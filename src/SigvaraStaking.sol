@@ -350,7 +350,7 @@ contract SigvaraStaking is
      * @notice Execute a slash after the challenge period has elapsed without dispute.
      * @dev    Anyone may call this once the window has closed — execution is permissionless
      *         to avoid committee liveness dependence. The distribution is fixed at init:
-     *         50% burned (sent to address(0)), 25% to victim, 25% to reporter.
+     *         50% burned (sent to 0xdead), 25% to victim, 25% to reporter.
      */
     function executeSlash(bytes32 didHash) external nonReentrant {
         SlashProposal storage proposal = slashProposals[didHash];

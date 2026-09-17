@@ -6,7 +6,7 @@ As AI agents become independent economic actors, they need a trust score that me
 
 > **Token status: undecided.** Staking and slashing in this protocol bond an ERC-20, and the contracts take that token by address at deploy time. Whether the bond asset ends up a purpose-built token or an established one is an open design decision. No token has been issued by this project, and nothing trading under the Sigvara name came from this team. Treat this repository and [sigvara.xyz](https://sigvara.xyz) as the only canonical sources.
 >
-> **Status:** contracts, oracle and SDK are built and tested. First deployment target is **Arc testnet** (chain ID `5042002`, USDC gas); see [docs/arc.md](docs/arc.md). [CounterAudit](https://counteraudit.io) both consumes Sigvara scores and feeds work-outcome attestations back into them.
+> **Status:** contracts, oracle and SDK are built and tested. First deployment target is **Arc testnet** (chain ID `5042002`, USDC gas); see [docs/arc.md](docs/arc.md). The same protocol already ran for a month as Countersig on Robinhood Chain testnet with a live hourly oracle; see [docs/lineage.md](docs/lineage.md). [CounterAudit](https://counteraudit.io) both consumes Sigvara scores and feeds work-outcome attestations back into them.
 
 ## Documentation
 
@@ -19,6 +19,7 @@ As AI agents become independent economic actors, they need a trust score that me
 | [CounterAudit Integration](docs/counteraudit-integration.md) | Enterprise — embed agent identity in your audit trail |
 | [AI Framework Integration](docs/ai-frameworks.md) | Developers — LangChain, AutoGen, CrewAI, Node.js |
 | [Reputation Model](docs/reputation-model.md) | Everyone — how the 6-factor score works and grows |
+| [Lineage](docs/lineage.md) | Everyone — the Robinhood Chain testnet run this protocol came from (addresses, oracle activity, what changed) |
 
 ---
 
