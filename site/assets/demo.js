@@ -4,7 +4,10 @@
  * (tweetnacl). The chain is simulated, but every rule below mirrors the
  * deployed contracts and the reference oracle:
  *   - DID and didHash derivation (SigvaraIdentity)
- *   - minimum stake, unbonding, slash split (SigvaraStaking)
+ *   - minimum stake, unbonding, slash lifecycle and split (SigvaraStaking):
+ *     a dispute cancels the proposal and reinstates the agent, execution is
+ *     permissionless strictly after the 7-day window, reporter = the committee
+ *     member who filed
  *   - six-factor score with per-factor maxima and the 6h score challenge
  *     window (SigvaraReputation + docs/reputation-model.md)
  *   - challenge/response payload format (packages/sdk challenge.ts)
@@ -159,6 +162,8 @@
     this.now = Math.floor(Date.now() / 1000);
     this.events = [];
     this.operator = '0x' + bytesToHex(randomBytes(20));
+    // SLASHING_COMMITTEE_ROLE holder. On testnet this is the deployer; on mainnet a multisig.
+    this.committee = '0x' + bytesToHex(randomBytes(20));
     this.balances = {};
     this.balances[this.operator] = PARAMS.faucetGrant;
     this.allowance = 0n;
@@ -210,7 +215,7 @@
     this.balances[this.operator] -= amount;
     this.allowance -= amount;
     this.stake += amount;
-    this.emit('StakeDeposited', { didHash: this.agent.didHash, amount: amount, total: this.stake }, 'SigvaraStaking.depositStake');
+    this.emit('StakeDeposited', { didHash: this.agent.didHash, operator: this.operator, amount: amount }, 'SigvaraStaking.depositStake (stake now ' + fmtToken(this.stake) + ')');
   };
   Simulator.prototype.hasMinimumStake = function () { return this.stake >= PARAMS.minimumStake; };
   Simulator.prototype.initiateWithdrawal = function (amount) {
@@ -219,10 +224,12 @@
     if (this.pendingWithdrawal) throw new Error('WithdrawalAlreadyQueued');
     if (amount > this.stake) throw new Error('InsufficientStake');
     var remaining = this.stake - amount;
-    if (this.agent.status === 'Active' && remaining !== 0n && remaining < PARAMS.minimumStake) throw new Error('InsufficientStake: an Active agent must keep at least minimumStake or withdraw to zero');
+    // While Active the remaining stake must stay at or above minimumStake. A full
+    // exit requires the operator to suspend the agent first (SigvaraIdentity.updateStatus).
+    if (this.agent.status === 'Active' && remaining < PARAMS.minimumStake) throw new Error('InsufficientStake: an Active agent must keep at least minimumStake; suspend the agent first to exit fully');
     this.stake -= amount;
     this.pendingWithdrawal = { amount: amount, claimableAt: this.now + PARAMS.unbondingPeriod };
-    this.emit('WithdrawalInitiated', { didHash: this.agent.didHash, amount: amount, claimableAt: this.pendingWithdrawal.claimableAt }, 'SigvaraStaking.initiateWithdrawal: unbonding for 21 days, still slashable');
+    this.emit('WithdrawalInitiated', { didHash: this.agent.didHash, operator: this.operator, amount: amount, claimableAt: this.pendingWithdrawal.claimableAt }, 'SigvaraStaking.initiateWithdrawal: unbonding for 21 days, still slashable');
   };
   Simulator.prototype.claimWithdrawal = function () {
     this.requireAgent();
@@ -232,30 +239,32 @@
     var amt = this.pendingWithdrawal.amount;
     this.pendingWithdrawal = null;
     this.balances[this.operator] += amt;
-    this.emit('WithdrawalClaimed', { didHash: this.agent.didHash, amount: amt }, 'SigvaraStaking.claimWithdrawal');
+    this.emit('WithdrawalClaimed', { didHash: this.agent.didHash, operator: this.operator, amount: amt }, 'SigvaraStaking.claimWithdrawal');
   };
 
   Simulator.prototype.proposeReputation = function (input) {
     this.requireAgent();
-    if (this.agent.status === 'Slashed') throw new Error('AgentSlashed: reputation is terminal');
+    // The oracle only scores agents it is tracking; a slashed DID is terminal.
+    if (this.agent.status === 'Slashed') throw new Error('oracle: slashed agents are not scored (reputation is terminal)');
     var f = computeFactors(input);
+    // A new proposal replaces any still-pending one and restarts the window.
     this.pendingScore = { factors: f, total: totalScore(f), proposedAt: this.now, finalizeAt: this.now + PARAMS.scoreChallengeWindow };
-    this.emit('ReputationProposed', { didHash: this.agent.didHash, total: this.pendingScore.total, finalizeAfter: this.pendingScore.finalizeAt }, 'oracle: SigvaraReputation.proposeReputation, 6h challenge window opens');
+    this.emit('ScoreProposed', { didHash: this.agent.didHash, proposedAt: this.now }, 'oracle: SigvaraReputation.proposeReputation (total ' + this.pendingScore.total + '), 6h challenge window opens');
     return this.pendingScore;
   };
   Simulator.prototype.finalizeReputation = function () {
-    if (!this.pendingScore) throw new Error('NoPendingScore');
-    if (this.now < this.pendingScore.finalizeAt) throw new Error('ChallengeWindowOpen: ' + Math.ceil((this.pendingScore.finalizeAt - this.now) / 3600) + 'h left');
+    if (!this.pendingScore) throw new Error('NoScorePending');
+    if (this.now < this.pendingScore.finalizeAt) throw new Error('ChallengeWindowActive: ' + Math.ceil((this.pendingScore.finalizeAt - this.now) / 3600) + 'h left');
     this.score = { factors: this.pendingScore.factors, total: this.pendingScore.total, lastUpdated: this.now };
     this.pendingScore = null;
-    this.emit('ReputationFinalized', { didHash: this.agent.didHash, total: this.score.total }, 'anyone: SigvaraReputation.finalizeReputation');
+    this.emit('ReputationUpdated', { didHash: this.agent.didHash, totalScore: this.score.total, timestamp: this.now }, 'anyone: SigvaraReputation.finalizeReputation');
     return this.score;
   };
   Simulator.prototype.rejectReputation = function () {
-    if (!this.pendingScore) throw new Error('NoPendingScore');
-    var t = this.pendingScore.total;
+    if (!this.pendingScore) throw new Error('NoScorePending');
+    if (this.now >= this.pendingScore.finalizeAt) throw new Error('ChallengeWindowExpired: the window has closed, only finalize is possible now');
     this.pendingScore = null;
-    this.emit('ReputationRejected', { didHash: this.agent.didHash, rejectedTotal: t }, 'committee: SigvaraReputation.rejectReputation, last finalized score stands');
+    this.emit('ScoreRejected', { didHash: this.agent.didHash, committee: this.committee }, 'committee: SigvaraReputation.rejectReputation, last finalized score stands');
   };
   Simulator.prototype.getTotalScore = function () { return this.score ? this.score.total : 0; };
   Simulator.prototype.meetsThreshold = function (t) { return this.getTotalScore() >= t; };
@@ -277,39 +286,55 @@
     if (!m) return { ok: false, reason: 'malformed payload' };
     if (m[1] !== this.agent.did) return { ok: false, reason: 'payload names a different DID' };
     if (this.now - parseInt(m[3], 10) > (maxAge || 300)) return { ok: false, reason: 'challenge expired' };
-    if (this.agent.status !== 'Active') return { ok: false, reason: 'agent status is ' + this.agent.status };
+    // Signature validity is independent of status; the SDK's verifySignature only
+    // checks registration, the stored key, DID binding and freshness. Status and
+    // score are separate reads the consumer combines into its own decision.
     var ok = this.nacl.sign.detached.verify(utf8(payload), sigBytes, this.agent.publicKey);
     return { ok: ok, reason: ok ? 'signature matches the on-chain Ed25519 key' : 'signature does not match the on-chain key' };
   };
 
-  Simulator.prototype.initiateSlash = function (victim, reporter, reason) {
+  // Slash proposal states mirror SlashState { Pending, Cancelled, Executed }.
+  Simulator.prototype.pendingSlash = function () { return this.slash && this.slash.state === 'Pending' ? this.slash : null; };
+  Simulator.prototype.initiateSlash = function (victim) {
     this.requireAgent();
-    if (this.slash && !this.slash.executed) throw new Error('SlashAlreadyPending');
+    if (this.pendingSlash()) throw new Error('SlashAlreadyPending');
+    // Gate on active stake plus anything queued for withdrawal.
     if (this.stake + (this.pendingWithdrawal ? this.pendingWithdrawal.amount : 0n) === 0n) throw new Error('NoStake');
-    this.slash = { victim: victim, reporter: reporter, reason: reason, initiatedAt: this.now, executableAt: this.now + PARAMS.challengePeriod, disputed: false, executed: false };
+    // The reporter is the committee member who files (msg.sender); they receive the reporter share.
+    this.slash = { victim: victim, reporter: this.committee, initiatedAt: this.now, deadline: this.now + PARAMS.challengePeriod, state: 'Pending' };
     this.agent.status = 'Suspended';
-    this.emit('SlashInitiated', { didHash: this.agent.didHash, victim: victim, reporter: reporter, executableAfter: this.slash.executableAt }, 'committee: SigvaraStaking.initiateSlash, agent Suspended, 7-day challenge window');
+    this.emit('SlashInitiated', { didHash: this.agent.didHash, reporter: this.committee, victim: victim, initiatedAt: this.now }, 'committee: SigvaraStaking.initiateSlash. Agent Suspended via SigvaraIdentity.updateStatus; 7-day challenge window');
+    this.emit('AgentStatusUpdated', { didHash: this.agent.didHash, newStatus: 'Suspended' }, 'SigvaraIdentity, applied by the staking core (operator cannot lift it)');
   };
   Simulator.prototype.disputeSlash = function () {
-    if (!this.slash || this.slash.executed) throw new Error('NoPendingSlash');
-    if (this.now >= this.slash.executableAt) throw new Error('ChallengePeriodOver');
-    this.slash.disputed = true;
-    this.emit('SlashDisputed', { didHash: this.agent.didHash }, 'operator: SigvaraStaking.disputeSlash, committee review on record');
+    var p = this.pendingSlash();
+    if (!p) throw new Error('NoActivePendingSlash');
+    if (this.now > p.deadline) throw new Error('ChallengePeriodExpired: the window closed at ' + p.deadline);
+    // A dispute cancels the proposal and reinstates the agent. The committee may
+    // re-initiate with stronger evidence.
+    p.state = 'Cancelled';
+    this.agent.status = 'Active';
+    this.emit('SlashDisputed', { didHash: this.agent.didHash, operator: this.operator }, 'operator: SigvaraStaking.disputeSlash. Proposal Cancelled, agent reinstated');
+    this.emit('AgentStatusUpdated', { didHash: this.agent.didHash, newStatus: 'Active' }, 'SigvaraIdentity, reinstated by the staking core');
   };
   Simulator.prototype.executeSlash = function () {
-    if (!this.slash || this.slash.executed) throw new Error('NoPendingSlash');
-    if (this.now < this.slash.executableAt) throw new Error('ChallengePeriodActive: ' + Math.ceil((this.slash.executableAt - this.now) / 86400) + ' days left');
+    var p = this.pendingSlash();
+    if (!p) throw new Error('NoActivePendingSlash' + (this.slash && this.slash.state === 'Cancelled' ? ': the proposal was cancelled by dispute; the committee must re-initiate' : ''));
+    // Executable strictly after the deadline (block.timestamp <= deadline reverts).
+    if (this.now <= p.deadline) throw new Error('ChallengePeriodActive: ' + Math.ceil((p.deadline - this.now) / 86400) + ' day(s) left');
     var total = this.stake + (this.pendingWithdrawal ? this.pendingWithdrawal.amount : 0n);
     var burned = total / 2n, toVictim = total / 4n, toReporter = total - burned - toVictim;
     this.stake = 0n; this.pendingWithdrawal = null;
     this.burned += burned;
-    this.balances[this.slash.victim] = (this.balances[this.slash.victim] || 0n) + toVictim;
-    this.balances[this.slash.reporter] = (this.balances[this.slash.reporter] || 0n) + toReporter;
-    this.slash.executed = true;
+    this.balances[p.victim] = (this.balances[p.victim] || 0n) + toVictim;
+    this.balances[p.reporter] = (this.balances[p.reporter] || 0n) + toReporter;
+    p.state = 'Executed';
     this.agent.status = 'Slashed';
     this.score = { factors: { feeScore: 0, successScore: 0, ageScore: 0, externalScore: 0, communityScore: 0, propagationScore: 0 }, total: 0, lastUpdated: this.now };
     this.pendingScore = null;
-    this.emit('SlashExecuted', { didHash: this.agent.didHash, burned: burned, toVictim: toVictim, toReporter: toReporter }, 'anyone: SigvaraStaking.executeSlash. Status Slashed (terminal), reputation zeroed');
+    this.emit('AgentStatusUpdated', { didHash: this.agent.didHash, newStatus: 'Slashed' }, 'SigvaraIdentity: terminal, no further transitions');
+    this.emit('ReputationZeroed', { didHash: this.agent.didHash }, 'SigvaraReputation.zeroReputation, called by the staking core; pending proposal cleared');
+    this.emit('SlashExecuted', { didHash: this.agent.didHash, burned: burned, toVictim: toVictim, toReporter: toReporter }, 'anyone: SigvaraStaking.executeSlash. 50% to 0xdead, 25% victim, 25% reporter');
     return { burned: burned, toVictim: toVictim, toReporter: toReporter };
   };
   Simulator.prototype.requireAgent = function () { if (!this.agent) throw new Error('NoAgent: register first'); };

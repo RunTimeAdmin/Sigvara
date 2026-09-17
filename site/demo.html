@@ -208,7 +208,7 @@
         <article class="step" data-step="2" data-state="locked">
           <div class="step-head" role="button" tabindex="0" aria-expanded="false"><div><div class="step-num">02 / BOND</div><h2>Post the stake</h2></div><span class="step-state">Locked</span></div>
           <div class="step-body">
-            <p>A bond is what makes the reputation cost something. The operator approves the staking contract, then deposits. Any amount is accepted, but the agent only counts as bonded at or above <span class="mono">minimumStake</span>. Withdrawals queue for 21 days and stay slashable the whole time.</p>
+            <p>A bond is what makes the reputation cost something. The operator approves the staking contract, then deposits. Any amount is accepted, but the agent only counts as bonded at or above <span class="mono">minimumStake</span>. While the agent is Active, a withdrawal must leave at least <span class="mono">minimumStake</span> behind; a full exit means suspending the agent first. Whatever is queued waits 21 days and stays slashable the whole time.</p>
             <div class="controls">
               <label class="field">Amount (SVR)<input id="stakeAmount" type="number" min="1" step="1" value="1000"></label>
               <button class="button" id="btnApprove">1. Approve</button>
@@ -245,7 +245,7 @@
         <article class="step" data-step="4" data-state="locked">
           <div class="step-head" role="button" tabindex="0" aria-expanded="false"><div><div class="step-num">04 / VERIFY</div><h2>Prove it to a counterparty</h2></div><span class="step-state">Locked</span></div>
           <div class="step-body">
-            <p>A product about to route a task issues a challenge naming the agent's DID. The agent signs it with its Ed25519 key. The verifier fetches the public key from the identity registry, checks the signature and freshness, then reads the score against its own threshold. No trust in the operator is needed at any point.</p>
+            <p>A product about to route a task issues a challenge naming the agent's DID. The agent signs it with its Ed25519 key. The verifier fetches the public key from the identity registry and checks the signature and freshness. Status and score are separate reads it combines into its own decision, so a valid signature from a suspended agent still gets refused. No trust in the operator is needed at any point.</p>
             <div class="controls">
               <label class="field">Score threshold<input id="inThreshold" type="number" min="0" max="100" value="40"></label>
               <button class="button" id="btnChallenge">1. Issue challenge</button>
@@ -260,11 +260,11 @@
         <article class="step" data-step="5" data-state="locked">
           <div class="step-head" role="button" tabindex="0" aria-expanded="false"><div><div class="step-num">05 / SLASH</div><h2>What misbehaviour costs</h2></div><span class="step-state">Locked</span></div>
           <div class="step-body">
-            <p>A counterparty reports harm. The slashing committee initiates: the agent is suspended immediately and a 7-day challenge window opens. The operator can dispute on the record. If the slash stands, anyone can execute it: half the bond burns, a quarter goes to the victim, a quarter to the reporter. Queued withdrawals are swept too. Status becomes Slashed, which is terminal, and the score is zeroed.</p>
+            <p>A counterparty reports harm and a committee member files the slash, naming the victim. The agent is suspended immediately and a 7-day challenge window opens. If the operator disputes inside the window, the proposal is cancelled and the agent reinstated; the committee can re-file with stronger evidence. If nobody disputes, once the window has closed anyone can execute it: half the bond burns, a quarter goes to the victim, a quarter to the committee member who filed. Queued withdrawals are swept too. Status becomes Slashed, which is terminal, and the score is zeroed.</p>
             <div class="controls">
               <button class="button button-danger" id="btnInitiateSlash">Committee initiates slash</button>
-              <button class="button" id="btnDispute">Operator disputes</button>
-              <button class="button" id="btnAdvance7d">Advance 7 days</button>
+              <button class="button" id="btnDispute">Operator disputes (cancels)</button>
+              <button class="button" id="btnAdvance7d">Advance past 7 days</button>
               <button class="button button-primary" id="btnExecuteSlash">Execute slash</button>
             </div>
             <div class="result" id="outSlash" aria-live="polite"></div>
@@ -486,12 +486,12 @@
     }
 
     // --------------------------------------------------------------- 05 --
-    var VICTIM = '0x' + D.bytesToHex(crypto.getRandomValues(new Uint8Array(20))), REPORTER = '0x' + D.bytesToHex(crypto.getRandomValues(new Uint8Array(20)));
+    var VICTIM = '0x' + D.bytesToHex(crypto.getRandomValues(new Uint8Array(20)));
     $('btnInitiateSlash').addEventListener('click', function () {
-      attempt(function () { sim.initiateSlash(VICTIM, REPORTER, 'counterparty report'); out('outSlash', line('status', 'Suspended', 'warn') + line('victim', VICTIM) + line('reporter', REPORTER) + line('executable after', fmtTs(sim.slash.executableAt)) + line('note', 'stake and queued withdrawals are frozen; verification now fails')); }, 'outSlash');
+      attempt(function () { sim.initiateSlash(VICTIM); out('outSlash', line('status', 'Suspended', 'warn') + line('victim', VICTIM) + line('reporter (committee member)', sim.committee) + line('challenge window closes', fmtTs(sim.slash.deadline)) + line('note', 'stake and queued withdrawals are frozen; a consumer query now sees Suspended')); }, 'outSlash');
     });
-    $('btnDispute').addEventListener('click', function () { attempt(function () { sim.disputeSlash(); out('outSlash', line('disputed', 'on record for committee review', 'warn') + line('note', 'the timelock still runs; execution stays possible after 7 days')); }, 'outSlash'); });
-    $('btnAdvance7d').addEventListener('click', function () { attempt(function () { sim.advance(P.challengePeriod); }); });
+    $('btnDispute').addEventListener('click', function () { attempt(function () { sim.disputeSlash(); out('outSlash', line('disputed', 'proposal cancelled, agent reinstated to Active', 'ok') + line('note', 'the committee may re-file with stronger evidence; until then nothing can be executed')); }, 'outSlash'); });
+    $('btnAdvance7d').addEventListener('click', function () { attempt(function () { sim.advance(P.challengePeriod + 1); }); });
     $('btnExecuteSlash').addEventListener('click', function () {
       attempt(function () { var r = sim.executeSlash(); out('outSlash', line('burned (50%)', D.fmtToken(r.burned) + ' SVR → 0xdead', 'bad') + line('to victim (25%)', D.fmtToken(r.toVictim) + ' SVR') + line('to reporter (25%)', D.fmtToken(r.toReporter) + ' SVR') + line('status', 'Slashed, terminal', 'bad') + line('reputation', 'zeroed')); setStep(5, 'done'); unlock(6); }, 'outSlash');
     });
