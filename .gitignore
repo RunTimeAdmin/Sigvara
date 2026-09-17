@@ -41,6 +41,8 @@ site/assets/*.jpg
 site/assets/*.jpeg
 site/assets/*.gif
 site/assets/*.webp
+# Root-level brand/profile images dropped in for review are never committed either
+sigvara-profile-pic.*
 
 # Local zip archives / build scratch, not part of the deployed site
 site/*.zip
