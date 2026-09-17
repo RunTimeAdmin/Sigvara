@@ -9,7 +9,7 @@ builds `src/`, `script/` and `test/`) and nothing here is deployed.
 - `test/` — the tests for the above
 - `docs/tokenomics.md`, `docs/oracle-first.md` — the earlier token model and the July 2026 decision to defer it
 
-The bond asset is SVR, launched through Archemist on Arc rather than through
+The bond asset will be SVR, launched through Tolly on Arc rather than through
 these contracts, so the sale, vesting and allocation logic here is unused. The live contracts (`SigvaraStaking`, `SigvaraOracleBond`,
 `SigvaraEpochFees`) take the bond token by address at initialization, so either
 answer is deploy configuration, not a code change. To bring any of this back,
