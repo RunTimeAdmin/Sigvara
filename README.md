@@ -8,6 +8,14 @@ As AI agents become independent economic actors, they need a trust score that me
 >
 > **Status:** contracts, oracle and SDK are built and tested. First deployment target is **Arc testnet** (chain ID `5042002`, USDC gas); see [docs/arc.md](docs/arc.md). The same protocol already ran for a month as Countersig on Robinhood Chain testnet with a live hourly oracle; see [docs/lineage.md](docs/lineage.md). [CounterAudit](https://counteraudit.io) both consumes Sigvara scores and feeds work-outcome attestations back into them.
 
+### This repo vs. the Countersig hosted platform
+
+This repository (`sigvara`) is the **decentralized protocol**: computed reputation and staked slashing on top of ERC-8004 identity, with no central authority. Trust here is enforced by cryptography and cryptoeconomics — nothing to sign up for, nothing to trust us on.
+
+There is a **separate product**, the Countersig platform (repo: [`RunTimeAdmin/Countersig`](https://github.com/RunTimeAdmin/Countersig)), which ships its own npm packages — `@countersig/sdk`, `@countersig/verify`, `@countersig/mcp`, `@countersig/react`. That platform is a centralized, hosted non-human-identity verification service. It is a different product with a different trust model, built by the same team, but it is **not this protocol** and does not read from or write to the contracts below. It kept the Countersig name; the protocol did not (see [docs/lineage.md](docs/lineage.md) for why).
+
+If you're looking for MCP server support or React trust-badge components, those live in the platform repo, not here. If you're integrating with the on-chain protocol — DIDs, staked reputation, permissionless verification — you're in the right place, and `@sigvara/protocol-sdk` (in [`packages/sdk`](packages/sdk), successor to `@countersig/protocol-sdk`) is the only SDK for it.
+
 ## Documentation
 
 | Guide | Audience |
@@ -151,7 +159,7 @@ Scores are computed off-chain by the oracle network and written to `SigvaraReput
 | Success Rate | 25 | Task attestations from consumers (e.g. CounterAudit) | `floor((successful / total) × 25)` | live |
 | Age | 20 | Registration timestamp | `min(20, floor(log₂(days+1) × 4))` | live |
 | External Trust | 15 | Normalized ERC-8004 feedback (linked agents) | mean of recognized tags × 15 | live |
-| Community | 5 | Flags from watchdog feeds | `max(0, 5 − flags × 2)` | live |
+| Community | 5 | Flags from watchdog feeds (e.g. HoodScan) | `max(0, 5 − flags × 2)` | live |
 | Propagation | 5 | Agent-vouching trust graph | — | Phase 2 |
 | **Total** | **100** | | | |
 
@@ -450,6 +458,10 @@ await fetch('https://api.counteraudit.io/v1/audit/ingest', {
 
 See the [CounterAudit Integration Guide](docs/counteraudit-integration.md) for full setup instructions.
 
+### HoodScan
+
+HoodScan is a rug-risk scanner for Robinhood Chain tokens. When a scan returns a red (high-risk) verdict, it reports the token's deployer address to the reputation oracle as a community flag. If that deployer operates a registered Sigvara agent, the flag lowers its Community factor — so on-chain misbehavior detected off-chain shows up in the agent's reputation. This is the watchdog half of the signal loop: consumers attest to good work, scanners flag bad actors. The oracle's flag endpoint is chain-agnostic, so any scanner can play the same role on Arc.
+
 ### On-chain consumers
 
 Any smart contract can gate operations on an agent's reputation:
@@ -465,7 +477,7 @@ require(rep.meetsThreshold(didHash, 60), "insufficient reputation");
 
 | Phase | Timeline | Deliverables |
 |---|---|---|
-| Core Protocol | Q3 2026 | contracts, reputation oracle and `@sigvara/protocol-sdk` v1.0 built and tested · CounterAudit attestation feed |
+| Core Protocol | Q3 2026 | contracts, reputation oracle and `@sigvara/protocol-sdk` v1.0 built and tested · CounterAudit attestation + HoodScan flag feeds |
 | Arc Port | Q4 2026 | Arc testnet deployment (`5042002`, USDC gas) · oracle epochs against Arc · bond-asset decision (see [docs/arc.md](docs/arc.md)) |
 | External Trust | Q4 2026 | ~~externalScore from ERC-8004 feedback~~ **done** (linked agents, live) · agent-vouching graph (propagationScore) · deeper ERC-8004 interop (publish CounterAudit validations to the Validation Registry) |
 | Mainnet Registries | Q1 2027 | Tier-1 security audit · registry deployment on Arc mainnet (`5042`) with bonds and scoring fees — bond asset to be decided |
