@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sigvara — Decentralized Identity for AI Agents</title>
+  <meta name="description" content="Sigvara gives autonomous AI agents verifiable on-chain identities, cryptoeconomically-secured reputation scores, and trustless agent-to-agent authentication." />
+  <meta property="og:title" content="Sigvara" />
+  <meta property="og:description" content="Decentralized identity and trust for autonomous AI agents." />
+  <meta property="og:url" content="https://sigvara.xyz" />
+  <meta property="og:image" content="https://sigvara.xyz/assets/og-image.png?v=rh" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:type" content="website" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Sigvara" />
+  <meta name="twitter:description" content="Decentralized identity and trust for autonomous AI agents." />
+  <meta name="twitter:image" content="https://sigvara.xyz/assets/og-image.png?v=rh" />
+  <link rel="icon" type="image/png" href="assets/logo.png" />
+  <link rel="canonical" href="https://sigvara.xyz" />
+  <link rel="stylesheet" href="assets/style.css" />
+  <style>
+    /* Landing-page-specific styles */
+    .hero {
+      padding: 100px 0 80px;
+      text-align: center;
+      position: relative;
+    }
+    .hero::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 50%; transform: translateX(-50%);
+      width: 700px; height: 400px;
+      background: radial-gradient(ellipse at center, rgba(79,142,247,0.08) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .hero h1 { margin-bottom: 22px; }
+    .hero .lead { margin: 0 auto 40px; }
+    .hero-cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-bottom: 60px; }
+    .hero-stats {
+      display: flex;
+      gap: 0;
+      justify-content: center;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      overflow: hidden;
+      max-width: 640px;
+      margin: 0 auto;
+    }
+    .stat {
+      flex: 1;
+      padding: 18px 20px;
+      text-align: center;
+      border-right: 1px solid var(--border);
+    }
+    .stat:last-child { border-right: none; }
+    .stat-val { font-family: var(--font-mono); font-size: 20px; font-weight: 700; color: var(--accent); display: block; }
+    .stat-label { font-size: 12px; color: var(--muted); margin-top: 2px; display: block; }
+
+    /* Problem section */
+    .problem-section { padding: 80px 0; }
+    .problem-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    @media (max-width: 680px) { .problem-grid { grid-template-columns: 1fr; } }
+    .problem-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; }
+    .problem-card .icon { color: var(--accent); margin-bottom: 14px; }
+    .problem-card h3 { margin-bottom: 8px; }
+    .problem-card p { font-size: 14px; color: var(--muted); margin: 0; }
+
+    /* Architecture */
+    .arch-section { padding: 80px 0; border-top: 1px solid var(--border); }
+    .arch-layers { display: flex; flex-direction: column; gap: 12px; margin-top: 36px; }
+    .arch-layer { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px 24px; display: flex; align-items: flex-start; gap: 18px; transition: border-color 0.2s; }
+    .arch-layer:hover { border-color: rgba(79,142,247,0.3); }
+    .arch-num { font-family: var(--font-mono); font-size: 10px; color: var(--accent); background: rgba(79,142,247,0.1); border: 1px solid rgba(79,142,247,0.25); border-radius: 4px; padding: 3px 8px; white-space: nowrap; margin-top: 2px; flex-shrink: 0; }
+    .arch-layer p { font-size: 14px; color: var(--muted); margin: 4px 0 0; }
+
+    /* How it works — 3-column on landing */
+    .hiw-section { padding: 80px 0; border-top: 1px solid var(--border); }
+    .hiw-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 36px; }
+    @media (max-width: 680px) { .hiw-grid { grid-template-columns: 1fr; } }
+    .hiw-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; }
+    .hiw-num { font-family: var(--font-mono); font-size: 11px; color: var(--accent); background: rgba(79,142,247,0.1); border: 1px solid rgba(79,142,247,0.25); border-radius: 50%; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; margin-bottom: 14px; }
+    .hiw-card h3 { font-size: 14px; margin-bottom: 8px; }
+    .hiw-card p { font-size: 13px; color: var(--muted); margin: 0; }
+
+    /* Integrate cards */
+    .integrate-section { padding: 80px 0; border-top: 1px solid var(--border); }
+    .integrate-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-top: 36px; }
+    @media (max-width: 680px) { .integrate-grid { grid-template-columns: 1fr; } }
+    .integrate-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; display: flex; flex-direction: column; gap: 10px; transition: border-color 0.2s; }
+    .integrate-card:hover { border-color: rgba(79,142,247,0.3); }
+    .ic-tag { font-family: var(--font-mono); font-size: 10px; color: var(--accent2); text-transform: uppercase; letter-spacing: 0.5px; }
+    .integrate-card h3 { font-size: 15px; margin: 0; }
+    .integrate-card p { font-size: 13px; color: var(--muted); margin: 0; flex: 1; }
+    .integrate-card a { font-size: 13px; color: var(--accent); align-self: flex-start; }
+
+    /* Contracts */
+    .contracts-section { padding: 80px 0; border-top: 1px solid var(--border); }
+
+    /* Roadmap */
+    .roadmap-section { padding: 80px 0; border-top: 1px solid var(--border); }
+  </style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-inner">
+    <a href="./" class="logo">sigvara<span class="dot">.</span>xyz</a>
+    <ul class="nav-links">
+      <li><a href="docs/quickstart.html">Quickstart</a></li>
+      <li><a href="docs/reputation.html">Reputation</a></li>
+      <li><a href="docs/counteraudit.html">CounterAudit</a></li>
+      <li><a href="docs/ai-frameworks.html">AI Frameworks</a></li>
+      <li><a href="app.html">App</a></li>
+      <li><a href="https://github.com/RunTimeAdmin/sigvara" target="_blank" rel="noopener">GitHub</a></li>
+      <li><a href="docs/quickstart.html" class="nav-cta">Get Started</a></li>
+    </ul>
+  </div>
+</nav>
+
+<div class="page-wrap">
+  <div class="container">
+
+    <!-- Hero -->
+    <div class="hero">
+      <div class="badge">TARGET · ARC TESTNET</div>
+      <h1>Decentralized Identity<br />for <span class="gradient-text">Autonomous AI Agents</span></h1>
+      <p class="lead">Sigvara gives AI agents verifiable on-chain identities, cryptoeconomically-secured reputation scores, and trustless peer-to-peer authentication — without a central authority.</p>
+      <div class="hero-cta">
+        <a href="docs/quickstart.html" class="btn btn-primary">Get Started →</a>
+        <a href="https://github.com/RunTimeAdmin/sigvara" target="_blank" rel="noopener" class="btn btn-secondary">View on GitHub</a>
+      </div>
+      <div class="hero-stats">
+        <div class="stat">
+          <span class="stat-val">4</span>
+          <span class="stat-label">Contracts Live</span>
+        </div>
+        <div class="stat">
+          <span class="stat-val">Ed25519</span>
+          <span class="stat-label">PKI + W3C DIDs</span>
+        </div>
+        <div class="stat">
+          <span class="stat-val">6-Factor</span>
+          <span class="stat-label">Reputation Score</span>
+        </div>
+        <div class="stat">
+          <span class="stat-val">Slashable</span>
+          <span class="stat-label">Bonded Stake</span>
+        </div>
+      </div>
+    </div>
+
+    <hr class="divider" />
+
+    <!-- Problem -->
+    <div class="problem-section">
+      <div class="section-label">The Problem</div>
+      <h2>AI agents have no identity layer</h2>
+      <p class="section-lead">Agents can execute tasks, transact on-chain, and communicate via A2A protocols. But they cannot prove who they are. Without verifiable identity, every interaction requires pre-existing trust — which does not scale.</p>
+      <div class="problem-grid">
+        <div class="problem-card">
+          <div class="icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="17" y1="8" x2="23" y2="14"/><line x1="23" y1="8" x2="17" y2="14"/></svg>
+          </div>
+          <h3>No Verifiable Identity</h3>
+          <p>Any agent can claim to be any other agent. There is no cryptographic proof of ownership.</p>
+        </div>
+        <div class="problem-card">
+          <div class="icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="14" width="4" height="7" rx="1"/><rect x="10" y="9" width="4" height="12" rx="1"/><rect x="18" y="5" width="4" height="16" rx="1"/><line x1="6" y1="17.5" x2="10" y2="14.5" stroke-dasharray="2 2"/><line x1="14" y1="12.5" x2="18" y2="9.5" stroke-dasharray="2 2"/></svg>
+          </div>
+          <h3>No Portable Reputation</h3>
+          <p>Reputation is siloed per platform. An agent starts from zero on every new marketplace.</p>
+        </div>
+        <div class="problem-card">
+          <div class="icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><line x1="9" y1="9" x2="15" y2="15"/><line x1="15" y1="9" x2="9" y2="15"/></svg>
+          </div>
+          <h3>No Accountability</h3>
+          <p>When an agent causes harm, there is no stake to slash and no operator to hold responsible.</p>
+        </div>
+      </div>
+    </div>
+
+    <hr class="divider" />
+
+    <!-- Architecture -->
+    <div class="arch-section">
+      <div class="section-label">Architecture</div>
+      <h2>The trust layer on ERC-8004.</h2>
+      <p class="section-lead">Identity comes from the <a href="https://eips.ethereum.org/EIPS/eip-8004" target="_blank" rel="noopener">ERC-8004</a> standard. Sigvara adds the two things the standard leaves out: a computed score and slashable stake.</p>
+      <div class="arch-layers">
+        <div class="arch-layer">
+          <span class="arch-num">LAYER 3</span>
+          <div>
+            <h3>Off-Chain Verification</h3>
+            <p>Agents authenticate peer-to-peer using Ed25519 PKI challenge-response. On-chain state is the source of truth for public keys and the computed score.</p>
+          </div>
+        </div>
+        <div class="arch-layer">
+          <span class="arch-num">LAYER 2</span>
+          <div>
+            <h3>Identity: ERC-8004</h3>
+            <p>Agents register once on the ERC-8004 Identity Registry — the backed standard, live on 30+ chains. Sigvara reads that identity and its feedback rather than maintaining a competing registry.</p>
+          </div>
+        </div>
+        <div class="arch-layer">
+          <span class="arch-num">LAYER 1</span>
+          <div>
+            <h3>Sigvara on top</h3>
+            <p><strong>Reputation</strong> — a normalized computed score, the layer above ERC-8004's raw feedback — and <strong>Staking</strong> — bonds and slashing, the accountability the standard omits. Both public and composable.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <hr class="divider" />
+
+    <!-- How It Works -->
+    <div class="hiw-section">
+      <div class="section-label">How It Works</div>
+      <h2>From zero to trusted agent in five steps</h2>
+      <p class="section-lead">The full lifecycle — key generation, on-chain registration, reputation scoring, and peer authentication.</p>
+      <div class="hiw-grid">
+        <div class="hiw-card">
+          <div class="hiw-num">1</div>
+          <h3>Generate a keypair</h3>
+          <p>Ed25519 identity created off-chain. The public key anchors on-chain; the private key signs challenges.</p>
+        </div>
+        <div class="hiw-card">
+          <div class="hiw-num">2</div>
+          <h3>Register on ERC-8004, bond stake</h3>
+          <p>Your agent's identity is its ERC-8004 registration. Bond a minimum stake with Sigvara (testnet uses the faucet token; mainnet bonds in established assets) to make it accountable and eligible for scoring.</p>
+        </div>
+        <div class="hiw-card">
+          <div class="hiw-num">3</div>
+          <h3>Do work with your DID</h3>
+          <p>Include your DID in every audit call. Identity and reputation are sealed into each tamper-evident packet.</p>
+        </div>
+        <div class="hiw-card">
+          <div class="hiw-num">4</div>
+          <h3>Oracle scores you</h3>
+          <p>The oracle network aggregates on-chain signals every epoch and writes a 6-factor score (0–100) to the contract.</p>
+        </div>
+        <div class="hiw-card">
+          <div class="hiw-num">5</div>
+          <h3>Reputation unlocks access</h3>
+          <p>Higher scores mean peers set lower barriers. More work generates more signals, which raises your score further.</p>
+        </div>
+        <div class="hiw-card" style="background: rgba(79,142,247,0.04); border-color: rgba(79,142,247,0.2);">
+          <div class="hiw-num" style="color: var(--accent2); background: rgba(124,90,247,0.1); border-color: rgba(124,90,247,0.25);">→</div>
+          <h3>Ready to build?</h3>
+          <p>Follow the step-by-step guide to register your first agent on Arc testnet in about 10 minutes.</p>
+          <a href="docs/quickstart.html" style="font-size:13px; margin-top: 8px; display:inline-block;">Quickstart guide →</a>
+        </div>
+      </div>
+    </div>
+
+    <hr class="divider" />
+
+    <!-- Integrate -->
+    <div class="integrate-section">
+      <div class="section-label">Integrate</div>
+      <h2>Four ways to build on Sigvara</h2>
+      <p class="section-lead">From a full SDK integration to a single on-chain view call.</p>
+      <div class="integrate-grid">
+        <div class="integrate-card">
+          <div class="ic-tag">TypeScript SDK</div>
+          <h3>Register and authenticate agents</h3>
+          <p>Full lifecycle management: key generation, on-chain registration, challenge signing, and reputation queries. Works with any Node.js application.</p>
+          <a href="docs/quickstart.html">Quickstart guide →</a>
+        </div>
+        <div class="integrate-card">
+          <div class="ic-tag">CounterAudit</div>
+          <h3>Embed identity in your audit trail</h3>
+          <p>Add <code>agent_did</code> to your existing CounterAudit ingest calls. Identity and reputation are sealed into every packet automatically.</p>
+          <a href="docs/counteraudit.html">Integration guide →</a>
+        </div>
+        <div class="integrate-card">
+          <div class="ic-tag">AI Frameworks</div>
+          <h3>LangChain, AutoGen, CrewAI</h3>
+          <p>Thin wrappers that add a DID and audit call to any agent action. The same pattern works across every major framework.</p>
+          <a href="docs/ai-frameworks.html">Framework examples →</a>
+        </div>
+        <div class="integrate-card">
+          <div class="ic-tag">On-Chain</div>
+          <h3>Gate smart contracts on reputation</h3>
+          <p>One view call. Any Solidity contract can require a minimum reputation score before accepting an agent's action or transaction.</p>
+          <a href="docs/reputation.html">See example →</a>
+        </div>
+      </div>
+    </div>
+
+    <hr class="divider" />
+
+    <!-- Contracts -->
+    <div class="contracts-section">
+      <div class="section-label">Testnet Contracts</div>
+      <h2>Deploying on Arc</h2>
+      <p class="section-lead">Arc testnet, chain ID 5042002, USDC gas. Contract addresses will be published here and mirrored in <code>deployments/5042002.json</code> once the testnet deployment lands. Explorer: <a href="https://explorer.testnet.arc.io" target="_blank" rel="noopener">explorer.testnet.arc.io</a>.</p>
+      <table class="data-table">
+        <thead>
+          <tr><th>Contract</th><th>Address</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="mono">SVRToken</td><td class="addr">pending</td><td><span class="tag tag-blue">Planned</span></td></tr>
+          <tr><td class="mono">SigvaraIdentity</td><td class="addr">pending</td><td><span class="tag tag-blue">Planned</span></td></tr>
+          <tr><td class="mono">SigvaraReputation</td><td class="addr">pending</td><td><span class="tag tag-blue">Planned</span></td></tr>
+          <tr><td class="mono">SigvaraStaking</td><td class="addr">pending</td><td><span class="tag tag-blue">Planned</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <hr class="divider" />
+
+    <!-- Roadmap -->
+    <div class="roadmap-section">
+      <div class="section-label">Roadmap</div>
+      <h2>What's built. What's next.</h2>
+      <div class="roadmap" style="margin-top:36px">
+        <div class="roadmap-item">
+          <span class="roadmap-phase tag tag-green">DONE</span>
+          <div><h3>Core Protocol Contracts</h3><p>Identity, Reputation, and Staking registries. 58 Foundry tests passing including 3× 1,000-run fuzz suites. CEI security fix applied.</p></div>
+        </div>
+        <div class="roadmap-item">
+          <span class="roadmap-phase tag tag-green">DONE</span>
+          <div><h3>TypeScript SDK v1.0.0-alpha.1</h3><p><code>@sigvara/protocol-sdk</code> — Ed25519 key management, challenge-response, DID formatting, on-chain verifier, W3C DID Document builder.</p></div>
+        </div>
+        <div class="roadmap-item">
+          <span class="roadmap-phase tag tag-blue">Q4 2026</span>
+          <div><h3>Arc Testnet Deployment</h3><p>Deploy the protocol to Arc testnet (5042002) with USDC gas. Addresses in <code>deployments/5042002.json</code>; SDK integration tests run against the live deploy.</p></div>
+        </div>
+        <div class="roadmap-item">
+          <span class="roadmap-phase tag tag-green">DONE</span>
+          <div><h3>Reputation Oracle</h3><p>Hourly epoch scoring. Two signal feeds wired: CounterAudit reports work-outcome attestations, and the externalScore factor reads live ERC-8004 feedback (Base Sepolia) for linked agents.</p></div>
+        </div>
+        <div class="roadmap-item">
+          <span class="roadmap-phase tag tag-blue">Q1 2027</span>
+          <div><h3>Mainnet Registries</h3><p>Tier-1 security audit. Registry deployment on Arc mainnet with bonds and scoring fees; the bond asset is an open decision.</p></div>
+        </div>
+        <div class="roadmap-item">
+          <span class="roadmap-phase tag tag-blue">Q2 2027</span>
+          <div><h3>Cross-Chain Expansion</h3><p>Solana and Base state mirroring via LayerZero. One agent identity, every chain.</p></div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /container -->
+</div><!-- /page-wrap -->
+
+<footer>
+  <div class="footer-inner">
+    <div class="footer-left">
+      <strong style="font-family:var(--font-mono);font-size:13px">sigvara.xyz</strong> &nbsp;·&nbsp;
+      MIT License &nbsp;·&nbsp;
+      <a href="https://sigvara.xyz" target="_blank" rel="noopener">sigvara.xyz</a>
+    </div>
+    <div class="footer-links">
+      <a href="docs/quickstart.html">Quickstart</a>
+      <a href="docs/reputation.html">Reputation</a>
+      <a href="docs/counteraudit.html">CounterAudit</a>
+      <a href="https://github.com/RunTimeAdmin/sigvara" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

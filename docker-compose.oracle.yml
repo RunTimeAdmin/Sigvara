@@ -1,0 +1,24 @@
+services:
+  oracle:
+    build:
+      context: ./oracle
+      dockerfile: Dockerfile
+    container_name: sigvara-oracle
+    restart: unless-stopped
+    env_file: ./oracle/.env
+    ports:
+      - "127.0.0.1:3030:3030"
+    volumes:
+      # attestation/flag state survives restarts and rebuilds (see oracle/store.js)
+      - oracle_state:/data
+    networks:
+      - default
+      - sigvara-mesh
+
+networks:
+  # shared with CounterAudit so it can reach the oracle without exposing a host port
+  sigvara-mesh:
+    external: true
+
+volumes:
+  oracle_state:
