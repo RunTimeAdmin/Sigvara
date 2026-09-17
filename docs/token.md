@@ -27,6 +27,18 @@ contracts need from a bond asset: `SigvaraStaking`, `SigvaraOracleBond` and
 `SigvaraEpochFees` take the token by address at initialization and treat it as
 a plain `IERC20`.
 
+## Addresses
+
+| Role | Address |
+|---|---|
+| Deployer / creator | `0x8857A7C392d1Bb1A68647c64Ce18D9AA1Fd023b0` |
+| Treasury | `0xeDC966e23318782c0241aBe1790bd221b8aCE867` |
+
+The launch transaction and the registry deployments will be sent from the deployer
+address. A token or contract attributed to Sigvara that was not created by that
+address is not ours. The treasury address holds protocol-owned SVR and pays the
+costs listed under treasury policy; it holds nothing else.
+
 ## Distribution
 
 There is no team allocation, no treasury allocation, no vesting and no sale.
@@ -41,7 +53,7 @@ operator bond and operator incentives) are published here on launch day.
 
 The creator share of pool trading fees, credited by the Archemist locker, is
 used to buy SVR on the open market. Purchased SVR goes to the protocol
-treasury address (published here) and is spent only on oracle bonds, operator
+treasury address above and is spent only on oracle bonds, operator
 incentives and slashing-committee costs. Buybacks run on a published schedule,
 not in response to price. No fee revenue is paid out to the team.
 
