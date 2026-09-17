@@ -25,6 +25,8 @@ import "../src/SVRToken.sol";
  *   DEPLOYER_PRIVATE_KEY   — deployer key (used for broadcast)
  *
  * Optional env vars:
+ *   SVR_ADDRESS            — existing ERC-20 to use as the bond token (mainnet). When unset,
+ *                            the script deploys the SVRToken testnet faucet token instead.
  *   ORACLE_ADDRESS         — address that may call updateReputation() on the oracle network
  *                            defaults to deployer
  *   COMMITTEE_ADDRESS      — initial SLASHING_COMMITTEE_ROLE holder (testnet 3-of-5 multisig)
@@ -53,8 +55,8 @@ contract Deploy is Script {
 
         vm.startBroadcast(deployerKey);
 
-        // 1. stake-token testnet token
-        SVRToken svr = new SVRToken(deployer);
+        // 1. Bond token: an existing ERC-20 from SVR_ADDRESS, or the testnet faucet token.
+        SVRToken svr = _bondToken(deployer);
 
         // 2. Identity — stakingCore wired after staking is deployed
         SigvaraIdentity identityImpl = new SigvaraIdentity();
@@ -117,6 +119,15 @@ contract Deploy is Script {
 
         // Write addresses to deployments/{chainId}.json for SDK config
         _writeAddresses(deployer, address(svr), address(identity), address(reputation), address(staking));
+    }
+
+    // SVR_ADDRESS points at an existing ERC-20 (the mainnet bond asset). When unset,
+    // deploy the SVRToken testnet faucet token. Kept out of run() to stay under the
+    // stack limit.
+    function _bondToken(address deployer) internal returns (SVRToken) {
+        address existing = vm.envOr("SVR_ADDRESS", address(0));
+        if (existing != address(0)) return SVRToken(existing);
+        return new SVRToken(deployer);
     }
 
     function _writeAddresses(

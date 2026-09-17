@@ -1,5 +1,7 @@
 export { SigvaraAgent } from './agent';
 export { SigvaraVerifier, registerAgent } from './verifier';
+export { depositStake } from './stake';
+export type { DepositStakeResult } from './stake';
 export {
   generateChallenge,
   signChallenge,
