@@ -57,3 +57,7 @@ CODE_REVIEW_REPORT.md
 
 # Local planning spreadsheets (e.g. presale_model.xlsx), not part of the codebase
 *.xlsx
+
+# Packaged site builds for hosting uploads (not source)
+sigvara-site-*/
+sigvara-site-*.zip
