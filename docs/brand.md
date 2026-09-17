@@ -144,7 +144,7 @@ Headlines should be compact and confident. Body copy should remain readable and 
 
 The primary mark is an **S-shaped signal path** with two endpoint nodes. The path represents a signed signal moving between identity and outcome. The endpoints make the shape recognizable at small sizes.
 
-The master avatar is `holding/sigvara-avatar.svg` (copy it beside any page that references it). Use it for:
+The master avatar is `site/assets/sigvara-avatar.svg`. Use it for:
 
 - Browser favicon.
 - Social profile image.
