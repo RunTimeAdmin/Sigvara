@@ -484,7 +484,7 @@ require(rep.meetsThreshold(didHash, 60), "insufficient reputation");
 | Mainnet Registries | Q1 2027 | Tier-1 security audit · registry deployment on Arc mainnet (`5042`) with bonds and scoring fees in SVR |
 | Cross-Chain | Q2 2027 | Solana + Base state mirroring via LayerZero |
 
-The token-launch contract set (fixed-supply `SVR`, vesting, public sale) and the earlier tokenomics and oracle-first direction docs live under [`archive/token-launch/`](archive/token-launch/). They are out of the build; SVR launches through Archemist rather than these contracts.
+The token-launch contract set (fixed-supply `SVR`, vesting, public sale) and the earlier tokenomics and oracle-first direction docs live under [`archive/token-launch/`](archive/token-launch/). They are out of the build; SVR will launch through Tolly rather than these contracts.
 
 ---
 
