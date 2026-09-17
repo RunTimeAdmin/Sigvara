@@ -348,14 +348,18 @@ const trusted = await verifier.meetsThreshold(agentA.did, 60);
 ### On-chain registration (operator)
 
 ```typescript
-import { registerAgent } from '@sigvara/protocol-sdk';
+import { registerAgent, depositStake } from '@sigvara/protocol-sdk';
 
 const { didHash } = await registerAgent(
   signer,                        // ethers.Signer with operator wallet
-  agentA.did,                    // or just the agent's Ethereum address
+  agentA.agentAddress,           // the agent's Ethereum address (the DID is derived from it)
   agentA.publicKeyBytes32,       // bytes32 Ed25519 public key
   IDENTITY_CONTRACT_ADDRESS
 );
+
+// Bond after registration (the staking contract requires an Active agent).
+// Sends the ERC-20 approval only if the allowance is short, then deposits.
+await depositStake(signer, didHash, 1000n * 10n ** 18n, STAKING_CONTRACT_ADDRESS);
 ```
 
 ### DID Document resolution

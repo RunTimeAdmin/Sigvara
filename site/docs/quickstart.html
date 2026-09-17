@@ -78,17 +78,17 @@
         <div class="qs-step">
           <div class="qs-header"><div class="qs-num">2</div><h3>Get testnet stake tokens</h3></div>
           <div class="qs-body">
-            <p>Call the public faucet on SVRToken once per wallet (24-hour cooldown).</p>
+            <p>Call the public faucet on the testnet SVRToken. It mints up to 10,000 SVR per call, one call per wallet per 24 hours.</p>
             <pre><code><span class="kw">import</span> { ethers } <span class="kw">from</span> <span class="str">'ethers'</span>;
 
 <span class="kw">const</span> provider = <span class="kw">new</span> ethers.<span class="fn">JsonRpcProvider</span>(process.env.RPC_URL);
 <span class="kw">const</span> signer   = <span class="kw">new</span> ethers.<span class="fn">Wallet</span>(process.env.OPERATOR_PRIVATE_KEY, provider);
 <span class="kw">const</span> svr     = <span class="kw">new</span> ethers.<span class="fn">Contract</span>(
   <span class="str">'0x…'</span>,
-  [<span class="str">'function faucet() external'</span>],
+  [<span class="str">'function faucet(uint256 amount) external'</span>],
   signer
 );
-<span class="kw">await</span> svr.<span class="fn">faucet</span>(); <span class="cm">// Mints 1,000 SVR to your wallet</span></code></pre>
+<span class="kw">await</span> svr.<span class="fn">faucet</span>(ethers.<span class="fn">parseEther</span>(<span class="str">'1000'</span>)); <span class="cm">// Mints 1,000 SVR to your wallet</span></code></pre>
           </div>
         </div>
 
@@ -111,22 +111,22 @@ console.log(agent.did);
         </div>
 
         <div class="qs-step">
-          <div class="qs-header"><div class="qs-num">4</div><h3>Approve and register on-chain</h3></div>
+          <div class="qs-header"><div class="qs-num">4</div><h3>Register on-chain, then post the bond</h3></div>
           <div class="qs-body">
-            <p>Two transactions: approve the staking contract to spend SVR, then register. The contract computes your <code>didHash</code> from your address and chain ID.</p>
-            <pre><code><span class="kw">import</span> { <span class="fn">registerAgent</span> } <span class="kw">from</span> <span class="str">'@sigvara/protocol-sdk'</span>;
+            <p>Registration comes first: the staking contract only accepts deposits for an agent that is already Active. <code>registerAgent</code> is one transaction; <code>depositStake</code> checks your allowance, sends the ERC-20 approval only if it is short, then deposits. The contract computes your <code>didHash</code> from the agent address and chain ID.</p>
+            <pre><code><span class="kw">import</span> { <span class="fn">registerAgent</span>, <span class="fn">depositStake</span> } <span class="kw">from</span> <span class="str">'@sigvara/protocol-sdk'</span>;
 
 <span class="kw">const</span> IDENTITY_ADDRESS = <span class="str">'0x…'</span>;
 <span class="kw">const</span> STAKING_ADDRESS  = <span class="str">'0x…'</span>;
-<span class="kw">const</span> minStake = ethers.<span class="fn">parseEther</span>(<span class="str">'1000'</span>);
-
-<span class="kw">await</span> svr.<span class="fn">approve</span>(STAKING_ADDRESS, minStake);
+<span class="kw">const</span> minStake = ethers.<span class="fn">parseEther</span>(<span class="str">'1000'</span>); <span class="cm">// minimumStake on testnet</span>
 
 <span class="kw">const</span> { didHash, txHash } = <span class="kw">await</span> <span class="fn">registerAgent</span>(
-  signer, signer.address, agent.publicKeyBytes32,
-  IDENTITY_ADDRESS, STAKING_ADDRESS, minStake
+  signer, agent.agentAddress, agent.publicKeyBytes32, IDENTITY_ADDRESS
 );
-console.log(<span class="str">'Registered:'</span>, `https://explorer.testnet.arc.io/tx/${txHash}`);</code></pre>
+console.log(<span class="str">'Registered:'</span>, `https://explorer.testnet.arc.io/tx/${txHash}`);
+
+<span class="kw">const</span> bond = <span class="kw">await</span> <span class="fn">depositStake</span>(signer, didHash, minStake, STAKING_ADDRESS);
+console.log(<span class="str">'Bonded:'</span>, bond.txHash, bond.approveTxHash ? <span class="str">'(approval sent first)'</span> : <span class="str">''</span>);</code></pre>
           </div>
         </div>
 

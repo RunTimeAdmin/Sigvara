@@ -18,7 +18,7 @@ npm install @sigvara/protocol-sdk ethers
 
 ```bash
 # .env
-OPERATOR_PRIVATE_KEY=0x...      # needs RH testnet ETH for gas + SVR for stake
+OPERATOR_PRIVATE_KEY=0x...      # needs Arc testnet USDC for gas + SVR for stake
 RPC_URL=https://rpc.testnet.arc.io
 ```
 
@@ -34,7 +34,7 @@ SVR_TOKEN=0x...   # from deployments/5042002.json after deploy
 
 ## 3. Get testnet stake tokens
 
-The SVRToken has an `onlyOwner` mint and a public `faucet()`. Call it once per wallet:
+The testnet SVRToken has an `onlyOwner` mint and a public `faucet(amount)`: up to 10,000 SVR per call, one call per wallet per 24 hours.
 
 ```typescript
 import { ethers } from 'ethers';
@@ -44,11 +44,11 @@ const signer = new ethers.Wallet(process.env.OPERATOR_PRIVATE_KEY, provider);
 
 const svr = new ethers.Contract(
   '0x...',  // from deployments/5042002.json
-  ['function faucet() external', 'function balanceOf(address) view returns (uint256)'],
+  ['function faucet(uint256 amount) external', 'function balanceOf(address) view returns (uint256)'],
   signer
 );
 
-await svr.faucet();
+await svr.faucet(ethers.parseEther('1000'));
 const balance = await svr.balanceOf(signer.address);
 console.log('SVR balance:', ethers.formatEther(balance));
 ```
@@ -75,29 +75,26 @@ console.log('DID:', agent.did);
 console.log('Ed25519 private key (store this):', privateKey);
 ```
 
-## 5. Register on-chain
+## 5. Register on-chain, then post the bond
 
-Two transactions: approve the staking contract to spend SVR, then register.
+Registration first: the staking contract only accepts deposits for an agent that is already Active. `registerAgent` is one transaction. `depositStake` checks the allowance, sends the ERC-20 approval only if it is short, then deposits.
 
 ```typescript
-import { registerAgent } from '@sigvara/protocol-sdk';
+import { registerAgent, depositStake } from '@sigvara/protocol-sdk';
 
-// Approve staking contract to pull SVR (1000 SVR minimum stake)
-const minStake = ethers.parseEther('1000');
-await svr.approve(STAKING_ADDRESS, minStake);
+const minStake = ethers.parseEther('1000'); // minimumStake on testnet
 
-// Register — this calls depositStake + registerAgent atomically
 const { didHash, txHash } = await registerAgent(
   signer,
   agentAddress,
   agent.publicKeyBytes32,
   IDENTITY_ADDRESS,
-  STAKING_ADDRESS,
-  minStake,
 );
-
 console.log('didHash:', didHash);
 console.log('tx:', `https://explorer.testnet.arc.io/tx/${txHash}`);
+
+const bond = await depositStake(signer, didHash, minStake, STAKING_ADDRESS);
+console.log('bond tx:', bond.txHash, bond.approveTxHash ? '(approval sent first)' : '');
 ```
 
 After a few blocks the oracle will detect the `AgentRegistered` event and begin tracking the agent. The initial score will be low (age=0, activity=0) and will grow over time.
