@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lineage — Sigvara</title>
+  <meta name="description" content="The Robinhood Chain testnet run Sigvara came from: contract addresses, a month of hourly oracle epochs, what was exercised, why the name changed, and what changed on the way to Arc." />
+  <link rel="icon" type="image/svg+xml" href="../assets/sigvara-avatar.svg" />
+  <link rel="stylesheet" href="../assets/style.css" />
+</head>
+<body>
+
+<nav>
+  <div class="nav-inner">
+    <a href="../" class="logo" aria-label="Sigvara home"><svg class="brand-mark" viewBox="0 0 64 64" role="img" aria-label="Sigvara mark"><defs><linearGradient id="brand-gradient" x1="8" y1="8" x2="56" y2="56" gradientUnits="userSpaceOnUse"><stop stop-color="#c5b7ff"/><stop offset=".55" stop-color="#9475ff"/><stop offset="1" stop-color="#6fe5ea"/></linearGradient></defs><rect x="1" y="1" width="62" height="62" rx="19" fill="#15172b" stroke="rgba(197,183,255,.25)"/><path d="M46.5 20.5c-4.5-5-12.5-6.8-19.2-4.1-6.5 2.7-8.5 9.4-3.4 13.2 2.3 1.7 5.1 2.1 8.7 2.7 5.8.9 8 2.6 7.1 6.2-1.1 4.6-7.4 7-12.9 5.8-3.4-.8-6-2.4-8.2-5.3" fill="none" stroke="url(#brand-gradient)" stroke-width="5.2" stroke-linecap="round"/><circle cx="47" cy="20" r="3.1" fill="#6fe5ea"/><circle cx="18.5" cy="39" r="3.1" fill="#c5b7ff"/></svg><span class="wordmark">sig<span class="accent">vara</span></span></a>
+    <ul class="nav-links">
+      <li><a href="quickstart.html">Quickstart</a></li>
+      <li><a href="reputation.html">Reputation</a></li>
+      <li><a href="counteraudit.html">CounterAudit</a></li>
+      <li><a href="ai-frameworks.html">AI Frameworks</a></li>
+      <li class="nav-keep"><a href="https://github.com/RunTimeAdmin/sigvara" target="_blank" rel="noopener">GitHub</a></li>
+      <li class="nav-keep"><a href="quickstart.html" class="nav-cta">Get Started</a></li>
+    </ul>
+  </div>
+</nav>
+
+<div class="page-wrap">
+  <div class="container">
+    <div class="docs-layout">
+
+      <aside class="docs-sidebar">
+        <div class="sidebar-section">
+          <div class="sidebar-label">Getting Started</div>
+          <ul class="sidebar-links">
+            <li><a href="quickstart.html">Quickstart</a></li>
+          </ul>
+        </div>
+        <div class="sidebar-section">
+          <div class="sidebar-label">Protocol</div>
+          <ul class="sidebar-links">
+            <li><a href="reputation.html">Reputation Model</a></li>
+            <li><a href="../#docs">Network &amp; Contracts</a></li>
+            <li><a href="lineage.html" class="active">Lineage</a></li>
+          </ul>
+        </div>
+        <div class="sidebar-section">
+          <div class="sidebar-label">Integrations</div>
+          <ul class="sidebar-links">
+            <li><a href="counteraudit.html">CounterAudit</a></li>
+            <li><a href="ai-frameworks.html">AI Frameworks</a></li>
+          </ul>
+        </div>
+        <div class="sidebar-section">
+          <div class="sidebar-label">Source</div>
+          <ul class="sidebar-links">
+            <li><a href="https://github.com/RunTimeAdmin/sigvara" target="_blank" rel="noopener">GitHub →</a></li>
+          </ul>
+        </div>
+      </aside>
+
+      <main class="docs-content">
+        <div class="section-label">Protocol</div>
+        <h2>Lineage</h2>
+        <p>Sigvara did not start on Arc. The same protocol, identity, reputation, staking, epoch fees, oracle and SDK, ran as a public testnet on Robinhood Chain for a month under its earlier name, Countersig Network. This page records that run so anyone can check it. Every value below was read from the chain and its explorer on 17 September 2026; the earlier repository is <a href="https://github.com/RunTimeAdmin/countersig-network" target="_blank" rel="noopener">RunTimeAdmin/countersig-network</a>.</p>
+
+        <h3>Deployment</h3>
+        <table class="data-table">
+          <thead><tr><th>Item</th><th>Value</th></tr></thead>
+          <tbody>
+            <tr><td>Network</td><td>Robinhood Chain testnet, chain ID <code>46630</code></td></tr>
+            <tr><td>Deployed</td><td>15 July 2026, 02:40 UTC, block <code>90338571</code></td></tr>
+            <tr><td>Deployer</td><td><code>0xfB38fA3C085FD9D06564524855d00E098ae0c450</code></td></tr>
+            <tr><td>Identity proxy</td><td><a href="https://explorer.testnet.chain.robinhood.com/address/0xCCF2Fd69c07EDFbc3C215cfD31e2F20FC208A16C" target="_blank" rel="noopener"><code>0xCCF2Fd69c07EDFbc3C215cfD31e2F20FC208A16C</code></a></td></tr>
+            <tr><td>Reputation proxy</td><td><a href="https://explorer.testnet.chain.robinhood.com/address/0xbB0c9C2DF28af31905dEfEa04c80372C0909f1bF" target="_blank" rel="noopener"><code>0xbB0c9C2DF28af31905dEfEa04c80372C0909f1bF</code></a></td></tr>
+            <tr><td>Staking proxy</td><td><a href="https://explorer.testnet.chain.robinhood.com/address/0x7281cf35ae9Bf56EAF5B1d0C2C8e167e50BCEC75" target="_blank" rel="noopener"><code>0x7281cf35ae9Bf56EAF5B1d0C2C8e167e50BCEC75</code></a></td></tr>
+            <tr><td>Epoch-fee registry proxy</td><td><a href="https://explorer.testnet.chain.robinhood.com/address/0x9a9b6A49f3FE1C02Fb1b5cB7f2911Add0ce2e2bb" target="_blank" rel="noopener"><code>0x9a9b6A49f3FE1C02Fb1b5cB7f2911Add0ce2e2bb</code></a>, deployed 16 July 2026</td></tr>
+            <tr><td>Testnet bond token</td><td><code>CSIG</code> faucet token, <a href="https://explorer.testnet.chain.robinhood.com/address/0x7E44aF56d14EBfd16D5D7Ba4F011b5206d487D55" target="_blank" rel="noopener"><code>0x7E44aF56d14EBfd16D5D7Ba4F011b5206d487D55</code></a>, 1,000 minted, no value</td></tr>
+            <tr><td>Creation transactions</td><td>identity <code>0x36fd2ea5…8430</code> · reputation <code>0x0aeadd94…7405</code> · staking <code>0x1923d98a…e88d</code> · fee registry <code>0x9130edb6…c18c</code></td></tr>
+          </tbody>
+        </table>
+        <p style="color:var(--muted);font-size:13px">Live parameters as read on 17 September 2026: minimum stake 1,000 CSIG, slash challenge period 7 days, unbonding period 21 days, score challenge window 30 minutes (a testnet setting; Arc uses 6 hours), epoch fee 0. A legacy Sepolia deployment from 30 June 2026 preceded it.</p>
+
+        <h3>What ran</h3>
+        <ul>
+          <li><strong>Reputation oracle, hourly epochs.</strong> The oracle wallet called <code>proposeReputation</code> and <code>finalizeReputation</code> every hour. The reputation contract shows 2,470 transactions between deployment and the last epoch on 14 August 2026, 18:19 UTC: roughly 1,200 scoring epochs over 30 days.</li>
+          <li><strong>Registered agents.</strong> Three agents registered through the identity registry, at blocks <code>90339181</code>, <code>90758493</code> and <code>90820089</code>. Their scores were rewritten every epoch; the last finalized values on chain are 24 and 63 out of 100, consistent with the <a href="reputation.html">six-factor model's</a> ramp-up curve for agents a few weeks old with mixed activity.</li>
+          <li><strong>Attestation and flag feeds.</strong> <a href="counteraudit.html">CounterAudit</a> consumed scores and fed work-outcome attestations back; a rug-risk scanner reported red-verdict deployers as community flags. These were the live inputs behind the success and community factors.</li>
+          <li><strong>SDK.</strong> The protocol SDK was published to npm and used for the live integration tests against this deployment.</li>
+          <li><strong>Not exercised.</strong> No bonds were deposited on testnet (the staking proxy has only its deployment transaction) and no slash was filed. The slashing path is covered by the contract test suite and by the <a href="../demo.html">interactive demo</a>, not by this run.</li>
+        </ul>
+
+        <h3>Why the name changed</h3>
+        <p>In late June 2026, while the protocol was still on Sepolia, an unrelated party copied the Countersig profile and brand images, scraped from the public repository, and launched a token under the Countersig name on a memecoin launchpad. Nothing trading under that name came from this team. The project had no token and had said so. An anti-impersonation notice went up on 1 July 2026, and on 15 July the direction was fixed as oracle-first with any token deferred. The Robinhood Chain testnet run continued under the Countersig name through August.</p>
+        <p>On 17 September 2026 the protocol was renamed Sigvara, with a new domain and new brand assets, so that the name people verify against is one that has never been attached to a token. The code, deployments and history on this page are the continuity.</p>
+        <div class="callout">The rule going forward: any token, contract address or launch attributed to Sigvara is genuine only if it is published first on sigvara.xyz and in the <a href="https://github.com/RunTimeAdmin/sigvara" target="_blank" rel="noopener">RunTimeAdmin/sigvara</a> repository. Anything else is not ours.</div>
+
+        <h3>What changed on the way to Arc</h3>
+        <ul>
+          <li>Contracts renamed from Countersig to Sigvara; storage layouts unchanged.</li>
+          <li>Score challenge window set to 6 hours for Arc (30 minutes on the testnet).</li>
+          <li>Slash exit-dodge closed via the unbonding queue (22 July 2026), which is why <code>executeSlash</code> sweeps queued withdrawals.</li>
+          <li>ERC-8004 adopted as the canonical identity registry; the on-chain Ed25519 key and slash status remain Sigvara's extension.</li>
+          <li>Bond token moved from the faucet <code>CSIG</code> to a deploy-time address, so the same scripts serve testnet and mainnet.</li>
+        </ul>
+
+        <h3>Caveats</h3>
+        <ul>
+          <li>The Robinhood testnet contracts are not source-verified on the explorer. Bytecode and the broadcast records in the earlier repository are the evidence.</li>
+          <li>The agent scores quoted above are point-in-time reads. The deployment has been dormant since 14 August 2026 and the network may reset it at any time.</li>
+        </ul>
+      </main>
+
+    </div>
+  </div>
+</div>
+
+<footer>
+  <div class="footer-inner">
+    <div class="footer-left">
+      <a href="../" style="font-family:var(--font-mono);font-size:13px;color:var(--muted)">sigvara.xyz</a> &nbsp;·&nbsp; MIT License
+    </div>
+    <div class="footer-links">
+      <a href="quickstart.html">Quickstart</a>
+      <a href="reputation.html">Reputation</a>
+      <a href="counteraudit.html">CounterAudit</a>
+      <a href="https://github.com/RunTimeAdmin/sigvara" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

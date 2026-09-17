@@ -51,6 +51,24 @@ A legacy Sepolia deployment from 30 June 2026 preceded it (identity
   only its deployment transaction) and no slash was filed. The slashing path
   is covered by the Foundry suite and by the interactive demo, not by this run.
 
+## Why the name changed
+
+In late June 2026, while the protocol was still on Sepolia, an unrelated party
+copied the Countersig profile and brand images (scraped from the public
+repository) and launched a token under the Countersig name on a memecoin
+launchpad. Nothing trading under that name came from this team. The project
+had no token and had said so. An anti-impersonation notice went up on
+1 July 2026, and on 15 July the direction was fixed as oracle-first with any
+token deferred. The Robinhood Chain testnet run continued under the Countersig
+name through August.
+
+On 17 September 2026 the protocol was renamed Sigvara, with a new domain and
+new brand assets, so that the name people verify against is one that has never
+been attached to a token. The code, deployments and history on this page are
+the continuity. The rule going forward: any token, contract address or launch
+attributed to Sigvara is genuine only if it is published first on sigvara.xyz
+and in the RunTimeAdmin/sigvara repository.
+
 ## What changed on the way to Arc
 
 - Contracts renamed from Countersig to Sigvara; storage layouts unchanged.
