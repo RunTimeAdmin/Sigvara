@@ -29,6 +29,7 @@ If you're looking for MCP server support or React trust-badge components, those 
 | [AI Framework Integration](docs/ai-frameworks.md) | Developers — LangChain, AutoGen, CrewAI, Node.js |
 | [Reputation Model](docs/reputation-model.md) | Everyone — how the 6-factor score works and grows |
 | [Lineage](docs/lineage.md) | Everyone — the Robinhood Chain testnet run this protocol came from (addresses, oracle activity, what changed) |
+| [Security & Mainnet Readiness Review](docs/SECURITY_AND_MAINNET_READINESS_REVIEW.md) | Everyone — a point-in-time review dated 17 Sep 2026: conditional no-go for mainnet, with the blockers named |
 
 ---
 
