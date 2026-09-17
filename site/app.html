@@ -165,6 +165,9 @@ function candidateWallets() {
   return list.sort((a, b) => (b.rdns === "io.metamask" || b.name === "MetaMask") - (a.rdns === "io.metamask" || a.name === "MetaMask"));
 }
 
+// Escape anything that did not come from our own template strings before it hits innerHTML.
+const esc = (v) => String(v).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
 function logLine(html) {
   const el = $("log");
   el.innerHTML += (el.innerHTML ? "\n" : "") + html;
@@ -259,14 +262,14 @@ async function connectWith(c) {
         }]});
       }
     }
-    $("walletStatus").innerHTML = `<span class="pill-ok">${c.name}: ${account.slice(0, 6)}…${account.slice(-4)} on 5042002</span>`;
+    $("walletStatus").innerHTML = `<span class="pill-ok">${esc(c.name)}: ${account.slice(0, 6)}…${account.slice(-4)} on 5042002</span>`;
     ["depositBtn", "withdrawBtn", "faucetBtn"].forEach(id => $(id).disabled = false);
     if (!$("agentAddr").value) $("agentAddr").value = account;
     refreshSvrBalance();
     lookup();
   } catch (e) {
     wallet = null;
-    logLine(`<span class="pill-err">${c.name}: ${e.message} — this chain needs a wallet that supports custom networks (MetaMask does; Phantom does not).</span>`);
+    logLine(`<span class="pill-err">${esc(c.name)}: ${esc(e.message)} — this chain needs a wallet that supports custom networks (MetaMask does; Phantom does not).</span>`);
   }
 }
 
@@ -294,7 +297,7 @@ async function lookup() {
     $("didHash").textContent = didHash;
     if (registeredAt !== 0n) {
       const score = BigInt(await rpcRead(REPUTATION, SEL.getTotalScore + pad32(didHash)));
-      $("regStatus").innerHTML = `<span class="pill-ok">yes — ${statusStr}</span>`;
+      $("regStatus").innerHTML = `<span class="pill-ok">yes — ${esc(statusStr)}</span>`;
       $("score").textContent = `${score} / 100`;
       const rep = await rpcRead(REPUTATION, SEL.getReputation + pad32(didHash));
       $("breakdown").innerHTML = FACTORS
@@ -315,7 +318,7 @@ async function lookup() {
     $("covered").innerHTML = covered ? '<span class="pill-ok">yes</span>' : '<span class="pill-err">no — deposit below</span>';
     $("agentInfo").style.display = "";
   } catch (e) {
-    logLine(`<span class="pill-err">lookup failed: ${e.message}</span>`);
+    logLine(`<span class="pill-err">lookup failed: ${esc(e.message)}</span>`);
   }
 }
 
@@ -350,7 +353,7 @@ async function registerAgentFlow() {
     logLine("registering agent (your wallet becomes the operator)…");
     await sendTx(IDENTITY, SEL.registerAgent + encAddr(currentAgent) + pubHex);
     await lookup();
-  } catch (e) { logLine(`<span class="pill-err">${e.message}</span>`); }
+  } catch (e) { logLine(`<span class="pill-err">${esc(e.message)}</span>`); }
 }
 
 async function deposit() {
@@ -359,29 +362,29 @@ async function deposit() {
     const amt = parseUnits($("amount").value);
     const allowance = BigInt(await rpcRead(tokenAddr, SEL.allowance + encAddr(account) + encAddr(FEES)));
     if (allowance < amt) {
-      logLine(`approving ${formatUnits(amt)} ${tokenSymbol}…`);
+      logLine(`approving ${formatUnits(amt)} ${esc(tokenSymbol)}…`);
       await sendTx(tokenAddr, SEL.approve + encAddr(FEES) + encUint(amt));
     }
-    logLine(`depositing ${formatUnits(amt)} ${tokenSymbol} for agent…`);
+    logLine(`depositing ${formatUnits(amt)} ${esc(tokenSymbol)} for agent…`);
     await sendTx(FEES, SEL.depositFor + pad32(currentDidHash) + encUint(amt));
     await lookup(); await refreshSvrBalance();
-  } catch (e) { logLine(`<span class="pill-err">${e.message}</span>`); }
+  } catch (e) { logLine(`<span class="pill-err">${esc(e.message)}</span>`); }
 }
 async function withdrawFees() {
   try {
     if (!currentDidHash) await lookup();
     const amt = parseUnits($("amount").value);
-    logLine(`withdrawing ${formatUnits(amt)} ${tokenSymbol} (operator only)…`);
+    logLine(`withdrawing ${formatUnits(amt)} ${esc(tokenSymbol)} (operator only)…`);
     await sendTx(FEES, SEL.withdraw + pad32(currentDidHash) + encUint(amt));
     await lookup(); await refreshSvrBalance();
-  } catch (e) { logLine(`<span class="pill-err">${e.message}</span>`); }
+  } catch (e) { logLine(`<span class="pill-err">${esc(e.message)}</span>`); }
 }
 async function faucet() {
   try {
-    logLine(`requesting 1,000 ${tokenSymbol} from faucet…`);
+    logLine(`requesting 1,000 ${esc(tokenSymbol)} from faucet…`);
     await sendTx(tokenAddr, SEL.faucet + encUint(1000n * 10n ** tokenDecimals));
     await refreshSvrBalance();
-  } catch (e) { logLine(`<span class="pill-err">${e.message} (testnet faucet only, has a cooldown)</span>`); }
+  } catch (e) { logLine(`<span class="pill-err">${esc(e.message)} (testnet faucet only, has a cooldown)</span>`); }
 }
 
 // ---- init ----
@@ -400,15 +403,15 @@ async function faucet() {
     tokenDecimals = BigInt(await rpcRead(tokenAddr, SEL.decimals));
     // on testnet, make it impossible to read the faucet token as a real asset
     if (CHAIN_ID === 5042002) tokenSymbol = "test " + tokenSymbol;
-    $("amount").placeholder = `amount in ${tokenSymbol}, e.g. 100`;
-    $("faucetBtn").textContent = `Get 1,000 ${tokenSymbol}`;
+    $("amount").placeholder = `amount in ${esc(tokenSymbol)}, e.g. 100`;
+    $("faucetBtn").textContent = `Get 1,000 ${esc(tokenSymbol)}`;
     const fee = BigInt(await rpcRead(FEES, SEL.epochFee));
-    $("feeNow").textContent = `${formatUnits(fee)} ${tokenSymbol}/epoch`;
+    $("feeNow").textContent = `${formatUnits(fee)} ${esc(tokenSymbol)}/epoch`;
     $("feeNote").textContent = (fee === 0n ? "(bootstrap: scoring is free, gating disabled — " : "(")
       + "fees use a valueless testnet faucet token, not a tradeable asset)";
   } catch (e) {
     $("feeNow").textContent = "unavailable";
-    logLine(`<span class="pill-err">RPC read failed: ${e.message}</span>`);
+    logLine(`<span class="pill-err">RPC read failed: ${esc(e.message)}</span>`);
   }
 })();
 </script>

@@ -74,7 +74,17 @@ function rateLimited(key, now = Date.now(), max = RATE_MAX, windowMs = RATE_WIND
   return bucket.count > max;
 }
 
+// Loopback binds may run without an admin token (local testing). Anything else
+// must have one, or /attest, /flag and /epoch are open to the network. Returns
+// null when the configuration is acceptable, otherwise the reason to refuse startup.
+function adminTokenPolicyError(host, adminToken) {
+  const loopback = host === '127.0.0.1' || host === 'localhost' || host === '::1';
+  if (adminToken || loopback) return null;
+  return `ORACLE_ADMIN_TOKEN is unset but HOST=${host} is not loopback; refusing to expose unauthenticated write endpoints. Set ORACLE_ADMIN_TOKEN (openssl rand -hex 32) or bind to 127.0.0.1.`;
+}
+
 module.exports = {
+  adminTokenPolicyError,
   MAX_BODY_SIZE,
   RATE_WINDOW_MS,
   RATE_MAX,

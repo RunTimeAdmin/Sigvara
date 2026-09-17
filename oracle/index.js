@@ -7,7 +7,7 @@ const chain = require('./chain');
 const external = require('./external');
 const { computeScore } = require('./scoring');
 const { decideAction } = require('./epoch-policy');
-const { json, readBody, isAuthorized, parseScorePath, rateLimited } = require('./http-helpers');
+const { json, readBody, isAuthorized, parseScorePath, rateLimited, adminTokenPolicyError } = require('./http-helpers');
 const metrics = require('./metrics');
 
 // Per-client key for rate limiting. Behind the container's 127.0.0.1 port map all
@@ -383,6 +383,14 @@ const server = http.createServer(async (req, res) => {
 
   return json(res, 404, { error: 'Not found' });
 });
+
+{
+  const policyError = adminTokenPolicyError(cfg.host, cfg.adminToken);
+  if (policyError) {
+    console.error(`[oracle] ${policyError}`);
+    process.exit(1);
+  }
+}
 
 server.listen(cfg.port, cfg.host, () => {
   if (!cfg.adminToken) {

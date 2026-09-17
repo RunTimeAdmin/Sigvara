@@ -227,7 +227,7 @@ contract SigvaraOracleBond is
 
         op.bond -= amount;
 
-        bool demoted;
+        bool demoted = false;
         if (op.status == Status.Active && op.bond < bondAmount) {
             op.status = Status.Bonded;
             activeCount -= 1;

@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
-const { readBody, isAuthorized, parseScorePath, rateLimited, RATE_MAX } = require('./http-helpers');
+const { readBody, isAuthorized, parseScorePath, rateLimited, RATE_MAX, adminTokenPolicyError } = require('./http-helpers');
 
 // Minimal fake matching the subset of http.IncomingMessage that readBody uses:
 // an EventEmitter with data/end/error events plus a destroy() method.
@@ -140,4 +140,20 @@ test('rateLimited: separate keys have independent buckets', () => {
   for (let i = 0; i < RATE_MAX; i++) rateLimited('ip-c', now);
   assert.equal(rateLimited('ip-c', now), true, 'ip-c is capped');
   assert.equal(rateLimited('ip-d', now), false, 'ip-d is unaffected');
+});
+
+test('adminTokenPolicyError: loopback binds may run without a token', () => {
+  assert.equal(adminTokenPolicyError('127.0.0.1', ''), null);
+  assert.equal(adminTokenPolicyError('localhost', ''), null);
+  assert.equal(adminTokenPolicyError('::1', ''), null);
+});
+
+test('adminTokenPolicyError: a non-loopback bind without a token is refused', () => {
+  const err = adminTokenPolicyError('0.0.0.0', '');
+  assert.match(err, /ORACLE_ADMIN_TOKEN is unset/);
+  assert.match(err, /HOST=0.0.0.0/);
+});
+
+test('adminTokenPolicyError: any bind is fine once a token is set', () => {
+  assert.equal(adminTokenPolicyError('0.0.0.0', 'secret'), null);
 });
