@@ -3,7 +3,7 @@
 Sigvara contracts are EVM-generic (`block.chainid` is baked into every DID), so
 moving to Arc is deploy configuration plus a few chain facts you have to respect.
 This guide targets **Arc testnet** (`5042002`) now and **Arc mainnet** (`5042`)
-when the bond-asset decision is made.
+with SVR as the bond asset ([token.md](token.md)).
 
 | Network | Chain ID | Public RPC | Explorer | Faucet |
 |---|---|---|---|---|
@@ -117,7 +117,7 @@ the identity, so the same key on Arc mainnet is a different DID.
 
 ## 5. Mainnet (5042)
 
-Not before: the bond-asset decision, a Tier-1 audit, and a real slashing
+Not before: an external audit and a real slashing
 committee multisig in `COMMITTEE_ADDRESS`. Mechanically it is the same command
 with `--rpc-url arc_mainnet` and real USDC for gas.
 

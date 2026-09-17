@@ -552,7 +552,8 @@ Avoid:
 - "Unstoppable AI."
 - Claims that imply a live `did:sigvara` method before it exists.
 - Claims that imply Sigvara is owned or operated by Arc or Circle.
-- Claims about a token, a launch, or a bond asset before that decision is made.
+- Any SVR contract address, pool or launch detail that is not already published in docs/token.md and on sigvara.xyz.
+- Language that treats SVR as an investment or forecasts its value.
 
 ## 15. Implementation checklist
 

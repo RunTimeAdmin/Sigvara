@@ -9,8 +9,8 @@ builds `src/`, `script/` and `test/`) and nothing here is deployed.
 - `test/` — the tests for the above
 - `docs/tokenomics.md`, `docs/oracle-first.md` — the earlier token model and the July 2026 decision to defer it
 
-Whether the protocol's bond asset becomes a purpose-built token or a standard
-one is undecided. The live contracts (`SigvaraStaking`, `SigvaraOracleBond`,
+The bond asset is SVR, launched through Archemist on Arc rather than through
+these contracts, so the sale, vesting and allocation logic here is unused. The live contracts (`SigvaraStaking`, `SigvaraOracleBond`,
 `SigvaraEpochFees`) take the bond token by address at initialization, so either
 answer is deploy configuration, not a code change. To bring any of this back,
 move the files into `src/`, `script/` and `test/` and fix the relative imports.

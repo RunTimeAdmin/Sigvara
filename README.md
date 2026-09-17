@@ -4,9 +4,9 @@
 
 As AI agents become independent economic actors, they need a trust score that means something and accountability that costs something. [ERC-8004](https://eips.ethereum.org/EIPS/eip-8004) gives agents a standard on-chain identity and a raw feedback ledger, but deliberately leaves out the hard parts: computing a trustworthy score from that feedback, and putting slashable stake behind it. Sigvara is that layer. It takes ERC-8004 as the identity and feedback substrate, computes a normalized reputation score with an oracle, and enforces bonds and slashing — the accountability the standard omits. (Ed25519 PKI challenge-response for agent-to-agent auth rides alongside.)
 
-> **Token status: undecided.** Staking and slashing in this protocol bond an ERC-20, and the contracts take that token by address at deploy time. Whether the bond asset ends up a purpose-built token or an established one is an open design decision. No token has been issued by this project, and nothing trading under the Sigvara name came from this team. Treat this repository and [sigvara.xyz](https://sigvara.xyz) as the only canonical sources.
+> **Token.** The protocol's bond and fee asset is **SVR**, a fixed-supply, ownerless ERC-20 on Arc mainnet with no team allocation, no treasury allocation and no sale. Contract address, pool and treasury policy are published in [docs/token.md](docs/token.md) and on [sigvara.xyz](https://sigvara.xyz) before anywhere else; nothing trading under the Sigvara name that is not listed there came from this team. On-chain utility begins when the registries deploy to Arc mainnet after audit.
 >
-> **Where this stands.** Sigvara is a computed-reputation and staked-slashing layer for autonomous agents on top of ERC-8004: the standard covers identity and raw feedback; Sigvara computes a normalized score and puts slashable bond behind it. Contracts, oracle and SDK are built and tested (Foundry unit and fuzz tests, Slither in CI). The same protocol ran for about a month on Robinhood Chain testnet with a live hourly oracle under its prior name (see [docs/lineage.md](docs/lineage.md)), and **Arc testnet** (chain ID `5042002`) is the next deployment target ([docs/arc.md](docs/arc.md)). The bond asset for mainnet is still an open design choice, the oracle trust model is not yet decentralized, and there is no external audit. This is early protocol work with real engineering and a documented testnet lineage, not a mainnet product claim. [CounterAudit](https://counteraudit.io) both consumes Sigvara scores and feeds work-outcome attestations back into them.
+> **Where this stands.** Sigvara is a computed-reputation and staked-slashing layer for autonomous agents on top of ERC-8004: the standard covers identity and raw feedback; Sigvara computes a normalized score and puts slashable bond behind it. Contracts, oracle and SDK are built and tested (Foundry unit and fuzz tests, Slither in CI). The same protocol ran for about a month on Robinhood Chain testnet with a live hourly oracle under its prior name (see [docs/lineage.md](docs/lineage.md)), and **Arc testnet** (chain ID `5042002`) is the next deployment target ([docs/arc.md](docs/arc.md)). The oracle trust model is not yet decentralized, and there is no external audit. This is early protocol work with real engineering and a documented testnet lineage, not a mainnet product claim. [CounterAudit](https://counteraudit.io) both consumes Sigvara scores and feeds work-outcome attestations back into them.
 
 ### This repo vs. the Countersig hosted platform
 
@@ -23,6 +23,7 @@ If you're looking for MCP server support or React trust-badge components, those 
 | [Ecosystem Overview](docs/ecosystem.md) | Everyone — start here to understand the full picture |
 | [Quickstart](docs/quickstart.md) | Developers — register your first agent in 10 minutes |
 | [Arc](docs/arc.md) | Developers — deploy / test on Arc (5042002 / 5042), USDC gas |
+| [SVR token](docs/token.md) | Everyone — the bond and fee token: contract, distribution, treasury policy, when utility starts |
 | [Brand](docs/brand.md) | Designers / frontend — colors, type, layout and component rules for every Sigvara surface |
 | [CounterAudit Integration](docs/counteraudit-integration.md) | Enterprise — embed agent identity in your audit trail |
 | [AI Framework Integration](docs/ai-frameworks.md) | Developers — LangChain, AutoGen, CrewAI, Node.js |
@@ -478,12 +479,12 @@ require(rep.meetsThreshold(didHash, 60), "insufficient reputation");
 | Phase | Timeline | Deliverables |
 |---|---|---|
 | Core Protocol | Q3 2026 | contracts, reputation oracle and `@sigvara/protocol-sdk` v1.0 built and tested · CounterAudit attestation + HoodScan flag feeds |
-| Arc Port | Q4 2026 | Arc testnet deployment (`5042002`, USDC gas) · oracle epochs against Arc · bond-asset decision (see [docs/arc.md](docs/arc.md)) |
+| Arc Port | Q4 2026 | Arc testnet deployment (`5042002`, USDC gas) · oracle epochs against Arc · SVR launch on Arc mainnet ([docs/token.md](docs/token.md)) |
 | External Trust | Q4 2026 | ~~externalScore from ERC-8004 feedback~~ **done** (linked agents, live) · agent-vouching graph (propagationScore) · deeper ERC-8004 interop (publish CounterAudit validations to the Validation Registry) |
-| Mainnet Registries | Q1 2027 | Tier-1 security audit · registry deployment on Arc mainnet (`5042`) with bonds and scoring fees — bond asset to be decided |
+| Mainnet Registries | Q1 2027 | Tier-1 security audit · registry deployment on Arc mainnet (`5042`) with bonds and scoring fees in SVR |
 | Cross-Chain | Q2 2027 | Solana + Base state mirroring via LayerZero |
 
-The token-launch contract set (fixed-supply `SVR`, vesting, public sale) and the earlier tokenomics and oracle-first direction docs live under [`archive/token-launch/`](archive/token-launch/). They are out of the build until the bond-asset decision is made.
+The token-launch contract set (fixed-supply `SVR`, vesting, public sale) and the earlier tokenomics and oracle-first direction docs live under [`archive/token-launch/`](archive/token-launch/). They are out of the build; SVR launches through Archemist rather than these contracts.
 
 ---
 
