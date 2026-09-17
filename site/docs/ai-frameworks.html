@@ -7,13 +7,8 @@
   <meta name="description" content="Integrate Sigvara identity with LangChain, AutoGen, CrewAI, and other AI agent frameworks." />
   <link rel="icon" type="image/svg+xml" href="../assets/sigvara-avatar.svg" />
   <link rel="stylesheet" href="../assets/style.css" />
-  <style>
-    .fw-tabs { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
-    .fw-tab { font-size: 12px; font-family: var(--font-mono); padding: 5px 14px; border: 1px solid var(--border); border-radius: 20px; background: var(--surface); color: var(--muted); cursor: pointer; transition: all 0.15s; }
-    .fw-tab.active, .fw-tab:hover { color: var(--accent); border-color: rgba(79,142,247,0.4); background: rgba(79,142,247,0.07); }
-    .fw-pane { display: none; }
-    .fw-pane.active { display: block; }
-  </style>
+  <link rel="stylesheet" href="../assets/ai-frameworks.css" />
+
 </head>
 <body>
 
@@ -73,10 +68,10 @@
         <h3>Framework Examples</h3>
 
         <div class="fw-tabs">
-          <div class="fw-tab active" onclick="showFw('langchain', this)">LangChain</div>
-          <div class="fw-tab" onclick="showFw('autogen', this)">AutoGen</div>
-          <div class="fw-tab" onclick="showFw('crewai', this)">CrewAI</div>
-          <div class="fw-tab" onclick="showFw('generic', this)">Generic Node.js</div>
+          <div class="fw-tab active" data-fw="langchain" role="tab" tabindex="0">LangChain</div>
+          <div class="fw-tab" data-fw="autogen" role="tab" tabindex="0">AutoGen</div>
+          <div class="fw-tab" data-fw="crewai" role="tab" tabindex="0">CrewAI</div>
+          <div class="fw-tab" data-fw="generic" role="tab" tabindex="0">Generic Node.js</div>
         </div>
 
         <div id="fw-langchain" class="fw-pane active">
@@ -190,10 +185,10 @@ class AuditedTool(BaseTool):
 
         <h3>The Universal Pattern</h3>
         <p>Regardless of framework, the integration follows the same three steps:</p>
-        <ol style="color:var(--muted);font-size:15px;padding-left:20px;margin-bottom:24px">
-          <li style="margin-bottom:8px"><strong style="color:var(--text)">Initialize once at startup.</strong> Create a <code>SigvaraAgent</code> instance from your stored Ed25519 seed and agent address.</li>
-          <li style="margin-bottom:8px"><strong style="color:var(--text)">Include the DID in every audit call.</strong> Pass <code>agent_did: csAgent.did</code> in every CounterAudit ingest payload.</li>
-          <li style="margin-bottom:8px"><strong style="color:var(--text)">Never include the private key in the payload.</strong> The DID is a public identifier. The private key is only used to sign challenges when a peer requests authentication.</li>
+        <ol class="u-list-muted">
+          <li class="u-mb-8"><strong class="u-text">Initialize once at startup.</strong> Create a <code>SigvaraAgent</code> instance from your stored Ed25519 seed and agent address.</li>
+          <li class="u-mb-8"><strong class="u-text">Include the DID in every audit call.</strong> Pass <code>agent_did: csAgent.did</code> in every CounterAudit ingest payload.</li>
+          <li class="u-mb-8"><strong class="u-text">Never include the private key in the payload.</strong> The DID is a public identifier. The private key is only used to sign challenges when a peer requests authentication.</li>
         </ol>
       </main>
 
@@ -204,7 +199,7 @@ class AuditedTool(BaseTool):
 <footer>
   <div class="footer-inner">
     <div class="footer-left">
-      <a href="../" style="font-family:var(--font-mono);font-size:13px;color:var(--muted)">sigvara.xyz</a> &nbsp;·&nbsp; MIT License
+      <a class="u-mono-13" href="../">sigvara.xyz</a> &nbsp;·&nbsp; MIT License
     </div>
     <div class="footer-links">
       <a href="quickstart.html">Quickstart</a>
@@ -215,14 +210,8 @@ class AuditedTool(BaseTool):
   </div>
 </footer>
 
-<script>
-function showFw(id, tab) {
-  document.querySelectorAll('.fw-pane').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('.fw-tab').forEach(t => t.classList.remove('active'));
-  document.getElementById('fw-' + id).classList.add('active');
-  tab.classList.add('active');
-}
-</script>
 
+
+<script src="../assets/ai-frameworks.js"></script>
 </body>
 </html>

@@ -146,7 +146,7 @@ def audit_action(agent_did: str, action: dict, ca_api_key: str):
   outcome:      <span class="str">'success'</span>,  <span class="cm">// or 'failure'</span>
   raw_event:    action,
 }</code></pre>
-        <p style="color:var(--muted);font-size:13px">See the <a href="reputation.html">Reputation Model</a> for how each factor is computed and where its signal comes from.</p>
+        <p class="u-muted-13">See the <a href="reputation.html">Reputation Model</a> for how each factor is computed and where its signal comes from.</p>
 
         <h3>Why the Sealed Packet Matters</h3>
         <p>The reputation score is frozen at the moment of the action. If an agent is slashed next month, every audit record from before the slash still shows what their reputation was at the time. The historical record does not rewrite itself — the RFC 3161 timestamp and AES-GCM seal together guarantee it. This is the forensic property that makes Sigvara-enriched audit records legally meaningful.</p>
@@ -159,7 +159,7 @@ def audit_action(agent_did: str, action: dict, ca_api_key: str):
 <footer>
   <div class="footer-inner">
     <div class="footer-left">
-      <a href="../" style="font-family:var(--font-mono);font-size:13px;color:var(--muted)">sigvara.xyz</a> &nbsp;·&nbsp; MIT License
+      <a class="u-mono-13" href="../">sigvara.xyz</a> &nbsp;·&nbsp; MIT License
     </div>
     <div class="footer-links">
       <a href="quickstart.html">Quickstart</a>

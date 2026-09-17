@@ -394,3 +394,19 @@ input[type="text"]:focus { outline: none; border-color: var(--sig-violet); box-s
   .logo { font-size: 16px; }
   h1 { font-size: clamp(30px, 10vw, 40px); }
 }
+
+/* Utility classes: former inline style attributes, removed so the CSP can drop 'unsafe-inline'. */
+.u-muted-13 { color: var(--muted); font-size: 13px; }
+.u-mono-13 { font-family: var(--font-mono); font-size: 13px; color: var(--muted); }
+.u-mb-8 { margin-bottom: 8px; } .u-mb-6 { margin-bottom: 6px; } .u-mb-32 { margin-bottom: 32px; }
+.u-mt-48 { margin-top: 48px; } .u-mt-16 { margin-top: 16px; } .u-mt-12 { margin-top: 12px; }
+.u-text { color: var(--text); } .u-hidden { display: none !important; } .u-minw-0 { min-width: 0; }
+.u-block-link { display: block; text-decoration: none; }
+.u-step-kicker { font-size: 13px; color: var(--accent2); font-family: var(--font-mono); margin-bottom: 8px; }
+.u-note { font-size: 13px; color: var(--muted); margin: 0; }
+.u-lh-19 { line-height: 1.9; margin-bottom: 8px; }
+.u-muted-12-light { color: var(--muted); font-weight: 400; font-size: 12px; }
+.u-list-muted { color: var(--muted); font-size: 15px; padding-left: 20px; margin-bottom: 24px; }
+.u-h1-28 { font-size: 28px; margin-bottom: 4px; } .u-fs-12 { font-size: 12px; }
+.btn-inline-sm { padding: 4px 10px; font-size: 12.5px; margin-left: 8px; }
+.w-30 { width: 30%; } .w-25 { width: 25%; } .w-20 { width: 20%; } .w-15 { width: 15%; } .w-5 { width: 5%; }
