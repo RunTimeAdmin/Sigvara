@@ -68,7 +68,7 @@ CounterAudit integration revenue, not from the token.
 ## When the utility starts
 
 The Sigvara registries deploy to Arc mainnet after an external audit
-([docs/arc.md](arc.md), section 5). Until that deployment, SVR has no on-chain
+([docs/arc.md](arc.md), section 6). Until that deployment, SVR has no on-chain
 use in the protocol. Between launch and mainnet registries it is a token with a
 published roadmap and nothing else. Arc testnet keeps using the faucet
 `SVRToken` for mechanics testing; testnet tokens have no value and never will.

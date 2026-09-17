@@ -115,7 +115,35 @@ npx vitest run test/integration.test.ts
 DIDs minted here look like `did:sigvara:5042002:0x...`; the chain ID is part of
 the identity, so the same key on Arc mainnet is a different DID.
 
-## 5. Mainnet (5042)
+## 5. Upgrading a deployed proxy
+
+Every registry is a UUPS proxy gated on `UPGRADER_ROLE`, so an upgrade is the
+most dangerous operation in the system. `script/Upgrade.s.sol` deploys a fresh
+implementation, reads the proxy address out of `deployments/<chainId>.json`,
+records the ERC-1967 implementation slot before and after, and reverts if the
+slot did not move.
+
+```bash
+# Simulate first. TARGET is identity | reputation | staking | oracleBond | epochFees.
+TARGET=staking forge script script/Upgrade.s.sol --rpc-url arc_testnet -vvvv
+
+TARGET=staking forge script script/Upgrade.s.sol --rpc-url arc_testnet --broadcast -vvvv
+```
+
+`oracleBond` and `epochFees` are deployed by their own scripts and are not in
+the artifact, so pass `PROXY=0x...` for those. When the new implementation adds
+state that must not start at zero, pass `INIT_CALLDATA` with the encoded
+reinitializer call so it lands in the same transaction as the upgrade.
+
+Run `forge test --match-contract UpgradeTest` before broadcasting. Those tests
+cover the half the slot-pinning tests do not: that the upgrade executes, that
+only `UPGRADER_ROLE` can execute it, and that stakes, scores and queued
+withdrawals read back unchanged afterwards.
+
+On mainnet `UPGRADER_ROLE` belongs to the governance timelock, so this script is
+used to simulate and to produce the calldata, not to broadcast.
+
+## 6. Mainnet (5042)
 
 Not before: an external audit and a real slashing
 committee multisig in `COMMITTEE_ADDRESS`. Mechanically it is the same command

@@ -383,6 +383,11 @@ forge build
 forge test
 ```
 
+Deploy and upgrade scripts live in `script/`. `Deploy.s.sol` brings up the
+registries and wires roles; `Upgrade.s.sol` moves a single UUPS proxy to a new
+implementation and is covered by `test/Upgrade.t.sol`. See
+[docs/arc.md](docs/arc.md) for both.
+
 Running the fuzz suite at higher intensity:
 
 ```bash

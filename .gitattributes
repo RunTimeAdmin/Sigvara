@@ -1,0 +1,22 @@
+# The site is deployed by uploading files straight from a working tree, so the
+# working tree must match the index byte for byte. Without this, a Windows
+# checkout ships CRLF and every deployed file looks like it has drifted.
+* text=auto eol=lf
+
+# PowerShell is happier with CRLF.
+*.ps1 text eol=crlf
+
+# Never touch these.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.zip binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+
+# Minified vendor code is shipped verbatim and should not clutter diffs.
+site/assets/vendor/** -diff linguist-vendored
