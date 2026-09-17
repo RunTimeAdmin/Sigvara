@@ -77,7 +77,7 @@ graph TB
 | Contract | Role |
 |---|---|
 | [`SigvaraReputation`](src/SigvaraReputation.sol) | **Computed-score anchor.** Stores the oracle's normalized, capped 6-factor score — the layer *above* ERC-8004's raw feedback. Exposes `getTotalScore()` and `meetsThreshold()` for on-chain consumers. |
-| [`SigvaraStaking`](src/SigvaraStaking.sol) | **Staked accountability.** Agent bond management with committee-initiated slashing (7-day challenge window, permissionless execution after timelock). No ERC-8004 equivalent — this is the differentiator. Bond token is set by address at deploy: the testnet faucet token today, an established asset (WETH/USDC) at mainnet — the protocol never requires a native token. |
+| [`SigvaraStaking`](src/SigvaraStaking.sol) | **Staked accountability.** Agent bond management with committee-initiated slashing (7-day challenge window, permissionless execution after timelock). No ERC-8004 equivalent — this is the differentiator. Bond token is set by address at deploy: the faucet `SVRToken` on testnet, [SVR](docs/token.md) on mainnet — the contracts treat it as a plain `IERC20` either way. |
 | [`SigvaraIdentity`](src/SigvaraIdentity.sol) | **Legacy.** Original `did:sigvara` registry + on-chain Ed25519 PKI. Deprecated in favor of the ERC-8004 Identity Registry; kept for continuity of already-registered testnet agents. Its non-redundant part (the on-chain Ed25519 auth key + slash status) becomes an extension keyed to an ERC-8004 agent id. |
 
 The retained contracts use UUPS upgradeable proxies (OpenZeppelin v5), controlled by a governance timelock on mainnet.

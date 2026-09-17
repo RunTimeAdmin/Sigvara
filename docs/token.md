@@ -18,11 +18,15 @@ project.
 | Supply | 1,000,000,000, fixed at creation |
 | Decimals | 18 |
 | Owner / mint / pause | none |
-| Launch venue | Archemist on Arc, Uniswap V3 pool |
+| Launch venue | Tolly on Arc (pad `0xcad7ee36ac193bf2eddb7b3e2736c5bdb8269c8b`), Uniswap V3 pool, 1% tier, USDC quote |
+| Liquidity | Whole supply seeded single-sided at launch; LP NFT held by Tolly's ownerless, collect-only fee locker `0xe20e4297759597da75c8998ee76ec900600ad920` (no withdraw path in code) |
 | Pool | _published here at launch_ |
 
-The token contract is the standard one Archemist deploys. It has no owner, no
-mint function and no admin surface, which is exactly what the protocol
+The token contract is Tolly's `TollyToken`, a plain OpenZeppelin ERC-20 with
+public source ([TollyLabs/v3-contracts](https://github.com/TollyLabs/v3-contracts)).
+It has no owner, no mint, no pause, no blacklist and no transfer tax; its one
+deviation is an anti-snipe cap of 3% of supply per wallet for the first 300
+seconds after launch, after which it is a vanilla ERC-20. That is exactly what the protocol
 contracts need from a bond asset: `SigvaraStaking`, `SigvaraOracleBond` and
 `SigvaraEpochFees` take the token by address at initialization and treat it as
 a plain `IERC20`.
@@ -51,7 +55,8 @@ operator bond and operator incentives) are published here on launch day.
 
 ## Treasury policy
 
-The creator share of pool trading fees, credited by the Archemist locker, is
+The creator share of pool trading fees (64% of the 1% buy-side pool fee, paid
+in USDC and credited by Tolly's fee locker) is
 used to buy SVR on the open market. Purchased SVR goes to the protocol
 treasury address above and is spent only on oracle bonds, operator
 incentives and slashing-committee costs. Buybacks run on a published schedule,
