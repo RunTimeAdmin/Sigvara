@@ -15,6 +15,8 @@ const counters = {
   finalizeAttempts: 0,
   finalizeSuccesses: 0,
   finalizeErrors: 0,
+  feeCharges: 0,
+  feeChargeErrors: 0,
   attestAccepted: 0,
   attestRejectedCooldown: 0,
   attestRejectedOther: 0,
@@ -71,6 +73,11 @@ function toPrometheusText() {
   lines.push('# TYPE sigvara_oracle_finalize_total counter');
   lines.push(`sigvara_oracle_finalize_total{result="success"} ${counters.finalizeSuccesses}`);
   lines.push(`sigvara_oracle_finalize_total{result="error"} ${counters.finalizeErrors}`);
+
+  lines.push('# HELP sigvara_oracle_fee_charges_total Epoch-fee charges attempted by the oracle');
+  lines.push('# TYPE sigvara_oracle_fee_charges_total counter');
+  lines.push(`sigvara_oracle_fee_charges_total{result="ok"} ${counters.feeCharges}`);
+  lines.push(`sigvara_oracle_fee_charges_total{result="error"} ${counters.feeChargeErrors}`);
 
   lines.push('');
   lines.push('# HELP sigvara_oracle_attest_total Attestation requests');

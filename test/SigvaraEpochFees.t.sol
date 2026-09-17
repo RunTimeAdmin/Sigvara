@@ -146,13 +146,19 @@ contract SigvaraEpochFeesTest is Test {
         assertEq(fees.collected(), EPOCH_FEE);
     }
 
-    function test_chargeEpoch_uncovered_returnsFalse_noStateChange() public {
+    /// An uncovered agent must make the charge revert, not return false. A bool the
+    /// oracle forgets to inspect turns a missed payment into a free scoring run with
+    /// no error recorded anywhere; a revert forces the caller to skip the agent.
+    function test_chargeEpoch_uncovered_reverts_noStateChange() public {
         vm.prank(operator);
         fees.depositFor(didHash, 5e18); // < EPOCH_FEE
 
+        vm.expectRevert(
+            abi.encodeWithSelector(SigvaraEpochFees.InsufficientBalance.selector, didHash, EPOCH_FEE, 5e18)
+        );
         vm.prank(oracle);
-        bool charged = fees.chargeEpoch(didHash);
-        assertFalse(charged);
+        fees.chargeEpoch(didHash);
+
         assertEq(fees.balance(didHash), 5e18);
         assertEq(fees.collected(), 0);
     }

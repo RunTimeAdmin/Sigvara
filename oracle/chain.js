@@ -156,8 +156,9 @@ async function isCovered(didHash) {
   return feeContract.isCovered(didHash);
 }
 
-// Charges one epoch fee for the agent. isCovered() is checked first by the caller,
-// so this is expected to succeed; the tx return is not inspected.
+// Charges one epoch fee for the agent. The registry reverts when the agent is not
+// covered, so a silent no-op is not possible: a failure here surfaces as a thrown
+// error and the caller skips the agent rather than scoring it for free.
 async function chargeEpoch(didHash) {
   if (!feeContract) return;
   const tx = await feeContract.chargeEpoch(didHash);

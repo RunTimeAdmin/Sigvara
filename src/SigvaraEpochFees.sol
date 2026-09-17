@@ -91,6 +91,7 @@ contract SigvaraEpochFees is
     error NotOperator(bytes32 didHash, address caller);
     error InsufficientBalance(bytes32 didHash, uint256 requested, uint256 available);
     error NothingToDistribute();
+    error AgentNotRegistered(bytes32 didHash);
 
     // -------------------------------------------------------------------------
     // Constructor / Initializer
@@ -146,6 +147,11 @@ contract SigvaraEpochFees is
      */
     function depositFor(bytes32 didHash, uint256 amount) external nonReentrant {
         if (amount == 0) revert ZeroAmount();
+        // Only fund identities that exist. withdraw() resolves the owner lazily from
+        // the registry, and the didHash is publicly computable before registration,
+        // so funding an unregistered hash hands the balance to whoever registers that
+        // address next -- or strands it forever if nobody does.
+        if (identityRegistry.getIdentity(didHash).registeredAt == 0) revert AgentNotRegistered(didHash);
         svr.safeTransferFrom(msg.sender, address(this), amount);
         balance[didHash] += amount;
         emit FeesDeposited(didHash, msg.sender, amount, balance[didHash]);
@@ -190,7 +196,10 @@ contract SigvaraEpochFees is
         if (fee == 0) return true;
 
         uint256 bal = balance[didHash];
-        if (bal < fee) return false;
+        // Revert rather than reporting failure in a return value. The only caller is
+        // the oracle, and a bool it forgets to inspect turns a missed payment into a
+        // free scoring run with no error anywhere. A revert cannot be ignored.
+        if (bal < fee) revert InsufficientBalance(didHash, fee, bal);
 
         balance[didHash] = bal - fee;
         collected += fee;

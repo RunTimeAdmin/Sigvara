@@ -80,6 +80,14 @@ async function runEpoch() {
 
   try {
     await runEpochInner();
+  } catch (err) {
+    // runEpochInner reads chain config (challenge window, chain clock, epoch fee)
+    // outside any per-agent guard. A transient RPC failure there used to escape as
+    // an unhandled rejection and kill the process; the container then restarted and
+    // immediately re-ran the epoch, which is how an agent could be charged twice.
+    // An epoch that cannot start is skipped until the next tick instead.
+    console.error('[oracle] epoch aborted:', err.message);
+    metrics.inc('epochsFailed');
   } finally {
     epochRunning = false;
   }
@@ -151,6 +159,18 @@ async function runEpochInner() {
         continue;
       }
 
+      // The status above came from the concurrent phase-1 batch. Writes are
+      // sequential, so by the time this agent's turn arrives a slash may have
+      // executed — and proposing then writes a fresh score onto a terminated
+      // identity that nothing will ever correct. Re-read immediately before
+      // writing so the check is one block from the write, not one batch.
+      const fresh = await chain.getAgentInfo(didHash);
+      if (fresh.status === chain.STATUS_SLASHED) {
+        console.log(`[oracle]   ${didHash.slice(0, 10)}… slashed since the batch read, skipping`);
+        chain.pruneAgent(didHash);
+        continue;
+      }
+
       const action = decideAction(pending, challengeWindow, chainNow);
 
       if (action === 'skip') {
@@ -190,22 +210,31 @@ async function runEpochInner() {
         : 0;
       const scores    = computeScore({ registeredAt, attestations: att, flags: flagCount, externalScore });
 
+      // Charge before proposing, not after. The coverage read above and the
+      // charge are separated by at least the propose transaction, and an
+      // operator can withdraw in that gap: they would be scored for free, and
+      // because the charge used to be fire-and-forget the failure was silent.
+      // Taking the fee first means a withdrawal after the charge costs them
+      // nothing to us. The trade-off is that an agent charged for an epoch whose
+      // proposal then fails has paid for a run it did not get; that is logged
+      // and counted, and is the lesser of the two errors.
+      if (gatingActive) {
+        try {
+          await chain.chargeEpoch(didHash);
+          metrics.inc('feeCharges');
+        } catch (chargeErr) {
+          console.error(`[oracle]   ${didHash.slice(0, 10)}… epoch-fee charge failed, not scoring: ${chargeErr.message}`);
+          metrics.inc('feeChargeErrors');
+          continue;
+        }
+      }
+
       metrics.inc('proposeAttempts');
       const txHash    = await chain.proposeScore(didHash, scores);
       metrics.inc('proposeSuccesses');
 
       console.log(`[oracle]   ${didHash.slice(0, 10)}… proposed score=${scores.total}/100 tx=${txHash.slice(0, 10)}…`);
       proposed++;
-
-      // Charge the epoch fee only after a successful proposal, so an agent pays
-      // solely for scoring runs it was actually included in.
-      if (gatingActive) {
-        try {
-          await chain.chargeEpoch(didHash);
-        } catch (chargeErr) {
-          console.error(`[oracle]   ${didHash.slice(0, 10)}… epoch-fee charge failed: ${chargeErr.message}`);
-        }
-      }
     } catch (err) {
       console.error(`[oracle]   ${didHash.slice(0, 10)}… error: ${err.message}`);
       metrics.inc('proposeErrors');
@@ -399,6 +428,6 @@ server.listen(cfg.port, cfg.host, () => {
   console.log(`[oracle] HTTP on ${cfg.host}:${cfg.port}  epoch every ${cfg.epochMs / 3_600_000}h  attest cooldown ${ATTEST_COOLDOWN_MS / 1000}s`);
   console.log(`[oracle] state path: ${getStatePath()}`);
   loadState();
-  runEpoch();
-  setInterval(runEpoch, cfg.epochMs);
+  runEpoch().catch(err => console.error('[oracle] startup epoch error:', err.message));
+  setInterval(() => runEpoch().catch(err => console.error('[oracle] scheduled epoch error:', err.message)), cfg.epochMs);
 });

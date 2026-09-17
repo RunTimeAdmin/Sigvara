@@ -119,6 +119,8 @@ contract SigvaraStaking is
     error NoWithdrawalPending(bytes32 didHash);
     error WithdrawalAlreadyPending(bytes32 didHash);
     error UnbondingPeriodActive(bytes32 didHash, uint256 claimableAt);
+    error VictimIsReporter(address victim);
+    error PeriodTooShort(uint256 provided, uint256 minimum);
 
     // -------------------------------------------------------------------------
     // Constructor / Initializer
@@ -296,6 +298,10 @@ contract SigvaraStaking is
         bytes calldata evidenceHash
     ) external nonReentrant onlyRole(SLASHING_COMMITTEE_ROLE) {
         if (victim == address(0)) revert ZeroAddress();
+        // The caller is recorded as the reporter and takes 25% of the bond. Letting
+        // it also name itself as the victim turns one committee signature into a 50%
+        // self-payment out of the accused party's stake.
+        if (victim == msg.sender) revert VictimIsReporter(victim);
         // Slashable balance is the active stake PLUS anything queued for withdrawal.
         // Checking only the active stake let an operator drain everything into the
         // unbonding queue (which executeSlash still sweeps) and thereby block the slash
@@ -398,12 +404,22 @@ contract SigvaraStaking is
         emit MinimumStakeUpdated(newMinimum);
     }
 
+    /// @notice Lower bound on the dispute window. Without it, an admin who also holds
+    ///         the committee role can set the period to zero and execute a slash in
+    ///         the same block, leaving the operator no chance to dispute.
+    uint256 public constant MIN_CHALLENGE_PERIOD = 3 days;
+    /// @notice Lower bound on unbonding, so queued withdrawals cannot be made
+    ///         instantly claimable while a slash is being prepared.
+    uint256 public constant MIN_UNBONDING_PERIOD = 1 days;
+
     function setChallengePeriod(uint256 newPeriod) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (newPeriod < MIN_CHALLENGE_PERIOD) revert PeriodTooShort(newPeriod, MIN_CHALLENGE_PERIOD);
         challengePeriod = newPeriod;
         emit ChallengePeriodUpdated(newPeriod);
     }
 
     function setUnbondingPeriod(uint256 newPeriod) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (newPeriod < MIN_UNBONDING_PERIOD) revert PeriodTooShort(newPeriod, MIN_UNBONDING_PERIOD);
         unbondingPeriod = newPeriod;
         emit UnbondingPeriodUpdated(newPeriod);
     }

@@ -234,6 +234,15 @@ contract SigvaraOracleBond is
             demoted = true;
         }
 
+        // A bond slashed to exactly zero must clear the record. Leaving a
+        // zero-bond operator in Bonded or Exiting bricks the address: depositBond,
+        // admit and removeOperator all revert on status, and withdrawBond reverts
+        // on NoBond, so nothing short of an upgrade could ever move it again.
+        if (op.bond == 0) {
+            op.status = Status.None;
+            op.unbondingAt = 0;
+        }
+
         svr.safeTransfer(slashBeneficiary, amount);
         emit OperatorSlashed(operator, amount, op.bond, demoted);
     }

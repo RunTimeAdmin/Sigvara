@@ -28,8 +28,14 @@ contract SVRToken is ERC20, Ownable {
     function faucet(uint256 amount) external {
         if (amount > FAUCET_CAP) revert("SVRToken: max 10,000 SVR per call");
 
-        uint256 availableAt = lastFaucetUse[msg.sender] + FAUCET_COOLDOWN;
-        if (block.timestamp < availableAt) revert FaucetCooldownActive(msg.sender, availableAt);
+        uint256 last = lastFaucetUse[msg.sender];
+        // A first-time caller has last == 0. Comparing 0 + COOLDOWN against
+        // block.timestamp locks the faucet on any chain whose clock is below one
+        // day, which is every fresh local devnet (Anvil starts at 1).
+        if (last != 0) {
+            uint256 availableAt = last + FAUCET_COOLDOWN;
+            if (block.timestamp < availableAt) revert FaucetCooldownActive(msg.sender, availableAt);
+        }
 
         lastFaucetUse[msg.sender] = block.timestamp;
         _mint(msg.sender, amount);
