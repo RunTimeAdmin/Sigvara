@@ -69,6 +69,10 @@ forge script script/Deploy.s.sol --rpc-url arc_testnet -vvvv
 forge script script/Deploy.s.sol --rpc-url arc_testnet --broadcast -vvvv
 ```
 
+Note: the simulate step also writes `deployments/5042002.json`, with addresses that
+were never broadcast. Delete it before the real run, and only commit the file
+produced by `--broadcast`.
+
 Optional role overrides (`ORACLE_ADDRESS`, `COMMITTEE_ADDRESS`, `MINIMUM_STAKE`,
 `CHALLENGE_PERIOD`, `SCORE_CHALLENGE_WINDOW`, `UNBONDING_PERIOD`) are documented
 in the header of `script/Deploy.s.sol`.

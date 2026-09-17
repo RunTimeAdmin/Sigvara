@@ -15,12 +15,6 @@ import "../src/SVRToken.sol";
  *         and writes the deployed addresses to deployments/{chainId}.json.
  *
  * Usage — Arc testnet (chain ID 5042002; gas is USDC, fund via https://faucet.circle.com):
- *   forge script script/Deploy.s.sol --rpc-url arc_testnet --broadcast -vvvv
- *   # writes deployments/5042002.json; add --legacy if fee estimation fails
- *
- * Usage — Arc mainnet (chain ID 5042): same command with --rpc-url arc_mainnet.
- *
- * Usage — Arc testnet (chain ID 5042002; gas is USDC, fund via https://faucet.circle.com):
  *   forge script script/Deploy.s.sol --rpc-url arc_testnet -vvvv              # simulate
  *   forge script script/Deploy.s.sol --rpc-url arc_testnet --broadcast -vvvv  # deploy
  *   # writes deployments/5042002.json; add --legacy if fee estimation fails
