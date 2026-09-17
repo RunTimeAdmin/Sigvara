@@ -14,7 +14,7 @@ This repository (`sigvara`) is the **decentralized protocol**: computed reputati
 
 There is a **separate product**, the Countersig platform (repo: [`RunTimeAdmin/Countersig`](https://github.com/RunTimeAdmin/Countersig)), which ships its own npm packages — `@countersig/sdk`, `@countersig/verify`, `@countersig/mcp`, `@countersig/react`. That platform is a centralized, hosted non-human-identity verification service. It is a different product with a different trust model, built by the same team, but it is **not this protocol** and does not read from or write to the contracts below. It kept the Countersig name; the protocol did not (see [docs/lineage.md](docs/lineage.md) for why).
 
-If you're looking for MCP server support or React trust-badge components, those live in the platform repo, not here. If you're integrating with the on-chain protocol — DIDs, staked reputation, permissionless verification — you're in the right place, and `@sigvara/protocol-sdk` (in [`packages/sdk`](packages/sdk), successor to `@countersig/protocol-sdk`) is the only SDK for it.
+If you're looking for MCP server support or React trust-badge components, those live in the platform repo, not here. If you're integrating with the on-chain protocol — DIDs, staked reputation, permissionless verification — you're in the right place, and [`@sigvara/protocol-sdk`](https://www.npmjs.com/package/@sigvara/protocol-sdk) (source in [`packages/sdk`](packages/sdk), successor to the now-deprecated `@countersig/protocol-sdk`) is the only SDK for it.
 
 ## Documentation
 
