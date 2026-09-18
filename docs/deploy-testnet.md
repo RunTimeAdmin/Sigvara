@@ -8,21 +8,22 @@ Run every command from the repository root with `lib/` populated (see
 
 ## Before you start
 
-**Read this first.** The contracts carry known unfixed findings from the
-security scan of 17 September 2026. Two are structural:
+**Read this first.** One structural finding from the security scan of
+17 September 2026 is still open:
 
-- An agent can hold Active status with zero collateral and become
-  permanently unslashable, by self-suspending, withdrawing the whole stake,
-  claiming, and setting itself Active again.
 - Registration proves no control of the agent address, so anyone can claim an
   address they do not own, choose the key verifiers will check, and lock the
   rightful owner out.
 
-Neither costs anything on testnet: the bond is a faucet token anyone can mint
-10,000 of per day. Deploy anyway if the goal is to exercise the stack, but do
-not present testnet scores as adversarially trustworthy, and expect agent
-addresses to be squattable. The registries are UUPS proxies, so the fixes land
-as an upgrade on these same addresses rather than a redeploy.
+The other structural finding, an agent holding Active status with zero
+collateral and so being permanently unslashable, is fixed: identity checks the
+bond before letting an agent return to Active, and reputation refuses to score
+an agent that is not bonded.
+
+Squatting costs nothing on testnet, so deploy if the goal is to exercise the
+stack, but expect agent addresses to be claimable by whoever gets there first.
+The registries are UUPS proxies, so the fix lands as an upgrade on these same
+addresses rather than a redeploy.
 
 ## 1. Addresses and keys
 
@@ -93,13 +94,9 @@ in PowerShell, `unset DEPLOYER_PRIVATE_KEY` in bash.
 Check the printed roles and periods, and confirm there is no role-separation
 warning.
 
-**A simulate run writes `deployments/5042002.json` with addresses that were
-never broadcast.** Delete it before the real run, or you will commit addresses
-that do not exist:
-
-```powershell
-Remove-Item -Force -ErrorAction SilentlyContinue deployments\5042002.json
-```
+A simulate run prints the addresses it would have used and writes nothing. The
+artifact is only touched on a real broadcast, so there is no file to clean up
+between the two runs and no way to commit an address that does not exist.
 
 ## 4. Broadcast
 
