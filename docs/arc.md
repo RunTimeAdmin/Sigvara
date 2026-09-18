@@ -170,9 +170,17 @@ bond is what they lose for speaking falsely.
 **Order matters.** Turning this on stops every oracle that has not bonded and been
 admitted, so do it last:
 
-1. The oracle wallet acquires the bond token and calls `postBond`.
-2. Governance calls `admitOperator` for it, which moves it to Active.
+1. The oracle wallet acquires the bond token and calls `depositBond(amount)`. On
+   testnet the token has a public faucet: `faucet(10000e18)`, once per wallet per day.
+   This leaves the operator at status `Bonded`, which is not yet enough.
+2. The admin calls `admit(operator)`, moving it to `Active`. Note this is
+   `DEFAULT_ADMIN_ROLE`, the deployer, not the committee. The committee holds
+   `SLASHER_ROLE`, which is the power to take a bond, not to grant standing.
 3. Only then point reputation at the registry.
+
+```bash
+cast send <oracleBond proxy> "admit(address)" <oracle wallet>   --private-key $DEPLOYER_KEY --rpc-url arc_testnet
+```
 
 ```bash
 cast send <reputation proxy> "setOperatorBond(address)" <oracleBond proxy>   --private-key $ADMIN_KEY --rpc-url arc_testnet
@@ -181,7 +189,8 @@ cast send <reputation proxy> "setOperatorBond(address)" <oracleBond proxy>   --p
 Passing the zero address turns the requirement back off, which is why this is a plain
 setter and not another initializer: unset is a safe working state.
 
-Check where you stand before flipping it:
+Check where you stand before flipping it. `bondOf` being non-zero is not the same as
+being admitted, and only the second one lets an oracle propose:
 
 ```bash
 cast call <oracleBond proxy> "isActiveOperator(address)(bool)" <oracle wallet> --rpc-url arc_testnet
