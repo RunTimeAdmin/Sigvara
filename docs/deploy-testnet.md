@@ -28,8 +28,13 @@ as an upgrade on these same addresses rather than a redeploy.
 
 | Role | Address | Notes |
 |---|---|---|
-| Deployer | `0x8857A7C392d1Bb1A68647c64Ce18D9AA1Fd023b0` | Keeps `DEFAULT_ADMIN_ROLE` and `UPGRADER_ROLE` on every contract |
+| Deployer (testnet) | `0x18CBcE50390f5f6ebe4E20Fc17833F25c8D94811` | Keeps `DEFAULT_ADMIN_ROLE` and `UPGRADER_ROLE` on every contract |
 | Treasury | `0xeDC966e23318782c0241aBe1790bd221b8aCE867` | Not used by this deployment |
+
+The testnet deployer is deliberately a different address from the one in
+[docs/token.md](token.md), which is reserved for the mainnet SVR launch and the
+mainnet registry deployment. Keeping them apart means a testnet key, which is
+handled far more casually, never touches anything that matters on mainnet.
 | Oracle | choose one | The wallet the oracle service signs with |
 | Committee | choose one | `SLASHING_COMMITTEE_ROLE` |
 
@@ -47,7 +52,7 @@ five role grants: about **0.45 USDC** at 45 gwei. A few USDC covers it many
 times over.
 
 ```bash
-cast balance 0x8857A7C392d1Bb1A68647c64Ce18D9AA1Fd023b0 --rpc-url arc_testnet --ether
+cast balance 0x18CBcE50390f5f6ebe4E20Fc17833F25c8D94811 --rpc-url arc_testnet --ether
 ```
 
 ## 3. Simulate

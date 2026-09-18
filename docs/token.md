@@ -38,9 +38,11 @@ a plain `IERC20`.
 | Deployer / creator | `0x8857A7C392d1Bb1A68647c64Ce18D9AA1Fd023b0` |
 | Treasury | `0xeDC966e23318782c0241aBe1790bd221b8aCE867` |
 
-The launch transaction and the registry deployments will be sent from the deployer
-address. A token or contract attributed to Sigvara that was not created by that
-address is not ours. The treasury address holds protocol-owned SVR and pays the
+The SVR launch transaction and the Arc **mainnet** registry deployment will be sent
+from the deployer address above. A token or mainnet contract attributed to Sigvara
+that was not created by that address is not ours. Arc testnet is deployed from a
+separate address (see [deploy-testnet.md](deploy-testnet.md)) so that a testnet key
+never touches anything with value. The treasury address holds protocol-owned SVR and pays the
 costs listed under treasury policy; it holds nothing else.
 
 ## Distribution
