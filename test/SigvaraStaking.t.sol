@@ -148,6 +148,63 @@ contract SigvaraStakingTest is Test {
     /// Suspended agents deposit so they can climb back over minimumStake. Identity
     /// refuses to reactivate an under-collateralised agent, so refusing the deposit
     /// too would make withdrawing the bond a one-way trip into a dead identity.
+    /// The bond is what activates a new agent. Registration alone leaves it
+    /// PendingBond, which is neither scoreable nor slashable, so nothing accrues to an
+    /// identity that never put anything at risk.
+    function test_depositStake_activatesAPendingBondAgent() public {
+        address op2 = makeAddr("op2");
+        vm.prank(op2);
+        bytes32 fresh = identity.registerAgent(makeAddr("agent2"), bytes32(uint256(9)));
+        assertEq(
+            uint8(identity.getIdentity(fresh).status),
+            uint8(SigvaraIdentity.AgentStatus.PendingBond)
+        );
+        assertFalse(identity.isActive(fresh));
+
+        svr.mint(op2, MIN_STAKE);
+        vm.startPrank(op2);
+        svr.approve(address(staking), MIN_STAKE);
+        staking.depositStake(fresh, MIN_STAKE);
+        vm.stopPrank();
+
+        assertTrue(identity.isActive(fresh), "the deposit activated it");
+    }
+
+    /// A deposit that does not clear the floor leaves the agent where it was.
+    function test_depositStake_belowTheFloorDoesNotActivate() public {
+        address op2 = makeAddr("op3");
+        vm.prank(op2);
+        bytes32 fresh = identity.registerAgent(makeAddr("agent3"), bytes32(uint256(10)));
+
+        svr.mint(op2, MIN_STAKE);
+        vm.startPrank(op2);
+        svr.approve(address(staking), MIN_STAKE);
+        staking.depositStake(fresh, MIN_STAKE - 1);
+        vm.stopPrank();
+
+        assertFalse(identity.isActive(fresh), "still short of the minimum");
+        assertEq(
+            uint8(identity.getIdentity(fresh).status),
+            uint8(SigvaraIdentity.AgentStatus.PendingBond)
+        );
+    }
+
+    /// Topping up must not drag a deliberately suspended agent back to Active. An
+    /// operator that suspended itself to withdraw, or one the staking core suspended
+    /// for a pending slash, stays where it is.
+    function test_depositStake_doesNotReactivateASuspendedAgent() public {
+        vm.prank(operator);
+        staking.depositStake(didHash, MIN_STAKE);
+        assertTrue(identity.isActive(didHash));
+
+        vm.prank(operator);
+        identity.updateStatus(didHash, SigvaraIdentity.AgentStatus.Suspended);
+
+        vm.prank(operator);
+        staking.depositStake(didHash, MIN_STAKE);
+        assertFalse(identity.isActive(didHash), "still suspended by its operator's choice");
+    }
+
     function test_depositStake_allowedWhileSuspended() public {
         vm.prank(operator);
         identity.updateStatus(didHash, SigvaraIdentity.AgentStatus.Suspended);

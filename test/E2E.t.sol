@@ -117,7 +117,14 @@ contract E2EIntegrationTest is Test {
         vm.prank(operator);
         didHash = identity.registerAgent(agentAddr, PUB_KEY);
         
-        assertTrue(identity.isActive(didHash), "Agent should be active after registration");
+        // Registration no longer confers Active status: an unbonded agent cannot be
+        // slashed, so an Active one that had never staked was unaccountable by
+        // construction. The deposit below is what activates it.
+        assertFalse(identity.isActive(didHash), "registration alone does not activate");
+        assertEq(
+            uint8(identity.getIdentity(didHash).status),
+            uint8(SigvaraIdentity.AgentStatus.PendingBond)
+        );
         assertEq(identity.getIdentity(didHash).operator, operator, "Operator mismatch");
         assertEq(identity.getIdentity(didHash).agentAddress, agentAddr, "Agent address mismatch");
 

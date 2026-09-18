@@ -248,11 +248,11 @@ contract StakingInvariantTest is Test {
 
         handler = new StakingHandler(svr, identity, staking, committee, ops, dids);
 
-        // Bond every agent before fuzzing. registerAgent leaves an agent Active with
-        // nothing staked, so an unbonded start would break
-        // invariant_activeAgentsAreCollateralised on the initial state and test
-        // registration rather than the transitions. Routed through the handler so its
-        // deposit accounting stays authoritative for the conservation invariants.
+        // Bond every agent before fuzzing. Registration now leaves them PendingBond,
+        // which is not Active and so trivially satisfies
+        // invariant_activeAgentsAreCollateralised; bonding them first is what makes the
+        // invariant test the transitions rather than pass by vacuity. Routed through
+        // the handler so its deposit accounting stays authoritative for conservation.
         handler.seedBonds(MIN_STAKE);
 
         // The handler impersonates the committee, so it needs no role of its own.
@@ -336,9 +336,9 @@ contract StakingInvariantTest is Test {
     /// Queued withdrawals count. They are still slashable until claimed, so an agent
     /// unbonding is not yet off the hook.
     ///
-    /// Scope: this covers agents that have been bonded, which the setup arranges.
-    /// registerAgent on its own still leaves an agent Active with nothing staked, a
-    /// separate gap that this fix does not close.
+    /// Holds for every agent now, not only bonded ones: registration leaves an agent
+    /// PendingBond rather than Active, so there is no longer a state where an Active
+    /// agent has never staked anything.
     function invariant_activeAgentsAreCollateralised() public view {
         uint256 n = handler.agentCount();
         for (uint256 i = 0; i < n; i++) {
