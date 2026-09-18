@@ -153,7 +153,7 @@ contract E2EIntegrationTest is Test, RegistrationHelper {
         });
 
         vm.prank(oracle);
-        reputation.proposeReputation(didHash, scoreData);
+        reputation.proposeReputation(didHash, scoreData, bytes32(0));
 
         SigvaraReputation.PendingScore memory pending = reputation.getPendingScore(didHash);
         assertTrue(pending.exists, "Pending score should exist");
@@ -269,7 +269,7 @@ contract E2EIntegrationTest is Test, RegistrationHelper {
             lastUpdated: 0
         });
         vm.prank(oracle);
-        reputation.proposeReputation(didHash, goodScore);
+        reputation.proposeReputation(didHash, goodScore, bytes32(0));
         vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
         reputation.finalizeReputation(didHash);
         
@@ -283,7 +283,7 @@ contract E2EIntegrationTest is Test, RegistrationHelper {
             lastUpdated: 0
         });
         vm.prank(oracle);
-        reputation.proposeReputation(didHash, inflated);
+        reputation.proposeReputation(didHash, inflated, bytes32(0));
 
         // Committee rejects within window
         vm.prank(committee);
@@ -374,7 +374,7 @@ contract E2EIntegrationTest is Test, RegistrationHelper {
             lastUpdated: 0
         });
         vm.prank(oracle);
-        reputation.proposeReputation(didHash, epoch1);
+        reputation.proposeReputation(didHash, epoch1, bytes32(0));
         vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
         reputation.finalizeReputation(didHash);
         assertEq(reputation.getTotalScore(didHash), 28, "Epoch 1 score");
@@ -387,7 +387,7 @@ contract E2EIntegrationTest is Test, RegistrationHelper {
             lastUpdated: 0
         });
         vm.prank(oracle);
-        reputation.proposeReputation(didHash, epoch2);
+        reputation.proposeReputation(didHash, epoch2, bytes32(0));
         vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
         reputation.finalizeReputation(didHash);
         assertEq(reputation.getTotalScore(didHash), 62, "Epoch 2 score");
@@ -400,7 +400,7 @@ contract E2EIntegrationTest is Test, RegistrationHelper {
             lastUpdated: 0
         });
         vm.prank(oracle);
-        reputation.proposeReputation(didHash, epoch3);
+        reputation.proposeReputation(didHash, epoch3, bytes32(0));
         vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
         reputation.finalizeReputation(didHash);
         assertEq(reputation.getTotalScore(didHash), 100, "Epoch 3 max score");
@@ -484,7 +484,7 @@ contract E2EIntegrationTest is Test, RegistrationHelper {
             lastUpdated: 0
         });
         vm.prank(oracle);
-        reputation.proposeReputation(didHash, score);
+        reputation.proposeReputation(didHash, score, bytes32(0));
         vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
         reputation.finalizeReputation(didHash);
         assertEq(reputation.getTotalScore(didHash), 60, "Pre-slash score");
@@ -501,7 +501,7 @@ contract E2EIntegrationTest is Test, RegistrationHelper {
         // slashed agent straight back up to its old value. The registry rejects it now.
         vm.expectRevert(abi.encodeWithSelector(SigvaraReputation.AgentSlashed.selector, didHash));
         vm.prank(oracle);
-        reputation.proposeReputation(didHash, score);
+        reputation.proposeReputation(didHash, score, bytes32(0));
 
         vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
         assertEq(reputation.getTotalScore(didHash), 0, "Slashed agent stays at zero");

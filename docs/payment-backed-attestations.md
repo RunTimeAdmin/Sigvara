@@ -158,6 +158,40 @@ sending 3, against a unit of one token per point:
 |---|---|---|
 | `feeScore` | 23 | 8 |
 
+## Checkable inputs
+
+Everything above happens off chain. The payments are on chain and anyone can read them,
+but *which* payments the oracle counted lived only in its own state file, so checking a
+score meant trusting that file.
+
+Each proposal now carries a Merkle root over the evidence behind it, stored next to the
+score and readable from `evidenceRoots(didHash)`. The oracle serves the leaves:
+
+```bash
+curl http://oracle/evidence/0x8414ce0b…
+```
+
+A verifier takes each payment, reads the transaction off the chain to confirm the payer,
+the amount and the settlement time, rebuilds the leaf, and checks it against the root the
+contract holds, either locally or through `verifyEvidence(didHash, leaf, proof)`. Nothing
+in that path requires trusting the oracle.
+
+Leaves are double-hashed so a leaf can never pose as an internal node, and an odd node is
+promoted rather than duplicated, which would otherwise let a tree be extended with the
+repeated leaf and keep the same root. Pairs hash in sorted order, matching OpenZeppelin's
+`MerkleProof`, which commits to the set rather than to the order the oracle listed it in.
+
+The commitment is cross-checked in both directions: the oracle builds a tree in
+JavaScript and a contract test verifies those exact proofs on chain. A disagreement about
+leaf encoding or odd-node handling would otherwise pass each side's own tests and fail
+only in production.
+
+**What it proves and what it does not.** It proves the oracle counted a given payment,
+and makes a quietly dropped payment detectable, because removing one changes the root.
+It does not prove the oracle counted *everything* it should have: a payment nobody ever
+submitted leaves no trace to be missing from. Detecting that needs someone watching the
+chain independently, which is the watcher this does not replace.
+
 ## What this does not fix
 
 The payer is verified, the payment is verified, and the amount is verified. The

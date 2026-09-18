@@ -16,7 +16,7 @@ const OPERATOR_SET_ABI = ['function isActiveOperator(address) view returns (bool
 const REPUTATION_ABI = [
   'function operatorBond() view returns (address)',
   'function getTotalScore(bytes32 didHash) view returns (uint8)',
-  'function proposeReputation(bytes32 didHash, tuple(uint8 feeScore, uint8 successScore, uint8 ageScore, uint8 externalScore, uint8 communityScore, uint8 propagationScore, uint256 lastUpdated) data)',
+  'function proposeReputation(bytes32 didHash, tuple(uint8 feeScore, uint8 successScore, uint8 ageScore, uint8 externalScore, uint8 communityScore, uint8 propagationScore, uint256 lastUpdated) data, bytes32 evidenceRoot)',
   'function finalizeReputation(bytes32 didHash)',
   'function getPendingScore(bytes32 didHash) view returns (tuple(tuple(uint8 feeScore, uint8 successScore, uint8 ageScore, uint8 externalScore, uint8 communityScore, uint8 propagationScore, uint256 lastUpdated) data, uint256 proposedAt, bool exists))',
   'function challengeWindow() view returns (uint256)',
@@ -236,7 +236,7 @@ async function isBonded(didHash) {
   }
 }
 
-async function proposeScore(didHash, scores) {
+async function proposeScore(didHash, scores, evidenceRoot = ethers.ZeroHash) {
   const tx = await reputationContract.proposeReputation(didHash, {
     feeScore:         scores.feeScore,
     successScore:     scores.successScore,
@@ -245,7 +245,7 @@ async function proposeScore(didHash, scores) {
     communityScore:   scores.communityScore,
     propagationScore: scores.propagationScore,
     lastUpdated:      BigInt(Math.floor(Date.now() / 1000)),
-  });
+  }, evidenceRoot);
   await tx.wait(1);
   return tx.hash;
 }

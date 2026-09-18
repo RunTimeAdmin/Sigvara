@@ -9,6 +9,7 @@ const { computeScore } = require('./scoring');
 const { decideAction } = require('./epoch-policy');
 const { json, readBody, isAuthorized, parseScorePath, rateLimited, adminTokenPolicyError } = require('./http-helpers');
 const payments = require('./payments');
+const merkle = require('./merkle');
 const metrics = require('./metrics');
 
 // Verified-payment settings. Read once at startup so a malformed value fails the
@@ -306,7 +307,13 @@ async function runEpochInner() {
       }
 
       metrics.inc('proposeAttempts');
-      const txHash    = await chain.proposeScore(didHash, scores);
+      // Commit to the evidence alongside the score. Without it the only record of
+      // which payments produced this number is the oracle's own state file, and a
+      // third party checking the arithmetic would have to take that on trust.
+      const evidenceRoot = payments.required(paymentCfg)
+        ? merkle.rootFor(getPaymentEvents(didHash))
+        : undefined;
+      const txHash    = await chain.proposeScore(didHash, scores, evidenceRoot);
       metrics.inc('proposeSuccesses');
 
       console.log(`[oracle]   ${didHash.slice(0, 10)}… proposed score=${scores.total}/100 tx=${txHash.slice(0, 10)}…`);
@@ -487,6 +494,37 @@ const server = http.createServer(async (req, res) => {
       metrics.inc('attestRejectedOther');
       return json(res, 400, { error: err.message });
     }
+  }
+
+  // GET /evidence/:didHash — the payments behind an agent's score, with proofs.
+  //
+  // Everything here is checkable without trusting this service: each txHash can be
+  // read off the chain, and the root can be compared with the one the reputation
+  // contract holds. Deliberately unauthenticated, like /score: evidence nobody can
+  // fetch is evidence nobody can audit.
+  if (req.method === 'GET' && pathname.startsWith('/evidence/')) {
+    const didHash = pathname.slice('/evidence/'.length);
+    if (!/^0x[0-9a-fA-F]{64}$/.test(didHash)) {
+      return json(res, 400, { error: 'didHash must be a 32-byte hex string' });
+    }
+    const events = getPaymentEvents(didHash);
+    const tree = merkle.buildTree(events);
+    return json(res, 200, {
+      didHash,
+      evidenceRoot: tree.root,
+      count: events.length,
+      // The leaf is derivable from the payment, so a verifier rebuilds it rather than
+      // trusting the one served here; it is included to make that comparison easy.
+      evidence: events.map((e, i) => ({
+        txHash: e.txHash ?? null,
+        payer: e.payer,
+        amount: e.amount,
+        settledAt: e.ts,
+        success: e.success,
+        leaf: tree.leaves[i],
+        proof: merkle.proofFor(tree, i),
+      })),
+    });
   }
 
   // POST /flag  — body: { didHash }
