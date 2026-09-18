@@ -22,6 +22,30 @@ contract OperatorSetMock is IOperatorSet {
     function isActiveOperator(address who) external view returns (bool) { return active[who]; }
 }
 
+/// An identity registry from before operator transfer: it answers what the bond and
+/// scorability checks need, and has no operatorChangedAt at all.
+contract LegacyIdentityMock {
+    IStakeView public stakeView;
+    address private op;
+    address private agent;
+
+    constructor(address stakeView_, address operator_, address agent_) {
+        stakeView = IStakeView(stakeView_);
+        op = operator_;
+        agent = agent_;
+    }
+
+    function getIdentity(bytes32) external view returns (SigvaraIdentity.AgentIdentity memory) {
+        return SigvaraIdentity.AgentIdentity({
+            operator: op,
+            agentAddress: agent,
+            ed25519PubKey: bytes32(uint256(1)),
+            status: SigvaraIdentity.AgentStatus.Active,
+            registeredAt: 1
+        });
+    }
+}
+
 contract SigvaraReputationTest is Test {
     SigvaraReputation rep;
     SigvaraIdentity identity;
@@ -624,6 +648,45 @@ contract SigvaraReputationTest is Test {
 
         vm.warp(block.timestamp + 5 days);
         assertEq(rep.getTotalScore(DID), 20, "the buyer re-earns the right to spend it");
+    }
+
+    /// A hardcoded selector that drifts would not fail loudly: the staticcall would
+    /// simply miss, the branch would be skipped, and maturity would silently stop
+    /// restarting on a handover. I got this constant wrong once already.
+    function test_maturity_operatorChangedAtSelectorIsCorrect() public pure {
+        assertEq(bytes4(keccak256("operatorChangedAt(bytes32)")), bytes4(0xcd46167a));
+    }
+
+    /// An identity registry from before operator transfer has no operatorChangedAt.
+    /// getTotalScore is what every consumer reads, so it must degrade rather than
+    /// revert when the two proxies are a version apart. This is the exact failure
+    /// that took every score on Arc testnet unreadable.
+    function test_maturity_survivesAnOlderIdentityRegistry() public {
+        LegacyIdentityMock legacy = new LegacyIdentityMock(address(stakeView), operator, agentAddr);
+
+        SigvaraReputation old = SigvaraReputation(address(new ERC1967Proxy(
+            address(new SigvaraReputation()),
+            abi.encodeCall(
+                SigvaraReputation.initialize,
+                (admin, oracle, staking, committee, CHALLENGE_WINDOW)
+            )
+        )));
+        vm.startPrank(admin);
+        old.initializeV3(address(legacy));
+        old.initializeV4(4);
+        vm.stopPrank();
+
+        vm.prank(oracle);
+        old.proposeReputation(DID, maxScore);
+        vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
+        old.finalizeReputation(DID);
+
+        // Would revert here if the typed getter were still used.
+        assertEq(old.getEarnedScore(DID), 100);
+        assertEq(old.getTotalScore(DID), 0, "matures from zero, no revert");
+
+        vm.warp(block.timestamp + 3 days);
+        assertEq(old.getTotalScore(DID), 12, "keeps maturing against a legacy registry");
     }
 
     function test_maturity_rateOfZeroIsRejected() public {

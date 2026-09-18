@@ -54,12 +54,15 @@ contract Upgrade is Script {
     error UnknownTarget(string target);
     error ProxyNotFound(string target, uint256 chainId);
     error ImplementationUnchanged(address proxy, address impl);
+    error DependencyMissing(string target, string needs, address from);
 
     function run() external {
         string memory target = vm.envString("TARGET");
         _requireKnownTarget(target); // fail on a typo before touching the artifact
         address proxy = _proxyAddress(target);
         bytes memory initData = vm.envOr("INIT_CALLDATA", bytes(""));
+
+        _checkDependencies(target, proxy);
 
         address oldImpl = _implementationOf(proxy);
 
@@ -78,6 +81,52 @@ contract Upgrade is Script {
         console2.log("Old impl:       ", oldImpl);
         console2.log("New impl:       ", afterImpl);
         console2.log("Init calldata:  ", initData.length == 0 ? "none" : "supplied");
+    }
+
+    /**
+     * @dev Refuses an upgrade whose new code would call a function the contracts it
+     *      depends on do not have yet.
+     *
+     *      This exists because of a real failure. Reputation gained a read of
+     *      `identityRegistry.operatorChangedAt`, identity was a version behind on Arc
+     *      testnet, and every `getTotalScore` on the chain reverted the moment the
+     *      upgrade landed. The tests never caught it because they deploy both
+     *      contracts from the same source every time; only a live pair can be skewed.
+     *
+     *      The contracts are now tolerant of the skew as well. This is the second
+     *      layer: refuse the ordering rather than quietly degrade into it.
+     */
+    function _checkDependencies(string memory target, address proxy) internal view {
+        bytes32 t = keccak256(bytes(target));
+
+        if (t == keccak256("reputation")) {
+            address identity = _addressGetter(proxy, "identityRegistry()");
+            if (identity == address(0)) return; // not wired yet, nothing to depend on
+            if (!_answers(identity, abi.encodeWithSignature("operatorChangedAt(bytes32)", bytes32(0)))) {
+                revert DependencyMissing("reputation", "identity.operatorChangedAt: upgrade identity first", identity);
+            }
+        }
+
+        if (t == keccak256("staking")) {
+            address identity = _addressGetter(proxy, "identityRegistry()");
+            if (identity == address(0)) return;
+            // stakeView landed in the same release as clearSlashSuspension, which the
+            // new staking calls. Checking a view stands in for the one that writes.
+            if (!_answers(identity, abi.encodeWithSignature("stakeView()"))) {
+                revert DependencyMissing("staking", "identity.stakeView: upgrade identity first", identity);
+            }
+        }
+    }
+
+    function _answers(address target, bytes memory callData) internal view returns (bool) {
+        (bool ok, bytes memory ret) = target.staticcall(callData);
+        return ok && ret.length >= 32;
+    }
+
+    function _addressGetter(address target, string memory sig) internal view returns (address) {
+        (bool ok, bytes memory ret) = target.staticcall(abi.encodeWithSignature(sig));
+        if (!ok || ret.length < 32) return address(0);
+        return abi.decode(ret, (address));
     }
 
     /// @dev Fresh implementation for `target`. Implementations hold no state, so a
