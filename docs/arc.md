@@ -135,6 +135,37 @@ npx vitest run test/integration.test.ts
 DIDs minted here look like `did:sigvara:5042002:0x...`; the chain ID is part of
 the identity, so the same key on Arc mainnet is a different DID.
 
+## 4b. Oracle operator bonds
+
+`SigvaraOracleBond` records who has posted a performance bond as an oracle operator,
+and lets governance admit, eject and partially slash them. It is deployed by its own
+script, which merges the proxy address into `deployments/<chainId>.json` under
+`oracleBond`.
+
+Use three distinct addresses. If the deployer is also the slasher and the payee, one
+key can seize an operator's bond and send it to itself, which is the opposite of what
+a performance bond is for. The script warns on testnet and refuses on mainnet.
+
+PowerShell:
+
+```powershell
+$env:SVR_ADDRESS       = "0x41De2D6D55318e197a00E8f5B496eA2790e23E6c"
+$env:SLASHER_ADDRESS   = "0x..."   # governance or the committee, not the deployer
+$env:SLASH_BENEFICIARY = "0x..."   # where seized bonds go, not the deployer
+forge script script/DeployOracleBond.s.sol --rpc-url arc_testnet -vvvv              # simulate
+forge script script/DeployOracleBond.s.sol --rpc-url arc_testnet --broadcast -vvvv
+```
+
+**A simulate run writes the artifact with an address that was never broadcast**, the
+same trap as the first deploy. Restore the file with `git checkout deployments/` before
+the real run, then commit what the broadcast produced.
+
+Deploying this on its own changes no behaviour. Nothing in the protocol consults it
+yet: `ORACLE_ROLE` on `SigvaraReputation` is still granted by an admin and is not
+checked against `isActiveOperator()`. The registry is the first of three steps, and
+the other two are a contract change to require an admitted operator, and a second
+operator actually running on separate infrastructure.
+
 ## 5. Upgrading a deployed proxy
 
 Every registry is a UUPS proxy gated on `UPGRADER_ROLE`, so an upgrade is the
