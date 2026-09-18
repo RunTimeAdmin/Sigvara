@@ -55,7 +55,25 @@ cast balance 0x8857A7C392d1Bb1A68647c64Ce18D9AA1Fd023b0 --rpc-url arc_testnet --
 Never broadcast a first deploy without simulating it. Export the key in your own
 shell; it must not be written to a file in the repository.
 
+Run from the repository root, not from a subdirectory: `forge` resolves
+`foundry.toml`, the RPC aliases and the `deployments/` path relative to it.
+
+PowerShell:
+
+```powershell
+cd D:\Sigvara
+$env:DEPLOYER_PRIVATE_KEY = "0x..."
+$env:ORACLE_ADDRESS       = "0x..."
+$env:COMMITTEE_ADDRESS    = "0x..."
+$env:MINIMUM_STAKE        = "1000000000000000000000"   # 1,000 SVR
+
+forge script script/Deploy.s.sol --rpc-url arc_testnet -vvvv
+```
+
+bash:
+
 ```bash
+cd /d/Sigvara
 export DEPLOYER_PRIVATE_KEY=0x...
 export ORACLE_ADDRESS=0x...
 export COMMITTEE_ADDRESS=0x...
@@ -64,6 +82,9 @@ export MINIMUM_STAKE=1000000000000000000000   # 1,000 SVR
 forge script script/Deploy.s.sol --rpc-url arc_testnet -vvvv
 ```
 
+Clear the key from the shell when you are done: `Remove-Item Env:DEPLOYER_PRIVATE_KEY`
+in PowerShell, `unset DEPLOYER_PRIVATE_KEY` in bash.
+
 Check the printed roles and periods, and confirm there is no role-separation
 warning.
 
@@ -71,8 +92,8 @@ warning.
 never broadcast.** Delete it before the real run, or you will commit addresses
 that do not exist:
 
-```bash
-rm -f deployments/5042002.json
+```powershell
+Remove-Item -Force deploymentsń2002.json
 ```
 
 ## 4. Broadcast
