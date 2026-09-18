@@ -134,6 +134,11 @@ async function runEpochInner() {
   try {
     agents = await chain.getRegisteredAgents();
   } catch (err) {
+    // Keep whatever the scan managed before it failed. Chunks are checkpointed, so
+    // an aborted backfill resumes rather than starting over, and a long catch-up on
+    // a rate-limited node finishes across several epochs instead of never.
+    setScanState(chain.getScanState());
+    persistState();
     console.error('[oracle] could not fetch registered agents:', err.message);
     metrics.inc('epochsFailed');
     return;

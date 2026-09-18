@@ -322,3 +322,31 @@ test('reset: clears the cursor so a fresh scan starts from FROM_BLOCK', () => {
   chain.reset();
   assert.equal(chain.getScanState().lastScannedBlock, null);
 });
+
+test('getRegisteredAgents: keeps progress when a chunk fails part way through', async () => {
+  chain.reset();
+  // Fails for one block range every time it is asked, so the backoff exhausts
+  // rather than slipping past a call counter on retry.
+  const fakeIdentity = {
+    filters: { AgentRegistered: () => ({}) },
+    queryFilter: async (_f, start) => {
+      if (start === 1200) throw new Error('rate limit exceeded');
+      return [{
+        args: { didHash: '0xdid' + start, agentAddress: '0xagent' },
+        blockNumber: start,
+      }];
+    },
+  };
+  chain.init(
+    { rpcUrl: 'x', privateKey: '0x' + '1'.repeat(64), identityAddress: '0x' + '1'.repeat(40),
+      reputationAddress: '0x' + '2'.repeat(40), fromBlock: 1000, logChunkSize: 100 },
+    { provider: { getBlockNumber: async () => 1999 }, wallet: {}, identityContract: fakeIdentity,
+      reputationContract: {} }
+  );
+
+  await assert.rejects(() => chain.getRegisteredAgents(), /rate limit/);
+
+  const state = chain.getScanState();
+  assert.equal(state.lastScannedBlock, 1199, 'kept the two chunks that succeeded');
+  assert.equal(state.agents.length, 2, 'kept the agents those chunks found');
+});
