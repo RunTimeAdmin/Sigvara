@@ -156,9 +156,9 @@ forge script script/DeployOracleBond.s.sol --rpc-url arc_testnet -vvvv          
 forge script script/DeployOracleBond.s.sol --rpc-url arc_testnet --broadcast -vvvv
 ```
 
-**A simulate run writes the artifact with an address that was never broadcast**, the
-same trap as the first deploy. Restore the file with `git checkout deployments/` before
-the real run, then commit what the broadcast produced.
+A dry run prints the address it would have used and writes nothing. The artifact is
+only touched on a real broadcast, so there is no cleanup step between the two and no
+way to commit an address that does not exist. Commit what the broadcast produced.
 
 Deploying this on its own changes no behaviour. Nothing in the protocol consults it
 yet: `ORACLE_ROLE` on `SigvaraReputation` is still granted by an admin and is not

@@ -100,7 +100,17 @@ contract DeployOracleBond is Script {
 
     /// @dev Merges into the existing artifact rather than replacing it, so the registry
     ///      addresses written by script/Deploy.s.sol survive.
+    ///
+    ///      Only on a real broadcast. A dry run produces an address that exists nowhere,
+    ///      and writing it left the artifact holding a contract that was never deployed,
+    ///      one `git commit` away from becoming the address everything trusts. The
+    ///      runbook used to tell you to undo it by hand; not doing it is better.
     function _recordAddress(address bond) internal {
+        if (!_broadcasting()) {
+            console2.log("Dry run: artifact not written. Re-run with --broadcast to record.");
+            return;
+        }
+
         string memory path = string.concat("deployments/", vm.toString(block.chainid), ".json");
         if (!vm.exists(path)) {
             console2.log("!! no deployments artifact at", path, "- record the address by hand");
@@ -108,5 +118,10 @@ contract DeployOracleBond is Script {
         }
         vm.writeJson(string.concat("\"", vm.toString(bond), "\""), path, ".oracleBond");
         console2.log("Recorded in:      ", path);
+    }
+
+    function _broadcasting() internal view returns (bool) {
+        return vm.isContext(VmSafe.ForgeContext.ScriptBroadcast)
+            || vm.isContext(VmSafe.ForgeContext.ScriptResume);
     }
 }
