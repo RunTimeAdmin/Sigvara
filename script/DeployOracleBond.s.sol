@@ -24,10 +24,16 @@ import "../src/SigvaraOracleBond.sol";
  *   SLASH_BENEFICIARY     — destination for slashed bonds (defaults to deployer)
  *   ORACLE_BOND_AMOUNT    — minimum bond in wei (default 1,000 SVR)
  *   ORACLE_UNBONDING      — unbonding cooldown seconds (default 7 days)
+ *
+ * Writes the proxy address into deployments/{chainId}.json under "oracleBond", so the
+ * address is recorded rather than living only in this script's console output.
  */
 contract DeployOracleBond is Script {
     uint256 constant DEFAULT_BOND = 1_000e18;
     uint256 constant DEFAULT_UNBONDING = 7 days;
+    uint256 constant ARC_MAINNET = 5042;
+
+    error RolesNotSeparated(address deployer, address slasher, address beneficiary);
 
     function run() external {
         uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
@@ -38,6 +44,8 @@ contract DeployOracleBond is Script {
         address beneficiary = vm.envOr("SLASH_BENEFICIARY", deployer);
         uint256 bondAmount  = vm.envOr("ORACLE_BOND_AMOUNT", DEFAULT_BOND);
         uint256 unbonding   = vm.envOr("ORACLE_UNBONDING", DEFAULT_UNBONDING);
+
+        _checkRoleSeparation(deployer, slasher, beneficiary);
 
         vm.startBroadcast(deployerKey);
 
@@ -65,5 +73,40 @@ contract DeployOracleBond is Script {
         console2.log("Bond amount (wei): ", bondAmount);
         console2.log("Unbonding (s):     ", unbonding);
         console2.log("SVR:              ", svr);
+
+        _recordAddress(address(bond));
+    }
+
+    /// @dev The deployer keeps DEFAULT_ADMIN_ROLE and UPGRADER_ROLE. If it is also the
+    ///      slasher and the payee, one key can seize an operator's bond and send it to
+    ///      itself, which is the opposite of a performance bond. Tolerated on testnet,
+    ///      refused on mainnet, matching script/Deploy.s.sol.
+    function _checkRoleSeparation(address deployer, address slasher, address beneficiary)
+        internal
+        view
+    {
+        bool slasherIsDeployer = slasher == deployer;
+        bool payeeIsDeployer = beneficiary == deployer;
+        if (!slasherIsDeployer && !payeeIsDeployer) return;
+
+        if (block.chainid == ARC_MAINNET) {
+            revert RolesNotSeparated(deployer, slasher, beneficiary);
+        }
+        console2.log("!! WARNING: roles are not separated.");
+        if (slasherIsDeployer) console2.log("!!   SLASHER_ADDRESS is the deployer");
+        if (payeeIsDeployer)   console2.log("!!   SLASH_BENEFICIARY is the deployer");
+        console2.log("!! One key can seize an operator bond and pay itself. Testnet only.");
+    }
+
+    /// @dev Merges into the existing artifact rather than replacing it, so the registry
+    ///      addresses written by script/Deploy.s.sol survive.
+    function _recordAddress(address bond) internal {
+        string memory path = string.concat("deployments/", vm.toString(block.chainid), ".json");
+        if (!vm.exists(path)) {
+            console2.log("!! no deployments artifact at", path, "- record the address by hand");
+            return;
+        }
+        vm.writeJson(string.concat("\"", vm.toString(bond), "\""), path, ".oracleBond");
+        console2.log("Recorded in:      ", path);
     }
 }
