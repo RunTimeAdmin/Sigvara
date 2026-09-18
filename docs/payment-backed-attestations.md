@@ -102,6 +102,14 @@ This applies to `successScore` as well as `feeScore`. Both halves of the success
 ratio decay together, so nine successes a year ago no longer mask a failure this
 week.
 
+Decaying a ratio is not enough on its own. A ratio is scale invariant, so ten
+successes decayed to 0.44 successes out of 0.44 is still 1.0, and an agent that
+went silent would hold full marks forever. The success rate therefore divides by
+`total + 5` rather than `total`. Evidence has to accumulate to approach the cap,
+a single observation is worth about four points instead of twenty-five, and as
+decayed weight tends to zero so does the score. That is what stops a farmed score
+sitting indefinitely.
+
 Two reasons it matters. Without it the score answers "was this agent ever busy"
 rather than "is it busy now", and an agent that stopped working a year ago keeps
 full marks indefinitely. It also turns farmed reputation into a perishable asset:

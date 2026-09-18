@@ -25,12 +25,35 @@ test('successScore: no attestations = 0', () => {
   assert.equal(successScore(0, 0), 0);
 });
 
-test('successScore: 100% success = 25', () => {
-  assert.equal(successScore(100, 100), 25);
+test('successScore: a perfect record approaches but never reaches the cap', () => {
+  // The prior in the denominator means evidence has to accumulate. 100/100 is
+  // strong but not perfect knowledge, and nothing can reach 25 exactly.
+  assert.equal(successScore(100, 100), 23);
+  assert.equal(successScore(1000, 1000), 24);
+  assert.ok(successScore(10 ** 9, 10 ** 9) <= 25);
 });
 
-test('successScore: 50% success = 12', () => {
-  assert.equal(successScore(5, 10), 12);
+test('successScore: 50% success, prior pulls it below half the cap', () => {
+  assert.equal(successScore(5, 10), 8);
+});
+
+test('successScore: one observation is worth little', () => {
+  // Previously 1/1 scored the full 25, so a single self-payment bought the whole
+  // factor. That was the cheapest step in a Sybil's path to a high score.
+  assert.equal(successScore(1, 1), 4);
+  assert.ok(successScore(1, 1) < successScore(20, 20));
+});
+
+test('successScore: a decayed record fades toward zero, so silence costs', () => {
+  // A ratio alone is scale invariant: 10/10 decayed to 0.44/0.44 is still 1.0,
+  // and would hold full marks forever. The prior is what makes weight matter.
+  assert.equal(successScore(0.44, 0.44), 2);
+  assert.equal(successScore(0.01, 0.01), 0);
+});
+
+test('successScore: the prior is adjustable', () => {
+  assert.equal(successScore(1, 1, 0), 25);
+  assert.ok(successScore(10, 10, 20) < successScore(10, 10, 5));
 });
 
 test('successScore: 0% success = 0', () => {
@@ -93,11 +116,13 @@ test('computeScore: new agent with no activity = age+community only', () => {
 });
 
 test('computeScore: total never exceeds 100', () => {
-  // Max without external: 30+25+20+0+5+0 = 80 (propagation stub at 0)
+  // Max without external: 30 fee + 20 age + 5 community, plus a success score
+  // that approaches 25 without reaching it because of the prior.
   const registeredAt = Math.floor(Date.now() / 1000) - 365 * 86400;
   const s = computeScore({ registeredAt, attestations: { successful: 300, total: 300 }, flags: 0 });
   assert.ok(s.total <= 100);
-  assert.equal(s.total, 80);
+  assert.equal(s.successScore, 24);
+  assert.equal(s.total, 79);
 });
 
 test('computeScore: externalScore is included in the total', () => {
@@ -115,11 +140,14 @@ test('computeScore: externalScore clamped to the 0-15 cap', () => {
   assert.equal(under.externalScore, 0);
 });
 
-test('computeScore: with external, max total is 95', () => {
-  // 30+25+20+15+5+0 = 95 (propagation still a stub)
+test('computeScore: with external, a realistic ceiling is 94', () => {
+  // 30 fee + 24 success + 20 age + 15 external + 5 community, propagation a stub.
+  // Success lands at 24 rather than 25: the prior means a finite record never
+  // quite reaches the cap.
   const registeredAt = Math.floor(Date.now() / 1000) - 365 * 86400;
   const s = computeScore({ registeredAt, attestations: { successful: 300, total: 300 }, flags: 0, externalScore: 15 });
-  assert.equal(s.total, 95);
+  assert.equal(s.total, 94);
+  assert.ok(s.total <= 100);
 });
 
 test('computeScore: slashed-like scenario (high flags)', () => {
