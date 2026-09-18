@@ -58,8 +58,10 @@ function readConfig(env = process.env) {
     // on an 18-decimal token.
     minAmount: BigInt(env.PAYMENT_MIN_AMOUNT || '0'),
     minConfirmations: Number(env.PAYMENT_MIN_CONFIRMATIONS || 1),
-    // Base units of volume per point of feeScore.
-    feeUnit: BigInt(env.PAYMENT_FEE_UNIT || '1000000'),
+    // Base units of volume per point of feeScore. The default is 100 USDC per
+    // point, so the 30-point cap lands at 3,000 USDC of settled volume, which is
+    // the figure docs/reputation-model.md has always quoted for this factor.
+    feeUnit: BigInt(env.PAYMENT_FEE_UNIT || '100000000'),
   };
 }
 
