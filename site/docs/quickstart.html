@@ -84,7 +84,7 @@
 <span class="kw">const</span> provider = <span class="kw">new</span> ethers.<span class="fn">JsonRpcProvider</span>(process.env.RPC_URL);
 <span class="kw">const</span> signer   = <span class="kw">new</span> ethers.<span class="fn">Wallet</span>(process.env.OPERATOR_PRIVATE_KEY, provider);
 <span class="kw">const</span> svr     = <span class="kw">new</span> ethers.<span class="fn">Contract</span>(
-  <span class="str">'0x…'</span>,
+  <span class="str">'0x41De2D6D55318e197a00E8f5B496eA2790e23E6c'</span>,
   [<span class="str">'function faucet(uint256 amount) external'</span>],
   signer
 );
