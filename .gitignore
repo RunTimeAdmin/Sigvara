@@ -61,3 +61,7 @@ CODE_REVIEW_REPORT.md
 # Packaged site builds for hosting uploads (not source)
 sigvara-site-*/
 sigvara-site-*.zip
+
+# Local probes that assert unfixed vulnerable behaviour. Kept out of the repo
+# until the corresponding fixes land (see D:\Sigvara-private\security-findings).
+test/Verify*.t.sol
