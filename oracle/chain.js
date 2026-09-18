@@ -119,9 +119,14 @@ async function getRegisteredAgents() {
           blockNumber: e.blockNumber,
         });
       }
+      // Checkpoint every chunk, not once at the end. A rate-limited node can stop a
+      // long backfill part way through, and recording progress only on completion
+      // threw away everything already scanned: the next attempt restarted from
+      // FROM_BLOCK, hit the same limit at the same place, and never finished. Chunks
+      // are processed in order, so the last completed one is a sound resume point.
+      lastScannedBlock = end;
       if (end < latest) await sleep(400);
     }
-    lastScannedBlock = latest;
   }
 
   return Array.from(knownAgents.values());
