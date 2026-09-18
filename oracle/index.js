@@ -8,7 +8,12 @@ const external = require('./external');
 const { computeScore } = require('./scoring');
 const { decideAction } = require('./epoch-policy');
 const { json, readBody, isAuthorized, parseScorePath, rateLimited, adminTokenPolicyError } = require('./http-helpers');
+const payments = require('./payments');
 const metrics = require('./metrics');
+
+// Verified-payment settings. Read once at startup so a malformed value fails the
+// process rather than silently disabling verification on the first request.
+const paymentCfg = payments.readConfig();
 
 // Per-client key for rate limiting. Behind the container's 127.0.0.1 port map all
 // requests may share one source IP, so this degrades to a global cap — still a
@@ -58,11 +63,21 @@ const {
   persist: persistState,
   checkAttestCooldown,
   recordAttestation,
+  creditPayment,
+  paymentVolume,
   pruneExpiredCooldowns,
   isStatePathWritable,
   getStatePath,
   ATTEST_COOLDOWN_MS,
 } = require('./store');
+
+// With verification on, feeScore comes from settled payment volume rather than the
+// attestation-count proxy. null keeps computeScore on the old path. Used by both the
+// epoch and the /score endpoint so the number served matches the number proposed.
+function measuredFeeScoreFor(didHash) {
+  if (!payments.required(paymentCfg)) return null;
+  return payments.feeScoreFromVolume(paymentVolume(didHash), paymentCfg.feeUnit);
+}
 
 // ---- Epoch -----------------------------------------------------------------
 
@@ -208,7 +223,10 @@ async function runEpochInner() {
       const externalScore = (external.configured() && linkedId !== undefined)
         ? await external.externalScoreFor(linkedId, operator)
         : 0;
-      const scores    = computeScore({ registeredAt, attestations: att, flags: flagCount, externalScore });
+      const scores    = computeScore({
+        registeredAt, attestations: att, flags: flagCount, externalScore,
+        measuredFeeScore: measuredFeeScoreFor(didHash),
+      });
 
       // Charge before proposing, not after. The coverage read above and the
       // charge are separated by at least the propose transaction, and an
@@ -307,14 +325,50 @@ const server = http.createServer(async (req, res) => {
       return json(res, 429, { error: 'Rate limited' });
     }
     try {
-      const { didHash, success, attester } = await readBody(req);
+      const body = await readBody(req);
+      const { didHash, success } = body;
+      let attester = body.attester;
       if (!didHash) {
         metrics.inc('attestRejectedOther');
         return json(res, 400, { error: 'didHash required' });
       }
-      if (!attester) {
+      // Only needed when payments are off; otherwise it comes from the transfer.
+      if (!attester && !payments.required(paymentCfg)) {
         metrics.inc('attestRejectedOther');
         return json(res, 400, { error: 'attester required (unique ID for the attestation source)' });
+      }
+
+      // With verification on, the attester is whoever actually paid, taken from the
+      // settlement transfer. The `attester` field in the body is ignored: letting a
+      // caller name themselves is what made attestations free to manufacture.
+      let credited = null;
+      if (payments.required(paymentCfg)) {
+        const txHash = body.payment && body.payment.txHash;
+        let info;
+        try {
+          info = await chain.getAgentInfo(didHash);
+        } catch (err) {
+          metrics.inc('attestRejectedOther');
+          return json(res, 502, { error: `could not read agent: ${err.message}` });
+        }
+        if (!info || Number(info.registeredAt) === 0) {
+          metrics.inc('attestRejectedOther');
+          return json(res, 400, { error: 'unknown didHash' });
+        }
+        try {
+          credited = await payments.verifyPayment(
+            { provider: chain.getProvider(), cfg: paymentCfg },
+            txHash,
+            info.agentAddress
+          );
+        } catch (err) {
+          // An RPC failure is not the caller's fault and must not be recorded as a
+          // rejected attestation, or a flaky node would look like abuse.
+          const rpc = err.code === 'rpc_error';
+          metrics.inc(rpc ? 'paymentRpcErrors' : 'attestRejectedPayment');
+          return json(res, rpc ? 502 : 402, { error: err.message, code: err.code || 'payment_invalid' });
+        }
+        attester = credited.payer;
       }
 
       const cooldownCheck = checkAttestCooldown(attester, didHash);
@@ -335,9 +389,23 @@ const server = http.createServer(async (req, res) => {
       if (success) att.successful++;
       attestations.set(didHash, att);
       recordAttestation(attester, didHash);
+      if (credited) {
+        // Credit after the cooldown check so a rejected attestation does not burn
+        // the receipt; the payer can retry once the cooldown clears.
+        if (!creditPayment(didHash, credited.txHash, credited.amount)) {
+          metrics.inc('attestRejectedPayment');
+          return json(res, 409, { error: 'this settlement has already been credited', code: 'replayed' });
+        }
+        metrics.inc('paymentsVerified');
+      }
       persistState();
       metrics.inc('attestAccepted');
-      return json(res, 200, { didHash, attester, ...att });
+      return json(res, 200, {
+        didHash,
+        attester,
+        ...att,
+        ...(credited ? { payment: { txHash: credited.txHash, amount: credited.amount.toString() } } : {}),
+      });
     } catch (err) {
       metrics.inc('attestRejectedOther');
       return json(res, 400, { error: err.message });
@@ -403,7 +471,10 @@ const server = http.createServer(async (req, res) => {
       const externalScore = (external.configured() && linkedId !== undefined)
         ? await external.externalScoreFor(linkedId, operator)
         : 0;
-      const scores    = computeScore({ registeredAt, attestations: att, flags: flagCount, externalScore });
+      const scores    = computeScore({
+        registeredAt, attestations: att, flags: flagCount, externalScore,
+        measuredFeeScore: measuredFeeScoreFor(didHash),
+      });
       return json(res, 200, { didHash, status, scores, attestations: att, flags: flagCount, erc8004AgentId: linkedId ?? null });
     } catch (err) {
       return json(res, 500, { error: err.message });

@@ -20,6 +20,9 @@ const counters = {
   attestAccepted: 0,
   attestRejectedCooldown: 0,
   attestRejectedOther: 0,
+  attestRejectedPayment: 0,
+  paymentsVerified: 0,
+  paymentRpcErrors: 0,
   flagsReceived: 0,
   linksCreated: 0,
   rateLimitHits: 0,
@@ -84,6 +87,14 @@ function toPrometheusText() {
   lines.push('# TYPE sigvara_oracle_attest_total counter');
   lines.push(`sigvara_oracle_attest_total{result="accepted"} ${counters.attestAccepted}`);
   lines.push(`sigvara_oracle_attest_total{result="rejected_cooldown"} ${counters.attestRejectedCooldown}`);
+  lines.push(`sigvara_oracle_attest_total{result="rejected_payment"} ${counters.attestRejectedPayment}`);
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_payments_verified_total Attestations backed by a verified settlement');
+  lines.push('# TYPE sigvara_oracle_payments_verified_total counter');
+  lines.push(`sigvara_oracle_payments_verified_total ${counters.paymentsVerified}`);
+  lines.push('# HELP sigvara_oracle_payment_rpc_errors_total Receipt lookups that failed on the RPC, not on the payment');
+  lines.push('# TYPE sigvara_oracle_payment_rpc_errors_total counter');
+  lines.push(`sigvara_oracle_payment_rpc_errors_total ${counters.paymentRpcErrors}`);
   lines.push(`sigvara_oracle_attest_total{result="rejected_other"} ${counters.attestRejectedOther}`);
 
   lines.push('');

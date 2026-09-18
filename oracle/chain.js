@@ -93,9 +93,17 @@ async function getAgentInfo(didHash) {
   const id = await identityContract.getIdentity(didHash);
   return {
     operator: id.operator,
+    // The address payments must be made to for an attestation to count. It is
+    // part of the DID, so it cannot be repointed after registration.
+    agentAddress: id.agentAddress,
     registeredAt: Number(id.registeredAt),
     status: Number(id.status),
   };
+}
+
+/// Read-only provider, for modules that verify transactions the oracle did not send.
+function getProvider() {
+  return provider;
 }
 
 async function proposeScore(didHash, scores) {
@@ -171,6 +179,7 @@ module.exports = {
   reset,
   getRegisteredAgents,
   getAgentInfo,
+  getProvider,
   proposeScore,
   finalizeScore,
   getPendingScore,
