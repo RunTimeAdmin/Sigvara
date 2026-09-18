@@ -74,6 +74,8 @@ contract E2EIntegrationTest is Test {
                 CHALLENGE_WINDOW
             ))
         )));
+        vm.prank(admin);
+        reputation.initializeV3(address(identity));
 
         // Deploy Staking proxy
         staking = SigvaraStaking(address(new ERC1967Proxy(
@@ -493,18 +495,14 @@ contract E2EIntegrationTest is Test {
         staking.executeSlash(didHash);
         assertEq(reputation.getTotalScore(didHash), 0, "Post-slash score");
 
-        // New proposal still results in zero because slash clears pending too
-        // (The oracle could still propose, but finalization writes to storage
-        // which is immediately zeroed by any subsequent slash — in practice,
-        // the oracle should not propose for slashed agents)
+        // A slash is terminal. This used to be enforced only by the oracle choosing
+        // not to propose, which meant a compromised or buggy oracle could score a
+        // slashed agent straight back up to its old value. The registry rejects it now.
+        vm.expectRevert(abi.encodeWithSelector(SigvaraReputation.AgentSlashed.selector, didHash));
         vm.prank(oracle);
         reputation.proposeReputation(didHash, score);
+
         vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
-        reputation.finalizeReputation(didHash);
-        
-        // Score is now set again since there's no enforcement preventing
-        // reputation proposals for slashed agents at the contract level
-        // (enforcement is at the oracle level)
-        assertEq(reputation.getTotalScore(didHash), 60, "New score written (oracle should filter)");
+        assertEq(reputation.getTotalScore(didHash), 0, "Slashed agent stays at zero");
     }
 }
