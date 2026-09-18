@@ -422,11 +422,17 @@ contract SigvaraStakingTest is Test {
         vm.prank(operator);
         staking.disputeSlash(didHash);
 
+        // A dispute moves the proposal to committee resolution and keeps the bond
+        // frozen. It does not cancel the slash and does not reinstate the agent:
+        // doing either let an operator veto every proposal and withdraw the stake.
         SigvaraStaking.SlashProposal memory p = staking.getSlashProposal(didHash);
-        assertEq(uint8(p.state), uint8(SigvaraStaking.SlashState.Cancelled));
+        assertEq(uint8(p.state), uint8(SigvaraStaking.SlashState.Disputed));
+        assertFalse(identity.isActive(didHash), "agent stays suspended pending resolution");
 
-        // Agent reinstated.
-        assertTrue(identity.isActive(didHash));
+        // The stake stays locked while the dispute is open.
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.SlashAlreadyPending.selector, didHash));
+        vm.prank(operator);
+        staking.initiateWithdrawal(didHash, MIN_STAKE);
     }
 
     function test_disputeSlash_reverts_afterChallengePeriod() public {
@@ -483,10 +489,17 @@ contract SigvaraStakingTest is Test {
         vm.prank(stranger); // execution is permissionless
         staking.executeSlash(didHash);
 
+        // The burn goes out immediately; victim and reporter shares are credited and
+        // pulled, so a recipient that cannot receive the token cannot block settlement.
         assertEq(svr.balanceOf(address(0xdead)), expectedBurned);
-        assertEq(svr.balanceOf(victim), expectedVictim);
-        assertEq(svr.balanceOf(committee), expectedReporter);
+        assertEq(staking.claimable(victim), expectedVictim);
+        assertEq(staking.claimable(committee), expectedReporter);
         assertEq(staking.getStake(didHash), 0);
+
+        vm.prank(victim);
+        staking.claimSlashProceeds();
+        assertEq(svr.balanceOf(victim), expectedVictim);
+        assertEq(staking.claimable(victim), 0);
     }
 
     function test_executeSlash_marksAgentSlashed() public {

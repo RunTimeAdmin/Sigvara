@@ -11,11 +11,13 @@ warning an auditor discovers cold. This record lists what was reviewed, why
 it stays, and what would change the decision.
 
 Slither 0.11.5 over `src/` on 17 September 2026 reported 16 findings: 0 High,
-4 Medium, 10 Low, 2 Informational.
+4 Medium, 10 Low, 2 Informational. After the dispute-freeze change it reports
+16 again (3 Medium, 11 Low, 2 Informational): `expireDispute` joined the same
+timestamp class, and the previously listed uninitialized-local was fixed.
 
 ## Accepted
 
-### `timestamp` (Low, 10 sites)
+### `timestamp` (Low, 11 sites)
 
 `block.timestamp` gates the slash challenge period (7 days), the unbonding
 period (21 days), the score challenge window (6 hours) and the oracle-bond

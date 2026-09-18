@@ -46,7 +46,10 @@ contract SigvaraStaking is
     // Types
     // -------------------------------------------------------------------------
 
-    enum SlashState { None, Pending, Executed, Cancelled }
+    /// @dev Disputed is appended, never inserted: these values are persisted in
+    ///      `slashProposals` on a live proxy and renumbering them would reinterpret
+    ///      every stored proposal after a UUPS upgrade.
+    enum SlashState { None, Pending, Executed, Cancelled, Disputed }
 
     struct Stake {
         uint256 amount;
@@ -66,6 +69,11 @@ contract SigvaraStaking is
         uint256 initiatedAt;
         SlashState state;
         bytes evidenceHash; // keccak256 of off-chain evidence blob (stored for auditability)
+        // Appended for the dispute-freeze change. New fields go at the end of the
+        // struct for the same reason new storage goes at the end of the contract.
+        uint256 challengeDeadline; // snapshot at initiation, so later admin changes
+                                   // to challengePeriod cannot move an in-flight window
+        uint256 disputedAt;        // when the operator disputed; 0 if never disputed
     }
 
     // -------------------------------------------------------------------------
@@ -89,6 +97,13 @@ contract SigvaraStaking is
     // Seconds a withdrawal sits queued (and still slashable) before it can be claimed.
     uint256 public unbondingPeriod;
 
+    /// @notice Slash proceeds owed to victims and reporters, withdrawn by them.
+    /// @dev    Pull rather than push. Paying out inline meant the one function that
+    ///         resolves a proposal was also the only function that could unlock the
+    ///         stake, so a recipient that cannot receive the token (a blocklisting
+    ///         token, or a contract that reverts) froze the entire bond permanently.
+    mapping(address => uint256) public claimable;
+
     // -------------------------------------------------------------------------
     // Events
     // -------------------------------------------------------------------------
@@ -99,6 +114,8 @@ contract SigvaraStaking is
     event SlashInitiated(bytes32 indexed didHash, address indexed reporter, address indexed victim, uint256 initiatedAt);
     event SlashDisputed(bytes32 indexed didHash, address indexed operator);
     event SlashExecuted(bytes32 indexed didHash, uint256 burned, uint256 toVictim, uint256 toReporter);
+    event SlashCancelled(bytes32 indexed didHash, address indexed by);
+    event SlashProceedsClaimed(address indexed account, uint256 amount);
     event MinimumStakeUpdated(uint256 newMinimum);
     event ChallengePeriodUpdated(uint256 newPeriod);
     event UnbondingPeriodUpdated(uint256 newPeriod);
@@ -121,6 +138,9 @@ contract SigvaraStaking is
     error UnbondingPeriodActive(bytes32 didHash, uint256 claimableAt);
     error VictimIsReporter(address victim);
     error PeriodTooShort(uint256 provided, uint256 minimum);
+    error SlashNotDisputed(bytes32 didHash);
+    error DisputeResolutionActive(bytes32 didHash, uint256 expiresAt);
+    error NothingClaimable(address account);
 
     // -------------------------------------------------------------------------
     // Constructor / Initializer
@@ -226,7 +246,11 @@ contract SigvaraStaking is
         SigvaraIdentity.AgentIdentity memory id = identityRegistry.getIdentity(didHash);
         if (id.operator != msg.sender) revert NotOperator(didHash, msg.sender);
 
-        if (slashProposals[didHash].state == SlashState.Pending) {
+        // A Pending or Disputed proposal freezes the bond. Disputing must not
+        // release it: that is what let an operator cancel every proposal for free
+        // and walk away with the whole stake once unbonding elapsed.
+        SlashState st = slashProposals[didHash].state;
+        if (st == SlashState.Pending || st == SlashState.Disputed) {
             revert SlashAlreadyPending(didHash);
         }
 
@@ -266,7 +290,11 @@ contract SigvaraStaking is
         // depend on unbondingPeriod staying longer than challengePeriod (both are
         // admin-tunable): if it were ever shorter, an operator could claim mid-slash
         // and dodge the queued portion.
-        if (slashProposals[didHash].state == SlashState.Pending) {
+        // A Pending or Disputed proposal freezes the bond. Disputing must not
+        // release it: that is what let an operator cancel every proposal for free
+        // and walk away with the whole stake once unbonding elapsed.
+        SlashState st = slashProposals[didHash].state;
+        if (st == SlashState.Pending || st == SlashState.Disputed) {
             revert SlashAlreadyPending(didHash);
         }
 
@@ -307,7 +335,10 @@ contract SigvaraStaking is
         // unbonding queue (which executeSlash still sweeps) and thereby block the slash
         // from ever being initiated — nullifying accountability. Gate on the total.
         if (stakes[didHash].amount + stakes[didHash].unbondingAmount == 0) revert NoStake(didHash);
-        if (slashProposals[didHash].state == SlashState.Pending) revert SlashAlreadyPending(didHash);
+        SlashState existing = slashProposals[didHash].state;
+        if (existing == SlashState.Pending || existing == SlashState.Disputed) {
+            revert SlashAlreadyPending(didHash);
+        }
 
         // Write state before the external call (CEI pattern).
         slashProposals[didHash] = SlashProposal({
@@ -316,7 +347,11 @@ contract SigvaraStaking is
             victim: victim,
             initiatedAt: block.timestamp,
             state: SlashState.Pending,
-            evidenceHash: evidenceHash
+            evidenceHash: evidenceHash,
+            // Snapshot the window. Reading the live challengePeriod at execute time
+            // let an admin shorten an in-flight dispute window to nothing.
+            challengeDeadline: block.timestamp + challengePeriod,
+            disputedAt: 0
         });
 
         // Suspend immediately to halt the agent during the dispute window.
@@ -326,17 +361,20 @@ contract SigvaraStaking is
     }
 
     /**
-     * @notice Agent operator disputes a pending slash during the challenge period.
-     * @dev    Cancels the proposal and reinstates the agent to Active.
-     *         The committee may re-initiate with stronger evidence; this does not
-     *         permanently block slashing. A governance dispute resolution path is
-     *         planned for mainnet.
+     * @notice Operator disputes a pending slash, moving it to committee resolution.
+     * @dev    A dispute FREEZES the stake; it does not cancel the proposal and does
+     *         not reinstate the agent. Disputing used to set Cancelled, which released
+     *         the bond: an operator could queue the whole stake, cancel every proposal
+     *         the committee filed at no cost, and claim once unbonding elapsed.
+     *         The committee then calls resolveDispute. If it never does, anyone may
+     *         call expireDispute after DISPUTE_RESOLUTION_PERIOD so the freeze is
+     *         bounded in the other direction too.
      */
     function disputeSlash(bytes32 didHash) external nonReentrant {
         SlashProposal storage proposal = slashProposals[didHash];
         if (proposal.state != SlashState.Pending) revert NoActivePendingSlash(didHash);
 
-        uint256 deadline = proposal.initiatedAt + challengePeriod;
+        uint256 deadline = proposal.challengeDeadline;
         if (block.timestamp > deadline) {
             revert ChallengePeriodExpired(didHash, deadline);
         }
@@ -344,12 +382,67 @@ contract SigvaraStaking is
         SigvaraIdentity.AgentIdentity memory id = identityRegistry.getIdentity(didHash);
         if (id.operator != msg.sender) revert NotOperator(didHash, msg.sender);
 
-        proposal.state = SlashState.Cancelled;
-
-        // Reinstate the agent.
-        identityRegistry.updateStatus(didHash, SigvaraIdentity.AgentStatus.Active);
+        proposal.state = SlashState.Disputed;
+        proposal.disputedAt = block.timestamp;
 
         emit SlashDisputed(didHash, msg.sender);
+    }
+
+    /**
+     * @notice Committee resolves a disputed slash: uphold it or drop it.
+     * @param  uphold True to slash, false to cancel and reinstate the agent.
+     */
+    function resolveDispute(bytes32 didHash, bool uphold)
+        external
+        nonReentrant
+        onlyRole(SLASHING_COMMITTEE_ROLE)
+    {
+        SlashProposal storage proposal = slashProposals[didHash];
+        if (proposal.state != SlashState.Disputed) revert SlashNotDisputed(didHash);
+
+        if (uphold) {
+            _settleSlash(didHash, proposal);
+        } else {
+            _dropProposal(didHash, proposal);
+        }
+    }
+
+    /**
+     * @notice Release a dispute the committee never resolved.
+     * @dev    Permissionless, so an operator is never dependent on committee liveness
+     *         to get an unresolved freeze lifted. The committee may re-file with
+     *         stronger evidence; it simply cannot sit on a frozen bond forever.
+     */
+    function expireDispute(bytes32 didHash) external nonReentrant {
+        SlashProposal storage proposal = slashProposals[didHash];
+        if (proposal.state != SlashState.Disputed) revert SlashNotDisputed(didHash);
+
+        uint256 expiresAt = proposal.disputedAt + DISPUTE_RESOLUTION_PERIOD;
+        if (block.timestamp <= expiresAt) revert DisputeResolutionActive(didHash, expiresAt);
+
+        _dropProposal(didHash, proposal);
+    }
+
+    /**
+     * @notice Committee withdraws a pending proposal before the window closes.
+     * @dev    Without this, a proposal filed and then abandoned left the agent
+     *         Suspended and its stake frozen permanently: after the window, dispute
+     *         reverts and nothing else could clear the state.
+     */
+    function cancelSlash(bytes32 didHash) external nonReentrant onlyRole(SLASHING_COMMITTEE_ROLE) {
+        SlashProposal storage proposal = slashProposals[didHash];
+        if (proposal.state != SlashState.Pending) revert NoActivePendingSlash(didHash);
+        _dropProposal(didHash, proposal);
+    }
+
+    /// @dev Cancel a proposal and return the agent to Active. Reinstating to Active
+    ///      (rather than the pre-slash status) is deliberate: it is what clears the
+    ///      staking-core suspension lock in SigvaraIdentity. An operator who wants to
+    ///      stay suspended can self-suspend again.
+    function _dropProposal(bytes32 didHash, SlashProposal storage proposal) internal {
+        proposal.state = SlashState.Cancelled;
+        identityRegistry.updateStatus(didHash, SigvaraIdentity.AgentStatus.Active);
+        emit SlashCancelled(didHash, msg.sender);
     }
 
     /**
@@ -362,11 +455,19 @@ contract SigvaraStaking is
         SlashProposal storage proposal = slashProposals[didHash];
         if (proposal.state != SlashState.Pending) revert NoActivePendingSlash(didHash);
 
-        uint256 deadline = proposal.initiatedAt + challengePeriod;
+        uint256 deadline = proposal.challengeDeadline;
         if (block.timestamp <= deadline) {
             revert ChallengePeriodActive(didHash, deadline);
         }
 
+        _settleSlash(didHash, proposal);
+    }
+
+    /// @dev Shared settlement for an undisputed slash and for a dispute the committee
+    ///      upheld. Proceeds are credited, not sent: a recipient that cannot receive
+    ///      the token must not be able to make settlement revert, because this is the
+    ///      only path that clears the proposal and unfreezes the bond.
+    function _settleSlash(bytes32 didHash, SlashProposal storage proposal) internal {
         Stake storage s = stakes[didHash];
         // Sweep both the active stake and any queued withdrawal — an unbonding
         // request in flight must not let an operator dodge a slash discovered
@@ -383,16 +484,30 @@ contract SigvaraStaking is
         uint256 toVictim = totalSlashed / 4;
         uint256 toReporter = totalSlashed - burned - toVictim; // absorbs any rounding dust
 
+        claimable[proposal.victim] += toVictim;
+        claimable[proposal.reporter] += toReporter;
+
         // Mark identity as permanently slashed and zero reputation.
         identityRegistry.updateStatus(didHash, SigvaraIdentity.AgentStatus.Slashed);
         reputationRegistry.zeroReputation(didHash);
 
-        // Transfer tokens.
-        svrToken.safeTransfer(address(0xdead), burned);   // canonical burn address
-        svrToken.safeTransfer(proposal.victim, toVictim);
-        svrToken.safeTransfer(proposal.reporter, toReporter);
+        // The burn is the one transfer kept inline. 0xdead is an unowned address that
+        // cannot refuse a standard transfer, and crediting it instead would leave the
+        // tokens in this contract, which is not a burn.
+        svrToken.safeTransfer(address(0xdead), burned);
 
         emit SlashExecuted(didHash, burned, toVictim, toReporter);
+    }
+
+    /**
+     * @notice Withdraw slash proceeds credited to the caller.
+     */
+    function claimSlashProceeds() external nonReentrant returns (uint256 amount) {
+        amount = claimable[msg.sender];
+        if (amount == 0) revert NothingClaimable(msg.sender);
+        claimable[msg.sender] = 0;
+        svrToken.safeTransfer(msg.sender, amount);
+        emit SlashProceedsClaimed(msg.sender, amount);
     }
 
     // -------------------------------------------------------------------------
@@ -411,6 +526,12 @@ contract SigvaraStaking is
     /// @notice Lower bound on unbonding, so queued withdrawals cannot be made
     ///         instantly claimable while a slash is being prepared.
     uint256 public constant MIN_UNBONDING_PERIOD = 1 days;
+
+    /// @notice How long the committee has to resolve a dispute before anyone may
+    ///         expire it. A dispute freezes the stake, so without this cap the
+    ///         committee could freeze an operator's bond indefinitely by filing
+    ///         once and never resolving.
+    uint256 public constant DISPUTE_RESOLUTION_PERIOD = 14 days;
 
     function setChallengePeriod(uint256 newPeriod) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (newPeriod < MIN_CHALLENGE_PERIOD) revert PeriodTooShort(newPeriod, MIN_CHALLENGE_PERIOD);

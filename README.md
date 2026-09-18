@@ -136,7 +136,7 @@ stateDiagram-v2
     [*] --> Active : registerAgent()
 
     Active --> Suspended : operator.updateStatus()\nor StakingCore.initiateSlash()
-    Suspended --> Active : operator.updateStatus()\nor StakingCore.disputeSlash()
+    Suspended --> Active : operator.updateStatus()\nor resolveDispute(false)\nor cancelSlash() / expireDispute()
 
     Active --> Slashed : StakingCore.executeSlash()
     Suspended --> Slashed : StakingCore.executeSlash()
@@ -190,8 +190,9 @@ sequenceDiagram
 
     alt Operator disputes within window
         Op->>ST: disputeSlash(didHash)
-        ST->>ID: updateStatus(didHash, Active)
-        Note over ST: Proposal cancelled — re-initiation possible
+        Note over ST: Proposal → Disputed. Bond stays frozen,<br/>agent stays Suspended
+        CM->>ST: resolveDispute(didHash, uphold)
+        Note over ST: Upheld slashes; rejected cancels and reinstates.<br/>Unresolved after 14 days, anyone may expireDispute()
     else Challenge period elapses undisputed
         Anyone->>ST: executeSlash(didHash)
         ST->>ID: updateStatus(didHash, Slashed)

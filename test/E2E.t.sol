@@ -179,6 +179,15 @@ contract E2EIntegrationTest is Test {
         // Verify distributions: 50% burn, 25% victim, 25% reporter
         uint256 totalSlashed = MIN_STAKE * 2;
         assertEq(svr.balanceOf(address(0xdead)), totalSlashed / 2, "Burn amount incorrect");
+        // Victim and reporter shares are credited and pulled, so an unreceivable
+        // recipient cannot block settlement and freeze the bond.
+        assertEq(staking.claimable(victim), totalSlashed / 4, "Victim credit incorrect");
+        assertEq(staking.claimable(committee), totalSlashed - totalSlashed / 2 - totalSlashed / 4, "Reporter credit incorrect");
+
+        vm.prank(victim);
+        staking.claimSlashProceeds();
+        vm.prank(committee);
+        staking.claimSlashProceeds();
         assertEq(svr.balanceOf(victim) - victimBalBefore, totalSlashed / 4, "Victim payment incorrect");
         assertEq(svr.balanceOf(committee) - committeeBalBefore, totalSlashed - totalSlashed / 2 - totalSlashed / 4, "Reporter payment incorrect");
 
@@ -211,13 +220,27 @@ contract E2EIntegrationTest is Test {
         vm.prank(operator);
         staking.disputeSlash(didHash);
 
-        // Agent reinstated
-        assertTrue(identity.isActive(didHash), "Should be reinstated after dispute");
+        // A dispute hands the proposal to the committee and keeps the bond frozen.
+        // It neither cancels the slash nor reinstates the agent.
+        assertFalse(identity.isActive(didHash), "Should stay suspended pending resolution");
         assertEq(staking.getStake(didHash), MIN_STAKE * 2, "Stake should be preserved");
         assertEq(
             uint8(staking.getSlashProposal(didHash).state),
+            uint8(SigvaraStaking.SlashState.Disputed),
+            "Slash should be disputed"
+        );
+
+        // The committee rules for the operator: proposal dropped, agent restored,
+        // stake released.
+        vm.prank(committee);
+        staking.resolveDispute(didHash, false);
+
+        assertTrue(identity.isActive(didHash), "Should be reinstated once the dispute is resolved");
+        assertEq(staking.getStake(didHash), MIN_STAKE * 2, "Stake should be intact");
+        assertEq(
+            uint8(staking.getSlashProposal(didHash).state),
             uint8(SigvaraStaking.SlashState.Cancelled),
-            "Slash should be cancelled"
+            "Slash should be cancelled after resolution"
         );
     }
 

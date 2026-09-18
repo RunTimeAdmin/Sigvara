@@ -117,12 +117,15 @@
         <article class="step" data-step="5" data-state="locked">
           <div class="step-head" role="button" tabindex="0" aria-expanded="false"><div><div class="step-num">05 / SLASH</div><h2>What misbehaviour costs</h2></div><span class="step-state">Locked</span></div>
           <div class="step-body">
-            <p>A counterparty reports harm and a committee member files the slash, naming the victim. The agent is suspended immediately and a 7-day challenge window opens. If the operator disputes inside the window, the proposal is cancelled and the agent reinstated; the committee can re-file with stronger evidence. If nobody disputes, once the window has closed anyone can execute it: half the bond burns, a quarter goes to the victim, a quarter to the committee member who filed. Queued withdrawals are swept too. Status becomes Slashed, which is terminal, and the score is zeroed.</p>
+            <p>A counterparty reports harm and a committee member files the slash, naming the victim. The agent is suspended immediately and a 7-day challenge window opens. If nobody disputes, once the window closes anyone can execute it. If the operator does dispute, the bond stays frozen and the proposal goes to the committee to rule on: upholding it slashes, rejecting it reinstates the agent. A dispute the committee never resolves can be expired by anyone after 14 days, so neither side can stall forever. On a slash, half the bond burns and the victim and reporter quarters are credited for them to claim. Queued withdrawals are swept too. Status becomes Slashed, which is terminal, and the score is zeroed.</p>
             <div class="controls">
               <button class="button button-danger" id="btnInitiateSlash">Committee initiates slash</button>
-              <button class="button" id="btnDispute">Operator disputes (cancels)</button>
+              <button class="button" id="btnDispute">Operator disputes (freezes)</button>
               <button class="button" id="btnAdvance7d">Advance past 7 days</button>
               <button class="button button-primary" id="btnExecuteSlash">Execute slash</button>
+              <button class="button button-danger" id="btnUphold">Committee upholds</button>
+              <button class="button" id="btnRejectDispute">Committee rejects</button>
+              <button class="button" id="btnExpire">Expire unresolved dispute</button>
             </div>
             <div class="result" id="outSlash" aria-live="polite"></div>
           </div>

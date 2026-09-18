@@ -35,6 +35,10 @@ contract StakingHandler is Test {
     uint256 public totalClaimed;
     /// Every token that left through a slash, as reported by the event math.
     uint256 public totalSlashedOut;
+    /// Slash proceeds actually pulled out by victims and reporters.
+    uint256 public totalProceedsClaimed;
+    /// Fixed victim address, so credits land somewhere the handler can claim from.
+    address public constant victimAddr = address(uint160(uint256(keccak256("invariant.victim"))));
 
     constructor(
         InvMockSVR svr_,
@@ -88,11 +92,10 @@ contract StakingHandler is Test {
         } catch {}
     }
 
-    function initiateSlash(uint256 seed, address victim) external {
+    function initiateSlash(uint256 seed) external {
         (, bytes32 did) = _pick(seed);
-        if (victim == address(0) || victim == address(staking)) return;
         vm.prank(committee);
-        try staking.initiateSlash(did, victim, "") {} catch {}
+        try staking.initiateSlash(did, victimAddr, "") {} catch {}
     }
 
     function disputeSlash(uint256 seed) external {
@@ -108,6 +111,41 @@ contract StakingHandler is Test {
         slashable += queued;
         try staking.executeSlash(did) {
             totalSlashedOut += slashable;
+        } catch {}
+    }
+
+    /// Disputes now freeze the bond until the committee rules, so the resolution
+    /// paths have to be part of the reachable state space.
+    function resolveDispute(uint256 seed, bool uphold) external {
+        (, bytes32 did) = _pick(seed);
+        uint256 slashable = staking.getStake(did);
+        (uint256 queued,) = staking.getPendingWithdrawal(did);
+        slashable += queued;
+        vm.prank(committee);
+        try staking.resolveDispute(did, uphold) {
+            if (uphold) totalSlashedOut += slashable;
+        } catch {}
+    }
+
+    function expireDispute(uint256 seed) external {
+        (, bytes32 did) = _pick(seed);
+        try staking.expireDispute(did) {} catch {}
+    }
+
+    function cancelSlash(uint256 seed) external {
+        (, bytes32 did) = _pick(seed);
+        vm.prank(committee);
+        try staking.cancelSlash(did) {} catch {}
+    }
+
+    /// Slash proceeds are pulled, so claiming is a reachable action too.
+    function claimProceeds(uint256 seed) external {
+        address who = seed % 2 == 0 ? victimAddr : committee;
+        uint256 owed = staking.claimable(who);
+        if (owed == 0) return;
+        vm.prank(who);
+        try staking.claimSlashProceeds() {
+            totalProceedsClaimed += owed;
         } catch {}
     }
 
@@ -196,10 +234,12 @@ contract StakingInvariantTest is Test {
             (uint256 queued,) = staking.getPendingWithdrawal(did);
             obligations += staking.getStake(did) + queued;
         }
+        // Slash proceeds are credited, not sent, so they are custodied until pulled.
+        obligations += staking.claimable(handler.victimAddr()) + staking.claimable(committee);
         assertEq(
             svr.balanceOf(address(staking)),
             obligations,
-            "staking custody does not equal the sum of recorded stakes and queued withdrawals"
+            "staking custody does not equal stakes plus queued withdrawals plus unclaimed proceeds"
         );
     }
 
@@ -207,10 +247,13 @@ contract StakingInvariantTest is Test {
     /// plus what a slash distributed. Nothing evaporates.
     function invariant_tokenConservation() public view {
         uint256 held = svr.balanceOf(address(staking));
+        // A slash now removes only the burned half from the contract immediately; the
+        // victim and reporter halves stay custodied until they are pulled.
+        uint256 leftViaSlash = svr.balanceOf(BURN) + handler.totalProceedsClaimed();
         assertEq(
             handler.totalDeposited(),
-            held + handler.totalClaimed() + handler.totalSlashedOut(),
-            "deposits do not reconcile against held, claimed and slashed totals"
+            held + handler.totalClaimed() + leftViaSlash,
+            "deposits do not reconcile against held, claimed, burned and pulled totals"
         );
     }
 
@@ -232,7 +275,20 @@ contract StakingInvariantTest is Test {
     /// The burn address only ever accumulates. A negative move would mean slashed
     /// value was recoverable.
     function invariant_burnedOnlyGrows() public view {
-        assertGe(svr.balanceOf(BURN), 0);
         assertLe(svr.balanceOf(BURN), handler.totalSlashedOut());
+    }
+
+    /// A disputed proposal must keep the bond frozen. If any agent is mid-dispute
+    /// while holding nothing, the freeze released the stake, which is the escape
+    /// this change exists to close.
+    function invariant_disputedAgentsStayBonded() public view {
+        uint256 n = handler.agentCount();
+        for (uint256 i = 0; i < n; i++) {
+            bytes32 did = handler.didAt(i);
+            if (staking.getSlashProposal(did).state == SigvaraStaking.SlashState.Disputed) {
+                (uint256 queued,) = staking.getPendingWithdrawal(did);
+                assertGt(staking.getStake(did) + queued, 0, "disputed agent has no bond at risk");
+            }
+        }
     }
 }
