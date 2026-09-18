@@ -60,6 +60,8 @@ contract SigvaraStakingTest is Test {
             address(repImpl),
             abi.encodeCall(SigvaraReputation.initialize, (admin, address(0), address(0), committee, SCORE_WINDOW))
         )));
+        vm.prank(admin);
+        rep.initializeV3(address(identity));
 
         // Deploy staking proxy with identity + rep.
         staking = SigvaraStaking(address(new ERC1967Proxy(

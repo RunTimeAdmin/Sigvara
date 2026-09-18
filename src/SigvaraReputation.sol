@@ -5,6 +5,8 @@ import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol"
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 
+import "./SigvaraIdentity.sol";
+
 /**
  * @title SigvaraReputation
  * @notice Stores the 6-factor reputation score for each registered agent.
@@ -30,6 +32,13 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
  *     propose-then-arbitrate step.
  *   - A fresh proposal for the same agent replaces any still-pending one and restarts
  *     the window; the previous pending proposal is simply abandoned.
+ *
+ * Identity binding:
+ *   Scores are only meaningful for agents that exist and are not terminated. This
+ *   contract therefore reads SigvaraIdentity on every write path. Without that check
+ *   a score could be written for a didHash that was never registered, letting anyone
+ *   pre-seed a reputation before the real operator claims the DID, and a slashed
+ *   agent could be scored back up to 100 after SigvaraStaking had zeroed it.
  */
 contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgradeable {
     // -------------------------------------------------------------------------
@@ -90,6 +99,10 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
     /// Seconds a proposed score sits open to challenge before it can be finalized.
     uint256 public challengeWindow;
 
+    /// Source of truth for whether a didHash exists and what state it is in.
+    /// Appended after challengeWindow: existing proxies keep their storage layout.
+    SigvaraIdentity public identityRegistry;
+
     // -------------------------------------------------------------------------
     // Events
     // -------------------------------------------------------------------------
@@ -99,6 +112,7 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
     event ScoreRejected(bytes32 indexed didHash, address indexed committee);
     event ReputationZeroed(bytes32 indexed didHash);
     event ChallengeWindowUpdated(uint256 newWindow);
+    event IdentityRegistrySet(address indexed identityRegistry);
 
     // -------------------------------------------------------------------------
     // Errors
@@ -108,6 +122,9 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
     error NoScorePending(bytes32 didHash);
     error ChallengeWindowActive(bytes32 didHash, uint256 finalizableAt);
     error ChallengeWindowExpired(bytes32 didHash, uint256 expiredAt);
+    error IdentityRegistryNotSet();
+    error AgentNotRegistered(bytes32 didHash);
+    error AgentSlashed(bytes32 didHash);
 
     // -------------------------------------------------------------------------
     // Constructor / Initializer
@@ -166,6 +183,29 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
         emit ChallengeWindowUpdated(challengeWindow_);
     }
 
+    /**
+     * @notice Points this contract at the identity registry. Required before any score
+     *         can be proposed or finalized.
+     * @dev    Follows the initializeV2 pattern: the live proxy has already consumed
+     *         earlier initializer versions, so call this through upgradeToAndCall to
+     *         keep the upgrade and the wiring in one transaction. Fresh deployments
+     *         call it straight after initialize(), where version 3 is still unconsumed.
+     *
+     *         Deliberately fail-closed. If the upgrade lands without this being called,
+     *         proposals revert with IdentityRegistryNotSet instead of continuing to
+     *         accept unchecked writes, because a silently skipped check is the exact
+     *         defect this is fixing.
+     */
+    function initializeV3(address identityRegistry_)
+        external
+        onlyRole(DEFAULT_ADMIN_ROLE)
+        reinitializer(3)
+    {
+        if (identityRegistry_ == address(0)) revert IdentityRegistryNotSet();
+        identityRegistry = SigvaraIdentity(identityRegistry_);
+        emit IdentityRegistrySet(identityRegistry_);
+    }
+
     // -------------------------------------------------------------------------
     // Write functions
     // -------------------------------------------------------------------------
@@ -180,6 +220,8 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
         external
         onlyRole(ORACLE_ROLE)
     {
+        _requireScorable(didHash);
+
         if (data.feeScore > MAX_FEE_SCORE)               revert ScoreOutOfRange("feeScore", data.feeScore, MAX_FEE_SCORE);
         if (data.successScore > MAX_SUCCESS_SCORE)        revert ScoreOutOfRange("successScore", data.successScore, MAX_SUCCESS_SCORE);
         if (data.ageScore > MAX_AGE_SCORE)                revert ScoreOutOfRange("ageScore", data.ageScore, MAX_AGE_SCORE);
@@ -201,6 +243,10 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
      * @dev    Permissionless — execution doesn't depend on any single party's liveness.
      */
     function finalizeReputation(bytes32 didHash) external {
+        // Re-checked here, not just at propose time: the agent can be slashed while
+        // its proposal sits in the challenge window, and finalize is permissionless.
+        _requireScorable(didHash);
+
         PendingScore storage pending = pendingScores[didHash];
         if (!pending.exists) revert NoScorePending(didHash);
 
@@ -263,6 +309,22 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
         delete pendingScores[didHash];
 
         emit ReputationZeroed(didHash);
+    }
+
+    // -------------------------------------------------------------------------
+    // Internal
+    // -------------------------------------------------------------------------
+
+    /// @dev Rejects writes for a didHash that was never registered, and for one whose
+    ///      agent has been slashed. Suspended agents stay scorable: suspension is a
+    ///      normal, reversible operator state used during withdrawal, not a verdict.
+    function _requireScorable(bytes32 didHash) internal view {
+        SigvaraIdentity registry = identityRegistry;
+        if (address(registry) == address(0)) revert IdentityRegistryNotSet();
+
+        SigvaraIdentity.AgentIdentity memory id = registry.getIdentity(didHash);
+        if (id.registeredAt == 0) revert AgentNotRegistered(didHash);
+        if (id.status == SigvaraIdentity.AgentStatus.Slashed) revert AgentSlashed(didHash);
     }
 
     // -------------------------------------------------------------------------

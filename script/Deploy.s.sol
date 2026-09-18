@@ -77,6 +77,8 @@ contract Deploy is Script {
             address(repImpl),
             abi.encodeCall(SigvaraReputation.initialize, (deployer, address(0), address(0), address(0), scoreWindow))
         )));
+        // Reputation refuses to accept scores until it can check the identity registry.
+        reputation.initializeV3(address(identity));
 
         // 4. Staking — now we have identity + rep + token addresses
         SigvaraStaking stakingImpl = new SigvaraStaking();

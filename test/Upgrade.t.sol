@@ -60,6 +60,8 @@ contract UpgradeTest is Test {
             address(new SigvaraReputation()),
             abi.encodeCall(SigvaraReputation.initialize, (admin, oracle, address(0), committee, SCORE_WINDOW))
         )));
+        vm.prank(admin);
+        rep.initializeV3(address(identity));
         staking = SigvaraStaking(address(new ERC1967Proxy(
             address(new SigvaraStaking()),
             abi.encodeCall(SigvaraStaking.initialize, (

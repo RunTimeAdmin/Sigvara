@@ -135,6 +135,35 @@ the artifact, so pass `PROXY=0x...` for those. When the new implementation adds
 state that must not start at zero, pass `INIT_CALLDATA` with the encoded
 reinitializer call so it lands in the same transaction as the upgrade.
 
+### The reputation identity binding
+
+`SigvaraReputation` now reads `SigvaraIdentity` before accepting a score, so it can
+refuse writes for a didHash that was never registered and for an agent that has been
+slashed. The registry address lives in new storage that `initialize` never set, and
+the check is deliberately fail-closed: until `initializeV3` runs, every proposal
+reverts with `IdentityRegistryNotSet`.
+
+That makes the calldata mandatory rather than optional. Upgrade without it and the
+oracle stops scoring until you follow up, which is noisy but harmless; there is no
+path where the check is silently skipped.
+
+```bash
+TARGET=reputation INIT_CALLDATA=0x3101cfcb0000000000000000000000007e3afc532ee5d922ab3cc3ffb510c7c8151477dd forge script script/Upgrade.s.sol --rpc-url arc_testnet --broadcast -vvvv
+```
+
+The calldata above is `initializeV3(address)` against the Arc testnet identity proxy.
+Regenerate it for any other deployment:
+
+```bash
+cast calldata "initializeV3(address)" <identity proxy>
+```
+
+Confirm it took effect before trusting the oracle again:
+
+```bash
+cast call <reputation proxy> "identityRegistry()(address)" --rpc-url arc_testnet
+```
+
 Run `forge test --match-contract UpgradeTest` before broadcasting. Those tests
 cover the half the slot-pinning tests do not: that the upgrade executes, that
 only `UPGRADER_ROLE` can execute it, and that stakes, scores and queued

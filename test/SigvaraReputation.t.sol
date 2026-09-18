@@ -4,18 +4,24 @@ pragma solidity ^0.8.24;
 import "forge-std/Test.sol";
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import "@openzeppelin/contracts/access/IAccessControl.sol";
+import "../src/SigvaraIdentity.sol";
 import "../src/SigvaraReputation.sol";
 
 contract SigvaraReputationTest is Test {
     SigvaraReputation rep;
+    SigvaraIdentity identity;
 
     address admin     = makeAddr("admin");
     address oracle    = makeAddr("oracle");
     address staking   = makeAddr("staking");
     address committee = makeAddr("committee");
     address stranger  = makeAddr("stranger");
+    address operator  = makeAddr("operator");
+    address agentAddr = makeAddr("agent");
 
-    bytes32 constant DID = keccak256("did:sigvara:5042002:0xagent");
+    // Reputation now rejects writes for a didHash the identity registry does not
+    // know, so this has to be a really registered agent rather than a bare hash.
+    bytes32 DID;
     uint256 constant CHALLENGE_WINDOW = 1 hours;
 
     SigvaraReputation.ReputationData maxScore = SigvaraReputation.ReputationData({
@@ -29,12 +35,21 @@ contract SigvaraReputationTest is Test {
     });
 
     function setUp() public {
+        identity = SigvaraIdentity(address(new ERC1967Proxy(
+            address(new SigvaraIdentity()),
+            abi.encodeCall(SigvaraIdentity.initialize, (admin, address(0)))
+        )));
+        vm.prank(operator);
+        DID = identity.registerAgent(agentAddr, bytes32(uint256(0xdeadbeef)));
+
         SigvaraReputation impl = new SigvaraReputation();
         bytes memory init = abi.encodeCall(
             SigvaraReputation.initialize,
             (admin, oracle, staking, committee, CHALLENGE_WINDOW)
         );
         rep = SigvaraReputation(address(new ERC1967Proxy(address(impl), init)));
+        vm.prank(admin);
+        rep.initializeV3(address(identity));
     }
 
     // Propose then warp past the challenge window and finalize — the common path
@@ -412,16 +427,74 @@ contract SigvaraReputationTest is Test {
     }
 
     function test_initializeV2_grantsCommitteeAndSetsWindow_onceOnly() public {
+        // Deliberately not the shared proxy: setUp() runs initializeV3 on that one,
+        // which consumes initializer version 3 and puts version 2 permanently out of
+        // reach. This mirrors a proxy that has been upgraded for optimistic scoring
+        // but not yet bound to the identity registry.
+        SigvaraReputation fresh = SigvaraReputation(address(new ERC1967Proxy(
+            address(new SigvaraReputation()),
+            abi.encodeCall(
+                SigvaraReputation.initialize,
+                (admin, oracle, staking, committee, CHALLENGE_WINDOW)
+            )
+        )));
+
         address newCommittee = makeAddr("newCommittee");
         vm.prank(admin);
-        rep.initializeV2(newCommittee, 2 hours);
+        fresh.initializeV2(newCommittee, 2 hours);
 
-        assertEq(rep.challengeWindow(), 2 hours);
-        assertTrue(rep.hasRole(rep.SLASHING_COMMITTEE_ROLE(), newCommittee));
+        assertEq(fresh.challengeWindow(), 2 hours);
+        assertTrue(fresh.hasRole(fresh.SLASHING_COMMITTEE_ROLE(), newCommittee));
 
         vm.expectRevert(abi.encodeWithSignature("InvalidInitialization()"));
         vm.prank(admin);
-        rep.initializeV2(newCommittee, 3 hours);
+        fresh.initializeV2(newCommittee, 3 hours);
+    }
+
+    /// initializeV3 is the wiring step. It must not be reachable twice, and a zero
+    /// address must not be accepted, since either would leave the check unenforced.
+    function test_initializeV3_onceOnly_andRejectsZero() public {
+        SigvaraReputation fresh = SigvaraReputation(address(new ERC1967Proxy(
+            address(new SigvaraReputation()),
+            abi.encodeCall(
+                SigvaraReputation.initialize,
+                (admin, oracle, staking, committee, CHALLENGE_WINDOW)
+            )
+        )));
+
+        vm.expectRevert(SigvaraReputation.IdentityRegistryNotSet.selector);
+        vm.prank(admin);
+        fresh.initializeV3(address(0));
+
+        vm.prank(admin);
+        fresh.initializeV3(address(identity));
+        assertEq(address(fresh.identityRegistry()), address(identity));
+
+        vm.expectRevert(abi.encodeWithSignature("InvalidInitialization()"));
+        vm.prank(admin);
+        fresh.initializeV3(address(identity));
+    }
+
+    /// The whole point of the binding: a didHash the registry has never seen cannot
+    /// be given a score. Without this, anyone could pre-seed a reputation for a DID
+    /// before its real operator registers it.
+    function test_proposeReputation_reverts_unregisteredDid() public {
+        bytes32 ghost = keccak256("did:sigvara:5042002:0xnever-registered");
+        vm.expectRevert(abi.encodeWithSelector(SigvaraReputation.AgentNotRegistered.selector, ghost));
+        vm.prank(oracle);
+        rep.proposeReputation(ghost, maxScore);
+    }
+
+    /// Suspension is a normal, reversible operator state used during withdrawal.
+    /// It must not stop an agent being scored, or self-suspending would be a way to
+    /// freeze a score in place.
+    function test_proposeReputation_allowsSuspendedAgent() public {
+        vm.prank(operator);
+        identity.updateStatus(DID, SigvaraIdentity.AgentStatus.Suspended);
+
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore);
+        assertTrue(rep.getPendingScore(DID).exists);
     }
 
     function test_initializeV2_reverts_notAdmin() public {
