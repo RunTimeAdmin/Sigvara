@@ -79,6 +79,7 @@ contract SigvaraStakingTest is Test {
 
         // Wire up cross-contract roles.
         vm.startPrank(admin);
+        identity.initializeV2(address(staking));
         identity.grantRole(identity.STAKING_CORE_ROLE(), address(staking));
         rep.grantRole(rep.STAKING_CORE_ROLE(), address(staking));
         staking.grantRole(staking.SLASHING_COMMITTEE_ROLE(), committee);
@@ -532,6 +533,11 @@ contract SigvaraStakingTest is Test {
             externalScore: 15, communityScore: 5, propagationScore: 5,
             lastUpdated: 0
         });
+        // Scoring now requires a bond, so the agent has to be staked before it can
+        // carry a score that the slash then zeroes.
+        vm.prank(operator);
+        staking.depositStake(didHash, MIN_STAKE);
+
         _finalizeScore(didHash, data);
         assertEq(rep.getTotalScore(didHash), 100);
 

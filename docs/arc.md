@@ -253,6 +253,30 @@ Regenerate it for any other deployment with
 cast call <identity proxy> "stakeView()(address)" --rpc-url arc_testnet
 ```
 
+### The bond requirement
+
+`SigvaraReputation` now refuses to score an agent holding less than `minimumStake`.
+It reads the bond through the identity registry's stake view, so there is one wiring
+point rather than two that could disagree. Nothing new needs initializing, but
+identity must already have been through its own `initializeV2`, or every proposal
+reverts with `StakeViewNotSet`.
+
+Upgrade reputation on its own, no calldata:
+
+```powershell
+$env:TARGET        = "reputation"
+$env:INIT_CALLDATA = ""
+forge script script/Upgrade.s.sol --rpc-url arc_testnet -vvvv              # simulate
+forge script script/Upgrade.s.sol --rpc-url arc_testnet --broadcast -vvvv
+```
+
+Expect existing unbonded agents to stop being scored the moment this lands. That is
+the point, but check who it affects before broadcasting:
+
+```bash
+cast call <staking proxy> "hasMinimumStake(bytes32)(bool)" <didHash> --rpc-url arc_testnet
+```
+
 Run `forge test --match-contract UpgradeTest` before broadcasting. Those tests
 cover the half the slot-pinning tests do not: that the upgrade executes, that
 only `UPGRADER_ROLE` can execute it, and that stakes, scores and queued

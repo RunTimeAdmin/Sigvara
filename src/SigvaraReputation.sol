@@ -39,6 +39,13 @@ import "./SigvaraIdentity.sol";
  *   a score could be written for a didHash that was never registered, letting anyone
  *   pre-seed a reputation before the real operator claims the DID, and a slashed
  *   agent could be scored back up to 100 after SigvaraStaking had zeroed it.
+ *
+ * Bond requirement:
+ *   An agent must hold minimumStake to be scored at all. Registration costs only gas,
+ *   so without this an attacker could stand up identities in bulk, score them, and
+ *   never be exposed to a slash, because slashing reverts when there is no stake to
+ *   take. The bond is what makes a score accountable, and reputation is where it has
+ *   to be enforced: SigvaraStaking cannot refuse a score it never sees.
  */
 contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgradeable {
     // -------------------------------------------------------------------------
@@ -123,8 +130,10 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
     error ChallengeWindowActive(bytes32 didHash, uint256 finalizableAt);
     error ChallengeWindowExpired(bytes32 didHash, uint256 expiredAt);
     error IdentityRegistryNotSet();
+    error StakeViewNotSet();
     error AgentNotRegistered(bytes32 didHash);
     error AgentSlashed(bytes32 didHash);
+    error AgentNotBonded(bytes32 didHash);
 
     // -------------------------------------------------------------------------
     // Constructor / Initializer
@@ -315,9 +324,18 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
     // Internal
     // -------------------------------------------------------------------------
 
-    /// @dev Rejects writes for a didHash that was never registered, and for one whose
-    ///      agent has been slashed. Suspended agents stay scorable: suspension is a
-    ///      normal, reversible operator state used during withdrawal, not a verdict.
+    /// @dev Rejects writes for a didHash that was never registered, for one whose agent
+    ///      has been slashed, and for one that is not bonded. Suspended agents stay
+    ///      scorable while they remain bonded: suspension is a normal, reversible
+    ///      operator state used during withdrawal, not a verdict.
+    ///
+    ///      The bond is read through the identity registry's stake view rather than a
+    ///      reference of this contract's own, so there is a single wiring point and the
+    ///      two registries cannot disagree about what counts as bonded.
+    ///
+    ///      Queued withdrawals do not count. They remain slashable until claimed, but an
+    ///      agent on its way out should stop accruing reputation rather than keep
+    ///      earning while it unwinds.
     function _requireScorable(bytes32 didHash) internal view {
         SigvaraIdentity registry = identityRegistry;
         if (address(registry) == address(0)) revert IdentityRegistryNotSet();
@@ -325,6 +343,10 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
         SigvaraIdentity.AgentIdentity memory id = registry.getIdentity(didHash);
         if (id.registeredAt == 0) revert AgentNotRegistered(didHash);
         if (id.status == SigvaraIdentity.AgentStatus.Slashed) revert AgentSlashed(didHash);
+
+        IStakeView stakeView = registry.stakeView();
+        if (address(stakeView) == address(0)) revert StakeViewNotSet();
+        if (!stakeView.hasMinimumStake(didHash)) revert AgentNotBonded(didHash);
     }
 
     // -------------------------------------------------------------------------

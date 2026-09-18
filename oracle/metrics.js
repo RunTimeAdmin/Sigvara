@@ -23,6 +23,7 @@ const counters = {
   attestRejectedPayment: 0,
   paymentsVerified: 0,
   paymentRpcErrors: 0,
+  skippedUnbonded: 0,
   flagsReceived: 0,
   linksCreated: 0,
   rateLimitHits: 0,
@@ -89,6 +90,10 @@ function toPrometheusText() {
   lines.push(`sigvara_oracle_attest_total{result="rejected_cooldown"} ${counters.attestRejectedCooldown}`);
   lines.push(`sigvara_oracle_attest_total{result="rejected_payment"} ${counters.attestRejectedPayment}`);
   lines.push('');
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_skipped_unbonded_total Agents skipped for holding less than minimumStake');
+  lines.push('# TYPE sigvara_oracle_skipped_unbonded_total counter');
+  lines.push(`sigvara_oracle_skipped_unbonded_total ${counters.skippedUnbonded}`);
   lines.push('# HELP sigvara_oracle_payments_verified_total Attestations backed by a verified settlement');
   lines.push('# TYPE sigvara_oracle_payments_verified_total counter');
   lines.push(`sigvara_oracle_payments_verified_total ${counters.paymentsVerified}`);

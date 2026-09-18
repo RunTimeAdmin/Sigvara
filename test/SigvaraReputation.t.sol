@@ -7,9 +7,18 @@ import "@openzeppelin/contracts/access/IAccessControl.sol";
 import "../src/SigvaraIdentity.sol";
 import "../src/SigvaraReputation.sol";
 
+/// Stands in for SigvaraStaking. These are reputation unit tests, so the bond
+/// answer is set directly rather than built up through a real stake.
+contract RepStakeViewMock is IStakeView {
+    bool public bonded = true;
+    function set(bool v) external { bonded = v; }
+    function hasMinimumStake(bytes32) external view returns (bool) { return bonded; }
+}
+
 contract SigvaraReputationTest is Test {
     SigvaraReputation rep;
     SigvaraIdentity identity;
+    RepStakeViewMock stakeView;
 
     address admin     = makeAddr("admin");
     address oracle    = makeAddr("oracle");
@@ -41,6 +50,10 @@ contract SigvaraReputationTest is Test {
         )));
         vm.prank(operator);
         DID = identity.registerAgent(agentAddr, bytes32(uint256(0xdeadbeef)));
+
+        stakeView = new RepStakeViewMock();
+        vm.prank(admin);
+        identity.initializeV2(address(stakeView));
 
         SigvaraReputation impl = new SigvaraReputation();
         bytes memory init = abi.encodeCall(
@@ -483,6 +496,30 @@ contract SigvaraReputationTest is Test {
         vm.expectRevert(abi.encodeWithSelector(SigvaraReputation.AgentNotRegistered.selector, ghost));
         vm.prank(oracle);
         rep.proposeReputation(ghost, maxScore);
+    }
+
+    /// Registration costs only gas, so an unbonded agent must not be scoreable. It
+    /// also cannot be slashed, since slashing needs stake to take, which is what made
+    /// bulk identity creation the cheapest attack on the score.
+    function test_proposeReputation_reverts_whenAgentIsNotBonded() public {
+        stakeView.set(false);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraReputation.AgentNotBonded.selector, DID));
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore);
+    }
+
+    /// The bond has to hold for the whole optimistic window, not just at proposal.
+    /// Otherwise an agent could be scored, withdraw, and have the score finalized
+    /// after the collateral was gone.
+    function test_finalizeReputation_reverts_whenBondIsWithdrawnMidWindow() public {
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore);
+
+        stakeView.set(false);
+        vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
+
+        vm.expectRevert(abi.encodeWithSelector(SigvaraReputation.AgentNotBonded.selector, DID));
+        rep.finalizeReputation(DID);
     }
 
     /// Suspension is a normal, reversible operator state used during withdrawal.
