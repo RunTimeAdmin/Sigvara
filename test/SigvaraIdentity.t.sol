@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import "forge-std/Test.sol";
+import "./helpers/RegistrationHelper.sol";
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import "@openzeppelin/contracts/access/IAccessControl.sol";
 import "../src/SigvaraIdentity.sol";
@@ -14,20 +15,31 @@ contract StakeViewMock is IStakeView {
     function hasMinimumStake(bytes32) external view returns (bool) { return bonded; }
 }
 
-contract SigvaraIdentityTest is Test {
+/// Accepts any signature its owner produced. Enough to exercise the ERC-1271 path.
+contract ERC1271Agent {
+    address public owner;
+    constructor(address owner_) { owner = owner_; }
+    function isValidSignature(bytes32 hash, bytes calldata sig) external view returns (bytes4) {
+        return SignatureChecker.isValidSignatureNow(owner, hash, sig) ? bytes4(0x1626ba7e) : bytes4(0);
+    }
+}
+
+contract SigvaraIdentityTest is Test, RegistrationHelper {
     SigvaraIdentity identity;
     StakeViewMock stakeView;
 
     address admin    = makeAddr("admin");
     address staking  = makeAddr("staking");
     address operator = makeAddr("operator");
-    address agent    = makeAddr("agent");
+    address agent;
+    uint256 agentPk;
     address stranger = makeAddr("stranger");
 
     bytes32 constant PUB_KEY   = bytes32(uint256(0xdeadbeef));
     bytes32 constant PUB_KEY_2 = bytes32(uint256(0xcafebabe));
 
     function setUp() public {
+        (agent, agentPk) = makeAddrAndKey("agent");
         SigvaraIdentity impl = new SigvaraIdentity();
         bytes memory init = abi.encodeCall(SigvaraIdentity.initialize, (admin, staking));
         identity = SigvaraIdentity(address(new ERC1967Proxy(address(impl), init)));
@@ -314,8 +326,7 @@ contract SigvaraIdentityTest is Test {
     // -------------------------------------------------------------------------
 
     function test_registerAgent_success() public {
-        vm.prank(operator);
-        bytes32 didHash = identity.registerAgent(agent, PUB_KEY);
+        bytes32 didHash = registerSigned(identity, operator, agentPk, PUB_KEY);
 
         assertEq(didHash, identity.computeDidHash(agent));
 
@@ -334,38 +345,127 @@ contract SigvaraIdentityTest is Test {
         vm.expectEmit(true, true, true, true);
         emit SigvaraIdentity.AgentRegistered(expectedHash, operator, agent, PUB_KEY);
 
+        registerSigned(identity, operator, agentPk, PUB_KEY);
+    }
+
+    // -------------------------------------------------------------------------
+    // proof of control
+    // -------------------------------------------------------------------------
+
+    /// The hole this closes: without a signature anyone could claim an address they
+    /// did not control, choose the Ed25519 key verifiers would check against it, and
+    /// lock the rightful owner out for good, since a didHash can never be reissued.
+    function test_registerAgent_reverts_withoutASignature() public {
+        vm.expectRevert(
+            abi.encodeWithSelector(SigvaraIdentity.BadRegistrationSignature.selector, agent)
+        );
         vm.prank(operator);
-        identity.registerAgent(agent, PUB_KEY);
+        identity.registerAgent(agent, PUB_KEY, hex"");
+    }
+
+    /// A signature from the wrong key is no better than none.
+    function test_registerAgent_reverts_onSomeoneElsesSignature() public {
+        (, uint256 otherPk) = makeAddrAndKey("someoneElse");
+        bytes memory sig = signRegistration(identity, otherPk, operator, PUB_KEY);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(SigvaraIdentity.BadRegistrationSignature.selector, agent)
+        );
+        vm.prank(operator);
+        identity.registerAgent(agent, PUB_KEY, sig);
+    }
+
+    /// The operator is in the digest, so a signature cannot be lifted from the mempool
+    /// and used by someone else to claim the agent first.
+    function test_registerAgent_reverts_whenAnotherOperatorUsesTheSignature() public {
+        bytes memory sig = signRegistration(identity, agentPk, operator, PUB_KEY);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(SigvaraIdentity.BadRegistrationSignature.selector, agent)
+        );
+        vm.prank(stranger);
+        identity.registerAgent(agent, PUB_KEY, sig);
+    }
+
+    /// The Ed25519 key is in the digest, so an interceptor cannot swap in a key that
+    /// verifiers would then trust for this agent.
+    function test_registerAgent_reverts_whenThePubKeyIsSwapped() public {
+        bytes memory sig = signRegistration(identity, agentPk, operator, PUB_KEY);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(SigvaraIdentity.BadRegistrationSignature.selector, agent)
+        );
+        vm.prank(operator);
+        identity.registerAgent(agent, PUB_KEY_2, sig);
+    }
+
+    /// The registry address is in the digest, so a signature made for one deployment
+    /// cannot be replayed against another on the same chain.
+    function test_registerAgent_reverts_whenReplayedOnAnotherRegistry() public {
+        SigvaraIdentity other = SigvaraIdentity(address(new ERC1967Proxy(
+            address(new SigvaraIdentity()),
+            abi.encodeCall(SigvaraIdentity.initialize, (admin, staking))
+        )));
+        bytes memory sigForOther = signRegistration(other, agentPk, operator, PUB_KEY);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(SigvaraIdentity.BadRegistrationSignature.selector, agent)
+        );
+        vm.prank(operator);
+        identity.registerAgent(agent, PUB_KEY, sigForOther);
+    }
+
+    /// An agent may be a contract. SignatureChecker falls through to ERC-1271, so a
+    /// Safe or a custom agent contract can register without holding an EOA key.
+    function test_registerAgent_acceptsAnErc1271Agent() public {
+        ERC1271Agent contractAgent = new ERC1271Agent(agent);
+
+        // Signed for the contract's own address: the digest binds whichever address is
+        // being claimed, so the owner's signature over its own would not do.
+        bytes32 digest = identity.registrationDigest(address(contractAgent), operator, PUB_KEY);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(agentPk, MessageHashUtils.toEthSignedMessageHash(digest));
+
+        vm.prank(operator);
+        bytes32 didHash = identity.registerAgent(
+            address(contractAgent), PUB_KEY, abi.encodePacked(r, s, v)
+        );
+        assertEq(identity.getIdentity(didHash).agentAddress, address(contractAgent));
+    }
+
+    function test_registrationDigest_isDeterministicAndBinds() public view {
+        bytes32 a = identity.registrationDigest(agent, operator, PUB_KEY);
+        assertEq(a, identity.registrationDigest(agent, operator, PUB_KEY), "stable");
+        assertTrue(a != identity.registrationDigest(agent, stranger, PUB_KEY), "binds the operator");
+        assertTrue(a != identity.registrationDigest(agent, operator, PUB_KEY_2), "binds the key");
+        assertTrue(a != identity.registrationDigest(stranger, operator, PUB_KEY), "binds the agent");
     }
 
     function test_registerAgent_reverts_zeroPubKey() public {
         vm.expectRevert(SigvaraIdentity.ZeroPubKey.selector);
         vm.prank(operator);
-        identity.registerAgent(agent, bytes32(0));
+        identity.registerAgent(agent, bytes32(0), hex"");
     }
 
     function test_registerAgent_reverts_zeroAgentAddress() public {
         vm.expectRevert(SigvaraIdentity.ZeroAgentAddress.selector);
         vm.prank(operator);
-        identity.registerAgent(address(0), PUB_KEY);
+        identity.registerAgent(address(0), PUB_KEY, hex"");
     }
 
     function test_registerAgent_reverts_duplicate() public {
-        vm.prank(operator);
-        identity.registerAgent(agent, PUB_KEY);
+        registerSigned(identity, operator, agentPk, PUB_KEY);
 
         bytes32 didHash = identity.computeDidHash(agent);
+        bytes memory sig = signRegistration(identity, agentPk, operator, PUB_KEY_2);
         vm.expectRevert(abi.encodeWithSelector(SigvaraIdentity.AlreadyRegistered.selector, didHash));
         vm.prank(operator);
-        identity.registerAgent(agent, PUB_KEY_2);
+        identity.registerAgent(agent, PUB_KEY_2, sig);
     }
 
     function test_registerAgent_tracksOperatorAgents() public {
-        address agent2 = makeAddr("agent2");
-        vm.startPrank(operator);
-        bytes32 h1 = identity.registerAgent(agent, PUB_KEY);
-        bytes32 h2 = identity.registerAgent(agent2, PUB_KEY_2);
-        vm.stopPrank();
+        (address agent2, uint256 agent2Pk) = makeAddrAndKey("agent2");
+        bytes32 h1 = registerSigned(identity, operator, agentPk, PUB_KEY);
+        bytes32 h2 = registerSigned(identity, operator, agent2Pk, PUB_KEY_2);
 
         bytes32[] memory agents = identity.getOperatorAgents(operator);
         assertEq(agents.length, 2);
@@ -378,8 +478,7 @@ contract SigvaraIdentityTest is Test {
     // -------------------------------------------------------------------------
 
     function _register() internal returns (bytes32 didHash) {
-        vm.prank(operator);
-        didHash = identity.registerAgent(agent, PUB_KEY);
+        didHash = registerSigned(identity, operator, agentPk, PUB_KEY);
     }
 
     function test_rotatePublicKey_success() public {

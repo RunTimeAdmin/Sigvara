@@ -8,21 +8,20 @@ Run every command from the repository root with `lib/` populated (see
 
 ## Before you start
 
-**Read this first.** One structural finding from the security scan of
-17 September 2026 is still open:
+**Read this first.** Both structural findings from the security scan of
+17 September 2026 are now closed.
 
-- Registration proves no control of the agent address, so anyone can claim an
-  address they do not own, choose the key verifiers will check, and lock the
-  rightful owner out.
+An agent could hold Active status with zero collateral and so be permanently
+unslashable. Identity checks the bond before letting an agent become Active,
+reputation refuses to score an unbonded agent, and registration now leaves an
+agent `PendingBond` rather than Active until a deposit clears the floor.
 
-The other structural finding, an agent holding Active status with zero
-collateral and so being permanently unslashable, is fixed: identity checks the
-bond before letting an agent return to Active, and reputation refuses to score
-an agent that is not bonded.
+Registration proved no control of the agent address, so anyone could claim an
+address they did not own and choose the key verifiers would check. The agent
+address must now sign for its own registration, and the digest binds the chain,
+the registry, the operator and the Ed25519 key.
 
-Squatting costs nothing on testnet, so deploy if the goal is to exercise the
-stack, but expect agent addresses to be claimable by whoever gets there first.
-The registries are UUPS proxies, so the fix lands as an upgrade on these same
+The registries are UUPS proxies, so both fixes land as upgrades on these same
 addresses rather than a redeploy.
 
 ## 1. Addresses and keys

@@ -21,7 +21,7 @@ const SEL = {
   epochFee: "0x41e4cfa8", balance: "0x89eba421", isCovered: "0xcb607e4f",
   depositFor: "0x1da1bbfb", withdraw: "0x040cf020",
   approve: "0x095ea7b3", allowance: "0xdd62ed3e", balanceOf: "0x70a08231", faucet: "0x57915897",
-  svr: "0x0b5ae4d9", symbol: "0x95d89b41", decimals: "0x313ce567", registerAgent: "0xdb24d4ba",
+  svr: "0x0b5ae4d9", symbol: "0x95d89b41", decimals: "0x313ce567", registerAgent: "0x367260d7", registrationDigest: "0x9aad085f",
   getReputation: "0xd14519d2", getPendingScore: "0x56cf76e7", challengeWindow: "0x861a1412",
 };
 // factor label, on-chain word index, and max — mirrors SigvaraReputation.ReputationData
@@ -29,6 +29,17 @@ const FACTORS = [
   ["fee", 0, 30], ["success", 1, 25], ["age", 2, 20],
   ["external", 3, 15], ["community", 4, 5], ["propagation", 5, 5],
 ];
+
+// ABI-encodes a trailing dynamic `bytes` argument. `headWords` is the number of
+// 32-byte head slots the call has in total, including this argument's offset slot,
+// because the offset is measured from the start of the head. Passing the wrong count
+// produces a call that encodes cleanly and decodes to garbage.
+function encBytes(hex, headWords) {
+  const body = strip(hex);
+  const len = body.length / 2;
+  const padded = body + "0".repeat((32 - (len % 32)) % 32 * 2);
+  return encUint(BigInt(headWords * 32)) + encUint(BigInt(len)) + padded;
+}
 
 const $ = (id) => document.getElementById(id);
 let account = null, currentDidHash = null, currentAgent = null;
@@ -271,8 +282,33 @@ async function registerAgentFlow() {
     a.download = `sigvara-agent-key-${currentAgent.slice(0, 10)}.txt`;
     a.click();
     logLine(`key file downloaded — keep it safe. pubkey 0x${pubHex.slice(0, 16)}…`);
+    // Registration requires a signature from the agent address itself, so the browser
+    // can only do this for the wallet it is connected to. Anything else needs the SDK,
+    // where the agent's key can be supplied separately.
+    if (currentAgent.toLowerCase() !== account.toLowerCase()) {
+      logLine('<span class="pill-err">Registration needs a signature from the agent address. '
+        + 'Connect the wallet for ' + esc(currentAgent) + ', or use the SDK flow in the '
+        + '<a href="docs/quickstart.html">Quickstart</a> to sign with its key separately.</span>');
+      return;
+    }
+
+    logLine("signing proof of control for this address…");
+    const digest = await rpcRead(
+      IDENTITY,
+      SEL.registrationDigest + encAddr(currentAgent) + encAddr(account) + pubHex
+    );
+    // personal_sign applies the EIP-191 prefix, which is the one the contract expects.
+    const signature = await wallet.request({
+      method: "personal_sign",
+      params: [digest, account],
+    });
+
     logLine("registering agent (your wallet becomes the operator)…");
-    await sendTx(IDENTITY, SEL.registerAgent + encAddr(currentAgent) + pubHex);
+    await sendTx(
+      IDENTITY,
+      // agentAddress, ed25519PubKey, signature -> three head slots.
+      SEL.registerAgent + encAddr(currentAgent) + pubHex + encBytes(signature, 3)
+    );
     await lookup();
   } catch (e) { logLine(`<span class="pill-err">${esc(e.message)}</span>`); }
 }

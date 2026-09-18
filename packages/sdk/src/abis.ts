@@ -1,5 +1,6 @@
 export const IDENTITY_ABI = [
-  'function registerAgent(address agentAddress, bytes32 ed25519PubKey) returns (bytes32 didHash)',
+  'function registerAgent(address agentAddress, bytes32 ed25519PubKey, bytes signature) returns (bytes32 didHash)',
+  'function registrationDigest(address agentAddress, address operator, bytes32 ed25519PubKey) view returns (bytes32)',
   'function getIdentity(bytes32 didHash) view returns (tuple(address operator, address agentAddress, bytes32 ed25519PubKey, uint8 status, uint256 registeredAt))',
   'function computeDidHash(address agentAddress) view returns (bytes32)',
   'function isActive(bytes32 didHash) view returns (bool)',

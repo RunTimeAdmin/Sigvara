@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import "forge-std/Test.sol";
+import "./helpers/RegistrationHelper.sol";
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import "@openzeppelin/contracts/access/IAccessControl.sol";
 
@@ -9,7 +10,7 @@ import "../src/SigvaraEpochFees.sol";
 import "../src/SigvaraIdentity.sol";
 import "../src/SVRToken.sol";
 
-contract SigvaraEpochFeesTest is Test {
+contract SigvaraEpochFeesTest is Test, RegistrationHelper {
     SigvaraEpochFees fees;
     SigvaraIdentity identity;
     SVRToken svr;
@@ -17,7 +18,8 @@ contract SigvaraEpochFeesTest is Test {
     address admin      = makeAddr("admin");
     address oracle     = makeAddr("oracle");
     address operator   = makeAddr("operator");
-    address agent      = makeAddr("agent");
+    address agent;
+    uint256 agentPk;
     address funder     = makeAddr("funder");
     address rewardPool = makeAddr("rewardPool");
     address stranger   = makeAddr("stranger");
@@ -28,6 +30,7 @@ contract SigvaraEpochFeesTest is Test {
     bytes32 didHash;
 
     function setUp() public {
+        (agent, agentPk) = makeAddrAndKey("agent");
         // stake-token (testnet mintable token is fine for fixtures).
         svr = new SVRToken(address(this));
 
@@ -37,8 +40,7 @@ contract SigvaraEpochFeesTest is Test {
             address(idImpl),
             abi.encodeCall(SigvaraIdentity.initialize, (admin, address(0)))
         )));
-        vm.prank(operator);
-        didHash = identity.registerAgent(agent, PUB_KEY);
+        didHash = registerSigned(identity, operator, agentPk, PUB_KEY);
 
         // Fee registry behind a proxy.
         SigvaraEpochFees feesImpl = new SigvaraEpochFees();

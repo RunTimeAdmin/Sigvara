@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import "forge-std/Test.sol";
+import "./helpers/RegistrationHelper.sol";
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/access/IAccessControl.sol";
@@ -19,7 +20,7 @@ contract MockSVR is ERC20 {
     }
 }
 
-contract SigvaraStakingTest is Test {
+contract SigvaraStakingTest is Test, RegistrationHelper {
     MockSVR svr;
     SigvaraIdentity identity;
     SigvaraReputation rep;
@@ -28,7 +29,8 @@ contract SigvaraStakingTest is Test {
     address admin     = makeAddr("admin");
     address committee = makeAddr("committee");
     address operator  = makeAddr("operator");
-    address agentAddr = makeAddr("agent");
+    address agentAddr;
+    uint256 agentPk;
     address victim    = makeAddr("victim");
     address stranger  = makeAddr("stranger");
 
@@ -42,6 +44,7 @@ contract SigvaraStakingTest is Test {
     bytes32 didHash;
 
     function setUp() public {
+        (agentAddr, agentPk) = makeAddrAndKey("agent");
         svr = new MockSVR();
 
         // Deploy implementations.
@@ -86,8 +89,7 @@ contract SigvaraStakingTest is Test {
         vm.stopPrank();
 
         // Register an agent.
-        vm.prank(operator);
-        didHash = identity.registerAgent(agentAddr, PUB_KEY);
+                didHash = registerSigned(identity, operator, agentPk, PUB_KEY);
 
         // Fund operator and approve staking.
         svr.mint(operator, 10_000e18);
@@ -153,8 +155,8 @@ contract SigvaraStakingTest is Test {
     /// identity that never put anything at risk.
     function test_depositStake_activatesAPendingBondAgent() public {
         address op2 = makeAddr("op2");
-        vm.prank(op2);
-        bytes32 fresh = identity.registerAgent(makeAddr("agent2"), bytes32(uint256(9)));
+        (, uint256 a2) = makeAddrAndKey("agent2");
+        bytes32 fresh = registerSigned(identity, op2, a2, bytes32(uint256(9)));
         assertEq(
             uint8(identity.getIdentity(fresh).status),
             uint8(SigvaraIdentity.AgentStatus.PendingBond)
@@ -173,8 +175,8 @@ contract SigvaraStakingTest is Test {
     /// A deposit that does not clear the floor leaves the agent where it was.
     function test_depositStake_belowTheFloorDoesNotActivate() public {
         address op2 = makeAddr("op3");
-        vm.prank(op2);
-        bytes32 fresh = identity.registerAgent(makeAddr("agent3"), bytes32(uint256(10)));
+        (, uint256 a3) = makeAddrAndKey("agent3");
+        bytes32 fresh = registerSigned(identity, op2, a3, bytes32(uint256(10)));
 
         svr.mint(op2, MIN_STAKE);
         vm.startPrank(op2);

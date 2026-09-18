@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import "forge-std/Test.sol";
+import "./helpers/RegistrationHelper.sol";
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
@@ -194,7 +195,7 @@ contract StakingHandler is Test {
  * bugs actually surface: tokens appearing, disappearing, or being promised to
  * two places at once.
  */
-contract StakingInvariantTest is Test {
+contract StakingInvariantTest is Test, RegistrationHelper {
     InvMockSVR svr;
     SigvaraIdentity identity;
     SigvaraReputation rep;
@@ -241,9 +242,8 @@ contract StakingInvariantTest is Test {
         bytes32[] memory dids = new bytes32[](3);
         for (uint256 i = 0; i < 3; i++) {
             ops[i] = makeAddr(string.concat("operator", vm.toString(i)));
-            address agentAddr = makeAddr(string.concat("agent", vm.toString(i)));
-            vm.prank(ops[i]);
-            dids[i] = identity.registerAgent(agentAddr, bytes32(uint256(i + 1)));
+            (, uint256 agentPk) = makeAddrAndKey(string.concat("agent", vm.toString(i)));
+            dids[i] = registerSigned(identity, ops[i], agentPk, bytes32(uint256(i + 1)));
         }
 
         handler = new StakingHandler(svr, identity, staking, committee, ops, dids);

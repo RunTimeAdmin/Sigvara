@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import "forge-std/Test.sol";
+import "./helpers/RegistrationHelper.sol";
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
@@ -23,7 +24,7 @@ contract MockSVR is ERC20 {
     }
 }
 
-contract E2EIntegrationTest is Test {
+contract E2EIntegrationTest is Test, RegistrationHelper {
     MockSVR svr;
     SigvaraIdentity identity;
     SigvaraReputation reputation;
@@ -34,7 +35,8 @@ contract E2EIntegrationTest is Test {
     address oracle    = makeAddr("oracle");
     address committee = makeAddr("committee");
     address operator  = makeAddr("operator");
-    address agentAddr = makeAddr("agent");
+    address agentAddr;
+    uint256 agentPk;
     address victim    = makeAddr("victim");
 
     // Constants matching typical deployment
@@ -49,6 +51,7 @@ contract E2EIntegrationTest is Test {
     bytes32 didHash;
 
     function setUp() public {
+        (agentAddr, agentPk) = makeAddrAndKey("agent");
         // Deploy token
         svr = new MockSVR();
 
@@ -114,8 +117,7 @@ contract E2EIntegrationTest is Test {
         // -------------------------------------------------------------------------
         // Step 1: Register agent
         // -------------------------------------------------------------------------
-        vm.prank(operator);
-        didHash = identity.registerAgent(agentAddr, PUB_KEY);
+                didHash = registerSigned(identity, operator, agentPk, PUB_KEY);
         
         // Registration no longer confers Active status: an unbonded agent cannot be
         // slashed, so an Active one that had never staked was unaccountable by
@@ -216,8 +218,7 @@ contract E2EIntegrationTest is Test {
     /// @notice Dispute path: slash initiated → operator disputes → slash cancelled
     function test_E2E_slashDispute_reinstatesAgent() public {
         // Register and stake
-        vm.prank(operator);
-        didHash = identity.registerAgent(agentAddr, PUB_KEY);
+                didHash = registerSigned(identity, operator, agentPk, PUB_KEY);
         vm.prank(operator);
         staking.depositStake(didHash, MIN_STAKE * 2);
 
@@ -257,8 +258,7 @@ contract E2EIntegrationTest is Test {
     /// @notice Reputation challenge: committee rejects bad score during window
     function test_E2E_reputationChallenge_rejectsBadScore() public {
         // Register and stake
-        vm.prank(operator);
-        didHash = identity.registerAgent(agentAddr, PUB_KEY);
+                didHash = registerSigned(identity, operator, agentPk, PUB_KEY);
         vm.prank(operator);
         staking.depositStake(didHash, MIN_STAKE);
 
@@ -297,8 +297,7 @@ contract E2EIntegrationTest is Test {
     /// @notice Withdrawal unbonding: cannot claim before period, can claim after
     function test_E2E_unbondingPeriod_preventsEarlyWithdrawal() public {
         // Register, stake, then suspend (to allow full withdrawal)
-        vm.prank(operator);
-        didHash = identity.registerAgent(agentAddr, PUB_KEY);
+                didHash = registerSigned(identity, operator, agentPk, PUB_KEY);
         vm.prank(operator);
         staking.depositStake(didHash, MIN_STAKE * 2);
         vm.prank(operator);
@@ -334,8 +333,7 @@ contract E2EIntegrationTest is Test {
     /// @notice Slash sweeps unbonding queue — cannot dodge slash by queuing withdrawal
     function test_E2E_slashSweepsUnbondingQueue() public {
         // Register, stake heavily, suspend, queue full withdrawal
-        vm.prank(operator);
-        didHash = identity.registerAgent(agentAddr, PUB_KEY);
+                didHash = registerSigned(identity, operator, agentPk, PUB_KEY);
         vm.prank(operator);
         staking.depositStake(didHash, MIN_STAKE * 3);
         vm.prank(operator);
@@ -365,8 +363,7 @@ contract E2EIntegrationTest is Test {
     /// @notice Multiple epochs: score updates over time
     function test_E2E_multipleEpochs_scoreEvolution() public {
         // Register and stake
-        vm.prank(operator);
-        didHash = identity.registerAgent(agentAddr, PUB_KEY);
+                didHash = registerSigned(identity, operator, agentPk, PUB_KEY);
         vm.prank(operator);
         staking.depositStake(didHash, MIN_STAKE);
 
@@ -412,7 +409,7 @@ contract E2EIntegrationTest is Test {
     /// @notice Multiple agents: independent lifecycle
     function test_E2E_multipleAgents_independentLifecycles() public {
         address operator2 = makeAddr("operator2");
-        address agent2 = makeAddr("agent2");
+        (address agent2, uint256 agent2Pk) = makeAddrAndKey("agent2");
         bytes32 pubKey2 = bytes32(uint256(0xcafebabe));
         
         svr.mint(operator2, 100_000e18);
@@ -420,14 +417,12 @@ contract E2EIntegrationTest is Test {
         svr.approve(address(staking), type(uint256).max);
 
         // Register agent 1
-        vm.prank(operator);
-        bytes32 did1 = identity.registerAgent(agentAddr, PUB_KEY);
+                bytes32 did1 = registerSigned(identity, operator, agentPk, PUB_KEY);
         vm.prank(operator);
         staking.depositStake(did1, MIN_STAKE);
 
         // Register agent 2
-        vm.prank(operator2);
-        bytes32 did2 = identity.registerAgent(agent2, pubKey2);
+        bytes32 did2 = registerSigned(identity, operator2, agent2Pk, pubKey2);
         vm.prank(operator2);
         staking.depositStake(did2, MIN_STAKE * 2);
 
@@ -459,8 +454,7 @@ contract E2EIntegrationTest is Test {
     /// @notice Slashed agent is terminal — cannot be reactivated
     function test_E2E_slashedAgentIsTerminal() public {
         // Setup and slash
-        vm.prank(operator);
-        didHash = identity.registerAgent(agentAddr, PUB_KEY);
+                didHash = registerSigned(identity, operator, agentPk, PUB_KEY);
         vm.prank(operator);
         staking.depositStake(didHash, MIN_STAKE);
         vm.prank(committee);
@@ -480,8 +474,7 @@ contract E2EIntegrationTest is Test {
     /// @notice Slashed agent cannot have reputation proposed
     function test_E2E_slashedAgentReputationStaysZero() public {
         // Setup, add score, then slash
-        vm.prank(operator);
-        didHash = identity.registerAgent(agentAddr, PUB_KEY);
+                didHash = registerSigned(identity, operator, agentPk, PUB_KEY);
         vm.prank(operator);
         staking.depositStake(didHash, MIN_STAKE);
 

@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import "forge-std/Test.sol";
+import "./helpers/RegistrationHelper.sol";
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import "@openzeppelin/contracts/access/IAccessControl.sol";
 import "../src/SigvaraIdentity.sol";
@@ -46,7 +47,7 @@ contract LegacyIdentityMock {
     }
 }
 
-contract SigvaraReputationTest is Test {
+contract SigvaraReputationTest is Test, RegistrationHelper {
     SigvaraReputation rep;
     SigvaraIdentity identity;
     RepStakeViewMock stakeView;
@@ -57,7 +58,8 @@ contract SigvaraReputationTest is Test {
     address committee = makeAddr("committee");
     address stranger  = makeAddr("stranger");
     address operator  = makeAddr("operator");
-    address agentAddr = makeAddr("agent");
+    address agentAddr;
+    uint256 agentPk;
 
     // Reputation now rejects writes for a didHash the identity registry does not
     // know, so this has to be a really registered agent rather than a bare hash.
@@ -75,12 +77,12 @@ contract SigvaraReputationTest is Test {
     });
 
     function setUp() public {
+        (agentAddr, agentPk) = makeAddrAndKey("agent");
         identity = SigvaraIdentity(address(new ERC1967Proxy(
             address(new SigvaraIdentity()),
             abi.encodeCall(SigvaraIdentity.initialize, (admin, address(0)))
         )));
-        vm.prank(operator);
-        DID = identity.registerAgent(agentAddr, bytes32(uint256(0xdeadbeef)));
+        DID = registerSigned(identity, operator, agentPk, bytes32(uint256(0xdeadbeef)));
 
         stakeView = new RepStakeViewMock();
         vm.prank(admin);

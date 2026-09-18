@@ -77,18 +77,28 @@ console.log('Ed25519 private key (store this):', privateKey);
 
 ## 5. Register on-chain, then post the bond
 
-Registration first: the staking contract only accepts deposits for an agent that is already Active. `registerAgent` is one transaction. `depositStake` checks the allowance, sends the ERC-20 approval only if it is short, then deposits.
+Registration comes first, then the bond activates the agent.
+
+Two things to know. The agent address has to sign for its own registration, which is
+what stops anyone claiming an address they do not control and choosing the key
+verifiers will check against it. And registration alone leaves the agent
+`PendingBond`: it is not Active, not scoreable and not slashable until a deposit
+carries it over `minimumStake`. That deposit is what activates it.
 
 ```typescript
 import { registerAgent, depositStake } from '@sigvara/protocol-sdk';
 
 const minStake = ethers.parseEther('1000'); // minimumStake on testnet
 
+// agentSigner proves control of agentAddress. It is often the same wallet as the
+// operator; when it is not, pass `{ signature }` instead and sign elsewhere, which is
+// how an HSM, a Safe or any ERC-1271 contract agent registers.
 const { didHash, txHash } = await registerAgent(
   signer,
   agentAddress,
   agent.publicKeyBytes32,
   IDENTITY_ADDRESS,
+  { agentSigner },
 );
 console.log('didHash:', didHash);
 console.log('tx:', `https://explorer.testnet.arc.io/tx/${txHash}`);

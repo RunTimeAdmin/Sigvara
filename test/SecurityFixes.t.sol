@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import "forge-std/Test.sol";
+import "./helpers/RegistrationHelper.sol";
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
@@ -24,7 +25,7 @@ contract FixMock is ERC20 {
  * set is easy to re-run against a future change, and so it is obvious what was
  * deliberately closed versus what merely happens to work.
  */
-contract SecurityFixesTest is Test {
+contract SecurityFixesTest is Test, RegistrationHelper {
     FixMock svr;
     SigvaraIdentity identity;
     SigvaraReputation rep;
@@ -37,7 +38,8 @@ contract SecurityFixesTest is Test {
     address oracle    = makeAddr("oracle");
     address slasher   = makeAddr("slasher");
     address operator  = makeAddr("operator");
-    address agentAddr = makeAddr("agent");
+    address agentAddr;
+    uint256 agentPk;
     address pool      = makeAddr("rewardPool");
 
     uint256 constant MIN_STAKE = 1000e18;
@@ -49,6 +51,7 @@ contract SecurityFixesTest is Test {
     bytes32 didHash;
 
     function setUp() public {
+        (agentAddr, agentPk) = makeAddrAndKey("agent");
         svr = new FixMock();
 
         identity = SigvaraIdentity(address(new ERC1967Proxy(
@@ -81,8 +84,7 @@ contract SecurityFixesTest is Test {
         staking.grantRole(staking.SLASHING_COMMITTEE_ROLE(), committee);
         vm.stopPrank();
 
-        vm.prank(operator);
-        didHash = identity.registerAgent(agentAddr, bytes32(uint256(1)));
+        didHash = registerSigned(identity, operator, agentPk, bytes32(uint256(1)));
 
         svr.mint(operator, MIN_STAKE);
         vm.startPrank(operator);
