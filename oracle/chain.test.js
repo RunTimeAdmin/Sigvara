@@ -285,3 +285,40 @@ test('fee gating: helpers delegate to the registry when configured', async () =>
   await chain.chargeEpoch('0xaaa');
   assert.deepEqual(fee.calls.chargeEpoch, ['0xaaa']);
 });
+
+// ---- scan cursor -----------------------------------------------------------
+
+test('restoreScanState: resumes from a saved cursor', () => {
+  chain.reset();
+  const ok = chain.restoreScanState({
+    lastScannedBlock: 62700000,
+    agents: [{ didHash: '0xaa', agentAddress: '0xbb', blockNumber: 1 }],
+  });
+  assert.equal(ok, true);
+  const out = chain.getScanState();
+  assert.equal(out.lastScannedBlock, 62700000);
+  assert.equal(out.agents.length, 1);
+  assert.equal(out.agents[0].didHash, '0xaa');
+});
+
+test('restoreScanState: ignores missing or malformed state rather than throwing', () => {
+  chain.reset();
+  assert.equal(chain.restoreScanState(null), false);
+  assert.equal(chain.restoreScanState({}), false);
+  assert.equal(chain.restoreScanState({ lastScannedBlock: 'soon' }), false);
+  assert.equal(chain.getScanState().lastScannedBlock, null, 'left at a full rescan');
+});
+
+test('restoreScanState: a cursor with no agents is still a valid resume point', () => {
+  // A chain where nothing has registered yet must not be replayed every restart.
+  chain.reset();
+  assert.equal(chain.restoreScanState({ lastScannedBlock: 500 }), true);
+  assert.equal(chain.getScanState().lastScannedBlock, 500);
+  assert.equal(chain.getScanState().agents.length, 0);
+});
+
+test('reset: clears the cursor so a fresh scan starts from FROM_BLOCK', () => {
+  chain.restoreScanState({ lastScannedBlock: 999, agents: [] });
+  chain.reset();
+  assert.equal(chain.getScanState().lastScannedBlock, null);
+});

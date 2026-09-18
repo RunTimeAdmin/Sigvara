@@ -64,6 +64,8 @@ const {
   checkAttestCooldown,
   recordAttestation,
   creditPayment,
+  getScanState: loadScanState,
+  setScanState,
   getPaymentEvents,
   prunePaymentEvents,
   pruneExpiredCooldowns,
@@ -290,11 +292,12 @@ async function runEpochInner() {
   // Once an event's weight is negligible it cannot move an integer score, so
   // keeping it only grows the state file. Pruning here rather than on the write
   // path keeps /attest fast and bounds the work to once an epoch.
+  // Record how far the scan got, so a restart does not replay the chain.
+  setScanState(chain.getScanState());
+
   const pruned = prunePaymentEvents(paymentCfg.halfLifeMs);
-  if (pruned > 0) {
-    console.log(`[oracle] pruned ${pruned} fully decayed payment event(s)`);
-    persistState();
-  }
+  if (pruned > 0) console.log(`[oracle] pruned ${pruned} fully decayed payment event(s)`);
+  persistState();
 
   console.log(`[oracle] epoch done — ${proposed} proposed, ${finalized} finalized in ${Date.now() - start}ms`);
   metrics.inc('epochsSucceeded');
@@ -565,6 +568,13 @@ server.listen(cfg.port, cfg.host, () => {
   console.log(`[oracle] HTTP on ${cfg.host}:${cfg.port}  epoch every ${cfg.epochMs / 3_600_000}h  attest cooldown ${ATTEST_COOLDOWN_MS / 1000}s`);
   console.log(`[oracle] state path: ${getStatePath()}`);
   loadState();
+
+  // Resume the log scan where it left off. Without this every restart replays the
+  // chain from FROM_BLOCK, which lengthens with every block and eventually exceeds
+  // what a public RPC will serve in one burst.
+  if (chain.restoreScanState(loadScanState())) {
+    console.log(`[oracle] resuming log scan from block ${loadScanState().lastScannedBlock + 1}`);
+  }
 
   // Reported, not enforced. The contract decides; this just means an oracle that
   // cannot propose says so at boot instead of failing quietly once an hour.
