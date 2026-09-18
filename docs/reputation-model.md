@@ -95,6 +95,35 @@ This factor is currently oracle-computed from the attestation graph and is the m
 
 ---
 
+## Inherited trust (5 pts)
+
+An attestation is only as good as whoever made it. A payment from an agent that is
+itself scored, bonded and slashable is better evidence than one from a wallet nobody
+has heard of, so counterparty standing now weighs on the score in two places.
+
+A counterparty's evidence cap rises with its own score. At the default weight, a
+perfectly scored counterparty contributes twice what an anonymous wallet can, while
+the cap on any single payer still holds.
+
+The propagation factor is one point per fully trusted counterparty, pro-rated by
+score, capped at five. Five counterparties with perfect scores reach the cap, and so
+do ten with half. Each counterparty counts once however much it pays: this factor
+measures the breadth of who will vouch for an agent, not the size of the cheques.
+
+Two properties make it worth having rather than dangerous.
+
+**It cannot be bootstrapped.** A ring of fresh identities all score zero and so grant
+each other nothing. Someone who stands up five Sybils gains no inherited trust from
+them until each has independently earned a score, which needs its own bond, its own
+diverse payers and its own tenure. Collusion has to start from real standing rather
+than manufacture it.
+
+**It is damped against reflexivity.** The scores read are the matured ones, which lag
+what has just been earned, so a reciprocal pair cannot lift each other inside one
+epoch. Unknown counterparties and unreachable nodes both read as zero, because no
+evidence of standing and no ability to check are the same thing as far as granting a
+bonus goes.
+
 ## Maturity
 
 A score is earned as soon as it finalizes, but it becomes spendable only over time.

@@ -72,6 +72,11 @@ function readConfig(env = process.env) {
     // default of 5, reaching the 30-point cap needs at least six distinct payers.
     // 0 disables the cap.
     maxPerPayer: Number(env.PAYMENT_MAX_PER_PAYER ?? 5),
+    // Web of trust. A counterparty that is itself a scored Sigvara agent is better
+    // evidence than an anonymous wallet, so its cap is raised in proportion to its
+    // own score: at the default of 1.0 a perfectly scored counterparty counts double.
+    // 0 disables the weighting and every payer is treated alike.
+    trustWeight: Number(env.PAYMENT_TRUST_WEIGHT ?? 1),
   };
 }
 
@@ -279,6 +284,43 @@ function byPayer(events, halfLifeMs, now = Date.now()) {
 }
 
 /**
+ * How far a counterparty's cap is raised by its own standing.
+ *
+ * Returns a multiplier in [1, 1 + trustWeight]. An unknown wallet gets 1, which is
+ * the behaviour before any of this existed. A ring of fresh agents all score 0 and so
+ * grant each other nothing, which is the property that matters: a web of trust that
+ * could be bootstrapped from nothing would be worse than no web at all.
+ */
+function trustMultiplier(payer, payerScores, trustWeight) {
+  if (!trustWeight || trustWeight <= 0 || !payerScores) return 1;
+  const score = payerScores[String(payer || '').toLowerCase()] || 0;
+  return 1 + (Math.max(0, Math.min(100, score)) / 100) * trustWeight;
+}
+
+/**
+ * Inherited trust, 0 to 5.
+ *
+ * One point per counterparty that is itself fully trusted, pro-rated by its score, so
+ * five perfectly scored counterparties reach the cap and ten half-scored ones do the
+ * same. Each counterparty contributes at most once however much it pays, because this
+ * factor is about the breadth of who vouches for an agent, not the size of the
+ * cheques. Scores are the matured ones, which lag, so a reciprocal pair cannot lift
+ * each other in a single epoch.
+ */
+function propagationScore(events, payerScores, max = 5) {
+  if (!payerScores) return 0;
+  const seen = new Set();
+  let trust = 0;
+  for (const e of events) {
+    const key = String(e.payer || '').toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    trust += Math.max(0, Math.min(100, payerScores[key] || 0)) / 100;
+  }
+  return Math.min(max, Math.floor(trust));
+}
+
+/**
  * Age-weighted volume with each counterparty's contribution capped.
  *
  * Without the cap, one wallet paying ten times is worth exactly as much as ten
@@ -286,11 +328,14 @@ function byPayer(events, halfLifeMs, now = Date.now()) {
  * `maxPerPayer` together set the cap: no payer contributes more than
  * `maxPerPayer` points of feeScore however much it sends.
  */
-function diversifiedVolume(events, { halfLifeMs, feeUnit, maxPerPayer }, now = Date.now()) {
+function diversifiedVolume(events, cfg, now = Date.now(), payerScores = null) {
+  const { halfLifeMs, feeUnit, maxPerPayer, trustWeight } = cfg;
   if (!maxPerPayer || maxPerPayer <= 0) return decayedVolume(events, halfLifeMs, now);
-  const cap = BigInt(feeUnit) * BigInt(maxPerPayer);
   let total = 0n;
-  for (const { volume } of byPayer(events, halfLifeMs, now).values()) {
+  for (const [payer, { volume }] of byPayer(events, halfLifeMs, now)) {
+    // Scaled by 1000 and divided back so a fractional multiplier survives BigInt.
+    const mult = BigInt(Math.round(trustMultiplier(payer, payerScores, trustWeight) * 1000));
+    const cap = (BigInt(feeUnit) * BigInt(maxPerPayer) * mult) / 1000n;
     total += volume > cap ? cap : volume;
   }
   return total;
@@ -304,11 +349,13 @@ function diversifiedVolume(events, { halfLifeMs, feeUnit, maxPerPayer }, now = D
  * capped its successes are scaled by the same factor, so the cap changes how much
  * its opinion counts without changing what its opinion was.
  */
-function diversifiedAttestations(events, { halfLifeMs, maxPerPayer }, now = Date.now()) {
+function diversifiedAttestations(events, cfg, now = Date.now(), payerScores = null) {
+  const { halfLifeMs, maxPerPayer, trustWeight } = cfg;
   if (!maxPerPayer || maxPerPayer <= 0) return decayedAttestations(events, halfLifeMs, now);
-  const cap = BigInt(maxPerPayer) * WEIGHT_SCALE;
   let successful = 0n, total = 0n;
-  for (const { weight, successWeight } of byPayer(events, halfLifeMs, now).values()) {
+  for (const [payer, { weight, successWeight }] of byPayer(events, halfLifeMs, now)) {
+    const mult = BigInt(Math.round(trustMultiplier(payer, payerScores, trustWeight) * 1000));
+    const cap = (BigInt(maxPerPayer) * WEIGHT_SCALE * mult) / 1000n;
     if (weight <= cap) { total += weight; successful += successWeight; }
     else { total += cap; successful += (successWeight * cap) / weight; }
   }
@@ -368,6 +415,8 @@ module.exports = {
   decayedAttestations,
   byPayer,
   isSelfPayment,
+  trustMultiplier,
+  propagationScore,
   diversifiedVolume,
   diversifiedAttestations,
   distinctPayers,
