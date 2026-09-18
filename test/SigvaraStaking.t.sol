@@ -104,7 +104,7 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
         vm.prank(admin);
         rep.grantRole(oracleRole, admin);
         vm.prank(admin);
-        rep.proposeReputation(did, data);
+        rep.proposeReputation(did, data, bytes32(0));
         vm.warp(block.timestamp + SCORE_WINDOW + 1);
         rep.finalizeReputation(did);
     }

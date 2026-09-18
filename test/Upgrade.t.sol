@@ -135,7 +135,7 @@ contract UpgradeTest is Test, RegistrationHelper {
             lastUpdated: 0
         });
         vm.prank(oracle);
-        rep.proposeReputation(didHash, data);
+        rep.proposeReputation(didHash, data, bytes32(0));
         vm.warp(block.timestamp + SCORE_WINDOW + 1);
         rep.finalizeReputation(didHash);
 

@@ -5,6 +5,8 @@ import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol"
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 
+import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
+
 import "./SigvaraIdentity.sol";
 
 /**
@@ -120,6 +122,10 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
         ReputationData data;
         uint256 proposedAt;
         bool exists;
+        // Appended, not inserted. ReputationData is nested above and is also stored on
+        // its own in `reputations`, so a field added inside it would shift proposedAt
+        // and exists here and corrupt every live proposal after an upgrade.
+        bytes32 evidenceRoot;
     }
 
     // -------------------------------------------------------------------------
@@ -147,6 +153,16 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
     /// type because it is an auto-generated mapping getter, which has no `.selector`.
     bytes4 private constant OPERATOR_CHANGED_AT = 0xcd46167a;
 
+    /// Merkle root of the evidence behind each agent's finalized score.
+    ///
+    /// A score is computed off-chain from payments the oracle verified, and until now
+    /// the only record of which payments those were lived in the oracle's own JSON
+    /// file. Anyone wanting to check the arithmetic had to trust that file. The root
+    /// commits to the evidence set at proposal time, so a third party can be handed the
+    /// leaves, re-verify each payment against the chain itself, and confirm the set is
+    /// the one that was actually scored.
+    mapping(bytes32 => bytes32) public evidenceRoots;
+
     /// Bonded operator registry. Unset means the check is off, which is a deliberate
     /// mode rather than a misconfiguration: the registry is a separate deployment.
     IOperatorSet public operatorBond;
@@ -155,8 +171,8 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
     // Events
     // -------------------------------------------------------------------------
 
-    event ScoreProposed(bytes32 indexed didHash, uint256 proposedAt);
-    event ReputationUpdated(bytes32 indexed didHash, uint8 totalScore, uint256 timestamp);
+    event ScoreProposed(bytes32 indexed didHash, uint256 proposedAt, bytes32 evidenceRoot);
+    event ReputationUpdated(bytes32 indexed didHash, uint8 totalScore, uint256 timestamp, bytes32 evidenceRoot);
     event ScoreRejected(bytes32 indexed didHash, address indexed committee);
     event ReputationZeroed(bytes32 indexed didHash);
     event ChallengeWindowUpdated(uint256 newWindow);
@@ -270,7 +286,7 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
      *         still-pending proposal for the same agent and restarts the window —
      *         the newer proposal reflects fresher on-chain state.
      */
-    function proposeReputation(bytes32 didHash, ReputationData calldata data)
+    function proposeReputation(bytes32 didHash, ReputationData calldata data, bytes32 evidenceRoot)
         external
         onlyRole(ORACLE_ROLE)
     {
@@ -287,10 +303,11 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
         pendingScores[didHash] = PendingScore({
             data: data,
             proposedAt: block.timestamp,
-            exists: true
+            exists: true,
+            evidenceRoot: evidenceRoot
         });
 
-        emit ScoreProposed(didHash, block.timestamp);
+        emit ScoreProposed(didHash, block.timestamp, evidenceRoot);
     }
 
     /**
@@ -319,7 +336,9 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
 
         ReputationData memory data = pending.data;
         data.lastUpdated = block.timestamp;
+        bytes32 root = pending.evidenceRoot;
         reputations[didHash] = data;
+        evidenceRoots[didHash] = root;
         delete pendingScores[didHash];
 
         maturedScore[didHash] = anchor;
@@ -333,7 +352,7 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
             + uint16(data.propagationScore);
         // Each factor is validated at propose time, so total <= 100.
         // forge-lint: disable-next-line(unsafe-typecast)
-        emit ReputationUpdated(didHash, uint8(total), block.timestamp);
+        emit ReputationUpdated(didHash, uint8(total), block.timestamp, root);
     }
 
     /**
@@ -371,6 +390,7 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
             lastUpdated: block.timestamp
         });
         delete pendingScores[didHash];
+        delete evidenceRoots[didHash];
         maturedScore[didHash] = 0;
         maturedAt[didHash] = block.timestamp;
 
@@ -529,6 +549,23 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
         // capped factors that cannot exceed 100.
         // forge-lint: disable-next-line(unsafe-typecast)
         return released >= earned ? earned : uint8(released);
+    }
+
+    /**
+     * @notice Whether `leaf` is part of the evidence behind this agent's live score.
+     * @dev    The leaf is built by the caller from a payment they can check on chain
+     *         themselves, so this proves the oracle counted that payment without
+     *         anyone having to trust the oracle's records. An agent with no root, or
+     *         one whose score predates this, verifies nothing rather than everything.
+     */
+    function verifyEvidence(bytes32 didHash, bytes32 leaf, bytes32[] calldata proof)
+        external
+        view
+        returns (bool)
+    {
+        bytes32 root = evidenceRoots[didHash];
+        if (root == bytes32(0)) return false;
+        return MerkleProof.verify(proof, root, leaf);
     }
 
     /// @notice The score as computed, before maturity is applied. Max 100.

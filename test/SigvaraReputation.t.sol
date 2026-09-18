@@ -102,7 +102,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
     // used by tests that just need a score live on-chain.
     function _proposeAndFinalize(bytes32 didHash, SigvaraReputation.ReputationData memory data) internal {
         vm.prank(oracle);
-        rep.proposeReputation(didHash, data);
+        rep.proposeReputation(didHash, data, bytes32(0));
         vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
         rep.finalizeReputation(didHash);
     }
@@ -113,7 +113,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
 
     function test_proposeReputation_success() public {
         vm.prank(oracle);
-        rep.proposeReputation(DID, maxScore);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
 
         SigvaraReputation.PendingScore memory pending = rep.getPendingScore(DID);
         assertTrue(pending.exists);
@@ -133,17 +133,17 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
             )
         );
         vm.prank(stranger);
-        rep.proposeReputation(DID, maxScore);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
     }
 
     function test_proposeReputation_replacesExistingPending() public {
         vm.startPrank(oracle);
-        rep.proposeReputation(DID, maxScore);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
 
         SigvaraReputation.ReputationData memory lower = maxScore;
         lower.feeScore = 10;
         vm.warp(block.timestamp + 10);
-        rep.proposeReputation(DID, lower);
+        rep.proposeReputation(DID, lower, bytes32(0));
         vm.stopPrank();
 
         SigvaraReputation.PendingScore memory pending = rep.getPendingScore(DID);
@@ -158,7 +158,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
             abi.encodeWithSelector(SigvaraReputation.ScoreOutOfRange.selector, "feeScore", 31, 30)
         );
         vm.prank(oracle);
-        rep.proposeReputation(DID, bad);
+        rep.proposeReputation(DID, bad, bytes32(0));
     }
 
     function test_proposeReputation_reverts_successScoreOverMax() public {
@@ -168,7 +168,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
             abi.encodeWithSelector(SigvaraReputation.ScoreOutOfRange.selector, "successScore", 26, 25)
         );
         vm.prank(oracle);
-        rep.proposeReputation(DID, bad);
+        rep.proposeReputation(DID, bad, bytes32(0));
     }
 
     function test_proposeReputation_reverts_ageScoreOverMax() public {
@@ -178,7 +178,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
             abi.encodeWithSelector(SigvaraReputation.ScoreOutOfRange.selector, "ageScore", 21, 20)
         );
         vm.prank(oracle);
-        rep.proposeReputation(DID, bad);
+        rep.proposeReputation(DID, bad, bytes32(0));
     }
 
     function test_proposeReputation_reverts_externalScoreOverMax() public {
@@ -188,7 +188,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
             abi.encodeWithSelector(SigvaraReputation.ScoreOutOfRange.selector, "externalScore", 16, 15)
         );
         vm.prank(oracle);
-        rep.proposeReputation(DID, bad);
+        rep.proposeReputation(DID, bad, bytes32(0));
     }
 
     function test_proposeReputation_reverts_communityScoreOverMax() public {
@@ -198,7 +198,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
             abi.encodeWithSelector(SigvaraReputation.ScoreOutOfRange.selector, "communityScore", 6, 5)
         );
         vm.prank(oracle);
-        rep.proposeReputation(DID, bad);
+        rep.proposeReputation(DID, bad, bytes32(0));
     }
 
     function test_proposeReputation_reverts_propagationScoreOverMax() public {
@@ -208,7 +208,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
             abi.encodeWithSelector(SigvaraReputation.ScoreOutOfRange.selector, "propagationScore", 6, 5)
         );
         vm.prank(oracle);
-        rep.proposeReputation(DID, bad);
+        rep.proposeReputation(DID, bad, bytes32(0));
     }
 
     // -------------------------------------------------------------------------
@@ -233,7 +233,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
     function test_finalizeReputation_reverts_beforeWindowElapsed() public {
         uint256 proposedAt = block.timestamp;
         vm.prank(oracle);
-        rep.proposeReputation(DID, maxScore);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
 
         vm.expectRevert(
             abi.encodeWithSelector(
@@ -254,7 +254,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
 
     function test_finalizeReputation_callableByAnyone() public {
         vm.prank(oracle);
-        rep.proposeReputation(DID, maxScore);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
         vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
 
         vm.prank(stranger);
@@ -269,7 +269,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
 
     function test_rejectReputation_success() public {
         vm.prank(oracle);
-        rep.proposeReputation(DID, maxScore);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
 
         vm.prank(committee);
         rep.rejectReputation(DID);
@@ -286,7 +286,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
         SigvaraReputation.ReputationData memory lower = maxScore;
         lower.feeScore = 5;
         vm.prank(oracle);
-        rep.proposeReputation(DID, lower);
+        rep.proposeReputation(DID, lower, bytes32(0));
 
         vm.prank(committee);
         rep.rejectReputation(DID);
@@ -296,7 +296,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
 
     function test_rejectReputation_reverts_notCommittee() public {
         vm.prank(oracle);
-        rep.proposeReputation(DID, maxScore);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
 
         vm.expectRevert(
             abi.encodeWithSelector(
@@ -320,7 +320,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
     function test_rejectReputation_reverts_afterWindowExpired() public {
         uint256 proposedAt = block.timestamp;
         vm.prank(oracle);
-        rep.proposeReputation(DID, maxScore);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
         vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
 
         vm.expectRevert(
@@ -393,7 +393,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
 
     function test_zeroReputation_clearsPendingProposal() public {
         vm.prank(oracle);
-        rep.proposeReputation(DID, maxScore);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
 
         vm.prank(staking);
         rep.zeroReputation(DID);
@@ -528,7 +528,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
         bytes32 ghost = keccak256("did:sigvara:5042002:0xnever-registered");
         vm.expectRevert(abi.encodeWithSelector(SigvaraReputation.AgentNotRegistered.selector, ghost));
         vm.prank(oracle);
-        rep.proposeReputation(ghost, maxScore);
+        rep.proposeReputation(ghost, maxScore, bytes32(0));
     }
 
     // -------------------------------------------------------------------------
@@ -540,7 +540,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
         vm.prank(admin);
         rep.initializeV4(rate);
         vm.prank(oracle);
-        rep.proposeReputation(DID, maxScore);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
         vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
         rep.finalizeReputation(DID);
     }
@@ -590,7 +590,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
         low.feeScore = 0; low.successScore = 0; low.ageScore = 0;
         low.externalScore = 0; low.propagationScore = 0; // leaves communityScore 5
         vm.prank(oracle);
-        rep.proposeReputation(DID, low);
+        rep.proposeReputation(DID, low, bytes32(0));
         vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
         rep.finalizeReputation(DID);
 
@@ -607,7 +607,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
         // Re-finalize the same perfect score. If the anchor took the earned value,
         // this would jump to 100.
         vm.prank(oracle);
-        rep.proposeReputation(DID, maxScore);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
         vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
         uint256 atFinalize = rep.getTotalScore(DID);
         rep.finalizeReputation(DID);
@@ -679,7 +679,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
         vm.stopPrank();
 
         vm.prank(oracle);
-        old.proposeReputation(DID, maxScore);
+        old.proposeReputation(DID, maxScore, bytes32(0));
         vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
         old.finalizeReputation(DID);
 
@@ -689,6 +689,90 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
 
         vm.warp(block.timestamp + 3 days);
         assertEq(old.getTotalScore(DID), 12, "keeps maturing against a legacy registry");
+    }
+
+    // -------------------------------------------------------------------------
+    // evidence commitments
+    // -------------------------------------------------------------------------
+
+    // Fixture produced by oracle/merkle.js over three payments. The point of pinning it
+    // here is cross-implementation: the JS builds the tree, this checks the contract
+    // accepts it. A mismatch in leaf encoding, pair ordering or odd-node handling would
+    // pass both sides' own tests and fail only in production.
+    bytes32 constant EV_ROOT  = 0x439f0128d168464f60c009baeeccb7518d69d99b226617cd601d89f8e34680c1;
+    bytes32 constant EV_LEAF0 = 0x2e7874cee2b10acbffa6dc8754834b7a7c30c7a52e28ba30d1b99fa298dc427c;
+    bytes32 constant EV_LEAF1 = 0xaec877709997027a936dbd9a8735b1a99a1c2c76a5d8a6f0d34a781194fa3ecd;
+    bytes32 constant EV_LEAF2 = 0x334937b7b479e0998b5f6e09e0026c8c45adb3c5b9fc1fd0cc3a6c94330b8c9e;
+
+    function _proof0() internal pure returns (bytes32[] memory p) {
+        p = new bytes32[](2);
+        p[0] = EV_LEAF1;
+        p[1] = EV_LEAF2;
+    }
+
+    function _proof2() internal pure returns (bytes32[] memory p) {
+        p = new bytes32[](1);
+        p[0] = 0xd17bb8827637bbeecdd8ad818a1d3c9a38559913ab4b6d39dd0263dad5f5dd10;
+    }
+
+    function _finalizeWithRoot(bytes32 root) internal {
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, root);
+        vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
+        rep.finalizeReputation(DID);
+    }
+
+    /// The whole point: a third party holding a payment can prove the oracle counted
+    /// it, without being given or having to trust the oracle's records.
+    function test_evidence_provesAPaymentWasCounted() public {
+        _finalizeWithRoot(EV_ROOT);
+
+        assertEq(rep.evidenceRoots(DID), EV_ROOT);
+        assertTrue(rep.verifyEvidence(DID, EV_LEAF0, _proof0()), "first leaf is in the set");
+        assertTrue(rep.verifyEvidence(DID, EV_LEAF2, _proof2()), "odd leaf is too");
+    }
+
+    /// A payment the oracle did not count cannot be made to verify.
+    function test_evidence_rejectsALeafThatIsNotInTheSet() public {
+        _finalizeWithRoot(EV_ROOT);
+        assertFalse(rep.verifyEvidence(DID, keccak256("invented"), _proof0()));
+    }
+
+    /// Proofs do not carry between agents, so evidence cannot be borrowed.
+    function test_evidence_isScopedToTheAgent() public {
+        _finalizeWithRoot(EV_ROOT);
+        bytes32 other = keccak256("did:sigvara:5042002:0xsomebodyelse");
+        assertFalse(rep.verifyEvidence(other, EV_LEAF0, _proof0()));
+    }
+
+    /// An agent with no committed evidence verifies nothing rather than everything.
+    function test_evidence_noRootVerifiesNothing() public {
+        _finalizeWithRoot(bytes32(0));
+        assertEq(rep.evidenceRoots(DID), bytes32(0));
+        assertFalse(rep.verifyEvidence(DID, EV_LEAF0, _proof0()));
+    }
+
+    /// The root travels with the score it belongs to and only lands on finalization.
+    function test_evidence_rootIsHeldOnThePendingProposal() public {
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, EV_ROOT);
+
+        assertEq(rep.getPendingScore(DID).evidenceRoot, EV_ROOT, "held with the proposal");
+        assertEq(rep.evidenceRoots(DID), bytes32(0), "not live until finalized");
+
+        vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
+        rep.finalizeReputation(DID);
+        assertEq(rep.evidenceRoots(DID), EV_ROOT);
+    }
+
+    /// A slash clears the evidence with the score. Leaving it would let a terminated
+    /// agent keep proving the record that got it slashed.
+    function test_evidence_clearedOnSlash() public {
+        _finalizeWithRoot(EV_ROOT);
+        vm.prank(staking);
+        rep.zeroReputation(DID);
+        assertEq(rep.evidenceRoots(DID), bytes32(0));
+        assertFalse(rep.verifyEvidence(DID, EV_LEAF0, _proof0()));
     }
 
     function test_maturity_rateOfZeroIsRejected() public {
@@ -714,7 +798,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
     function test_operatorBond_unsetMeansTheCheckIsOff() public {
         assertEq(address(rep.operatorBond()), address(0));
         vm.prank(oracle);
-        rep.proposeReputation(DID, maxScore);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
         assertTrue(rep.getPendingScore(DID).exists);
     }
 
@@ -728,7 +812,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
         assertTrue(rep.hasRole(rep.ORACLE_ROLE(), oracle), "still has the role");
         vm.expectRevert(abi.encodeWithSelector(SigvaraReputation.OracleNotBonded.selector, oracle));
         vm.prank(oracle);
-        rep.proposeReputation(DID, maxScore);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
     }
 
     function test_operatorBond_admittedOperatorCanPropose() public {
@@ -738,7 +822,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
         set.set(oracle, true);
 
         vm.prank(oracle);
-        rep.proposeReputation(DID, maxScore);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
         assertTrue(rep.getPendingScore(DID).exists);
     }
 
@@ -752,7 +836,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
 
         vm.expectRevert();
         vm.prank(stranger);
-        rep.proposeReputation(DID, maxScore);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
     }
 
     /// An operator that exits must not strand the scores it already proposed.
@@ -764,7 +848,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
         set.set(oracle, true);
 
         vm.prank(oracle);
-        rep.proposeReputation(DID, maxScore);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
 
         set.set(oracle, false); // ejected, or unbonded, mid-window
         vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
@@ -781,7 +865,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
         rep.setOperatorBond(address(0));
 
         vm.prank(oracle);
-        rep.proposeReputation(DID, maxScore);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
         assertTrue(rep.getPendingScore(DID).exists);
     }
 
@@ -798,7 +882,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
         stakeView.set(false);
         vm.expectRevert(abi.encodeWithSelector(SigvaraReputation.AgentNotBonded.selector, DID));
         vm.prank(oracle);
-        rep.proposeReputation(DID, maxScore);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
     }
 
     /// The bond has to hold for the whole optimistic window, not just at proposal.
@@ -806,7 +890,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
     /// after the collateral was gone.
     function test_finalizeReputation_reverts_whenBondIsWithdrawnMidWindow() public {
         vm.prank(oracle);
-        rep.proposeReputation(DID, maxScore);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
 
         stakeView.set(false);
         vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
@@ -823,7 +907,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
         identity.updateStatus(DID, SigvaraIdentity.AgentStatus.Suspended);
 
         vm.prank(oracle);
-        rep.proposeReputation(DID, maxScore);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
         assertTrue(rep.getPendingScore(DID).exists);
     }
 

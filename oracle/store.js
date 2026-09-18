@@ -28,7 +28,7 @@ const flags = new Map();
 const links = new Map();
 // "attester:didHash" → timestamp (ms) of last attestation — dedupe/cooldown guard
 const attestCooldowns = new Map();
-// didHash → [{ ts, amount: string, payer, success }] — one entry per verified payment.
+// didHash → [{ txHash, ts, amount: string, payer, success }] — one per verified payment.
 //
 // Individual events rather than a running total, because a total cannot be decayed:
 // weighting a payment by its age needs to know when it happened. Amounts are strings
@@ -115,7 +115,10 @@ function creditPayment(didHash, txHash, amount, payer, success, now = Date.now()
   if (usedPaymentTxs.has(key)) return false;
   usedPaymentTxs.add(key);
   const list = paymentEvents.get(didHash) ?? [];
-  list.push({ ts: now, amount: BigInt(amount).toString(), payer, success: !!success });
+  // The settlement hash is kept, not just used for dedupe: it is what lets a third
+  // party pull the payment off the chain and check it for themselves, which is the
+  // whole point of committing to the evidence.
+  list.push({ txHash: key, ts: now, amount: BigInt(amount).toString(), payer, success: !!success });
   paymentEvents.set(didHash, list);
   return true;
 }
