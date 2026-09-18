@@ -46,6 +46,14 @@ import "./SigvaraIdentity.sol";
  *   never be exposed to a slash, because slashing reverts when there is no stake to
  *   take. The bond is what makes a score accountable, and reputation is where it has
  *   to be enforced: SigvaraStaking cannot refuse a score it never sees.
+ *
+ * Maturity:
+ *   A score is earned immediately but becomes spendable only over time. Reads return
+ *   the matured value, which climbs toward the earned one at a bounded rate. Without
+ *   this, a score built quickly can be used the moment it peaks, which is exactly the
+ *   shape of a farm-and-cash-out: accumulate, get trusted, leave. Falls are not
+ *   delayed. A drop applies at once, because slowing bad news down would protect the
+ *   agent rather than whoever is relying on it.
  */
 contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgradeable {
     // -------------------------------------------------------------------------
@@ -110,6 +118,13 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
     /// Appended after challengeWindow: existing proxies keep their storage layout.
     SigvaraIdentity public identityRegistry;
 
+    /// Points of matured score per day. Appended, like everything after it.
+    uint256 public maturityRatePerDay;
+
+    /// Matured score as at `maturedAt`, the anchor reads extrapolate from.
+    mapping(bytes32 => uint8) public maturedScore;
+    mapping(bytes32 => uint256) public maturedAt;
+
     // -------------------------------------------------------------------------
     // Events
     // -------------------------------------------------------------------------
@@ -120,6 +135,7 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
     event ReputationZeroed(bytes32 indexed didHash);
     event ChallengeWindowUpdated(uint256 newWindow);
     event IdentityRegistrySet(address indexed identityRegistry);
+    event MaturityRateUpdated(uint256 pointsPerDay);
 
     // -------------------------------------------------------------------------
     // Errors
@@ -134,6 +150,7 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
     error AgentNotRegistered(bytes32 didHash);
     error AgentSlashed(bytes32 didHash);
     error AgentNotBonded(bytes32 didHash);
+    error MaturityRateZero();
 
     // -------------------------------------------------------------------------
     // Constructor / Initializer
@@ -265,10 +282,19 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
         // Stamp lastUpdated in memory so the struct is written to storage once,
         // and compute the event's total from the same memory copy instead of
         // re-reading the six factors back out of storage.
+        // Snapshot what was spendable under the OLD score before overwriting it, and
+        // restart the clock from there. Taking the matured value rather than the
+        // earned one is the whole point: a jump in the earned score is released from
+        // where the agent actually stood, not from where it claimed to be.
+        uint8 anchor = getTotalScore(didHash);
+
         ReputationData memory data = pending.data;
         data.lastUpdated = block.timestamp;
         reputations[didHash] = data;
         delete pendingScores[didHash];
+
+        maturedScore[didHash] = anchor;
+        maturedAt[didHash] = block.timestamp;
 
         uint16 total = uint16(data.feeScore)
             + uint16(data.successScore)
@@ -316,8 +342,27 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
             lastUpdated: block.timestamp
         });
         delete pendingScores[didHash];
+        maturedScore[didHash] = 0;
+        maturedAt[didHash] = block.timestamp;
 
         emit ReputationZeroed(didHash);
+    }
+
+    /**
+     * @notice Sets the rate at which an earned score becomes spendable.
+     * @dev    Separate initializer for the same reason as the others: the live proxy
+     *         has consumed earlier versions, so this has to run through
+     *         upgradeToAndCall. A rate of zero would freeze every score at its anchor
+     *         forever, so it is rejected rather than treated as "no maturity".
+     */
+    function initializeV4(uint256 pointsPerDay)
+        external
+        onlyRole(DEFAULT_ADMIN_ROLE)
+        reinitializer(4)
+    {
+        if (pointsPerDay == 0) revert MaturityRateZero();
+        maturityRatePerDay = pointsPerDay;
+        emit MaturityRateUpdated(pointsPerDay);
     }
 
     // -------------------------------------------------------------------------
@@ -353,6 +398,12 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
     // Admin
     // -------------------------------------------------------------------------
 
+    function setMaturityRate(uint256 pointsPerDay) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (pointsPerDay == 0) revert MaturityRateZero();
+        maturityRatePerDay = pointsPerDay;
+        emit MaturityRateUpdated(pointsPerDay);
+    }
+
     function setChallengeWindow(uint256 newWindow) external onlyRole(DEFAULT_ADMIN_ROLE) {
         challengeWindow = newWindow;
         emit ChallengeWindowUpdated(newWindow);
@@ -370,8 +421,36 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
         return pendingScores[didHash];
     }
 
-    /// @notice Returns the sum of all 6 factor scores. Max 100.
+    /**
+     * @notice The spendable score: what the agent has earned, released over time.
+     * @dev    This is what consumers should read, and what meetsThreshold uses. It
+     *         climbs from the anchor set at the last finalize toward the earned score
+     *         at maturityRatePerDay, and never exceeds it. A fall is immediate.
+     *
+     *         Extrapolating on read rather than on write means maturity accrues with
+     *         wall-clock time even if the oracle stops proposing, so an outage cannot
+     *         hold an honest agent below its earned score indefinitely.
+     */
     function getTotalScore(bytes32 didHash) public view returns (uint8) {
+        uint8 earned = getEarnedScore(didHash);
+        uint8 anchor = maturedScore[didHash];
+        if (earned <= anchor) return earned;
+
+        uint256 since = maturedAt[didHash];
+        // Before the first finalize there is no anchor to grow from, and a zero
+        // timestamp would extrapolate from 1970 and mature everything instantly.
+        if (since == 0 || maturityRatePerDay == 0) return earned;
+
+        uint256 released = uint256(anchor)
+            + ((block.timestamp - since) * maturityRatePerDay) / 1 days;
+        // Safe: this branch only runs when released < earned, and earned is a sum of
+        // capped factors that cannot exceed 100.
+        // forge-lint: disable-next-line(unsafe-typecast)
+        return released >= earned ? earned : uint8(released);
+    }
+
+    /// @notice The score as computed, before maturity is applied. Max 100.
+    function getEarnedScore(bytes32 didHash) public view returns (uint8) {
         ReputationData storage rep = reputations[didHash];
         uint16 total = uint16(rep.feeScore)
             + uint16(rep.successScore)

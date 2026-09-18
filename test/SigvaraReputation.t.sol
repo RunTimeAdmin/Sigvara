@@ -498,6 +498,121 @@ contract SigvaraReputationTest is Test {
         rep.proposeReputation(ghost, maxScore);
     }
 
+    // -------------------------------------------------------------------------
+    // maturity
+    // -------------------------------------------------------------------------
+
+    /// Enables maturity at `rate` points/day and finalizes `maxScore` for DID.
+    function _finalizeWithMaturity(uint256 rate) internal {
+        vm.prank(admin);
+        rep.initializeV4(rate);
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore);
+        vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
+        rep.finalizeReputation(DID);
+    }
+
+    /// The farm-and-cash-out shape: build a score fast, spend it at the peak. The
+    /// earned score is available immediately; the spendable one is not.
+    function test_maturity_scoreIsNotSpendableImmediately() public {
+        _finalizeWithMaturity(4);
+
+        assertEq(rep.getEarnedScore(DID), 100, "earned in full");
+        assertEq(rep.getTotalScore(DID), 0, "none of it spendable yet");
+        assertFalse(rep.meetsThreshold(DID, 1), "thresholds use the matured score");
+    }
+
+    function test_maturity_releasesAtTheConfiguredRate() public {
+        _finalizeWithMaturity(4);
+
+        vm.warp(block.timestamp + 1 days);
+        assertEq(rep.getTotalScore(DID), 4);
+
+        vm.warp(block.timestamp + 9 days);
+        assertEq(rep.getTotalScore(DID), 40);
+    }
+
+    function test_maturity_stopsAtTheEarnedScore() public {
+        _finalizeWithMaturity(4);
+        vm.warp(block.timestamp + 365 days);
+        assertEq(rep.getTotalScore(DID), 100, "never overshoots what was earned");
+    }
+
+    /// Maturity accrues with wall-clock time, not with oracle activity, so an oracle
+    /// outage cannot pin an honest agent below the score it earned.
+    function test_maturity_accruesWithoutFurtherFinalizations() public {
+        _finalizeWithMaturity(4);
+        vm.warp(block.timestamp + 5 days);
+        assertEq(rep.getTotalScore(DID), 20);
+    }
+
+    /// A fall is not delayed. Slowing bad news would protect the agent rather than
+    /// whoever is relying on it.
+    function test_maturity_dropsApplyImmediately() public {
+        _finalizeWithMaturity(4);
+        vm.warp(block.timestamp + 25 days);
+        assertEq(rep.getTotalScore(DID), 100);
+
+        SigvaraReputation.ReputationData memory low = maxScore;
+        low.feeScore = 0; low.successScore = 0; low.ageScore = 0;
+        low.externalScore = 0; low.propagationScore = 0; // leaves communityScore 5
+        vm.prank(oracle);
+        rep.proposeReputation(DID, low);
+        vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
+        rep.finalizeReputation(DID);
+
+        assertEq(rep.getTotalScore(DID), 5, "the drop is visible at once");
+    }
+
+    /// A later rise is released from where the agent actually stood, not from the
+    /// number it had claimed, so a score cannot be reset high by churning proposals.
+    function test_maturity_anchorsOnTheMaturedValueNotTheEarnedOne() public {
+        _finalizeWithMaturity(4);
+        vm.warp(block.timestamp + 2 days);
+        assertEq(rep.getTotalScore(DID), 8);
+
+        // Re-finalize the same perfect score. If the anchor took the earned value,
+        // this would jump to 100.
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore);
+        vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
+        uint256 atFinalize = rep.getTotalScore(DID);
+        rep.finalizeReputation(DID);
+
+        assertEq(rep.getTotalScore(DID), atFinalize, "no jump from re-finalizing");
+        assertLt(rep.getTotalScore(DID), 100);
+    }
+
+    /// A slash zeroes the score. The anchor has to go with it, or the agent would
+    /// climb back out on its own the moment anything was proposed again.
+    function test_maturity_slashResetsTheAnchor() public {
+        _finalizeWithMaturity(4);
+        vm.warp(block.timestamp + 25 days);
+        assertEq(rep.getTotalScore(DID), 100);
+
+        vm.prank(staking);
+        rep.zeroReputation(DID);
+
+        assertEq(rep.getTotalScore(DID), 0);
+        assertEq(rep.maturedScore(DID), 0, "anchor cleared");
+        vm.warp(block.timestamp + 365 days);
+        assertEq(rep.getTotalScore(DID), 0, "stays at zero without a new score");
+    }
+
+    function test_maturity_rateOfZeroIsRejected() public {
+        vm.expectRevert(SigvaraReputation.MaturityRateZero.selector);
+        vm.prank(admin);
+        rep.initializeV4(0);
+    }
+
+    function test_maturity_setMaturityRate_onlyAdmin() public {
+        vm.prank(admin);
+        rep.initializeV4(4);
+        vm.expectRevert();
+        vm.prank(stranger);
+        rep.setMaturityRate(10);
+    }
+
     /// Registration costs only gas, so an unbonded agent must not be scoreable. It
     /// also cannot be slashed, since slashing needs stake to take, which is what made
     /// bulk identity creation the cheapest attack on the score.

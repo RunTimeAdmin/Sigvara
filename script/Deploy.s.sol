@@ -35,12 +35,17 @@ import "../src/SVRToken.sol";
  *   CHALLENGE_PERIOD       — slash challenge window in seconds (default: 7 days)
  *   SCORE_CHALLENGE_WINDOW — reputation-score challenge window in seconds (default: 6 hours)
  *   UNBONDING_PERIOD       — seconds a queued withdrawal is still slashable before claim (default: 21 days)
+ *   MATURITY_RATE_PER_DAY  — points of score released per day (default: 4, so 100 takes 25 days)
  */
 contract Deploy is Script {
     uint256 constant DEFAULT_MINIMUM_STAKE = 1_000e18;
     uint256 constant DEFAULT_CHALLENGE_PERIOD = 7 days;
     uint256 constant DEFAULT_SCORE_CHALLENGE_WINDOW = 6 hours;
     uint256 constant DEFAULT_UNBONDING_PERIOD = 21 days;
+    /// Points of score released per day. At 4, a perfect score takes 25 days to
+    /// become fully spendable, which is what stops a farm being cashed in the week
+    /// it was built.
+    uint256 constant DEFAULT_MATURITY_RATE = 4;
 
     uint256 constant ARC_MAINNET = 5042;
 
@@ -79,6 +84,7 @@ contract Deploy is Script {
         )));
         // Reputation refuses to accept scores until it can check the identity registry.
         reputation.initializeV3(address(identity));
+        reputation.initializeV4(vm.envOr("MATURITY_RATE_PER_DAY", DEFAULT_MATURITY_RATE));
 
         // 4. Staking — now we have identity + rep + token addresses
         SigvaraStaking stakingImpl = new SigvaraStaking();
@@ -128,6 +134,7 @@ contract Deploy is Script {
         console2.log("Challenge period:", period);
         console2.log("Score chal. win.:", scoreWindow);
         console2.log("Unbonding period:", unbondPeriod);
+        console2.log("Maturity rate/day:", reputation.maturityRatePerDay());
 
         // Write addresses to deployments/{chainId}.json for SDK config
         _writeAddresses(deployer, address(svr), address(identity), address(reputation), address(staking));
