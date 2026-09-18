@@ -15,6 +15,7 @@ packages/sdk/node_modules/
 
 # Oracle
 oracle/node_modules/
+oracle/.state/
 
 # Environment
 .env
