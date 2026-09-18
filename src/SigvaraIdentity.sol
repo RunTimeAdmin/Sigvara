@@ -75,6 +75,18 @@ contract SigvaraIdentity is Initializable, AccessControlUpgradeable, UUPSUpgrade
     /// deployed proxies keep their layout.
     IStakeView public stakeView;
 
+    /// Outstanding transfer offer: didHash => the address that may accept it.
+    mapping(bytes32 => address) public pendingOperator;
+
+    /// When the operator last changed. Read by SigvaraReputation, which restarts a
+    /// score's maturity from a handover so an identity cannot be sold with its
+    /// reputation immediately spendable.
+    mapping(bytes32 => uint256) public operatorChangedAt;
+
+    /// How many times the agent has changed hands. Reported, not scored: a consumer
+    /// can decide for itself what a frequently traded identity is worth.
+    mapping(bytes32 => uint32) public operatorTransferCount;
+
     // -------------------------------------------------------------------------
     // Events
     // -------------------------------------------------------------------------
@@ -86,6 +98,9 @@ contract SigvaraIdentity is Initializable, AccessControlUpgradeable, UUPSUpgrade
         bytes32 ed25519PubKey
     );
     event StakeViewSet(address indexed stakeView);
+    event OperatorTransferOffered(bytes32 indexed didHash, address indexed from, address indexed to);
+    event OperatorTransferCancelled(bytes32 indexed didHash, address indexed by);
+    event OperatorTransferred(bytes32 indexed didHash, address indexed from, address indexed to);
     event AgentStatusUpdated(bytes32 indexed didHash, AgentStatus newStatus);
     event PublicKeyRotated(bytes32 indexed didHash, bytes32 newEd25519PubKey);
 
@@ -102,6 +117,10 @@ contract SigvaraIdentity is Initializable, AccessControlUpgradeable, UUPSUpgrade
     error SlashSuspensionLocked(bytes32 didHash);
     error StakeViewNotSet();
     error InsufficientCollateral(bytes32 didHash);
+    error NoTransferOffered(bytes32 didHash);
+    error NotOfferedOperator(bytes32 didHash, address caller);
+    error TransferWhileSlashPending(bytes32 didHash);
+    error SameOperator(bytes32 didHash);
 
     // -------------------------------------------------------------------------
     // Constructor / Initializer
@@ -261,6 +280,91 @@ contract SigvaraIdentity is Initializable, AccessControlUpgradeable, UUPSUpgrade
 
         id.status = newStatus;
         emit AgentStatusUpdated(didHash, newStatus);
+    }
+
+    /**
+     * @notice Offer this agent to a new operator. Nothing moves until they accept.
+     * @dev    Two steps on purpose. A one-shot transfer to a mistyped or uncontrolled
+     *         address would strand the identity and its bond permanently, with no way
+     *         back, because only the operator can act and nobody holds that key.
+     *         Requiring the recipient to accept proves they can transact from it.
+     *
+     *         Refused while a slash is pending. Otherwise an operator could hand off an
+     *         agent the moment it was accused and leave the liability with a buyer who
+     *         had no part in what it did.
+     */
+    function offerOperatorTransfer(bytes32 didHash, address newOperator) external {
+        AgentIdentity storage id = _requireRegistered(didHash);
+        _requireOperator(id, didHash);
+        if (id.status == AgentStatus.Slashed) revert SlashedAgentImmutable(didHash);
+        if (slashSuspended[didHash]) revert TransferWhileSlashPending(didHash);
+        if (newOperator == address(0)) revert ZeroAgentAddress();
+        if (newOperator == id.operator) revert SameOperator(didHash);
+
+        pendingOperator[didHash] = newOperator;
+        emit OperatorTransferOffered(didHash, id.operator, newOperator);
+    }
+
+    /// @notice Withdraw an outstanding offer. Either side may walk away before it lands.
+    function cancelOperatorTransfer(bytes32 didHash) external {
+        AgentIdentity storage id = _requireRegistered(didHash);
+        address offered = pendingOperator[didHash];
+        if (offered == address(0)) revert NoTransferOffered(didHash);
+        if (msg.sender != id.operator && msg.sender != offered) {
+            revert NotOperator(didHash, msg.sender);
+        }
+
+        delete pendingOperator[didHash];
+        emit OperatorTransferCancelled(didHash, msg.sender);
+    }
+
+    /**
+     * @notice Accept an offered agent and become its operator.
+     * @dev    The bond stays with the agent, not the operator, so the incoming operator
+     *         inherits it along with everything it is answerable for. The agent must be
+     *         bonded at handover, or what changes hands is a hollow identity carrying a
+     *         reputation and no collateral behind it.
+     *
+     *         A queued withdrawal is not blocked here and is claimable by the new
+     *         operator afterwards, which favours them; a buyer should still look before
+     *         accepting.
+     */
+    function acceptOperatorTransfer(bytes32 didHash) external {
+        AgentIdentity storage id = _requireRegistered(didHash);
+        address offered = pendingOperator[didHash];
+        if (offered == address(0)) revert NoTransferOffered(didHash);
+        if (msg.sender != offered) revert NotOfferedOperator(didHash, msg.sender);
+        if (id.status == AgentStatus.Slashed) revert SlashedAgentImmutable(didHash);
+        if (slashSuspended[didHash]) revert TransferWhileSlashPending(didHash);
+
+        if (address(stakeView) == address(0)) revert StakeViewNotSet();
+        if (!stakeView.hasMinimumStake(didHash)) revert InsufficientCollateral(didHash);
+
+        address previous = id.operator;
+        id.operator = msg.sender;
+        delete pendingOperator[didHash];
+
+        _removeFromOperatorIndex(previous, didHash);
+        operatorAgents[msg.sender].push(didHash);
+
+        operatorChangedAt[didHash] = block.timestamp;
+        operatorTransferCount[didHash] += 1;
+
+        emit OperatorTransferred(didHash, previous, msg.sender);
+    }
+
+    /// @dev Swap-and-pop. The index is a convenience view, not consensus state, and an
+    ///      operator's list is short, so the cost of keeping it honest is small.
+    function _removeFromOperatorIndex(address operator, bytes32 didHash) private {
+        bytes32[] storage list = operatorAgents[operator];
+        uint256 n = list.length;
+        for (uint256 i = 0; i < n; i++) {
+            if (list[i] == didHash) {
+                list[i] = list[n - 1];
+                list.pop();
+                return;
+            }
+        }
     }
 
     /**

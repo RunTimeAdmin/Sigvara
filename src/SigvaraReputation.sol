@@ -436,7 +436,23 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
         uint8 anchor = maturedScore[didHash];
         if (earned <= anchor) return earned;
 
+
         uint256 since = maturedAt[didHash];
+
+        // A handover restarts maturity. The reputation was earned by whoever held the
+        // agent before, so a buyer should not get it instantly spendable: that would
+        // make aged, scored identities a liquid commodity, which is the farm-and-sell
+        // market this is meant to price out. The score itself survives; only the right
+        // to spend it is re-earned, over the same window as any other rise.
+        SigvaraIdentity registry = identityRegistry;
+        if (address(registry) != address(0)) {
+            uint256 changed = registry.operatorChangedAt(didHash);
+            if (changed > since) {
+                since = changed;
+                anchor = 0;
+            }
+        }
+
         // Before the first finalize there is no anchor to grow from, and a zero
         // timestamp would extrapolate from 1970 and mature everything instantly.
         if (since == 0 || maturityRatePerDay == 0) return earned;

@@ -599,6 +599,26 @@ contract SigvaraReputationTest is Test {
         assertEq(rep.getTotalScore(DID), 0, "stays at zero without a new score");
     }
 
+    /// The farm-and-sell market: build an aged, scored identity and sell it. The
+    /// buyer inherits the score, but not the right to spend it straight away.
+    function test_maturity_restartsWhenTheAgentChangesHands() public {
+        _finalizeWithMaturity(4);
+        vm.warp(block.timestamp + 25 days);
+        assertEq(rep.getTotalScore(DID), 100, "seller has matured it fully");
+
+        address buyer = makeAddr("buyer");
+        vm.prank(operator);
+        identity.offerOperatorTransfer(DID, buyer);
+        vm.prank(buyer);
+        identity.acceptOperatorTransfer(DID);
+
+        assertEq(rep.getEarnedScore(DID), 100, "the record survives the sale");
+        assertEq(rep.getTotalScore(DID), 0, "but none of it is spendable yet");
+
+        vm.warp(block.timestamp + 5 days);
+        assertEq(rep.getTotalScore(DID), 20, "the buyer re-earns the right to spend it");
+    }
+
     function test_maturity_rateOfZeroIsRejected() public {
         vm.expectRevert(SigvaraReputation.MaturityRateZero.selector);
         vm.prank(admin);

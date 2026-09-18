@@ -114,6 +114,23 @@ last finalize, not from what it had earned, so re-proposing a high score does no
 the clock. And a fall is immediate: delaying bad news would protect the agent rather
 than whoever is relying on it.
 
+### Changing hands
+
+An agent can be transferred to a new operator in two steps: the current operator
+offers it, and the recipient accepts. Two steps because a one-shot transfer to a
+mistyped address would strand the identity and its bond permanently, since only the
+operator can act and nobody would hold that key.
+
+A transfer restarts maturity. The earned score survives the sale, but the buyer
+re-earns the right to spend it over the usual window. Without that, aged and scored
+identities would be a liquid commodity, which is the farm-and-sell market in its
+most convenient form. `operatorTransferCount` is public, so a consumer can also
+discount an identity that has changed hands repeatedly.
+
+Transfers are refused while a slash is pending, so an accused agent cannot be handed
+to a buyer who had no part in what it did, and refused unless the agent is bonded at
+handover, so what changes hands carries collateral rather than only a reputation.
+
 ## New Agent Ramp-Up
 
 A brand-new agent registers and immediately has:
