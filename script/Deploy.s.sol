@@ -42,6 +42,10 @@ contract Deploy is Script {
     uint256 constant DEFAULT_SCORE_CHALLENGE_WINDOW = 6 hours;
     uint256 constant DEFAULT_UNBONDING_PERIOD = 21 days;
 
+    uint256 constant ARC_MAINNET = 5042;
+
+    error RolesNotSeparated(address deployer, address oracle, address committee);
+
     function run() external {
         uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
         address deployer = vm.addr(deployerKey);
@@ -52,6 +56,8 @@ contract Deploy is Script {
         uint256 period        = vm.envOr("CHALLENGE_PERIOD",      DEFAULT_CHALLENGE_PERIOD);
         uint256 scoreWindow   = vm.envOr("SCORE_CHALLENGE_WINDOW", DEFAULT_SCORE_CHALLENGE_WINDOW);
         uint256 unbondPeriod  = vm.envOr("UNBONDING_PERIOD",      DEFAULT_UNBONDING_PERIOD);
+
+        _checkRoleSeparation(deployer, oracle, committee);
 
         vm.startBroadcast(deployerKey);
 
@@ -119,6 +125,26 @@ contract Deploy is Script {
 
         // Write addresses to deployments/{chainId}.json for SDK config
         _writeAddresses(deployer, address(svr), address(identity), address(reputation), address(staking));
+    }
+
+    /// @dev The deployer keeps DEFAULT_ADMIN_ROLE and UPGRADER_ROLE on every contract.
+    ///      If it is also the oracle and the committee, one key can propose a score,
+    ///      slash the agent it just scored, and upgrade the contracts that did it, so
+    ///      the optimistic model has no independent party in it at all. Tolerated on a
+    ///      testnet with a valueless faucet bond, refused on mainnet.
+    function _checkRoleSeparation(address deployer, address oracle, address committee) internal view {
+        bool oracleIsDeployer = oracle == deployer;
+        bool committeeIsDeployer = committee == deployer;
+        if (!oracleIsDeployer && !committeeIsDeployer && oracle != committee) return;
+
+        if (block.chainid == ARC_MAINNET) {
+            revert RolesNotSeparated(deployer, oracle, committee);
+        }
+        console2.log("!! WARNING: roles are not separated.");
+        if (oracleIsDeployer)    console2.log("!!   ORACLE_ADDRESS is the deployer");
+        if (committeeIsDeployer) console2.log("!!   COMMITTEE_ADDRESS is the deployer");
+        if (oracle == committee) console2.log("!!   oracle and committee are the same address");
+        console2.log("!! One key can score, slash and upgrade. Acceptable on testnet only.");
     }
 
     // SVR_ADDRESS points at an existing ERC-20 (the mainnet bond asset). When unset,

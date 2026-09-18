@@ -23,6 +23,7 @@ If you're looking for MCP server support or React trust-badge components, those 
 | [Ecosystem Overview](docs/ecosystem.md) | Everyone — start here to understand the full picture |
 | [Quickstart](docs/quickstart.md) | Developers — register your first agent in 10 minutes |
 | [Arc](docs/arc.md) | Developers — deploy / test on Arc (5042002 / 5042), USDC gas |
+| [Deploy to Arc testnet](docs/deploy-testnet.md) | Developers — the first-deployment runbook, step by step |
 | [SVR token](docs/token.md) | Everyone — the bond and fee token: contract, distribution, treasury policy, when utility starts |
 | [Brand](docs/brand.md) | Designers / frontend — colors, type, layout and component rules for every Sigvara surface |
 | [CounterAudit Integration](docs/counteraudit-integration.md) | Enterprise — embed agent identity in your audit trail |
