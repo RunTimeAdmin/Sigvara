@@ -5,7 +5,10 @@ const { ethers } = require('ethers');
 const IDENTITY_ABI = [
   'event AgentRegistered(bytes32 indexed didHash, address indexed operator, address indexed agentAddress, bytes32 ed25519PubKey)',
   'function getIdentity(bytes32 didHash) view returns (tuple(address operator, address agentAddress, bytes32 ed25519PubKey, uint8 status, uint256 registeredAt))',
+  'function stakeView() view returns (address)',
 ];
+
+const STAKE_VIEW_ABI = ['function hasMinimumStake(bytes32 didHash) view returns (bool)'];
 
 const REPUTATION_ABI = [
   'function proposeReputation(bytes32 didHash, tuple(uint8 feeScore, uint8 successScore, uint8 ageScore, uint8 externalScore, uint8 communityScore, uint8 propagationScore, uint256 lastUpdated) data)',
@@ -48,6 +51,8 @@ function init(cfg, deps = {}) {
 }
 
 // Clears in-memory scan state — used between tests, not called in production.
+function resetStakeViewCache() { stakeViewContract = undefined; }
+
 function reset() {
   lastScannedBlock = null;
   knownAgents = new Map();
@@ -104,6 +109,33 @@ async function getAgentInfo(didHash) {
 /// Read-only provider, for modules that verify transactions the oracle did not send.
 function getProvider() {
   return provider;
+}
+
+// Resolved once: the identity registry's stake view never changes after wiring.
+let stakeViewContract;
+
+/**
+ * Whether the agent holds the minimum bond.
+ *
+ * SigvaraReputation refuses to score an unbonded agent, so this is an optimisation:
+ * skipping them here avoids spending gas on a proposal that would revert. It fails
+ * OPEN on purpose. If the stake view cannot be read, the oracle proceeds and lets the
+ * contract decide, because the contract is the authority and an oracle that silently
+ * stopped scoring everyone on an RPC hiccup would be worse than a wasted transaction.
+ */
+async function isBonded(didHash) {
+  try {
+    if (stakeViewContract === undefined) {
+      const addr = await identityContract.stakeView();
+      stakeViewContract = addr && addr !== ethers.ZeroAddress
+        ? new ethers.Contract(addr, STAKE_VIEW_ABI, provider)
+        : null;
+    }
+    if (!stakeViewContract) return true;
+    return await stakeViewContract.hasMinimumStake(didHash);
+  } catch {
+    return true;
+  }
 }
 
 async function proposeScore(didHash, scores) {
@@ -177,9 +209,11 @@ async function chargeEpoch(didHash) {
 module.exports = {
   init,
   reset,
+  resetStakeViewCache,
   getRegisteredAgents,
   getAgentInfo,
   getProvider,
+  isBonded,
   proposeScore,
   finalizeScore,
   getPendingScore,

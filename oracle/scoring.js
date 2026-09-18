@@ -16,9 +16,23 @@ function feeScore(attestationTotal) {
   return Math.min(30, Math.floor(attestationTotal / 10));
 }
 
-function successScore(successful, total) {
-  if (total === 0) return 0;
-  return Math.floor((successful / total) * 25);
+// Pseudo-observations added to the denominator of the success rate.
+//
+// A bare ratio has two failures. One good job scores the same as ninety-nine out
+// of a hundred, because 1/1 and 99/99 are both 1.0. And a ratio is scale
+// invariant, so decaying both halves at the same rate leaves it untouched: an
+// agent with ten successes that then went silent for a year still reads 10/10
+// once decayed to 0.44/0.44, and holds full marks forever.
+//
+// Dividing by (total + prior) fixes both. A single observation is worth little,
+// evidence has to accumulate to approach the cap, and as decayed weight tends to
+// zero so does the score. That last part is what stops a farmed score sitting
+// indefinitely.
+const SUCCESS_PRIOR = 5;
+
+function successScore(successful, total, prior = SUCCESS_PRIOR) {
+  if (total <= 0) return 0;
+  return Math.floor((successful / (total + prior)) * 25);
 }
 
 function ageScore(registeredAtSeconds) {
@@ -38,13 +52,16 @@ function communityScore(unresolvedFlags) {
  * @param {{ registeredAt: number, attestations: { successful: number, total: number }, flags: number, externalScore?: number, measuredFeeScore?: number }} opts
  * @returns {{ feeScore, successScore, ageScore, externalScore, communityScore, propagationScore, total }}
  */
-function computeScore({ registeredAt, attestations, flags, externalScore = 0, measuredFeeScore = null }) {
+function computeScore({
+  registeredAt, attestations, flags, externalScore = 0, measuredFeeScore = null,
+  successPrior = SUCCESS_PRIOR,
+}) {
   const { successful = 0, total = 0 } = attestations;
 
   // measuredFeeScore is supplied when payments are verified: real volume beats the
   // attestation-count proxy. null means payment verification is off.
   const fs = measuredFeeScore === null ? feeScore(total) : Math.max(0, Math.min(30, measuredFeeScore));
-  const ss = successScore(successful, total);
+  const ss = successScore(successful, total, successPrior);
   const as = ageScore(registeredAt);
   // externalScore comes from ERC-8004 cross-protocol feedback (see external.js),
   // 0 when unlinked or unconfigured. Clamp to the contract's cap so a bad input
@@ -57,4 +74,4 @@ function computeScore({ registeredAt, attestations, flags, externalScore = 0, me
   return { feeScore: fs, successScore: ss, ageScore: as, externalScore: es, communityScore: cs, propagationScore: ps, total: fs + ss + as + es + cs + ps };
 }
 
-module.exports = { computeScore, feeScore, successScore, ageScore, communityScore };
+module.exports = { computeScore, feeScore, successScore, ageScore, communityScore, SUCCESS_PRIOR };

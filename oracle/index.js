@@ -193,6 +193,14 @@ async function runEpochInner() {
         continue;
       }
 
+      // Reputation refuses to score an unbonded agent. Checking here saves the gas
+      // of a proposal that would revert; the contract remains the authority.
+      if (!(await chain.isBonded(didHash))) {
+        console.log(`[oracle]   ${didHash.slice(0, 10)}… below minimum stake, skipping`);
+        metrics.inc('skippedUnbonded');
+        continue;
+      }
+
       const action = decideAction(pending, challengeWindow, chainNow);
 
       if (action === 'skip') {
