@@ -100,14 +100,34 @@ not depend on Arc. Leave it as-is.
 
 ## 4. SDK live integration tests
 
+Addresses below are the live Arc testnet deployment, from
+`deployments/5042002.json`. The operator key needs USDC for gas and SVR for the
+stake, since the test registers a real agent.
+
+PowerShell:
+
+```powershell
+cd packages\sdk
+$env:SIGVARA_RPC_URL            = "https://rpc.testnet.arc.io"
+$env:SIGVARA_CHAIN_ID           = "5042002"
+$env:SIGVARA_IDENTITY_ADDRESS   = "0x7e3aFC532eE5d922ab3cc3FFb510c7C8151477Dd"
+$env:SIGVARA_REPUTATION_ADDRESS = "0x6603C96275e85F724Cdf74666b399365e4cA29ed"
+$env:SIGVARA_STAKING_ADDRESS    = "0xA69d62B2a6774D21A2c15d5d83b27277eD31d35B"
+$env:SIGVARA_OPERATOR_PRIVATE_KEY = "0x..."
+
+npx vitest run test/integration.test.ts
+```
+
+bash:
+
 ```bash
 cd packages/sdk
 export SIGVARA_RPC_URL=https://rpc.testnet.arc.io
 export SIGVARA_CHAIN_ID=5042002
-export SIGVARA_IDENTITY_ADDRESS=0x...
-export SIGVARA_REPUTATION_ADDRESS=0x...
-export SIGVARA_STAKING_ADDRESS=0x...
-export SIGVARA_OPERATOR_PRIVATE_KEY=0x...   # funded with USDC; registers a test agent
+export SIGVARA_IDENTITY_ADDRESS=0x7e3aFC532eE5d922ab3cc3FFb510c7C8151477Dd
+export SIGVARA_REPUTATION_ADDRESS=0x6603C96275e85F724Cdf74666b399365e4cA29ed
+export SIGVARA_STAKING_ADDRESS=0xA69d62B2a6774D21A2c15d5d83b27277eD31d35B
+export SIGVARA_OPERATOR_PRIVATE_KEY=0x...
 
 npx vitest run test/integration.test.ts
 ```
@@ -123,11 +143,24 @@ implementation, reads the proxy address out of `deployments/<chainId>.json`,
 records the ERC-1967 implementation slot before and after, and reverts if the
 slot did not move.
 
-```bash
-# Simulate first. TARGET is identity | reputation | staking | oracleBond | epochFees.
-TARGET=staking forge script script/Upgrade.s.sol --rpc-url arc_testnet -vvvv
+Every command here needs `DEPLOYER_PRIVATE_KEY` in the environment as well, and
+must run from the repository root. `TARGET` is
+`identity | reputation | staking | oracleBond | epochFees`.
 
-TARGET=staking forge script script/Upgrade.s.sol --rpc-url arc_testnet --broadcast -vvvv
+PowerShell:
+
+```powershell
+$env:TARGET = "staking"
+forge script script/Upgrade.s.sol --rpc-url arc_testnet -vvvv              # simulate
+forge script script/Upgrade.s.sol --rpc-url arc_testnet --broadcast -vvvv
+```
+
+bash:
+
+```bash
+export TARGET=staking
+forge script script/Upgrade.s.sol --rpc-url arc_testnet -vvvv              # simulate
+forge script script/Upgrade.s.sol --rpc-url arc_testnet --broadcast -vvvv
 ```
 
 `oracleBond` and `epochFees` are deployed by their own scripts and are not in
@@ -147,8 +180,22 @@ That makes the calldata mandatory rather than optional. Upgrade without it and t
 oracle stops scoring until you follow up, which is noisy but harmless; there is no
 path where the check is silently skipped.
 
+PowerShell:
+
+```powershell
+$env:TARGET        = "reputation"
+$env:INIT_CALLDATA = "0x3101cfcb0000000000000000000000007e3afc532ee5d922ab3cc3ffb510c7c8151477dd"
+forge script script/Upgrade.s.sol --rpc-url arc_testnet -vvvv              # simulate
+forge script script/Upgrade.s.sol --rpc-url arc_testnet --broadcast -vvvv
+```
+
+bash:
+
 ```bash
-TARGET=reputation INIT_CALLDATA=0x3101cfcb0000000000000000000000007e3afc532ee5d922ab3cc3ffb510c7c8151477dd forge script script/Upgrade.s.sol --rpc-url arc_testnet --broadcast -vvvv
+export TARGET=reputation
+export INIT_CALLDATA=0x3101cfcb0000000000000000000000007e3afc532ee5d922ab3cc3ffb510c7c8151477dd
+forge script script/Upgrade.s.sol --rpc-url arc_testnet -vvvv              # simulate
+forge script script/Upgrade.s.sol --rpc-url arc_testnet --broadcast -vvvv
 ```
 
 The calldata above is `initializeV3(address)` against the Arc testnet identity proxy.
