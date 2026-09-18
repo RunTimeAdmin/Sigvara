@@ -30,13 +30,13 @@ as an upgrade on these same addresses rather than a redeploy.
 |---|---|---|
 | Deployer (testnet) | `0x18CBcE50390f5f6ebe4E20Fc17833F25c8D94811` | Keeps `DEFAULT_ADMIN_ROLE` and `UPGRADER_ROLE` on every contract |
 | Treasury | `0xeDC966e23318782c0241aBe1790bd221b8aCE867` | Not used by this deployment |
+| Oracle | choose one | The wallet the oracle service signs with |
+| Committee | choose one | `SLASHING_COMMITTEE_ROLE` |
 
 The testnet deployer is deliberately a different address from the one in
 [docs/token.md](token.md), which is reserved for the mainnet SVR launch and the
 mainnet registry deployment. Keeping them apart means a testnet key, which is
 handled far more casually, never touches anything that matters on mainnet.
-| Oracle | choose one | The wallet the oracle service signs with |
-| Committee | choose one | `SLASHING_COMMITTEE_ROLE` |
 
 Use three distinct addresses. If the oracle or the committee is the deployer,
 one key can propose a score, slash the agent it just scored, and upgrade the
