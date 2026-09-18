@@ -160,11 +160,38 @@ A dry run prints the address it would have used and writes nothing. The artifact
 only touched on a real broadcast, so there is no cleanup step between the two and no
 way to commit an address that does not exist. Commit what the broadcast produced.
 
-Deploying this on its own changes no behaviour. Nothing in the protocol consults it
-yet: `ORACLE_ROLE` on `SigvaraReputation` is still granted by an admin and is not
-checked against `isActiveOperator()`. The registry is the first of three steps, and
-the other two are a contract change to require an admitted operator, and a second
-operator actually running on separate infrastructure.
+### Making the bond bite
+
+Deploying the registry changes no behaviour on its own. `SigvaraReputation` has to be
+pointed at it, after which proposing a score requires the caller to be an admitted,
+bonded operator as well as holding `ORACLE_ROLE`. The role says who may speak; the
+bond is what they lose for speaking falsely.
+
+**Order matters.** Turning this on stops every oracle that has not bonded and been
+admitted, so do it last:
+
+1. The oracle wallet acquires the bond token and calls `postBond`.
+2. Governance calls `admitOperator` for it, which moves it to Active.
+3. Only then point reputation at the registry.
+
+```bash
+cast send <reputation proxy> "setOperatorBond(address)" <oracleBond proxy>   --private-key $ADMIN_KEY --rpc-url arc_testnet
+```
+
+Passing the zero address turns the requirement back off, which is why this is a plain
+setter and not another initializer: unset is a safe working state.
+
+Check where you stand before flipping it:
+
+```bash
+cast call <oracleBond proxy> "isActiveOperator(address)(bool)" <oracle wallet> --rpc-url arc_testnet
+```
+
+The oracle service reads this at startup and warns if the wallet cannot propose, so a
+misordered rollout shows up at boot rather than as a silent hourly failure.
+
+Finalization stays permissionless. It is mechanical and cannot change the number, and
+gating it would let an operator's exit strand every score it had already proposed.
 
 ## 5. Upgrading a deployed proxy
 

@@ -8,6 +8,16 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "./SigvaraIdentity.sol";
 
 /**
+ * @notice The slice of SigvaraOracleBond this contract needs.
+ * @dev    An interface rather than an import: the bond registry is deployed by its own
+ *         script and is optional, so reputation should not carry a hard dependency on
+ *         a contract that may not exist on a given chain.
+ */
+interface IOperatorSet {
+    function isActiveOperator(address operator) external view returns (bool);
+}
+
+/**
  * @title SigvaraReputation
  * @notice Stores the 6-factor reputation score for each registered agent.
  *
@@ -46,6 +56,14 @@ import "./SigvaraIdentity.sol";
  *   never be exposed to a slash, because slashing reverts when there is no stake to
  *   take. The bond is what makes a score accountable, and reputation is where it has
  *   to be enforced: SigvaraStaking cannot refuse a score it never sees.
+ *
+ * Bonded oracles:
+ *   When an operator set is configured, proposing a score requires the caller to be an
+ *   admitted, bonded operator in it, on top of holding ORACLE_ROLE. The role says who
+ *   is allowed to speak; the bond is what they lose for speaking falsely. Optional,
+ *   because the registry is deployed separately and a chain may not have one: with no
+ *   operator set configured the role alone governs, which is the single-operator
+ *   arrangement this started from.
  *
  * Maturity:
  *   A score is earned immediately but becomes spendable only over time. Reads return
@@ -125,6 +143,10 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
     mapping(bytes32 => uint8) public maturedScore;
     mapping(bytes32 => uint256) public maturedAt;
 
+    /// Bonded operator registry. Unset means the check is off, which is a deliberate
+    /// mode rather than a misconfiguration: the registry is a separate deployment.
+    IOperatorSet public operatorBond;
+
     // -------------------------------------------------------------------------
     // Events
     // -------------------------------------------------------------------------
@@ -136,6 +158,7 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
     event ChallengeWindowUpdated(uint256 newWindow);
     event IdentityRegistrySet(address indexed identityRegistry);
     event MaturityRateUpdated(uint256 pointsPerDay);
+    event OperatorBondSet(address indexed operatorBond);
 
     // -------------------------------------------------------------------------
     // Errors
@@ -151,6 +174,7 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
     error AgentSlashed(bytes32 didHash);
     error AgentNotBonded(bytes32 didHash);
     error MaturityRateZero();
+    error OracleNotBonded(address oracle);
 
     // -------------------------------------------------------------------------
     // Constructor / Initializer
@@ -247,6 +271,7 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
         onlyRole(ORACLE_ROLE)
     {
         _requireScorable(didHash);
+        _requireBondedOracle();
 
         if (data.feeScore > MAX_FEE_SCORE)               revert ScoreOutOfRange("feeScore", data.feeScore, MAX_FEE_SCORE);
         if (data.successScore > MAX_SUCCESS_SCORE)        revert ScoreOutOfRange("successScore", data.successScore, MAX_SUCCESS_SCORE);
@@ -381,6 +406,15 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
     ///      Queued withdrawals do not count. They remain slashable until claimed, but an
     ///      agent on its way out should stop accruing reputation rather than keep
     ///      earning while it unwinds.
+    /// @dev Checked on propose only. Finalization stays permissionless: it is
+    ///      mechanical, it cannot change the number, and gating it on operator status
+    ///      would let an oracle's exit strand every score it had already proposed.
+    function _requireBondedOracle() internal view {
+        IOperatorSet set = operatorBond;
+        if (address(set) == address(0)) return;
+        if (!set.isActiveOperator(msg.sender)) revert OracleNotBonded(msg.sender);
+    }
+
     function _requireScorable(bytes32 didHash) internal view {
         SigvaraIdentity registry = identityRegistry;
         if (address(registry) == address(0)) revert IdentityRegistryNotSet();
@@ -397,6 +431,22 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
     // -------------------------------------------------------------------------
     // Admin
     // -------------------------------------------------------------------------
+
+    /**
+     * @notice Point at the bonded operator registry, or pass address(0) to turn the
+     *         requirement off.
+     * @dev    A plain setter rather than another initializer. Unset is a safe, working
+     *         state, so there is nothing that must land atomically with an upgrade;
+     *         the other wirings needed initializers precisely because their unset state
+     *         was not safe.
+     *
+     *         Turning this on stops every oracle that has not bonded and been admitted,
+     *         so set it after the operators are in the registry, not before.
+     */
+    function setOperatorBond(address operatorBond_) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        operatorBond = IOperatorSet(operatorBond_);
+        emit OperatorBondSet(operatorBond_);
+    }
 
     function setMaturityRate(uint256 pointsPerDay) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (pointsPerDay == 0) revert MaturityRateZero();

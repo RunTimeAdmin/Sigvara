@@ -10,7 +10,10 @@ const IDENTITY_ABI = [
 
 const STAKE_VIEW_ABI = ['function hasMinimumStake(bytes32 didHash) view returns (bool)'];
 
+const OPERATOR_SET_ABI = ['function isActiveOperator(address) view returns (bool)'];
+
 const REPUTATION_ABI = [
+  'function operatorBond() view returns (address)',
   'function proposeReputation(bytes32 didHash, tuple(uint8 feeScore, uint8 successScore, uint8 ageScore, uint8 externalScore, uint8 communityScore, uint8 propagationScore, uint256 lastUpdated) data)',
   'function finalizeReputation(bytes32 didHash)',
   'function getPendingScore(bytes32 didHash) view returns (tuple(tuple(uint8 feeScore, uint8 successScore, uint8 ageScore, uint8 externalScore, uint8 communityScore, uint8 propagationScore, uint256 lastUpdated) data, uint256 proposedAt, bool exists))',
@@ -104,6 +107,33 @@ async function getAgentInfo(didHash) {
     registeredAt: Number(id.registeredAt),
     status: Number(id.status),
   };
+}
+
+/**
+ * Whether this oracle may still propose scores.
+ *
+ * SigvaraReputation can require the proposer to be an admitted, bonded operator. When
+ * it does and this wallet is not one, every propose reverts. Checking at startup turns
+ * a silent hourly failure into one line at boot.
+ *
+ * Returns {enforced, allowed, operatorBond}. Unknown on an RPC failure is reported as
+ * allowed, because refusing to start over a flaky node would be worse than trying.
+ */
+async function operatorStanding() {
+  try {
+    const addr = await reputationContract.operatorBond();
+    if (!addr || addr === ethers.ZeroAddress) {
+      return { enforced: false, allowed: true, operatorBond: null };
+    }
+    const set = new ethers.Contract(addr, OPERATOR_SET_ABI, provider);
+    return {
+      enforced: true,
+      allowed: await set.isActiveOperator(wallet.address),
+      operatorBond: addr,
+    };
+  } catch {
+    return { enforced: false, allowed: true, operatorBond: null };
+  }
 }
 
 /// Read-only provider, for modules that verify transactions the oracle did not send.
@@ -214,6 +244,7 @@ module.exports = {
   getAgentInfo,
   getProvider,
   isBonded,
+  operatorStanding,
   proposeScore,
   finalizeScore,
   getPendingScore,
