@@ -10,7 +10,7 @@ Sigvara reputation is a deterministic 6-factor score between 0 and 100. It is co
 |---|---|---|---|
 | Fee Activity | 30 | On-chain transaction volume in USD | `min(30, floor(totalFeesUSD / 100))` |
 | Success Rate | 25 | Cryptographic task attestations | `floor(successRate * 25)` |
-| Registration Age | 20 | Time since first registration | `min(20, floor(log₂(days+1) × 4))` |
+| Tenure | 20 | Span of verified trading, faded by how long since the last of it | `min(20, floor(log₂(spanDays+1) × 4)) × recency` |
 | External Trust | 15 | SAID Protocol / Gitcoin Passport | `floor(externalScore / 100 × 15)` |
 | Community | 5 | Unresolved flags | `max(0, 5 − flags × 2)` |
 | Trust Propagation | 5 | Trust graph network effects | oracle-computed |
@@ -39,9 +39,21 @@ Based on cryptographic attestations submitted by counterparties. A counterparty 
 
 This factor will eventually be sourced directly from CounterAudit verified packets — closing the loop between audit trail and reputation.
 
-### Registration Age (20 pts)
+### Tenure (20 pts)
 
-Logarithmic growth curve. A brand-new agent scores 0. The curve reaches maximum around day 31 and then levels off. The logarithm prevents a linear arms race where very old (but idle) agents dominate.
+Logarithmic growth curve on the span between an agent's first and most recent verified payment, multiplied by how recent that last payment is.
+
+This used to measure time since registration, and the claim here was that the logarithm prevented idle old agents dominating. It did not. It capped them, but an agent that registered two years ago and never worked still collected the full 20 points, which made this the cheapest factor in the score: register in bulk, wait a month, collect. Waiting is free.
+
+Three properties follow from measuring trade instead:
+
+- An agent that has never been paid at arm's length scores 0, however long ago it registered.
+- Waiting and then making a single payment scores 0 too, because the span starts at first activity. There is no way to bank idle time and convert it in one transaction.
+- Tenure fades once the agent stops. Two years of trading abandoned a year ago is worth about one point.
+
+What remains expensive is the thing an attacker cannot shortcut: a long, unbroken record of paid work from independent counterparties, with a bond posted and slashable throughout.
+
+Payments from the agent's own operator never enter the record, so the span is made of arm's-length trade only. When payment verification is off the factor falls back to the old calendar curve.
 
 ```
 Day 0   → 0 pts

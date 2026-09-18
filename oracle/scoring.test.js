@@ -2,7 +2,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { computeScore, feeScore, successScore, ageScore, communityScore } = require('./scoring');
+const { computeScore, feeScore, successScore, ageScore, ageCurve, communityScore } = require('./scoring');
 
 // ---- feeScore --------------------------------------------------------------
 
@@ -155,4 +155,72 @@ test('computeScore: slashed-like scenario (high flags)', () => {
   const s = computeScore({ registeredAt, attestations: { successful: 5, total: 10 }, flags: 5 });
   assert.equal(s.communityScore, 0);
   assert.ok(s.total >= 0);
+});
+
+// ---- tenure (age from activity, not the calendar) --------------------------
+
+const SEC = Math.floor(Date.now() / 1000);
+const DAYS = 86400;
+const win = (firstAgo, lastAgo, recency) => ({
+  firstActivitySec: SEC - firstAgo * DAYS,
+  lastActivitySec: SEC - lastAgo * DAYS,
+  recency,
+});
+
+test('ageScore: an agent that never worked scores 0 however old the registration', () => {
+  // This was the cheapest 20 points in the score: register, wait, collect.
+  assert.equal(ageScore(SEC - 730 * DAYS, { firstActivitySec: 0, lastActivitySec: 0, recency: 0 }), 0);
+});
+
+test('ageScore: waiting a month then paying once unlocks nothing', () => {
+  // The span starts at first activity, so there is no way to bank idle time and
+  // convert it with a single transaction.
+  assert.equal(ageScore(SEC - 31 * DAYS, win(0, 0, 1)), 0);
+});
+
+test('ageScore: a month of sustained trade reaches the cap', () => {
+  assert.equal(ageScore(SEC - 40 * DAYS, win(31, 0, 1)), 20);
+});
+
+test('ageScore: tenure decays once the agent stops', () => {
+  const active = ageScore(SEC - 800 * DAYS, win(730, 0, 1));
+  const stale = ageScore(SEC - 800 * DAYS, win(730, 365, 0.06));
+  assert.equal(active, 20);
+  assert.ok(stale <= 2, `abandoned tenure should nearly vanish, got ${stale}`);
+  assert.ok(stale < active);
+});
+
+test('ageScore: recency is clamped, so a bad weight cannot inflate the factor', () => {
+  assert.equal(ageScore(SEC - 800 * DAYS, win(730, 0, 5)), 20);
+  assert.equal(ageScore(SEC - 800 * DAYS, win(730, 0, -1)), 0);
+});
+
+test('ageScore: with no activity data it falls back to the calendar', () => {
+  // Payment verification off: existing deployments keep the old behaviour.
+  assert.equal(ageScore(SEC - 31 * DAYS, null), 20);
+  assert.equal(ageScore(SEC - 31 * DAYS), 20);
+});
+
+test('ageCurve: shape is unchanged, only what is fed into it', () => {
+  assert.equal(ageCurve(0), 0);
+  assert.equal(ageCurve(1), 4);
+  assert.equal(ageCurve(7), 12);
+  assert.equal(ageCurve(31), 20);
+  assert.equal(ageCurve(3650), 20);
+  assert.equal(ageCurve(-5), 0);
+});
+
+test('computeScore: passes activity through to the age factor', () => {
+  const idle = computeScore({
+    registeredAt: SEC - 730 * DAYS, attestations: { successful: 0, total: 0 }, flags: 0,
+    activity: { firstActivitySec: 0, lastActivitySec: 0, recency: 0 },
+  });
+  assert.equal(idle.ageScore, 0);
+  assert.equal(idle.total, 5); // community only
+
+  const working = computeScore({
+    registeredAt: SEC - 730 * DAYS, attestations: { successful: 0, total: 0 }, flags: 0,
+    activity: win(730, 0, 1),
+  });
+  assert.equal(working.ageScore, 20);
 });

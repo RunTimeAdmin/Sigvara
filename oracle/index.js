@@ -77,7 +77,9 @@ const {
 // by age. Nulls keep computeScore on the old path. Used by the epoch and by /score so
 // the number served matches the number proposed.
 function measuredFactorsFor(didHash, now = Date.now()) {
-  if (!payments.required(paymentCfg)) return { measuredFeeScore: null, measuredAttestations: null };
+  if (!payments.required(paymentCfg)) {
+    return { measuredFeeScore: null, measuredAttestations: null, activity: null };
+  }
   const events = getPaymentEvents(didHash);
   // Diversified, not just decayed: one counterparty's evidence is capped, so a ring
   // of wallets cannot substitute for a customer base.
@@ -86,6 +88,9 @@ function measuredFactorsFor(didHash, now = Date.now()) {
     measuredFeeScore: payments.feeScoreFromVolume(volume, paymentCfg.feeUnit),
     measuredAttestations: payments.diversifiedAttestations(events, paymentCfg, now),
     distinctPayers: payments.distinctPayers(events, paymentCfg.halfLifeMs, now),
+    // Tenure replaces calendar age: time since registration cost nothing, so it
+    // was the cheapest twenty points an idle farm could collect.
+    activity: payments.activityWindow(events, paymentCfg.halfLifeMs, now),
   };
 }
 
@@ -248,6 +253,7 @@ async function runEpochInner() {
         flags: flagCount,
         externalScore,
         measuredFeeScore: measured.measuredFeeScore,
+        activity: measured.activity,
       });
 
       // Charge before proposing, not after. The coverage read above and the
@@ -516,6 +522,7 @@ const server = http.createServer(async (req, res) => {
         flags: flagCount,
         externalScore,
         measuredFeeScore: measured.measuredFeeScore,
+        activity: measured.activity,
       });
       return json(res, 200, {
         didHash,
@@ -528,6 +535,7 @@ const server = http.createServer(async (req, res) => {
         ...(measured.measuredAttestations ? { weighted: {
           attestations: measured.measuredAttestations,
           distinctPayers: measured.distinctPayers,
+          activity: measured.activity,
           halfLifeDays: paymentCfg.halfLifeMs / 86400000,
           maxPerPayer: paymentCfg.maxPerPayer,
         } } : {}),

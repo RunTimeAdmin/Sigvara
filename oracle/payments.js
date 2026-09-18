@@ -293,6 +293,27 @@ function diversifiedAttestations(events, { halfLifeMs, maxPerPayer }, now = Date
   };
 }
 
+/**
+ * The agent's operating window, for the tenure factor.
+ *
+ * `recency` is the decay weight of the most recent payment, so a tenure that was
+ * earned and then abandoned fades at the same rate as everything else. Self-payments
+ * never reach the log, so this window is made of arm's-length trade only.
+ */
+function activityWindow(events, halfLifeMs, now = Date.now()) {
+  if (!events || events.length === 0) return null;
+  let first = Infinity, last = -Infinity;
+  for (const e of events) {
+    if (e.ts < first) first = e.ts;
+    if (e.ts > last) last = e.ts;
+  }
+  return {
+    firstActivitySec: Math.floor(first / 1000),
+    lastActivitySec: Math.floor(last / 1000),
+    recency: Number(decayWeight(now - last, halfLifeMs)) / Number(WEIGHT_SCALE),
+  };
+}
+
 /// Distinct counterparties with any surviving weight. Reported, not scored.
 function distinctPayers(events, halfLifeMs, now = Date.now()) {
   return byPayer(events, halfLifeMs, now).size;
@@ -325,6 +346,7 @@ module.exports = {
   diversifiedVolume,
   diversifiedAttestations,
   distinctPayers,
+  activityWindow,
   WEIGHT_SCALE,
   TRANSFER_TOPIC,
 };
