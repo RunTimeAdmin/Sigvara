@@ -5,11 +5,15 @@
 const CHAIN_ID = 5042002, CHAIN_HEX = "0x4cef52";
 const RPC = "https://rpc.testnet.arc.io";
 const EXPLORER = "https://explorer.testnet.arc.io";
-// Fill these from deployments/5042002.json after the Arc testnet deploy.
-const IDENTITY   = "0x0000000000000000000000000000000000000000";
-const REPUTATION = "0x0000000000000000000000000000000000000000";
+// From deployments/5042002.json — the Arc testnet deploy.
+const IDENTITY   = "0x7e3aFC532eE5d922ab3cc3FFb510c7C8151477Dd";
+const REPUTATION = "0x6603C96275e85F724Cdf74666b399365e4cA29ed";
+const SVR        = "0x41De2D6D55318e197a00E8f5B496eA2790e23E6c";
+// SigvaraEpochFees is not part of this deploy, so there is no registry to read.
+// Pointing at 0x0 is worse than useless: eth_call returns empty and BigInt throws,
+// which would abort the whole lookup. Everything fee-related is switched off.
 const FEES       = "0x0000000000000000000000000000000000000000";
-const SVR       = "0x0000000000000000000000000000000000000000";
+const FEES_LIVE  = !/^0x0{40}$/i.test(FEES);
 
 // 4-byte selectors, precomputed with `cast sig`
 const SEL = {
@@ -18,7 +22,7 @@ const SEL = {
   depositFor: "0x1da1bbfb", withdraw: "0x040cf020",
   approve: "0x095ea7b3", allowance: "0xdd62ed3e", balanceOf: "0x70a08231", faucet: "0x57915897",
   svr: "0x0b5ae4d9", symbol: "0x95d89b41", decimals: "0x313ce567", registerAgent: "0xdb24d4ba",
-  getReputation: "0xd14519d2",
+  getReputation: "0xd14519d2", getPendingScore: "0x56cf76e7", challengeWindow: "0x861a1412",
 };
 // factor label, on-chain word index, and max — mirrors SigvaraReputation.ReputationData
 const FACTORS = [
@@ -155,7 +159,9 @@ async function connectWith(c) {
       }
     }
     $("walletStatus").innerHTML = `<span class="pill-ok">${esc(c.name)}: ${account.slice(0, 6)}…${account.slice(-4)} on 5042002</span>`;
-    ["depositBtn", "withdrawBtn", "faucetBtn"].forEach(id => $(id).disabled = false);
+    // Deposits and withdrawals need a fee registry; the faucet does not.
+    (FEES_LIVE ? ["depositBtn", "withdrawBtn", "faucetBtn"] : ["faucetBtn"])
+      .forEach(id => $(id).disabled = false);
     if (!$("agentAddr").value) $("agentAddr").value = account;
     refreshSvrBalance();
     lookup();
@@ -183,14 +189,17 @@ async function lookup() {
     const registeredAt = BigInt(word(ident, 4));
     const statusNum = Number(BigInt(word(ident, 3)));
     const statusStr = ["Active", "Suspended", "Slashed"][statusNum] ?? "?";
-    const bal = BigInt(await rpcRead(FEES, SEL.balance + pad32(didHash)));
-    const covered = BigInt(await rpcRead(FEES, SEL.isCovered + pad32(didHash))) === 1n;
+    const bal = FEES_LIVE ? BigInt(await rpcRead(FEES, SEL.balance + pad32(didHash))) : 0n;
+    const covered = FEES_LIVE && BigInt(await rpcRead(FEES, SEL.isCovered + pad32(didHash))) === 1n;
     $("didStr").textContent = `did:sigvara:${CHAIN_ID}:${addr}`;
     $("didHash").textContent = didHash;
     if (registeredAt !== 0n) {
       const score = BigInt(await rpcRead(REPUTATION, SEL.getTotalScore + pad32(didHash)));
       $("regStatus").innerHTML = `<span class="pill-ok">yes — ${esc(statusStr)}</span>`;
-      $("score").textContent = `${score} / 100`;
+      // A proposed score sits in a separate slot until its challenge window closes.
+      // Showing only the finalized value reads as "no reputation" for any agent
+      // whose first score is still open to challenge.
+      $("score").innerHTML = `${score} / 100` + await pendingNote(didHash);
       const rep = await rpcRead(REPUTATION, SEL.getReputation + pad32(didHash));
       $("breakdown").innerHTML = FACTORS
         .map(([name, i, max]) => `${name} ${Number(BigInt(word(rep, i)))}/${max}`)
@@ -206,11 +215,29 @@ async function lookup() {
       $("score").textContent = "—";
       $("breakdown").textContent = "—";
     }
-    $("feeBal").textContent = formatUnits(bal) + " " + tokenSymbol;
-    $("covered").innerHTML = covered ? '<span class="pill-ok">yes</span>' : '<span class="pill-err">no — deposit below</span>';
+    $("feeBal").textContent = FEES_LIVE ? formatUnits(bal) + " " + tokenSymbol : "n/a";
+    $("covered").innerHTML = !FEES_LIVE
+      ? '<span class="pill-warn">n/a, no fee registry on this deploy</span>'
+      : covered ? '<span class="pill-ok">yes</span>' : '<span class="pill-err">no — deposit below</span>';
     $("agentInfo").classList.remove("u-hidden");
   } catch (e) {
     logLine(`<span class="pill-err">lookup failed: ${esc(e.message)}</span>`);
+  }
+}
+
+// Returns markup describing a score that is proposed but not yet finalized,
+// or an empty string when nothing is pending.
+async function pendingNote(didHash) {
+  try {
+    const raw = await rpcRead(REPUTATION, SEL.getPendingScore + pad32(didHash));
+    if (BigInt(word(raw, 8)) !== 1n) return "";
+    const total = FACTORS.reduce((sum, [, i]) => sum + Number(BigInt(word(raw, i))), 0);
+    const opensAt = Number(BigInt(word(raw, 7)))
+      + Number(BigInt(await rpcRead(REPUTATION, SEL.challengeWindow)));
+    const when = new Date(opensAt * 1000).toISOString().replace("T", " ").slice(0, 16);
+    return ` <span class="pill-warn">${total} proposed, finalizes after ${esc(when)} UTC</span>`;
+  } catch (_) {
+    return "";  // never let this block the score itself
   }
 }
 
@@ -250,6 +277,7 @@ async function registerAgentFlow() {
 
 async function deposit() {
   try {
+    if (!FEES_LIVE) { logLine('<span class="pill-err">No fee registry on this deployment.</span>'); return; }
     if (!currentDidHash) await lookup();
     const amt = parseUnits($("amount").value);
     const allowance = BigInt(await rpcRead(tokenAddr, SEL.allowance + encAddr(account) + encAddr(FEES)));
@@ -264,6 +292,7 @@ async function deposit() {
 }
 async function withdrawFees() {
   try {
+    if (!FEES_LIVE) { logLine('<span class="pill-err">No fee registry on this deployment.</span>'); return; }
     if (!currentDidHash) await lookup();
     const amt = parseUnits($("amount").value);
     logLine(`withdrawing ${formatUnits(amt)} ${esc(tokenSymbol)} (operator only)…`);
@@ -281,7 +310,12 @@ async function faucet() {
 
 // ---- init ----
 (async function init() {
-  $("feesLink").href = `${EXPLORER}/address/${FEES}`;
+  if (FEES_LIVE) {
+    $("feesLink").href = `${EXPLORER}/address/${FEES}`;
+  } else {
+    $("feesLink").removeAttribute("href");
+    $("feesLink").innerHTML = "<code>not deployed</code>";
+  }
   $("connectBtn").onclick = connect;
   $("lookupBtn").onclick = lookup;
   $("depositBtn").onclick = deposit;
@@ -290,17 +324,24 @@ async function faucet() {
   try {
     // fee token metadata comes from the chain: SVR faucet token on testnet,
     // USDC/WETH at mainnet — nothing on this page assumes a native token
-    tokenAddr = "0x" + strip(await rpcRead(FEES, SEL.svr)).slice(24);
+    // Without a registry to read it from, the faucet token comes from the
+    // deployment constant instead.
+    tokenAddr = FEES_LIVE ? "0x" + strip(await rpcRead(FEES, SEL.svr)).slice(24) : SVR;
     tokenSymbol = decodeString(await rpcRead(tokenAddr, SEL.symbol));
     tokenDecimals = BigInt(await rpcRead(tokenAddr, SEL.decimals));
     // on testnet, make it impossible to read the faucet token as a real asset
     if (CHAIN_ID === 5042002) tokenSymbol = "test " + tokenSymbol;
     $("amount").placeholder = `amount in ${esc(tokenSymbol)}, e.g. 100`;
     $("faucetBtn").textContent = `Get 1,000 ${esc(tokenSymbol)}`;
-    const fee = BigInt(await rpcRead(FEES, SEL.epochFee));
-    $("feeNow").textContent = `${formatUnits(fee)} ${esc(tokenSymbol)}/epoch`;
-    $("feeNote").textContent = (fee === 0n ? "(bootstrap: scoring is free, gating disabled — " : "(")
-      + "fees use a valueless testnet faucet token, not a tradeable asset)";
+    if (FEES_LIVE) {
+      const fee = BigInt(await rpcRead(FEES, SEL.epochFee));
+      $("feeNow").textContent = `${formatUnits(fee)} ${esc(tokenSymbol)}/epoch`;
+      $("feeNote").textContent = (fee === 0n ? "(bootstrap: scoring is free, gating disabled — " : "(")
+        + "fees use a valueless testnet faucet token, not a tradeable asset)";
+    } else {
+      $("feeNow").textContent = "none";
+      $("feeNote").textContent = "(no fee registry in this deploy, so scoring is free and nothing is charged)";
+    }
   } catch (e) {
     $("feeNow").textContent = "unavailable";
     logLine(`<span class="pill-err">RPC read failed: ${esc(e.message)}</span>`);

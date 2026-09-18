@@ -25,10 +25,10 @@ RPC_URL=https://rpc.testnet.arc.io
 Testnet contract addresses (Arc testnet, chain ID `5042002` — from `deployments/5042002.json`):
 
 ```
-IDENTITY_ADDRESS=0x...   # from deployments/5042002.json after deploy
-REPUTATION_ADDRESS=0x...   # from deployments/5042002.json after deploy
-STAKING_ADDRESS=0x...   # from deployments/5042002.json after deploy
-SVR_TOKEN=0x...   # from deployments/5042002.json after deploy
+IDENTITY_ADDRESS=0x7e3aFC532eE5d922ab3cc3FFb510c7C8151477Dd
+REPUTATION_ADDRESS=0x6603C96275e85F724Cdf74666b399365e4cA29ed
+STAKING_ADDRESS=0xA69d62B2a6774D21A2c15d5d83b27277eD31d35B
+SVR_TOKEN=0x41De2D6D55318e197a00E8f5B496eA2790e23E6c
 ```
 
 
@@ -43,7 +43,7 @@ const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
 const signer = new ethers.Wallet(process.env.OPERATOR_PRIVATE_KEY, provider);
 
 const svr = new ethers.Contract(
-  '0x...',  // from deployments/5042002.json
+  '0x41De2D6D55318e197a00E8f5B496eA2790e23E6c',  // SVR_TOKEN
   ['function faucet(uint256 amount) external', 'function balanceOf(address) view returns (uint256)'],
   signer
 );
