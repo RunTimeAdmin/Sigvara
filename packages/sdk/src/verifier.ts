@@ -158,15 +158,42 @@ export class SigvaraVerifier {
   }
 }
 
-// Standalone helper: operator registers an agent on-chain.
+/**
+ * Registers an agent on-chain. The operator sends the transaction; the agent address
+ * must sign for it.
+ *
+ * `agentSigner` proves control of `agentAddress`. Without it anyone could register an
+ * address they do not own, choose the Ed25519 key verifiers check against it, and lock
+ * the rightful owner out for good, since a didHash can never be reissued.
+ *
+ * The digest is read from the contract rather than rebuilt here, so a change to the
+ * binding cannot leave the SDK signing a stale message. Pass `signature` directly
+ * instead when the agent is a contract or its key lives in a signer you cannot hand
+ * over, such as an HSM or a Safe.
+ */
 export async function registerAgent(
   signer: ethers.Signer,
   agentAddress: string,
   ed25519PubKeyBytes32: string,
-  identityAddress: string
+  identityAddress: string,
+  proof: { agentSigner: ethers.Signer } | { signature: string }
 ): Promise<{ didHash: string; txHash: string }> {
   const contract = new ethers.Contract(identityAddress, IDENTITY_ABI, signer);
-  const tx = await contract.registerAgent(agentAddress, ed25519PubKeyBytes32);
+
+  let signature: string;
+  if ('signature' in proof) {
+    signature = proof.signature;
+  } else {
+    const operator = await signer.getAddress();
+    const digest: string = await contract.registrationDigest(
+      agentAddress, operator, ed25519PubKeyBytes32
+    );
+    // The digest is already an EIP-191 prefixed hash, so sign the raw bytes rather
+    // than letting the signer prefix it a second time.
+    signature = await proof.agentSigner.signMessage(ethers.getBytes(digest));
+  }
+
+  const tx = await contract.registerAgent(agentAddress, ed25519PubKeyBytes32, signature);
   const receipt = await tx.wait();
   const iface = new ethers.Interface(IDENTITY_ABI);
   let didHash = '';

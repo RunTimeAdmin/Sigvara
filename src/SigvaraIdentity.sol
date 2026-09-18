@@ -4,6 +4,8 @@ pragma solidity ^0.8.24;
 import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
+import "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
 /**
  * @notice The slice of SigvaraStaking this contract needs.
@@ -131,6 +133,7 @@ contract SigvaraIdentity is Initializable, AccessControlUpgradeable, UUPSUpgrade
     error TransferWhileSlashPending(bytes32 didHash);
     error SameOperator(bytes32 didHash);
     error CannotReturnToPendingBond(bytes32 didHash);
+    error BadRegistrationSignature(address agentAddress);
 
     // -------------------------------------------------------------------------
     // Constructor / Initializer
@@ -184,24 +187,88 @@ contract SigvaraIdentity is Initializable, AccessControlUpgradeable, UUPSUpgrade
     // -------------------------------------------------------------------------
 
     /**
+     * @notice The message an agent address must sign to be registered.
+     * @dev    Returned UNPREFIXED, so a client signs it with a plain personal_sign and
+     *         the EIP-191 prefix is applied once, by the wallet. Returning it already
+     *         prefixed reads as a convenience and is a trap: every standard signer
+     *         prefixes what it is given, so the signature would cover a double-prefixed
+     *         hash and never recover to the agent. verifyRegistration applies the prefix
+     *         on this side.
+     *
+     *         Public so a client can obtain the digest without reimplementing it, and so
+     *         the binding is auditable rather than folklore.
+     *
+     *         Every field is load-bearing. The chain id and this contract's address stop
+     *         a signature being replayed onto another deployment. The operator stops it
+     *         being lifted by somebody else and used to claim the agent. The Ed25519 key
+     *         stops an interceptor substituting a key that verifiers would then check
+     *         against, which is the whole point of the exercise.
+     */
+    function registrationDigest(
+        address agentAddress,
+        address operator,
+        bytes32 ed25519PubKey
+    ) public view returns (bytes32) {
+        return keccak256(abi.encode(
+            keccak256("SigvaraRegistration(uint256 chainId,address registry,address agentAddress,address operator,bytes32 ed25519PubKey)"),
+            block.chainid,
+            address(this),
+            agentAddress,
+            operator,
+            ed25519PubKey
+        ));
+    }
+
+    /// @notice Whether `signature` proves `agentAddress` agreed to this registration.
+    /// @dev    Exposed so a client can check a signature before spending gas on a
+    ///         transaction that would revert.
+    function verifyRegistration(
+        address agentAddress,
+        address operator,
+        bytes32 ed25519PubKey,
+        bytes calldata signature
+    ) public view returns (bool) {
+        return SignatureChecker.isValidSignatureNow(
+            agentAddress,
+            MessageHashUtils.toEthSignedMessageHash(
+                registrationDigest(agentAddress, operator, ed25519PubKey)
+            ),
+            signature
+        );
+    }
+
+    /**
      * @notice Register a new agent identity. The caller becomes the operator.
      * @dev    didHash is derived on-chain for trustless determinism. Any party can
      *         reproduce it without querying storage:
      *         keccak256(abi.encodePacked("did:sigvara:", block.chainid, ":", agentAddress))
      *
-     *         Staking enforcement is handled by SigvaraStaking, which should be called
-     *         before or atomically with this function via a registration helper/script.
+     *         The agent address must sign registrationDigest(). Without that, registration
+     *         proved no control of the address being claimed: anyone could register an
+     *         address they did not own, choose the Ed25519 key verifiers would check, and
+     *         lock the rightful owner out permanently, since a didHash can never be
+     *         re-registered. Signatures are checked through SignatureChecker, so an agent
+     *         may be an EOA or a contract implementing ERC-1271.
+     *
+     *         No nonce is needed: a didHash can only be registered once, so a signature
+     *         cannot be replayed against this registry, and the digest is bound to this
+     *         registry and chain so it cannot be replayed elsewhere.
      *
      * @param agentAddress  The agent's Ethereum address. Forms the identity component of the DID.
      * @param ed25519PubKey Raw 32-byte Ed25519 public key (no multibase prefix).
+     * @param signature     agentAddress's signature over registrationDigest().
      * @return didHash      The computed DID hash, emitted in the event and returned for convenience.
      */
-    function registerAgent(address agentAddress, bytes32 ed25519PubKey)
+    function registerAgent(address agentAddress, bytes32 ed25519PubKey, bytes calldata signature)
         external
         returns (bytes32 didHash)
     {
         if (agentAddress == address(0)) revert ZeroAgentAddress();
         if (ed25519PubKey == bytes32(0)) revert ZeroPubKey();
+
+        if (!verifyRegistration(agentAddress, msg.sender, ed25519PubKey, signature)) {
+            revert BadRegistrationSignature(agentAddress);
+        }
 
         didHash = computeDidHash(agentAddress);
         if (identities[didHash].registeredAt != 0) revert AlreadyRegistered(didHash);

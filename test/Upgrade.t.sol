@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import "forge-std/Test.sol";
+import "./helpers/RegistrationHelper.sol";
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/access/IAccessControl.sol";
@@ -26,7 +27,7 @@ contract MockSVRUpgrade is ERC20 {
  * state written before the upgrade reads back identically afterwards. Without
  * these, the most dangerous operation in the system was unexercised.
  */
-contract UpgradeTest is Test {
+contract UpgradeTest is Test, RegistrationHelper {
     /// ERC-1967 implementation slot.
     bytes32 constant IMPL_SLOT = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
 
@@ -39,7 +40,8 @@ contract UpgradeTest is Test {
     address committee = makeAddr("committee");
     address oracle    = makeAddr("oracle");
     address operator  = makeAddr("operator");
-    address agentAddr = makeAddr("agent");
+    address agentAddr;
+    uint256 agentPk;
     address stranger  = makeAddr("stranger");
 
     bytes32 constant PUB_KEY = bytes32(uint256(0xdeadbeef));
@@ -51,6 +53,7 @@ contract UpgradeTest is Test {
     bytes32 didHash;
 
     function setUp() public {
+        (agentAddr, agentPk) = makeAddrAndKey("agent");
         svr = new MockSVRUpgrade();
 
         identity = SigvaraIdentity(address(new ERC1967Proxy(
@@ -77,8 +80,7 @@ contract UpgradeTest is Test {
         vm.stopPrank();
 
         // Live state to carry across the upgrade.
-        vm.prank(operator);
-        didHash = identity.registerAgent(agentAddr, PUB_KEY);
+                didHash = registerSigned(identity, operator, agentPk, PUB_KEY);
 
         svr.mint(operator, MIN_STAKE);
         vm.startPrank(operator);

@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import "forge-std/Test.sol";
+import "./helpers/RegistrationHelper.sol";
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
@@ -39,7 +40,7 @@ contract DFBlocklist is ERC20 {
  * Each test here is the inverse of an exploit that was demonstrated against the
  * previous code.
  */
-contract DisputeFreezeTest is Test {
+contract DisputeFreezeTest is Test, RegistrationHelper {
     DFMock svr;
     SigvaraIdentity identity;
     SigvaraReputation rep;
@@ -49,7 +50,8 @@ contract DisputeFreezeTest is Test {
     address committee = makeAddr("committee");
     address oracle    = makeAddr("oracle");
     address operator  = makeAddr("operator");
-    address agentAddr = makeAddr("agent");
+    address agentAddr;
+    uint256 agentPk;
     address victim    = makeAddr("victim");
 
     uint256 constant STAKE     = 10_000e18;
@@ -60,6 +62,7 @@ contract DisputeFreezeTest is Test {
     bytes32 didHash;
 
     function setUp() public {
+        (agentAddr, agentPk) = makeAddrAndKey("agent");
         svr = new DFMock();
         identity = SigvaraIdentity(address(new ERC1967Proxy(
             address(new SigvaraIdentity()),
@@ -82,8 +85,7 @@ contract DisputeFreezeTest is Test {
         staking.grantRole(staking.SLASHING_COMMITTEE_ROLE(), committee);
         vm.stopPrank();
 
-        vm.prank(operator);
-        didHash = identity.registerAgent(agentAddr, bytes32(uint256(1)));
+        didHash = registerSigned(identity, operator, agentPk, bytes32(uint256(1)));
 
         svr.mint(operator, STAKE);
         vm.startPrank(operator);
@@ -217,8 +219,8 @@ contract DisputeFreezeTest is Test {
         vm.stopPrank();
 
         address op2 = makeAddr("op2");
-        vm.prank(op2);
-        bytes32 did2 = identity.registerAgent(makeAddr("agent2"), bytes32(uint256(2)));
+        (, uint256 agent2Pk) = makeAddrAndKey("agent2");
+        bytes32 did2 = registerSigned(identity, op2, agent2Pk, bytes32(uint256(2)));
         token.mint(op2, STAKE);
         vm.startPrank(op2);
         token.approve(address(s2), STAKE);
