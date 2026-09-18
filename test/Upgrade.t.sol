@@ -9,6 +9,7 @@ import "@openzeppelin/contracts/access/IAccessControl.sol";
 import "../src/SigvaraIdentity.sol";
 import "../src/SigvaraReputation.sol";
 import "../src/SigvaraStaking.sol";
+import "../script/Upgrade.s.sol";
 
 /// Minimal ERC20 for testing only.
 contract MockSVRUpgrade is ERC20 {
@@ -226,5 +227,73 @@ contract UpgradeTest is Test {
         vm.prank(operator);
         staking.claimWithdrawal(didHash);
         assertEq(svr.balanceOf(operator), MIN_STAKE);
+    }
+}
+
+/// A registry from before operator transfer: no operatorChangedAt, no stakeView.
+contract PreTransferIdentity {
+    function getIdentity(bytes32) external pure returns (uint256) { return 1; }
+}
+
+contract CurrentIdentity {
+    function operatorChangedAt(bytes32) external pure returns (uint256) { return 0; }
+    function stakeView() external pure returns (address) { return address(1); }
+}
+
+/// Holds an identityRegistry the way reputation and staking do.
+contract ProxyStub {
+    address public identityRegistry;
+    constructor(address id) { identityRegistry = id; }
+}
+
+/// Exposes the script's internal precheck.
+contract UpgradeHarness is Upgrade {
+    function check(string memory target, address proxy) external view {
+        _checkDependencies(target, proxy);
+    }
+}
+
+contract UpgradeDependencyTest is Test {
+    UpgradeHarness harness;
+
+    function setUp() public {
+        harness = new UpgradeHarness();
+    }
+
+    /// The exact ordering that broke Arc testnet: upgrade reputation while identity
+    /// is a version behind, and every getTotalScore on the chain starts reverting.
+    function test_refusesReputationAgainstAPreTransferIdentity() public {
+        address proxy = address(new ProxyStub(address(new PreTransferIdentity())));
+        vm.expectRevert();
+        harness.check("reputation", proxy);
+    }
+
+    function test_allowsReputationOnceIdentityIsCurrent() public {
+        address proxy = address(new ProxyStub(address(new CurrentIdentity())));
+        harness.check("reputation", proxy); // must not revert
+    }
+
+    function test_refusesStakingAgainstAnIdentityWithoutStakeView() public {
+        address proxy = address(new ProxyStub(address(new PreTransferIdentity())));
+        vm.expectRevert();
+        harness.check("staking", proxy);
+    }
+
+    function test_allowsStakingOnceIdentityIsCurrent() public {
+        address proxy = address(new ProxyStub(address(new CurrentIdentity())));
+        harness.check("staking", proxy);
+    }
+
+    /// An unwired proxy has nothing to depend on yet, and a fresh deployment must not
+    /// be blocked by a check about contracts it has not been pointed at.
+    function test_allowsWhenTheRegistryIsNotWiredYet() public {
+        address proxy = address(new ProxyStub(address(0)));
+        harness.check("reputation", proxy);
+        harness.check("staking", proxy);
+    }
+
+    function test_identityUpgradeHasNoDependencies() public {
+        address proxy = address(new ProxyStub(address(new PreTransferIdentity())));
+        harness.check("identity", proxy);
     }
 }

@@ -143,6 +143,10 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
     mapping(bytes32 => uint8) public maturedScore;
     mapping(bytes32 => uint256) public maturedAt;
 
+    /// `operatorChangedAt(bytes32)`. Written out rather than taken from the contract
+    /// type because it is an auto-generated mapping getter, which has no `.selector`.
+    bytes4 private constant OPERATOR_CHANGED_AT = 0xcd46167a;
+
     /// Bonded operator registry. Unset means the check is off, which is a deliberate
     /// mode rather than a misconfiguration: the registry is a separate deployment.
     IOperatorSet public operatorBond;
@@ -494,12 +498,24 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
         // make aged, scored identities a liquid commodity, which is the farm-and-sell
         // market this is meant to price out. The score itself survives; only the right
         // to spend it is re-earned, over the same window as any other rise.
-        SigvaraIdentity registry = identityRegistry;
-        if (address(registry) != address(0)) {
-            uint256 changed = registry.operatorChangedAt(didHash);
-            if (changed > since) {
-                since = changed;
-                anchor = 0;
+        // Read through a raw staticcall rather than the typed getter. An identity
+        // registry deployed before operator transfer existed has no such function, and
+        // a typed call to it reverts, taking this view down with it. getTotalScore is
+        // what every consumer reads, so a version skew between the two proxies would
+        // make every score on the chain unreadable. It degrades to "no handover known"
+        // instead, which is the state of the world on a registry that cannot record
+        // one. Learned the hard way on Arc testnet.
+        address registry = address(identityRegistry);
+        if (registry != address(0)) {
+            (bool ok, bytes memory ret) = registry.staticcall(
+                abi.encodeWithSelector(OPERATOR_CHANGED_AT, didHash)
+            );
+            if (ok && ret.length == 32) {
+                uint256 changed = abi.decode(ret, (uint256));
+                if (changed > since) {
+                    since = changed;
+                    anchor = 0;
+                }
             }
         }
 
