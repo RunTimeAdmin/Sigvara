@@ -135,15 +135,26 @@ contract SigvaraStakingTest is Test {
         staking.depositStake(didHash, MIN_STAKE);
     }
 
-    function test_depositStake_reverts_agentNotActive() public {
+    function test_depositStake_reverts_unregistered() public {
+        bytes32 ghost = keccak256("did:sigvara:5042002:0xnobody");
+        vm.expectRevert(
+            abi.encodeWithSelector(SigvaraStaking.AgentNotActive.selector, ghost)
+        );
+        vm.prank(operator);
+        staking.depositStake(ghost, MIN_STAKE);
+    }
+
+    /// Suspended agents deposit so they can climb back over minimumStake. Identity
+    /// refuses to reactivate an under-collateralised agent, so refusing the deposit
+    /// too would make withdrawing the bond a one-way trip into a dead identity.
+    function test_depositStake_allowedWhileSuspended() public {
         vm.prank(operator);
         identity.updateStatus(didHash, SigvaraIdentity.AgentStatus.Suspended);
 
-        vm.expectRevert(
-            abi.encodeWithSelector(SigvaraStaking.AgentNotActive.selector, didHash)
-        );
+        uint256 before = staking.getStake(didHash);
         vm.prank(operator);
         staking.depositStake(didHash, MIN_STAKE);
+        assertEq(staking.getStake(didHash), before + MIN_STAKE);
     }
 
     // -------------------------------------------------------------------------

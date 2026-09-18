@@ -93,6 +93,7 @@ contract E2EIntegrationTest is Test {
 
         // Wire cross-contract roles
         vm.startPrank(admin);
+        identity.initializeV2(address(staking));
         identity.grantRole(identity.STAKING_CORE_ROLE(), address(staking));
         reputation.grantRole(reputation.STAKING_CORE_ROLE(), address(staking));
         staking.grantRole(staking.SLASHING_COMMITTEE_ROLE(), committee);

@@ -6,6 +6,16 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 
 /**
+ * @notice The slice of SigvaraStaking this contract needs.
+ * @dev    Declared as an interface rather than importing SigvaraStaking, which
+ *         already imports this file. Keeping the dependency one-way avoids a
+ *         circular import for a single view call.
+ */
+interface IStakeView {
+    function hasMinimumStake(bytes32 didHash) external view returns (bool);
+}
+
+/**
  * @title SigvaraIdentity
  * @notice Anchors AI agent identities on-chain. Each agent is indexed by a deterministic
  *         didHash derived from the agent's Ethereum address and the current chain ID:
@@ -61,6 +71,10 @@ contract SigvaraIdentity is Initializable, AccessControlUpgradeable, UUPSUpgrade
     /// defeating the halt initiateSlash relies on.
     mapping(bytes32 => bool) public slashSuspended;
 
+    /// Collateral oracle for status transitions. Appended after slashSuspended so
+    /// deployed proxies keep their layout.
+    IStakeView public stakeView;
+
     // -------------------------------------------------------------------------
     // Events
     // -------------------------------------------------------------------------
@@ -71,6 +85,7 @@ contract SigvaraIdentity is Initializable, AccessControlUpgradeable, UUPSUpgrade
         address indexed agentAddress,
         bytes32 ed25519PubKey
     );
+    event StakeViewSet(address indexed stakeView);
     event AgentStatusUpdated(bytes32 indexed didHash, AgentStatus newStatus);
     event PublicKeyRotated(bytes32 indexed didHash, bytes32 newEd25519PubKey);
 
@@ -85,6 +100,8 @@ contract SigvaraIdentity is Initializable, AccessControlUpgradeable, UUPSUpgrade
     error ZeroAgentAddress();
     error SlashedAgentImmutable(bytes32 didHash);
     error SlashSuspensionLocked(bytes32 didHash);
+    error StakeViewNotSet();
+    error InsufficientCollateral(bytes32 didHash);
 
     // -------------------------------------------------------------------------
     // Constructor / Initializer
@@ -110,6 +127,27 @@ contract SigvaraIdentity is Initializable, AccessControlUpgradeable, UUPSUpgrade
         if (stakingCore != address(0)) {
             _grantRole(STAKING_CORE_ROLE, stakingCore);
         }
+    }
+
+    /**
+     * @notice Points this contract at the staking contract, so a status change back to
+     *         Active can be checked against the agent's collateral.
+     * @dev    Staking is deployed after identity, so its address is not known at
+     *         initialize() time. Call this through upgradeToAndCall on a live proxy, or
+     *         immediately after initialize() on a fresh deployment.
+     *
+     *         Fail-closed, like the reputation registry's identity binding: until this
+     *         runs, an operator-driven return to Active reverts with StakeViewNotSet
+     *         rather than skipping the collateral check.
+     */
+    function initializeV2(address stakeView_)
+        external
+        onlyRole(DEFAULT_ADMIN_ROLE)
+        reinitializer(2)
+    {
+        if (stakeView_ == address(0)) revert StakeViewNotSet();
+        stakeView = IStakeView(stakeView_);
+        emit StakeViewSet(stakeView_);
     }
 
     // -------------------------------------------------------------------------
@@ -193,6 +231,26 @@ contract SigvaraIdentity is Initializable, AccessControlUpgradeable, UUPSUpgrade
 
         // Track/clear the staking-applied suspension lock so the operator can't
         // reactivate mid-slash, while normal operator self-suspends stay unlocked.
+        // The bond is what makes a status meaningful. An operator could otherwise
+        // self-suspend, drain the whole stake (the minimumStake floor only applies
+        // while Active), claim it once unbonding elapsed, and walk straight back to
+        // Active carrying its reputation with nothing behind it. In that state
+        // initiateSlash reverts for want of stake, so the agent is unslashable.
+        //
+        // Draining to zero stays legal: that is how an operator exits. What is closed
+        // is the return trip.
+        //
+        // This applies to the staking core too. Exempting it left the same escape one
+        // step further round: queue a withdrawal while Suspended, draw a slash, dispute
+        // it, and the reinstatement that follows a dropped proposal put the agent back
+        // to Active under-collateralised. SigvaraStaking checks the bond before
+        // reinstating and leaves the agent Suspended otherwise, so this never reverts a
+        // permissionless call.
+        if (newStatus == AgentStatus.Active) {
+            if (address(stakeView) == address(0)) revert StakeViewNotSet();
+            if (!stakeView.hasMinimumStake(didHash)) revert InsufficientCollateral(didHash);
+        }
+
         if (isStakingCore) {
             if (newStatus == AgentStatus.Suspended) {
                 slashSuspended[didHash] = true;
@@ -203,6 +261,19 @@ contract SigvaraIdentity is Initializable, AccessControlUpgradeable, UUPSUpgrade
 
         id.status = newStatus;
         emit AgentStatusUpdated(didHash, newStatus);
+    }
+
+    /**
+     * @notice Lift a staking-applied suspension without reinstating the agent.
+     * @dev    For a dropped slash proposal against an agent that no longer holds the
+     *         minimum bond. Reinstating it would return an unslashable agent to Active,
+     *         and reverting would strand expireDispute, which anyone may call. The agent
+     *         stays Suspended with the lock cleared, so its operator can re-bond and
+     *         reactivate it through the normal path.
+     */
+    function clearSlashSuspension(bytes32 didHash) external onlyRole(STAKING_CORE_ROLE) {
+        _requireRegistered(didHash);
+        slashSuspended[didHash] = false;
     }
 
     // -------------------------------------------------------------------------

@@ -28,6 +28,7 @@ contract StakingHandler is Test {
     address public committee;
     address[] public operators;
     bytes32[] public didHashes;
+    bool public seeded;
 
     /// Every token this handler has ever put into the staking contract.
     uint256 public totalDeposited;
@@ -61,6 +62,21 @@ contract StakingHandler is Test {
         return (operators[i], didHashes[i]);
     }
 
+    /// One-shot initial bond for every agent, called from setUp before fuzzing.
+    function seedBonds(uint256 amount) external {
+        require(!seeded, "already seeded");
+        seeded = true;
+        for (uint256 i = 0; i < didHashes.length; i++) {
+            address op = operators[i];
+            svr.mint(op, amount);
+            vm.startPrank(op);
+            svr.approve(address(staking), amount);
+            staking.depositStake(didHashes[i], amount);
+            vm.stopPrank();
+            totalDeposited += amount;
+        }
+    }
+
     function deposit(uint256 seed, uint256 amount) external {
         (address op, bytes32 did) = _pick(seed);
         amount = bound(amount, 1, 10_000e18);
@@ -90,6 +106,18 @@ contract StakingHandler is Test {
         try staking.claimWithdrawal(did) {
             totalClaimed += amount;
         } catch {}
+    }
+
+    /// Operator-driven status changes. Without this the fuzzer could never reach the
+    /// suspend, drain, reactivate sequence, which is how an agent used to end up
+    /// Active with nothing bonded behind it.
+    function setStatus(uint256 seed, bool active) external {
+        (address op, bytes32 did) = _pick(seed);
+        vm.prank(op);
+        try identity.updateStatus(
+            did,
+            active ? SigvaraIdentity.AgentStatus.Active : SigvaraIdentity.AgentStatus.Suspended
+        ) {} catch {}
     }
 
     function initiateSlash(uint256 seed) external {
@@ -203,6 +231,7 @@ contract StakingInvariantTest is Test {
         )));
 
         vm.startPrank(admin);
+        identity.initializeV2(address(staking));
         identity.grantRole(identity.STAKING_CORE_ROLE(), address(staking));
         rep.grantRole(rep.STAKING_CORE_ROLE(), address(staking));
         staking.grantRole(staking.SLASHING_COMMITTEE_ROLE(), committee);
@@ -218,6 +247,13 @@ contract StakingInvariantTest is Test {
         }
 
         handler = new StakingHandler(svr, identity, staking, committee, ops, dids);
+
+        // Bond every agent before fuzzing. registerAgent leaves an agent Active with
+        // nothing staked, so an unbonded start would break
+        // invariant_activeAgentsAreCollateralised on the initial state and test
+        // registration rather than the transitions. Routed through the handler so its
+        // deposit accounting stays authoritative for the conservation invariants.
+        handler.seedBonds(MIN_STAKE);
 
         // The handler impersonates the committee, so it needs no role of its own.
         targetContract(address(handler));
@@ -289,6 +325,31 @@ contract StakingInvariantTest is Test {
                 (uint256 queued,) = staking.getPendingWithdrawal(did);
                 assertGt(staking.getStake(did) + queued, 0, "disputed agent has no bond at risk");
             }
+        }
+    }
+
+    /// An Active agent must be slashable, and it is only slashable if something is
+    /// bonded. This is the property the suite was missing: every invariant here
+    /// conserved tokens perfectly while an agent walked its whole bond out and came
+    /// back Active, because conservation says nothing about who is accountable.
+    ///
+    /// Queued withdrawals count. They are still slashable until claimed, so an agent
+    /// unbonding is not yet off the hook.
+    ///
+    /// Scope: this covers agents that have been bonded, which the setup arranges.
+    /// registerAgent on its own still leaves an agent Active with nothing staked, a
+    /// separate gap that this fix does not close.
+    function invariant_activeAgentsAreCollateralised() public view {
+        uint256 n = handler.agentCount();
+        for (uint256 i = 0; i < n; i++) {
+            bytes32 did = handler.didAt(i);
+            if (!identity.isActive(did)) continue;
+            (uint256 queued,) = staking.getPendingWithdrawal(did);
+            assertGe(
+                staking.getStake(did) + queued,
+                staking.minimumStake(),
+                "Active agent is below the minimum bond, so nothing can be slashed from it"
+            );
         }
     }
 }
