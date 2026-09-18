@@ -184,6 +184,17 @@ contract Deploy is Script {
         vm.serializeAddress(key, "reputation", reputation);
         string memory json = vm.serializeAddress(key, "staking", staking);
 
+        // Only on a real broadcast. A dry run mints addresses that exist nowhere, and
+        // writing them left the artifact one `git commit` away from publishing
+        // contracts that were never deployed. docs/deploy-testnet.md used to tell you
+        // to delete the file between the simulate and the broadcast; not writing it in
+        // the first place removes the step and the mistake.
+        if (!vm.isContext(VmSafe.ForgeContext.ScriptBroadcast)
+            && !vm.isContext(VmSafe.ForgeContext.ScriptResume)) {
+            console2.log("Dry run: deployments artifact not written.");
+            return;
+        }
+
         vm.createDir("deployments", true);
         vm.writeFile(
             string.concat("deployments/", vm.toString(block.chainid), ".json"),
