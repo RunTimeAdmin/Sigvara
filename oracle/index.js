@@ -79,10 +79,13 @@ const {
 function measuredFactorsFor(didHash, now = Date.now()) {
   if (!payments.required(paymentCfg)) return { measuredFeeScore: null, measuredAttestations: null };
   const events = getPaymentEvents(didHash);
-  const volume = payments.decayedVolume(events, paymentCfg.halfLifeMs, now);
+  // Diversified, not just decayed: one counterparty's evidence is capped, so a ring
+  // of wallets cannot substitute for a customer base.
+  const volume = payments.diversifiedVolume(events, paymentCfg, now);
   return {
     measuredFeeScore: payments.feeScoreFromVolume(volume, paymentCfg.feeUnit),
-    measuredAttestations: payments.decayedAttestations(events, paymentCfg.halfLifeMs, now),
+    measuredAttestations: payments.diversifiedAttestations(events, paymentCfg, now),
+    distinctPayers: payments.distinctPayers(events, paymentCfg.halfLifeMs, now),
   };
 }
 
@@ -396,6 +399,13 @@ const server = http.createServer(async (req, res) => {
           metrics.inc(rpc ? 'paymentRpcErrors' : 'attestRejectedPayment');
           return json(res, rpc ? 502 : 402, { error: err.message, code: err.code || 'payment_invalid' });
         }
+        if (payments.isSelfPayment(credited.payer, info)) {
+          metrics.inc('attestRejectedPayment');
+          return json(res, 402, {
+            error: 'an agent cannot attest itself: the payer is its own operator or agent address',
+            code: 'self_payment',
+          });
+        }
         attester = credited.payer;
       }
 
@@ -517,7 +527,9 @@ const server = http.createServer(async (req, res) => {
         // raw tally above.
         ...(measured.measuredAttestations ? { weighted: {
           attestations: measured.measuredAttestations,
+          distinctPayers: measured.distinctPayers,
           halfLifeDays: paymentCfg.halfLifeMs / 86400000,
+          maxPerPayer: paymentCfg.maxPerPayer,
         } } : {}),
         flags: flagCount,
         erc8004AgentId: linkedId ?? null,

@@ -14,6 +14,10 @@ const {
   decayWeight,
   decayedVolume,
   decayedAttestations,
+  isSelfPayment,
+  diversifiedVolume,
+  diversifiedAttestations,
+  distinctPayers,
   TRANSFER_TOPIC,
 } = require('./payments');
 
@@ -263,4 +267,86 @@ test('readConfig: half-life defaults to 90 days and 0 turns decay off', () => {
   assert.equal(readConfig({}).halfLifeMs, 90 * DAY);
   assert.equal(readConfig({ PAYMENT_HALF_LIFE_DAYS: '0' }).halfLifeMs, 0);
   assert.equal(readConfig({ PAYMENT_HALF_LIFE_DAYS: '30' }).halfLifeMs, 30 * DAY);
+});
+
+// ---- self-payment ----------------------------------------------------------
+
+const IDENT = { operator: '0x45D8c79e1188A429dbDfd8400A2869316d6fCe8D', agentAddress: '0xCc52Cd92963f8A86d04dB29a4810d1e01D193910' };
+
+test('isSelfPayment: the operator paying its own agent is caught', () => {
+  assert.equal(isSelfPayment(IDENT.operator, IDENT), true);
+});
+
+test('isSelfPayment: the agent paying itself is caught', () => {
+  assert.equal(isSelfPayment(IDENT.agentAddress, IDENT), true);
+});
+
+test('isSelfPayment: matching ignores address casing', () => {
+  assert.equal(isSelfPayment(IDENT.operator.toLowerCase(), IDENT), true);
+  assert.equal(isSelfPayment(IDENT.operator.toUpperCase(), IDENT), true);
+});
+
+test('isSelfPayment: a real counterparty passes', () => {
+  assert.equal(isSelfPayment('0x18CBcE50390f5f6ebe4E20Fc17833F25c8D94811', IDENT), false);
+});
+
+test('isSelfPayment: an empty payer is not treated as a match', () => {
+  // Guards against a blank operator field making every payment look like self-dealing.
+  assert.equal(isSelfPayment('', IDENT), false);
+  assert.equal(isSelfPayment('0xabc', { operator: '', agentAddress: '' }), false);
+});
+
+// ---- payer diversity -------------------------------------------------------
+
+const DCFG = { halfLifeMs: H90, feeUnit: 100n, maxPerPayer: 5 };
+const pev = (payer, amount, ok = true) => ({ ts: NOW, amount: String(amount), payer, success: ok });
+
+test('diversifiedVolume: one payer is capped however much it sends', () => {
+  const heaps = Array.from({ length: 50 }, () => pev('0xring', 100n));
+  assert.equal(diversifiedVolume(heaps, DCFG, NOW), 500n); // 5 points' worth, not 50
+});
+
+test('diversifiedVolume: many payers reach the full amount', () => {
+  const crowd = Array.from({ length: 50 }, (_, i) => pev('0xcust' + i, 100n));
+  assert.equal(diversifiedVolume(crowd, DCFG, NOW), 5000n);
+});
+
+test('diversifiedVolume: payers are matched case-insensitively', () => {
+  // Otherwise the same wallet in two casings would count as two counterparties.
+  const mixed = [pev('0xAbC', 400n), pev('0xabc', 400n)];
+  assert.equal(diversifiedVolume(mixed, DCFG, NOW), 500n);
+});
+
+test('diversifiedVolume: a cap of 0 disables the limit', () => {
+  const heaps = Array.from({ length: 50 }, () => pev('0xring', 100n));
+  assert.equal(diversifiedVolume(heaps, { ...DCFG, maxPerPayer: 0 }, NOW), 5000n);
+});
+
+test('diversifiedVolume: decay still applies underneath the cap', () => {
+  const old = [{ ts: NOW - 90 * DAY, amount: '1000', payer: '0xa', success: true }];
+  assert.equal(diversifiedVolume(old, { ...DCFG, maxPerPayer: 100 }, NOW), 500n);
+});
+
+test('diversifiedAttestations: one payer cannot buy full confidence', () => {
+  const spam = Array.from({ length: 100 }, () => pev('0xring', 1n));
+  assert.equal(diversifiedAttestations(spam, DCFG, NOW).total, 5);
+});
+
+test('diversifiedAttestations: capping scales successes, it does not change the opinion', () => {
+  // Half successes from one payer should stay half after capping.
+  const mixed = [];
+  for (let i = 0; i < 50; i++) mixed.push(pev('0xring', 1n, i % 2 === 0));
+  const { successful, total } = diversifiedAttestations(mixed, DCFG, NOW);
+  assert.equal(total, 5);
+  assert.ok(Math.abs(successful / total - 0.5) < 0.01, `ratio preserved, got ${successful / total}`);
+});
+
+test('distinctPayers: counts counterparties, not payments', () => {
+  const ev = [pev('0xa', 1n), pev('0xa', 1n), pev('0xb', 1n)];
+  assert.equal(distinctPayers(ev, H90, NOW), 2);
+});
+
+test('readConfig: maxPerPayer defaults to 5 and 0 disables it', () => {
+  assert.equal(readConfig({}).maxPerPayer, 5);
+  assert.equal(readConfig({ PAYMENT_MAX_PER_PAYER: '0' }).maxPerPayer, 0);
 });

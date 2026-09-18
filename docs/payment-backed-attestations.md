@@ -122,6 +122,33 @@ BigInt exists to preserve on an 18-decimal token. Events whose weight falls belo
 a thousandth are pruned once per epoch; they cannot move an integer score and
 would otherwise grow the state file without bound.
 
+## Counterparty checks
+
+Two rules apply once a payment verifies.
+
+**Self-payments are refused.** If the payer is the agent's own operator or its
+agent address, the attestation is rejected with `self_payment`. Paying yourself
+costs only gas, because the money comes back, and the resulting attestation is
+otherwise indistinguishable from a customer's. This does not stop someone funding
+a second wallet, but it raises the floor from free to deliberate.
+
+**One counterparty's evidence is capped.** Without a cap, a single wallet paying
+ten times is worth exactly as much as ten wallets paying once, so a small ring is
+as good as a customer base. `PAYMENT_MAX_PER_PAYER` limits any one payer to that
+many points of `feeScore` and that many attestations of weight. At the default of
+5, reaching the 30-point cap needs at least six distinct payers.
+
+Capping scales a payer's successes by the same factor as its weight, so the cap
+changes how much an opinion counts without changing what the opinion was. A payer
+with a 50% record still reads 50% after capping.
+
+Measured on Arc testnet with two real payers, one sending 20 tokens and one
+sending 3, against a unit of one token per point:
+
+| | Uncapped | Capped at 5 |
+|---|---|---|
+| `feeScore` | 23 | 8 |
+
 ## What this does not fix
 
 The payer is verified, the payment is verified, and the amount is verified. The
@@ -130,10 +157,11 @@ The payer is verified, the payment is verified, and the amount is verified. The
 manufacture volume. Payment raises the cost of a fake attestation from zero to the
 agent's price; it does not make attestations honest.
 
-Self-dealing is the sharper of the two. An operator paying their own agent inflates
-volume at the cost of gas alone, since the money returns to them. Counting distinct
-payers, or weighting volume by payer diversity, would blunt it. Neither is
-implemented.
+Self-dealing is the sharper of the two, and the counterparty checks above blunt it
+rather than close it. Refusing the operator and agent addresses catches the lazy
+version; funding a separate wallet still works. The per-payer cap then forces that
+into at least six wallets to max the factor, each with its own funding trail, but
+a determined attacker with capital can still build one.
 
 Attestation state also still lives in the oracle's JSON file rather than on chain,
 so the inputs to a score remain unverifiable by a third party even though each one
