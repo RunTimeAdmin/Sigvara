@@ -62,6 +62,9 @@ function readConfig(env = process.env) {
     // point, so the 30-point cap lands at 3,000 USDC of settled volume, which is
     // the figure docs/reputation-model.md has always quoted for this factor.
     feeUnit: BigInt(env.PAYMENT_FEE_UNIT || '100000000'),
+    // Days after which a payment counts half. 0 disables decay, which makes a
+    // score answer "was this agent ever busy" rather than "is it busy now".
+    halfLifeMs: Number(env.PAYMENT_HALF_LIFE_DAYS ?? 90) * 86_400_000,
   };
 }
 
@@ -155,6 +158,58 @@ async function verifyPayment({ provider, cfg }, txHash, payTo) {
   return { payer, amount, blockNumber: receipt.blockNumber, txHash: txHash.toLowerCase() };
 }
 
+// Decay weight, as an integer scaled by WEIGHT_SCALE.
+//
+// Deliberately not a float multiply. Amounts are BigInt because an 18-decimal
+// token overflows a JSON number, and converting to Number to apply a fractional
+// weight would throw away the precision that BigInt exists to keep. Scaling the
+// weight to an integer and dividing afterwards stays exact.
+const WEIGHT_SCALE = 1_000_000n;
+
+function decayWeight(ageMs, halfLifeMs) {
+  if (!halfLifeMs || halfLifeMs <= 0) return WEIGHT_SCALE; // decay off
+  if (ageMs <= 0) return WEIGHT_SCALE;                     // clock skew, treat as now
+  const w = Math.pow(0.5, ageMs / halfLifeMs);
+  return BigInt(Math.round(w * Number(WEIGHT_SCALE)));
+}
+
+/**
+ * Age-weighted payment volume.
+ *
+ * Without this, volume accumulates forever: an agent that did three thousand
+ * dollars of business last year still scores full marks today having done nothing
+ * since. Decay is also what makes a Sybil farm an ongoing cost rather than a
+ * one-off, because farmed volume evaporates unless it is renewed.
+ */
+function decayedVolume(events, halfLifeMs, now = Date.now()) {
+  let total = 0n;
+  for (const e of events) {
+    total += (BigInt(e.amount) * decayWeight(now - e.ts, halfLifeMs)) / WEIGHT_SCALE;
+  }
+  return total;
+}
+
+/**
+ * Age-weighted success ratio, as {successful, total} in scaled units.
+ *
+ * successScore is a ratio, so both halves decay together and a stale run of
+ * successes stops masking recent failures. Returned in the same shape the
+ * undecayed path uses so computeScore does not need to care which it got.
+ */
+function decayedAttestations(events, halfLifeMs, now = Date.now()) {
+  let successful = 0n, total = 0n;
+  for (const e of events) {
+    const w = decayWeight(now - e.ts, halfLifeMs);
+    total += w;
+    if (e.success) successful += w;
+  }
+  // Scale down to ordinary numbers; the ratio is all successScore uses.
+  return {
+    successful: Number(successful / 1000n) / 1000,
+    total: Number(total / 1000n) / 1000,
+  };
+}
+
 /**
  * feeScore from measured payment volume.
  *
@@ -174,5 +229,9 @@ module.exports = {
   verifyPayment,
   transfersTo,
   feeScoreFromVolume,
+  decayWeight,
+  decayedVolume,
+  decayedAttestations,
+  WEIGHT_SCALE,
   TRANSFER_TOPIC,
 };

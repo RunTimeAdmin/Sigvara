@@ -11,6 +11,9 @@ const {
   verifyPayment,
   transfersTo,
   feeScoreFromVolume,
+  decayWeight,
+  decayedVolume,
+  decayedAttestations,
   TRANSFER_TOPIC,
 } = require('./payments');
 
@@ -181,4 +184,83 @@ test('PaymentError carries a machine-readable code', () => {
   const e = new PaymentError('below_minimum', 'too small');
   assert.equal(e.code, 'below_minimum');
   assert.ok(e instanceof Error);
+});
+
+// ---- decay -----------------------------------------------------------------
+
+const DAY = 86_400_000;
+const H90 = 90 * DAY;
+const NOW = 1_800_000_000_000;
+const ev = (days, amount, success = true) => ({
+  ts: NOW - days * DAY, amount: String(amount), payer: '0xpayer', success,
+});
+
+test('decayWeight: full weight today, half at one half-life', () => {
+  assert.equal(decayWeight(0, H90), 1_000_000n);
+  assert.equal(decayWeight(H90, H90), 500_000n);
+  assert.equal(decayWeight(2 * H90, H90), 250_000n);
+});
+
+test('decayWeight: a half-life of 0 disables decay', () => {
+  assert.equal(decayWeight(10 * 365 * DAY, 0), 1_000_000n);
+});
+
+test('decayWeight: a timestamp in the future is treated as now, not amplified', () => {
+  // Clock skew between the oracle and a client must not mint extra weight.
+  assert.equal(decayWeight(-DAY, H90), 1_000_000n);
+});
+
+test('decayedVolume: halves every half-life', () => {
+  assert.equal(decayedVolume([ev(0, 1000n)], H90, NOW), 1000n);
+  assert.equal(decayedVolume([ev(90, 1000n)], H90, NOW), 500n);
+  assert.equal(decayedVolume([ev(180, 1000n)], H90, NOW), 250n);
+});
+
+test('decayedVolume: keeps BigInt precision on an 18-decimal token', () => {
+  const one = 10n ** 18n;
+  // A float multiply would round this; the scaled-integer weight does not.
+  assert.equal(decayedVolume([ev(90, one)], H90, NOW), one / 2n);
+});
+
+test('decayedVolume: a year of silence is worth about a sixteenth', () => {
+  const v = decayedVolume([ev(360, 1_000_000n)], H90, NOW);
+  assert.ok(v > 55_000n && v < 70_000n, `expected roughly 1/16, got ${v}`);
+});
+
+test('decayedVolume: sums many events at their own ages', () => {
+  const v = decayedVolume([ev(0, 100n), ev(90, 100n), ev(180, 100n)], H90, NOW);
+  assert.equal(v, 175n); // 100 + 50 + 25
+});
+
+test('decayedVolume: with decay off, an old payment still counts in full', () => {
+  assert.equal(decayedVolume([ev(3650, 1000n)], 0, NOW), 1000n);
+});
+
+test('decayedAttestations: a stale run of successes stops masking a recent failure', () => {
+  // Nine successes a year ago, one failure today. Undecayed that reads 90%.
+  const events = [];
+  for (let i = 0; i < 9; i++) events.push(ev(360, 1n, true));
+  events.push(ev(0, 1n, false));
+  const { successful, total } = decayedAttestations(events, H90, NOW);
+  const ratio = successful / total;
+  assert.ok(ratio < 0.4, `recent failure should dominate, got ${ratio.toFixed(2)}`);
+});
+
+test('decayedAttestations: with decay off it matches the raw tally', () => {
+  const events = [ev(360, 1n, true), ev(0, 1n, false)];
+  const { successful, total } = decayedAttestations(events, 0, NOW);
+  assert.equal(total, 2);
+  assert.equal(successful, 1);
+});
+
+test('decayedAttestations: no events reads zero, not NaN', () => {
+  const { successful, total } = decayedAttestations([], H90, NOW);
+  assert.equal(total, 0);
+  assert.equal(successful, 0);
+});
+
+test('readConfig: half-life defaults to 90 days and 0 turns decay off', () => {
+  assert.equal(readConfig({}).halfLifeMs, 90 * DAY);
+  assert.equal(readConfig({ PAYMENT_HALF_LIFE_DAYS: '0' }).halfLifeMs, 0);
+  assert.equal(readConfig({ PAYMENT_HALF_LIFE_DAYS: '30' }).halfLifeMs, 30 * DAY);
 });
