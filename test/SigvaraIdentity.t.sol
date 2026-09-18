@@ -126,6 +126,162 @@ contract SigvaraIdentityTest is Test {
         identity.clearSlashSuspension(didHash);
     }
 
+    // -------------------------------------------------------------------------
+    // operator transfer
+    // -------------------------------------------------------------------------
+
+    function test_transfer_movesTheAgentAndRecordsIt() public {
+        bytes32 didHash = _register();
+        address buyer = makeAddr("buyer");
+
+        vm.prank(operator);
+        identity.offerOperatorTransfer(didHash, buyer);
+        assertEq(identity.pendingOperator(didHash), buyer);
+        assertEq(identity.getIdentity(didHash).operator, operator, "nothing moves on the offer");
+
+        vm.prank(buyer);
+        identity.acceptOperatorTransfer(didHash);
+
+        assertEq(identity.getIdentity(didHash).operator, buyer);
+        assertEq(identity.pendingOperator(didHash), address(0), "offer consumed");
+        assertEq(identity.operatorChangedAt(didHash), block.timestamp);
+        assertEq(identity.operatorTransferCount(didHash), 1);
+    }
+
+    /// The index has to follow the agent, or the seller keeps listing something it no
+    /// longer controls and the buyer cannot find what it bought.
+    function test_transfer_movesTheAgentBetweenOperatorIndexes() public {
+        bytes32 didHash = _register();
+        address buyer = makeAddr("buyer");
+
+        vm.prank(operator);
+        identity.offerOperatorTransfer(didHash, buyer);
+        vm.prank(buyer);
+        identity.acceptOperatorTransfer(didHash);
+
+        assertEq(identity.getOperatorAgents(operator).length, 0, "gone from the seller");
+        bytes32[] memory bought = identity.getOperatorAgents(buyer);
+        assertEq(bought.length, 1);
+        assertEq(bought[0], didHash);
+    }
+
+    /// Only the named recipient can accept. Otherwise an offer would be a race that
+    /// anyone watching the mempool could win.
+    function test_transfer_onlyTheOfferedAddressCanAccept() public {
+        bytes32 didHash = _register();
+        address buyer = makeAddr("buyer");
+
+        vm.prank(operator);
+        identity.offerOperatorTransfer(didHash, buyer);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(SigvaraIdentity.NotOfferedOperator.selector, didHash, stranger)
+        );
+        vm.prank(stranger);
+        identity.acceptOperatorTransfer(didHash);
+    }
+
+    function test_transfer_reverts_acceptWithNoOffer() public {
+        bytes32 didHash = _register();
+        vm.expectRevert(
+            abi.encodeWithSelector(SigvaraIdentity.NoTransferOffered.selector, didHash)
+        );
+        vm.prank(stranger);
+        identity.acceptOperatorTransfer(didHash);
+    }
+
+    /// Handing off an accused agent would leave the liability with a buyer who had no
+    /// part in what it did.
+    function test_transfer_reverts_whileASlashIsPending() public {
+        bytes32 didHash = _register();
+        address buyer = makeAddr("buyer");
+
+        vm.prank(staking);
+        identity.updateStatus(didHash, SigvaraIdentity.AgentStatus.Suspended);
+        assertTrue(identity.slashSuspended(didHash));
+
+        vm.expectRevert(
+            abi.encodeWithSelector(SigvaraIdentity.TransferWhileSlashPending.selector, didHash)
+        );
+        vm.prank(operator);
+        identity.offerOperatorTransfer(didHash, buyer);
+    }
+
+    /// What changes hands must carry collateral, not just a reputation.
+    function test_transfer_reverts_whenTheAgentIsNotBonded() public {
+        bytes32 didHash = _register();
+        address buyer = makeAddr("buyer");
+
+        vm.prank(operator);
+        identity.offerOperatorTransfer(didHash, buyer);
+
+        stakeView.set(false);
+        vm.expectRevert(
+            abi.encodeWithSelector(SigvaraIdentity.InsufficientCollateral.selector, didHash)
+        );
+        vm.prank(buyer);
+        identity.acceptOperatorTransfer(didHash);
+    }
+
+    function test_transfer_eitherSideCanCancel() public {
+        bytes32 didHash = _register();
+        address buyer = makeAddr("buyer");
+
+        vm.prank(operator);
+        identity.offerOperatorTransfer(didHash, buyer);
+        vm.prank(buyer);
+        identity.cancelOperatorTransfer(didHash);
+        assertEq(identity.pendingOperator(didHash), address(0));
+
+        vm.prank(operator);
+        identity.offerOperatorTransfer(didHash, buyer);
+        vm.prank(operator);
+        identity.cancelOperatorTransfer(didHash);
+        assertEq(identity.pendingOperator(didHash), address(0));
+
+        // With an offer outstanding, a third party still cannot touch it.
+        vm.prank(operator);
+        identity.offerOperatorTransfer(didHash, buyer);
+        vm.expectRevert(
+            abi.encodeWithSelector(SigvaraIdentity.NotOperator.selector, didHash, stranger)
+        );
+        vm.prank(stranger);
+        identity.cancelOperatorTransfer(didHash);
+        assertEq(identity.pendingOperator(didHash), buyer, "offer untouched");
+    }
+
+    function test_transfer_reverts_onZeroOrSameOperator() public {
+        bytes32 didHash = _register();
+        vm.expectRevert(SigvaraIdentity.ZeroAgentAddress.selector);
+        vm.prank(operator);
+        identity.offerOperatorTransfer(didHash, address(0));
+
+        vm.expectRevert(abi.encodeWithSelector(SigvaraIdentity.SameOperator.selector, didHash));
+        vm.prank(operator);
+        identity.offerOperatorTransfer(didHash, operator);
+    }
+
+    /// The new operator gets the controls, and the old one loses them.
+    function test_transfer_handsOverControl() public {
+        bytes32 didHash = _register();
+        address buyer = makeAddr("buyer");
+
+        vm.prank(operator);
+        identity.offerOperatorTransfer(didHash, buyer);
+        vm.prank(buyer);
+        identity.acceptOperatorTransfer(didHash);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(SigvaraIdentity.NotOperator.selector, didHash, operator)
+        );
+        vm.prank(operator);
+        identity.updateStatus(didHash, SigvaraIdentity.AgentStatus.Suspended);
+
+        vm.prank(buyer);
+        identity.updateStatus(didHash, SigvaraIdentity.AgentStatus.Suspended);
+        assertFalse(identity.isActive(didHash));
+    }
+
     /// Suspending never needs collateral: that is the exit path.
     function test_updateStatus_suspendWorksWithoutCollateral() public {
         bytes32 didHash = _register();
