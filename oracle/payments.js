@@ -65,6 +65,13 @@ function readConfig(env = process.env) {
     // Days after which a payment counts half. 0 disables decay, which makes a
     // score answer "was this agent ever busy" rather than "is it busy now".
     halfLifeMs: Number(env.PAYMENT_HALF_LIFE_DAYS ?? 90) * 86_400_000,
+    // How much evidence one counterparty can contribute: at most this many points
+    // of feeScore, and this many attestations of weight. Volume from a single
+    // payer is otherwise indistinguishable from volume from a hundred, which is
+    // what makes a small ring of wallets as good as a real customer base. At the
+    // default of 5, reaching the 30-point cap needs at least six distinct payers.
+    // 0 disables the cap.
+    maxPerPayer: Number(env.PAYMENT_MAX_PER_PAYER ?? 5),
   };
 }
 
@@ -211,6 +218,87 @@ function decayedAttestations(events, halfLifeMs, now = Date.now()) {
 }
 
 /**
+ * Whether a payment is the agent's own side of the table paying itself.
+ *
+ * An operator can pay its own agent for the price of gas, since the money comes
+ * straight back, and the resulting attestation is indistinguishable from a real
+ * customer's. Catching the operator and the agent address does not stop someone
+ * funding a second wallet, but it raises the floor from free to deliberate.
+ */
+function isSelfPayment(payer, identity) {
+  const p = String(payer || '').toLowerCase();
+  if (!p) return false;
+  return p === String(identity.operator || '').toLowerCase()
+      || p === String(identity.agentAddress || '').toLowerCase();
+}
+
+/**
+ * Group decayed evidence by counterparty.
+ *
+ * Returns payer -> { volume, weight, successWeight }, all age-weighted. Kept
+ * separate from the summing so the caps below operate per payer rather than on a
+ * total that has already lost the distinction.
+ */
+function byPayer(events, halfLifeMs, now = Date.now()) {
+  const out = new Map();
+  for (const e of events) {
+    const w = decayWeight(now - e.ts, halfLifeMs);
+    const key = String(e.payer || '').toLowerCase();
+    const cur = out.get(key) ?? { volume: 0n, weight: 0n, successWeight: 0n };
+    cur.volume += (BigInt(e.amount) * w) / WEIGHT_SCALE;
+    cur.weight += w;
+    if (e.success) cur.successWeight += w;
+    out.set(key, cur);
+  }
+  return out;
+}
+
+/**
+ * Age-weighted volume with each counterparty's contribution capped.
+ *
+ * Without the cap, one wallet paying ten times is worth exactly as much as ten
+ * wallets paying once, so a ring is as good as a customer base. `feeUnit` and
+ * `maxPerPayer` together set the cap: no payer contributes more than
+ * `maxPerPayer` points of feeScore however much it sends.
+ */
+function diversifiedVolume(events, { halfLifeMs, feeUnit, maxPerPayer }, now = Date.now()) {
+  if (!maxPerPayer || maxPerPayer <= 0) return decayedVolume(events, halfLifeMs, now);
+  const cap = BigInt(feeUnit) * BigInt(maxPerPayer);
+  let total = 0n;
+  for (const { volume } of byPayer(events, halfLifeMs, now).values()) {
+    total += volume > cap ? cap : volume;
+  }
+  return total;
+}
+
+/**
+ * Age-weighted success ratio with each counterparty's evidence capped.
+ *
+ * The same reasoning as volume: a single payer filing a hundred attestations
+ * should not buy the confidence that a hundred payers would. When a payer is
+ * capped its successes are scaled by the same factor, so the cap changes how much
+ * its opinion counts without changing what its opinion was.
+ */
+function diversifiedAttestations(events, { halfLifeMs, maxPerPayer }, now = Date.now()) {
+  if (!maxPerPayer || maxPerPayer <= 0) return decayedAttestations(events, halfLifeMs, now);
+  const cap = BigInt(maxPerPayer) * WEIGHT_SCALE;
+  let successful = 0n, total = 0n;
+  for (const { weight, successWeight } of byPayer(events, halfLifeMs, now).values()) {
+    if (weight <= cap) { total += weight; successful += successWeight; }
+    else { total += cap; successful += (successWeight * cap) / weight; }
+  }
+  return {
+    successful: Number(successful / 1000n) / 1000,
+    total: Number(total / 1000n) / 1000,
+  };
+}
+
+/// Distinct counterparties with any surviving weight. Reported, not scored.
+function distinctPayers(events, halfLifeMs, now = Date.now()) {
+  return byPayer(events, halfLifeMs, now).size;
+}
+
+/**
  * feeScore from measured payment volume.
  *
  * The old proxy was attestation count divided by ten, which meant the factor
@@ -232,6 +320,11 @@ module.exports = {
   decayWeight,
   decayedVolume,
   decayedAttestations,
+  byPayer,
+  isSelfPayment,
+  diversifiedVolume,
+  diversifiedAttestations,
+  distinctPayers,
   WEIGHT_SCALE,
   TRANSFER_TOPIC,
 };
