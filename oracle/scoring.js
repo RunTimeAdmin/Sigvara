@@ -35,11 +35,48 @@ function successScore(successful, total, prior = SUCCESS_PRIOR) {
   return Math.floor((successful / (total + prior)) * 25);
 }
 
-function ageScore(registeredAtSeconds) {
-  // Logarithmic formula matches the Solidity on-chain reference value.
-  // Reaches max (20) around day 31: log2(32) * 4 = 20.
-  const days = (Date.now() / 1000 - registeredAtSeconds) / 86400;
+// Logarithmic curve, reaching the cap of 20 around day 31: log2(32) * 4 = 20.
+function ageCurve(days) {
+  if (!(days > 0)) return 0;
   return Math.min(20, Math.floor(Math.log2(days + 1) * 4));
+}
+
+/**
+ * Tenure, not calendar age.
+ *
+ * Measuring time since registration made this the cheapest factor in the score.
+ * Waiting costs nothing, so an attacker could register identities in bulk, leave
+ * them a month, and collect the full 20 points having done no work at all. The
+ * model doc claimed the logarithm stopped idle old agents dominating; it did not,
+ * it only capped them.
+ *
+ * With `activity` supplied the span runs from the agent's FIRST verified payment
+ * to its most recent one, and the result is weighted by how recent that last one
+ * is. The span deliberately starts at first activity rather than registration:
+ * otherwise waiting a month and then making one payment would unlock the full 20,
+ * which is the same free-lunch problem in a different shape.
+ *
+ * So an agent that never worked scores 0 however long ago it signed up. One that
+ * has just started scores 0 because it has no span yet, which is correct, it is
+ * new. One that traded for two years and stopped a year ago keeps almost nothing.
+ * One that has been trading for two years and is working today gets the full 20,
+ * because two years of sustained, paid, bonded operation is the part an attacker
+ * cannot shortcut.
+ *
+ * `activity` is null when payment verification is off, which keeps the old
+ * calendar behaviour so existing deployments are unaffected.
+ *
+ * @param {number} registeredAtSeconds
+ * @param {{ firstActivitySec: number, lastActivitySec: number, recency: number }|null} activity
+ */
+function ageScore(registeredAtSeconds, activity = null, nowMs = Date.now()) {
+  if (!activity) return ageCurve((nowMs / 1000 - registeredAtSeconds) / 86400);
+  const { firstActivitySec, lastActivitySec } = activity;
+  if (!firstActivitySec || !lastActivitySec) return 0;
+
+  const spanDays = (lastActivitySec - firstActivitySec) / 86400;
+  const recency = Math.max(0, Math.min(1, activity.recency ?? 0));
+  return Math.floor(ageCurve(spanDays) * recency);
 }
 
 function communityScore(unresolvedFlags) {
@@ -54,7 +91,7 @@ function communityScore(unresolvedFlags) {
  */
 function computeScore({
   registeredAt, attestations, flags, externalScore = 0, measuredFeeScore = null,
-  successPrior = SUCCESS_PRIOR,
+  successPrior = SUCCESS_PRIOR, activity = null,
 }) {
   const { successful = 0, total = 0 } = attestations;
 
@@ -62,7 +99,7 @@ function computeScore({
   // attestation-count proxy. null means payment verification is off.
   const fs = measuredFeeScore === null ? feeScore(total) : Math.max(0, Math.min(30, measuredFeeScore));
   const ss = successScore(successful, total, successPrior);
-  const as = ageScore(registeredAt);
+  const as = ageScore(registeredAt, activity);
   // externalScore comes from ERC-8004 cross-protocol feedback (see external.js),
   // 0 when unlinked or unconfigured. Clamp to the contract's cap so a bad input
   // can never make proposeReputation revert.
@@ -74,4 +111,4 @@ function computeScore({
   return { feeScore: fs, successScore: ss, ageScore: as, externalScore: es, communityScore: cs, propagationScore: ps, total: fs + ss + as + es + cs + ps };
 }
 
-module.exports = { computeScore, feeScore, successScore, ageScore, communityScore, SUCCESS_PRIOR };
+module.exports = { computeScore, feeScore, successScore, ageScore, ageCurve, communityScore, SUCCESS_PRIOR };
