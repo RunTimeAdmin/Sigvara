@@ -112,7 +112,8 @@ function transfersTo(receipt, asset, payTo) {
  * @param {object}   deps.cfg               from readConfig()
  * @param {string}   txHash
  * @param {string}   payTo                  the agent's own address, from the identity registry
- * @returns {Promise<{payer: string, amount: bigint, blockNumber: number, txHash: string}>}
+ * @returns {Promise<{payer: string, amount: bigint, blockNumber: number, settledAt: number, txHash: string}>}
+ *          settledAt is the block's timestamp in ms, not the time this ran.
  * @throws {PaymentError}
  */
 async function verifyPayment({ provider, cfg }, txHash, payTo) {
@@ -162,7 +163,31 @@ async function verifyPayment({ provider, cfg }, txHash, payTo) {
   }
   const payer = credits.reduce((a, b) => (b.value > a.value ? b : a)).from;
 
-  return { payer, amount, blockNumber: receipt.blockNumber, txHash: txHash.toLowerCase() };
+  // When the payment settled, not when the receipt was handed in. Decay, tenure and
+  // recency all key off this. Using the submission time made a year-old payment count
+  // as fresh, so receipts could be hoarded and released to keep a score alive without
+  // new work, and an agent's operating span collapsed to however fast its receipts
+  // were posted. With the settlement time, an old receipt arrives already decayed and
+  // hoarding buys nothing.
+  let block;
+  try {
+    block = await provider.getBlock(receipt.blockNumber);
+  } catch (err) {
+    throw new PaymentError('rpc_error', `could not read block: ${err.message}`);
+  }
+  if (!block || typeof block.timestamp !== 'number') {
+    // Never fall back to the current time: that silently reintroduces the bug this
+    // exists to fix, and a retry costs nothing.
+    throw new PaymentError('rpc_error', 'block timestamp unavailable');
+  }
+
+  return {
+    payer,
+    amount,
+    blockNumber: receipt.blockNumber,
+    settledAt: block.timestamp * 1000,
+    txHash: txHash.toLowerCase(),
+  };
 }
 
 // Decay weight, as an integer scaled by WEIGHT_SCALE.

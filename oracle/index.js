@@ -444,7 +444,9 @@ const server = http.createServer(async (req, res) => {
       if (credited) {
         // Credit after the cooldown check so a rejected attestation does not burn
         // the receipt; the payer can retry once the cooldown clears.
-        if (!creditPayment(didHash, credited.txHash, credited.amount, credited.payer, success)) {
+        if (!creditPayment(
+          didHash, credited.txHash, credited.amount, credited.payer, success, credited.settledAt
+        )) {
           metrics.inc('attestRejectedPayment');
           return json(res, 409, { error: 'this settlement has already been credited', code: 'replayed' });
         }
