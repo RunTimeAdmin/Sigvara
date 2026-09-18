@@ -75,6 +75,7 @@ contract SecurityFixesTest is Test {
         )));
 
         vm.startPrank(admin);
+        identity.initializeV2(address(staking));
         identity.grantRole(identity.STAKING_CORE_ROLE(), address(staking));
         rep.grantRole(rep.STAKING_CORE_ROLE(), address(staking));
         staking.grantRole(staking.SLASHING_COMMITTEE_ROLE(), committee);

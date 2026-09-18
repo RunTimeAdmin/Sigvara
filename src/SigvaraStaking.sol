@@ -230,6 +230,14 @@ contract SigvaraStaking is
         stakes[didHash].amount += amount;
         stakes[didHash].lockedAt = block.timestamp;
 
+        // The bond is what activates a new agent. Only from PendingBond: an agent that
+        // suspended itself to withdraw, or that the staking core suspended for a
+        // pending slash, must not be dragged back to Active by topping up.
+        if (id.status == SigvaraIdentity.AgentStatus.PendingBond
+            && stakes[didHash].amount >= minimumStake) {
+            identityRegistry.updateStatus(didHash, SigvaraIdentity.AgentStatus.Active);
+        }
+
         emit StakeDeposited(didHash, msg.sender, amount);
     }
 

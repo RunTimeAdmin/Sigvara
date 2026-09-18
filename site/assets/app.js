@@ -188,7 +188,9 @@ async function lookup() {
     const ident = await rpcRead(IDENTITY, SEL.identities + pad32(didHash));
     const registeredAt = BigInt(word(ident, 4));
     const statusNum = Number(BigInt(word(ident, 3)));
-    const statusStr = ["Active", "Suspended", "Slashed"][statusNum] ?? "?";
+    // Index matches SigvaraIdentity.AgentStatus. PendingBond means registered but
+    // never bonded: not slashable, not scoreable, not yet an agent to rely on.
+    const statusStr = ["Active", "Suspended", "Slashed", "awaiting bond"][statusNum] ?? "?";
     const bal = FEES_LIVE ? BigInt(await rpcRead(FEES, SEL.balance + pad32(didHash))) : 0n;
     const covered = FEES_LIVE && BigInt(await rpcRead(FEES, SEL.isCovered + pad32(didHash))) === 1n;
     $("didStr").textContent = `did:sigvara:${CHAIN_ID}:${addr}`;

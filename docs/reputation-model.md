@@ -160,6 +160,23 @@ Transfers are refused while a slash is pending, so an accused agent cannot be ha
 to a buyer who had no part in what it did, and refused unless the agent is bonded at
 handover, so what changes hands carries collateral rather than only a reputation.
 
+## Bond before trust
+
+A newly registered agent is `PendingBond`, not `Active`. Registration costs only gas,
+so minting an Active identity meant an unbonded agent existed the moment someone paid
+for a transaction, and an unbonded agent cannot be slashed: there is no stake to take.
+Bulk registration was therefore free and produced identities that could accrue
+standing while being unaccountable by construction.
+
+The first deposit that carries an agent over `minimumStake` activates it. Only from
+`PendingBond`: topping up must not drag back an agent that suspended itself to
+withdraw, or one the staking core suspended for a pending slash. Nothing returns to
+`PendingBond` either, since an agent cannot become un-bonded. It suspends and exits.
+
+`PendingBond` is appended to the status enum rather than inserted, because those values
+are stored on a live proxy and renumbering them would reinterpret every existing
+identity after an upgrade.
+
 ## New Agent Ramp-Up
 
 A brand-new agent registers and immediately has:

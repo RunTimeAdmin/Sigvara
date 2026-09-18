@@ -208,6 +208,9 @@ contract DisputeFreezeTest is Test {
             ))
         )));
         vm.startPrank(admin);
+        // Identity checks collateral against whichever staking it is pointed at, and
+        // this test runs a second one with a different token.
+        identity.setStakeView(address(s2));
         identity.grantRole(identity.STAKING_CORE_ROLE(), address(s2));
         rep.grantRole(rep.STAKING_CORE_ROLE(), address(s2));
         s2.grantRole(s2.SLASHING_COMMITTEE_ROLE(), committee);

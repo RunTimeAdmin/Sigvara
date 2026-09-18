@@ -8,6 +8,12 @@ export enum AgentStatus {
   Active = 0,
   Suspended = 1,
   Slashed = 2,
+  /**
+   * Registered but never bonded. Not slashable and not scoreable, so it is not an
+   * agent anyone should rely on yet. Becomes Active when a deposit first carries it
+   * over minimumStake. Appended to match the on-chain enum.
+   */
+  PendingBond = 3,
 }
 
 export interface AgentIdentity {

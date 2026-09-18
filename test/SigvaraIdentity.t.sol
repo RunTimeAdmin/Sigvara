@@ -323,7 +323,9 @@ contract SigvaraIdentityTest is Test {
         assertEq(id.operator, operator);
         assertEq(id.agentAddress, agent);
         assertEq(id.ed25519PubKey, PUB_KEY);
-        assertEq(uint8(id.status), uint8(SigvaraIdentity.AgentStatus.Active));
+        // Registration costs only gas, so it must not mint an Active identity. An
+        // unbonded Active agent cannot be slashed, which made bulk registration free.
+        assertEq(uint8(id.status), uint8(SigvaraIdentity.AgentStatus.PendingBond));
         assertGt(id.registeredAt, 0);
     }
 
@@ -566,9 +568,28 @@ contract SigvaraIdentityTest is Test {
         assertFalse(identity.isActive(identity.computeDidHash(agent)));
     }
 
-    function test_isActive_trueAfterRegistration() public {
+    function test_isActive_falseUntilBonded() public {
         bytes32 didHash = _register();
+        assertFalse(identity.isActive(didHash), "registration alone is not activation");
+
+        // The collateral gate is what lets it through, and only once the bond is real.
+        vm.prank(operator);
+        identity.updateStatus(didHash, SigvaraIdentity.AgentStatus.Active);
         assertTrue(identity.isActive(didHash));
+    }
+
+    /// PendingBond describes an identity that has never been bonded. An agent cannot
+    /// become un-bonded, so nothing returns to it: it suspends and exits instead.
+    function test_updateStatus_cannotReturnToPendingBond() public {
+        bytes32 didHash = _register();
+        vm.prank(operator);
+        identity.updateStatus(didHash, SigvaraIdentity.AgentStatus.Active);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(SigvaraIdentity.CannotReturnToPendingBond.selector, didHash)
+        );
+        vm.prank(operator);
+        identity.updateStatus(didHash, SigvaraIdentity.AgentStatus.PendingBond);
     }
 
     // -------------------------------------------------------------------------

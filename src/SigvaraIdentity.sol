@@ -40,7 +40,16 @@ contract SigvaraIdentity is Initializable, AccessControlUpgradeable, UUPSUpgrade
     // Types
     // -------------------------------------------------------------------------
 
-    enum AgentStatus { Active, Suspended, Slashed }
+    /// @dev PendingBond is APPENDED, never inserted. These values are persisted in
+    ///      `identities` on a live proxy, and renumbering them would reinterpret every
+    ///      stored identity after a UUPS upgrade.
+    ///
+    ///      A new agent starts here rather than Active. Registration costs only gas, so
+    ///      minting an Active identity meant an unbonded, unslashable agent existed the
+    ///      moment anyone paid for a transaction. It becomes Active when a deposit
+    ///      first carries it over minimumStake, which is what "bond before trust"
+    ///      should mean rather than merely describe.
+    enum AgentStatus { Active, Suspended, Slashed, PendingBond }
 
     struct AgentIdentity {
         address operator;       // Ethereum wallet that controls this agent's stake
@@ -121,6 +130,7 @@ contract SigvaraIdentity is Initializable, AccessControlUpgradeable, UUPSUpgrade
     error NotOfferedOperator(bytes32 didHash, address caller);
     error TransferWhileSlashPending(bytes32 didHash);
     error SameOperator(bytes32 didHash);
+    error CannotReturnToPendingBond(bytes32 didHash);
 
     // -------------------------------------------------------------------------
     // Constructor / Initializer
@@ -200,7 +210,7 @@ contract SigvaraIdentity is Initializable, AccessControlUpgradeable, UUPSUpgrade
             operator: msg.sender,
             agentAddress: agentAddress,
             ed25519PubKey: ed25519PubKey,
-            status: AgentStatus.Active,
+            status: AgentStatus.PendingBond,
             registeredAt: block.timestamp
         });
 
@@ -234,6 +244,9 @@ contract SigvaraIdentity is Initializable, AccessControlUpgradeable, UUPSUpgrade
         AgentIdentity storage id = _requireRegistered(didHash);
 
         if (id.status == AgentStatus.Slashed) revert SlashedAgentImmutable(didHash);
+        // Nothing moves back to PendingBond. It describes an identity that has never
+        // been bonded, and an agent cannot become un-bonded: it suspends and exits.
+        if (newStatus == AgentStatus.PendingBond) revert CannotReturnToPendingBond(didHash);
 
         bool isStakingCore = hasRole(STAKING_CORE_ROLE, msg.sender);
 
@@ -365,6 +378,20 @@ contract SigvaraIdentity is Initializable, AccessControlUpgradeable, UUPSUpgrade
                 return;
             }
         }
+    }
+
+    /**
+     * @notice Repoint the collateral oracle.
+     * @dev    initializeV2 can only ever run once, so without this a redeployed staking
+     *         contract would leave identity checking bonds against a dead one forever.
+     *         Zero is refused: an unset stake view fails every activation closed, which
+     *         is safe, but silently disabling the collateral gate is not something an
+     *         admin should be able to do by passing an empty argument.
+     */
+    function setStakeView(address stakeView_) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (stakeView_ == address(0)) revert StakeViewNotSet();
+        stakeView = IStakeView(stakeView_);
+        emit StakeViewSet(stakeView_);
     }
 
     /**
