@@ -210,12 +210,18 @@ contract SigvaraStaking is
     /**
      * @notice Deposit stake-token to back an agent identity.
      * @dev    Caller must have approved this contract for `amount` before calling.
-     *         The agent must already be registered in SigvaraIdentity; this call
-     *         verifies active status. Additional deposits accumulate on existing stakes.
+     *         The agent must already be registered in SigvaraIdentity. Additional
+     *         deposits accumulate on existing stakes.
+     *
+     *         Suspended agents may deposit. SigvaraIdentity refuses to move an agent
+     *         back to Active while it is below minimumStake, so an operator that
+     *         withdrew its bond down to nothing has to be able to top it back up.
+     *         Requiring Active here would make that a one-way trip and strand the
+     *         identity permanently. Slashed agents are terminal and still rejected.
      */
     function depositStake(bytes32 didHash, uint256 amount) external nonReentrant {
         SigvaraIdentity.AgentIdentity memory id = identityRegistry.getIdentity(didHash);
-        if (id.registeredAt == 0 || id.status != SigvaraIdentity.AgentStatus.Active) {
+        if (id.registeredAt == 0 || id.status == SigvaraIdentity.AgentStatus.Slashed) {
             revert AgentNotActive(didHash);
         }
         if (id.operator != msg.sender) revert NotOperator(didHash, msg.sender);
@@ -441,7 +447,16 @@ contract SigvaraStaking is
     ///      stay suspended can self-suspend again.
     function _dropProposal(bytes32 didHash, SlashProposal storage proposal) internal {
         proposal.state = SlashState.Cancelled;
-        identityRegistry.updateStatus(didHash, SigvaraIdentity.AgentStatus.Active);
+        // Only reinstate an agent that is still bonded. An operator can queue a
+        // withdrawal while Suspended, so by the time a proposal is dropped the active
+        // stake may sit below minimumStake, and reinstating would hand back Active
+        // status with nothing slashable behind it. Leaving it Suspended keeps the
+        // operator in control: deposit back over the minimum and reactivate.
+        if (stakes[didHash].amount >= minimumStake) {
+            identityRegistry.updateStatus(didHash, SigvaraIdentity.AgentStatus.Active);
+        } else {
+            identityRegistry.clearSlashSuspension(didHash);
+        }
         emit SlashCancelled(didHash, msg.sender);
     }
 

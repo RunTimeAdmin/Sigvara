@@ -96,6 +96,10 @@ contract Deploy is Script {
         )));
 
         // 5. Wire cross-contract roles
+        // Identity checks collateral before letting an operator return an agent to
+        // Active, so it needs the staking address. Staking is deployed after identity,
+        // hence a separate call rather than a constructor argument.
+        identity.initializeV2(address(staking));
         identity.grantRole(identity.STAKING_CORE_ROLE(), address(staking));
         reputation.grantRole(reputation.STAKING_CORE_ROLE(), address(staking));
         reputation.grantRole(reputation.ORACLE_ROLE(), oracle);

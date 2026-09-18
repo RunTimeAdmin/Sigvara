@@ -211,6 +211,48 @@ Confirm it took effect before trusting the oracle again:
 cast call <reputation proxy> "identityRegistry()(address)" --rpc-url arc_testnet
 ```
 
+### The collateral binding, and why the order matters
+
+`SigvaraIdentity` refuses to move an agent to Active unless it holds `minimumStake`,
+which it reads from `SigvaraStaking`. `SigvaraStaking` in turn only reinstates a still
+bonded agent when a slash proposal is dropped, and calls the new
+`clearSlashSuspension` otherwise. The two contracts have to be upgraded together, and
+identity has to go first.
+
+Taking staking first breaks everything: the new implementation calls
+`clearSlashSuspension`, which does not exist on the old identity, so every path that
+drops a proposal reverts. Taking identity first leaves a much narrower gap, where the
+old staking still reinstates unconditionally and would revert only for an agent that
+is under-collateralised with a proposal being dropped. Check for live proposals before
+starting and the gap is empty.
+
+Step 1, identity, with the wiring calldata:
+
+```powershell
+$env:TARGET        = "identity"
+$env:INIT_CALLDATA = "0x29b6eca9000000000000000000000000a69d62b2a6774d21a2c15d5d83b27277ed31d35b"
+forge script script/Upgrade.s.sol --rpc-url arc_testnet -vvvv              # simulate
+forge script script/Upgrade.s.sol --rpc-url arc_testnet --broadcast -vvvv
+```
+
+Step 2, staking, which needs no calldata. Clear `INIT_CALLDATA` or it will be sent
+again to the wrong contract:
+
+```powershell
+$env:TARGET        = "staking"
+$env:INIT_CALLDATA = ""
+forge script script/Upgrade.s.sol --rpc-url arc_testnet -vvvv              # simulate
+forge script script/Upgrade.s.sol --rpc-url arc_testnet --broadcast -vvvv
+```
+
+The calldata is `initializeV2(address)` against the Arc testnet staking proxy.
+Regenerate it for any other deployment with
+`cast calldata "initializeV2(address)" <staking proxy>`, and confirm it landed:
+
+```bash
+cast call <identity proxy> "stakeView()(address)" --rpc-url arc_testnet
+```
+
 Run `forge test --match-contract UpgradeTest` before broadcasting. Those tests
 cover the half the slot-pinning tests do not: that the upgrade executes, that
 only `UPGRADER_ROLE` can execute it, and that stakes, scores and queued
