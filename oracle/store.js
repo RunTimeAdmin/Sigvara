@@ -28,6 +28,12 @@ const flags = new Map();
 const links = new Map();
 // "attester:didHash" → timestamp (ms) of last attestation — dedupe/cooldown guard
 const attestCooldowns = new Map();
+// didHash → { volume: string (base units, BigInt-as-string), count } of verified payments.
+// Stored as a string because JSON has no BigInt and the volume can exceed 2^53 on an
+// 18-decimal token.
+const payments = new Map();
+// Settlement tx hashes already credited, so a receipt cannot be presented twice.
+const usedPaymentTxs = new Set();
 
 function load() {
   try {
@@ -36,6 +42,8 @@ function load() {
     for (const [k, v] of Object.entries(parsed.flags || {})) flags.set(k, v);
     for (const [k, v] of Object.entries(parsed.links || {})) links.set(k, v);
     for (const [k, v] of Object.entries(parsed.attestCooldowns || {})) attestCooldowns.set(k, v);
+    for (const [k, v] of Object.entries(parsed.payments || {})) payments.set(k, v);
+    for (const h of parsed.usedPaymentTxs || []) usedPaymentTxs.add(h);
     console.log(`[oracle] state loaded from ${STATE_PATH}: ${attestations.size} attestations, ${flags.size} flags, ${links.size} links, ${attestCooldowns.size} cooldowns`);
   } catch (err) {
     if (err.code === 'ENOENT') {
@@ -55,6 +63,8 @@ function persist() {
       flags: Object.fromEntries(flags),
       links: Object.fromEntries(links),
       attestCooldowns: Object.fromEntries(attestCooldowns),
+      payments: Object.fromEntries(payments),
+      usedPaymentTxs: [...usedPaymentTxs],
       savedAt: new Date().toISOString(),
     }));
     fs.renameSync(tmp, STATE_PATH);
@@ -87,6 +97,25 @@ function pruneExpiredCooldowns(now = Date.now()) {
   }
 }
 
+/// Records a verified payment against an agent. Returns false when this settlement
+/// has already been credited, which is the replay guard: the same receipt presented
+/// twice must not count twice.
+function creditPayment(didHash, txHash, amount) {
+  const key = txHash.toLowerCase();
+  if (usedPaymentTxs.has(key)) return false;
+  usedPaymentTxs.add(key);
+  const current = payments.get(didHash) ?? { volume: '0', count: 0 };
+  payments.set(didHash, {
+    volume: (BigInt(current.volume) + BigInt(amount)).toString(),
+    count: current.count + 1,
+  });
+  return true;
+}
+
+function paymentVolume(didHash) {
+  return BigInt((payments.get(didHash) ?? { volume: '0' }).volume);
+}
+
 function isStatePathWritable() {
   try {
     fs.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
@@ -108,6 +137,10 @@ module.exports = {
   flags,
   links,
   attestCooldowns,
+  payments,
+  usedPaymentTxs,
+  creditPayment,
+  paymentVolume,
   load,
   persist,
   checkAttestCooldown,

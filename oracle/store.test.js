@@ -7,6 +7,8 @@ const {
   recordAttestation,
   pruneExpiredCooldowns,
   attestCooldowns,
+  creditPayment,
+  paymentVolume,
   ATTEST_COOLDOWN_MS,
 } = require('./store');
 
@@ -99,4 +101,37 @@ test('cooldown calculation returns correct remaining time', () => {
   const result = checkAttestCooldown('attester1', '0xabc', now + halfCooldown);
   assert.equal(result.allowed, false);
   assert.equal(result.remainingMs, ATTEST_COOLDOWN_MS - halfCooldown);
+});
+
+// ---- payment credits -------------------------------------------------------
+
+test('creditPayment: accumulates volume across payments', () => {
+  const did = '0x' + '11'.repeat(32);
+  assert.equal(creditPayment(did, '0x' + 'a1'.repeat(32), 1_000_000n), true);
+  assert.equal(creditPayment(did, '0x' + 'a2'.repeat(32), 2_500_000n), true);
+  assert.equal(paymentVolume(did), 3_500_000n);
+});
+
+test('creditPayment: the same settlement cannot be credited twice', () => {
+  const did = '0x' + '22'.repeat(32);
+  const tx = '0x' + 'b1'.repeat(32);
+  assert.equal(creditPayment(did, tx, 1_000_000n), true);
+  assert.equal(creditPayment(did, tx, 1_000_000n), false, 'replay refused');
+  assert.equal(paymentVolume(did), 1_000_000n, 'volume unchanged by the replay');
+});
+
+test('creditPayment: a receipt spent on one agent cannot be reused on another', () => {
+  const tx = '0x' + 'c1'.repeat(32);
+  assert.equal(creditPayment('0x' + '33'.repeat(32), tx, 500n), true);
+  assert.equal(creditPayment('0x' + '44'.repeat(32), tx, 500n), false);
+});
+
+test('creditPayment: tx hash matching ignores case', () => {
+  const did = '0x' + '55'.repeat(32);
+  assert.equal(creditPayment(did, '0x' + 'DE'.repeat(32), 1n), true);
+  assert.equal(creditPayment(did, '0x' + 'de'.repeat(32), 1n), false);
+});
+
+test('paymentVolume: an agent with no payments reads zero, not undefined', () => {
+  assert.equal(paymentVolume('0x' + '99'.repeat(32)), 0n);
 });

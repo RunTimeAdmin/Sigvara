@@ -1,0 +1,184 @@
+'use strict';
+
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const { ethers } = require('ethers');
+
+const {
+  PaymentError,
+  readConfig,
+  required,
+  verifyPayment,
+  transfersTo,
+  feeScoreFromVolume,
+  TRANSFER_TOPIC,
+} = require('./payments');
+
+const ASSET = '0x3600000000000000000000000000000000000000';
+const AGENT = '0xCc52Cd92963f8A86d04dB29a4810d1e01D193910';
+const PAYER = '0x45D8c79e1188A429dbDfd8400A2869316d6fCe8D';
+const OTHER = '0x18CBcE50390f5f6ebe4E20Fc17833F25c8D94811';
+const TX = '0x' + 'ab'.repeat(32);
+
+const topicFor = addr => ethers.zeroPadValue(ethers.getAddress(addr), 32);
+
+function transferLog({ asset = ASSET, from = PAYER, to = AGENT, value = 1_000_000n } = {}) {
+  return {
+    address: asset,
+    topics: [TRANSFER_TOPIC, topicFor(from), topicFor(to)],
+    data: ethers.zeroPadValue(ethers.toBeHex(value), 32),
+  };
+}
+
+function fakeProvider({ receipt, head = 100, receiptError = null, headError = null }) {
+  return {
+    getTransactionReceipt: async () => {
+      if (receiptError) throw new Error(receiptError);
+      return receipt;
+    },
+    getBlockNumber: async () => {
+      if (headError) throw new Error(headError);
+      return head;
+    },
+  };
+}
+
+const CFG = { mode: 'required', asset: ASSET, minAmount: 0n, minConfirmations: 1, feeUnit: 1_000_000n };
+
+// ---- config ----------------------------------------------------------------
+
+test('readConfig: defaults to off, and off needs no asset', () => {
+  const cfg = readConfig({});
+  assert.equal(cfg.mode, 'off');
+  assert.equal(required(cfg), false);
+});
+
+test('readConfig: required without an asset is a startup failure, not a silent pass', () => {
+  assert.throws(() => readConfig({ PAYMENT_VERIFICATION: 'required' }), /PAYMENT_ASSET/);
+});
+
+test('readConfig: rejects an unknown mode rather than guessing', () => {
+  assert.throws(() => readConfig({ PAYMENT_VERIFICATION: 'maybe' }), /must be/);
+});
+
+test('readConfig: amounts stay BigInt so an 18-decimal token does not lose precision', () => {
+  const cfg = readConfig({
+    PAYMENT_VERIFICATION: 'required',
+    PAYMENT_ASSET: ASSET,
+    PAYMENT_MIN_AMOUNT: '1234567890123456789',
+  });
+  assert.equal(cfg.minAmount, 1234567890123456789n);
+});
+
+// ---- log matching ----------------------------------------------------------
+
+test('transfersTo: ignores a transfer of a different asset', () => {
+  const logs = [transferLog({ asset: OTHER })];
+  assert.equal(transfersTo({ logs }, ASSET, AGENT).length, 0);
+});
+
+test('transfersTo: ignores a transfer to somebody else', () => {
+  const logs = [transferLog({ to: OTHER })];
+  assert.equal(transfersTo({ logs }, ASSET, AGENT).length, 0);
+});
+
+test('transfersTo: ignores a non-Transfer event from the same token', () => {
+  const logs = [{ address: ASSET, topics: [ethers.id('Approval(address,address,uint256)'), topicFor(PAYER), topicFor(AGENT)], data: '0x' + '0'.repeat(64) }];
+  assert.equal(transfersTo({ logs }, ASSET, AGENT).length, 0);
+});
+
+test('transfersTo: picks up several credits in one transaction', () => {
+  const logs = [transferLog({ value: 10n }), transferLog({ value: 5n, from: OTHER })];
+  const found = transfersTo({ logs }, ASSET, AGENT);
+  assert.equal(found.length, 2);
+  assert.equal(found[0].value, 10n);
+});
+
+// ---- verification ----------------------------------------------------------
+
+test('verifyPayment: accepts a settled transfer and reports the payer from the log', async () => {
+  const provider = fakeProvider({ receipt: { status: 1, blockNumber: 99, logs: [transferLog({ value: 2_500_000n })] } });
+  const out = await verifyPayment({ provider, cfg: CFG }, TX, AGENT);
+  assert.equal(out.payer, ethers.getAddress(PAYER));
+  assert.equal(out.amount, 2_500_000n);
+  assert.equal(out.txHash, TX.toLowerCase());
+});
+
+test('verifyPayment: the payer comes from the chain, not from the caller', async () => {
+  // The whole point: a caller cannot name themselves as the attester.
+  const provider = fakeProvider({ receipt: { status: 1, blockNumber: 99, logs: [transferLog({ from: OTHER })] } });
+  const out = await verifyPayment({ provider, cfg: CFG }, TX, AGENT);
+  assert.equal(out.payer, ethers.getAddress(OTHER));
+});
+
+test('verifyPayment: rejects a transaction that paid a different address', async () => {
+  const provider = fakeProvider({ receipt: { status: 1, blockNumber: 99, logs: [transferLog({ to: OTHER })] } });
+  await assert.rejects(() => verifyPayment({ provider, cfg: CFG }, TX, AGENT), e => e.code === 'no_transfer');
+});
+
+test('verifyPayment: rejects a reverted transaction', async () => {
+  const provider = fakeProvider({ receipt: { status: 0, blockNumber: 99, logs: [transferLog()] } });
+  await assert.rejects(() => verifyPayment({ provider, cfg: CFG }, TX, AGENT), e => e.code === 'reverted');
+});
+
+test('verifyPayment: rejects an unmined transaction', async () => {
+  const provider = fakeProvider({ receipt: null });
+  await assert.rejects(() => verifyPayment({ provider, cfg: CFG }, TX, AGENT), e => e.code === 'not_found');
+});
+
+test('verifyPayment: rejects a payment below the minimum', async () => {
+  const cfg = { ...CFG, minAmount: 1_000_000n };
+  const provider = fakeProvider({ receipt: { status: 1, blockNumber: 99, logs: [transferLog({ value: 999_999n })] } });
+  await assert.rejects(() => verifyPayment({ provider, cfg }, TX, AGENT), e => e.code === 'below_minimum');
+});
+
+test('verifyPayment: holds off until the transfer has enough confirmations', async () => {
+  const cfg = { ...CFG, minConfirmations: 6 };
+  const provider = fakeProvider({ receipt: { status: 1, blockNumber: 100, logs: [transferLog()] }, head: 102 });
+  await assert.rejects(() => verifyPayment({ provider, cfg }, TX, AGENT), e => e.code === 'unconfirmed');
+});
+
+test('verifyPayment: an RPC failure is reported as an RPC failure, not a bad payment', async () => {
+  // A node having a bad minute must not be recorded as the caller trying it on.
+  const provider = fakeProvider({ receipt: null, receiptError: 'connection reset' });
+  await assert.rejects(() => verifyPayment({ provider, cfg: CFG }, TX, AGENT), e => e.code === 'rpc_error');
+});
+
+test('verifyPayment: rejects a malformed tx hash before touching the network', async () => {
+  let called = false;
+  const provider = { getTransactionReceipt: async () => { called = true; return null; }, getBlockNumber: async () => 1 };
+  await assert.rejects(() => verifyPayment({ provider, cfg: CFG }, '0xdeadbeef', AGENT), e => e.code === 'bad_tx_hash');
+  assert.equal(called, false, 'did not call the provider');
+});
+
+test('verifyPayment: a split payment counts as one, summed', async () => {
+  const provider = fakeProvider({
+    receipt: { status: 1, blockNumber: 99, logs: [transferLog({ value: 400_000n }), transferLog({ value: 600_000n })] },
+  });
+  const out = await verifyPayment({ provider, cfg: CFG }, TX, AGENT);
+  assert.equal(out.amount, 1_000_000n);
+});
+
+// ---- fee score -------------------------------------------------------------
+
+test('feeScoreFromVolume: one point per unit of volume', () => {
+  assert.equal(feeScoreFromVolume(0n, 1_000_000n), 0);
+  assert.equal(feeScoreFromVolume(999_999n, 1_000_000n), 0);
+  assert.equal(feeScoreFromVolume(5_000_000n, 1_000_000n), 5);
+});
+
+test('feeScoreFromVolume: caps at 30 so the contract can never reject the score', () => {
+  assert.equal(feeScoreFromVolume(10_000_000_000n, 1_000_000n), 30);
+});
+
+test('feeScoreFromVolume: handles volume beyond Number.MAX_SAFE_INTEGER', () => {
+  // 18-decimal token: 5000 whole units, well past 2^53 in base units.
+  assert.equal(feeScoreFromVolume(5000n * 10n ** 18n, 10n ** 18n), 30);
+  assert.equal(feeScoreFromVolume(7n * 10n ** 18n, 10n ** 18n), 7);
+});
+
+test('PaymentError carries a machine-readable code', () => {
+  const e = new PaymentError('below_minimum', 'too small');
+  assert.equal(e.code, 'below_minimum');
+  assert.ok(e instanceof Error);
+});

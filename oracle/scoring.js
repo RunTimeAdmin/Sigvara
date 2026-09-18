@@ -8,6 +8,11 @@
 
 function feeScore(attestationTotal) {
   // Proxy for fee activity: 1 point per 10 attestations received, capped at 30.
+  //
+  // Only used when payment verification is off. It counts HTTP requests, not fees,
+  // so with an unauthenticated /attest the largest factor in the score was whatever
+  // the loudest caller chose to send. When PAYMENT_VERIFICATION=required the oracle
+  // passes measured volume instead and this is not consulted. See payments.js.
   return Math.min(30, Math.floor(attestationTotal / 10));
 }
 
@@ -30,13 +35,15 @@ function communityScore(unresolvedFlags) {
 }
 
 /**
- * @param {{ registeredAt: number, attestations: { successful: number, total: number }, flags: number, externalScore?: number }} opts
+ * @param {{ registeredAt: number, attestations: { successful: number, total: number }, flags: number, externalScore?: number, measuredFeeScore?: number }} opts
  * @returns {{ feeScore, successScore, ageScore, externalScore, communityScore, propagationScore, total }}
  */
-function computeScore({ registeredAt, attestations, flags, externalScore = 0 }) {
+function computeScore({ registeredAt, attestations, flags, externalScore = 0, measuredFeeScore = null }) {
   const { successful = 0, total = 0 } = attestations;
 
-  const fs = feeScore(total);
+  // measuredFeeScore is supplied when payments are verified: real volume beats the
+  // attestation-count proxy. null means payment verification is off.
+  const fs = measuredFeeScore === null ? feeScore(total) : Math.max(0, Math.min(30, measuredFeeScore));
   const ss = successScore(successful, total);
   const as = ageScore(registeredAt);
   // externalScore comes from ERC-8004 cross-protocol feedback (see external.js),
