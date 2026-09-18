@@ -3,8 +3,8 @@
 // Ported from bagsReputation.js — adapted for the Sigvara EVM protocol.
 // All six factors are self-contained pure functions so they can be unit-tested in isolation.
 //
-// Phase 1 stubs: externalScore (SAID integration) and propagationScore (trust graph)
-// are always 0 until Phase 2 oracle network is live.
+// externalScore (ERC-8004 cross-protocol feedback) is 0 unless the EXTERNAL_* env is
+// configured. propagationScore is inherited trust: see payments.propagationScore.
 
 function feeScore(attestationTotal) {
   // Proxy for fee activity: 1 point per 10 attestations received, capped at 30.
@@ -91,7 +91,7 @@ function communityScore(unresolvedFlags) {
  */
 function computeScore({
   registeredAt, attestations, flags, externalScore = 0, measuredFeeScore = null,
-  successPrior = SUCCESS_PRIOR, activity = null,
+  successPrior = SUCCESS_PRIOR, activity = null, propagation = 0,
 }) {
   const { successful = 0, total = 0 } = attestations;
 
@@ -105,7 +105,10 @@ function computeScore({
   // can never make proposeReputation revert.
   const es = Math.max(0, Math.min(15, Math.trunc(externalScore) || 0));
   const cs = communityScore(flags ?? 0);
-  const ps = 0;  // Trust propagation graph — Phase 2
+  // Inherited trust from counterparties that are themselves scored agents. 0 when
+  // payment verification is off, since there are no identified counterparties to
+  // inherit from. Clamped so a bad input cannot make proposeReputation revert.
+  const ps = Math.max(0, Math.min(5, Math.trunc(propagation) || 0));
 
   // Sum all six factors so total stays correct once es/ps become nonzero in Phase 2.
   return { feeScore: fs, successScore: ss, ageScore: as, externalScore: es, communityScore: cs, propagationScore: ps, total: fs + ss + as + es + cs + ps };

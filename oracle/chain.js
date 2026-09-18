@@ -6,6 +6,7 @@ const IDENTITY_ABI = [
   'event AgentRegistered(bytes32 indexed didHash, address indexed operator, address indexed agentAddress, bytes32 ed25519PubKey)',
   'function getIdentity(bytes32 didHash) view returns (tuple(address operator, address agentAddress, bytes32 ed25519PubKey, uint8 status, uint256 registeredAt))',
   'function stakeView() view returns (address)',
+  'function computeDidHash(address agentAddress) view returns (bytes32)',
 ];
 
 const STAKE_VIEW_ABI = ['function hasMinimumStake(bytes32 didHash) view returns (bool)'];
@@ -14,6 +15,7 @@ const OPERATOR_SET_ABI = ['function isActiveOperator(address) view returns (bool
 
 const REPUTATION_ABI = [
   'function operatorBond() view returns (address)',
+  'function getTotalScore(bytes32 didHash) view returns (uint8)',
   'function proposeReputation(bytes32 didHash, tuple(uint8 feeScore, uint8 successScore, uint8 ageScore, uint8 externalScore, uint8 communityScore, uint8 propagationScore, uint256 lastUpdated) data)',
   'function finalizeReputation(bytes32 didHash)',
   'function getPendingScore(bytes32 didHash) view returns (tuple(tuple(uint8 feeScore, uint8 successScore, uint8 ageScore, uint8 externalScore, uint8 communityScore, uint8 propagationScore, uint256 lastUpdated) data, uint256 proposedAt, bool exists))',
@@ -178,6 +180,30 @@ async function operatorStanding() {
   }
 }
 
+/**
+ * The Sigvara score of the agent at `address`, or 0 if there is no agent there.
+ *
+ * A counterparty's own standing is what makes the web of trust weigh anything: a
+ * payment from a reputable agent is better evidence than one from a wallet nobody
+ * knows. Deliberately reads the MATURED score, the one getTotalScore serves, because
+ * it lags what has just been earned and so damps the reflexivity of A's score lifting
+ * B's while B's lifts A's.
+ *
+ * Failures read as 0. An unknown counterparty and an unreachable node both mean "no
+ * evidence of standing", and the safe direction is to grant no bonus.
+ */
+async function getAgentScore(address) {
+  try {
+    const didHash = await identityContract.computeDidHash(address);
+    const id = await identityContract.getIdentity(didHash);
+    if (Number(id.registeredAt) === 0) return 0;
+    if (Number(id.status) === STATUS_SLASHED) return 0;
+    return Number(await reputationContract.getTotalScore(didHash));
+  } catch {
+    return 0;
+  }
+}
+
 /// Read-only provider, for modules that verify transactions the oracle did not send.
 function getProvider() {
   return provider;
@@ -286,6 +312,7 @@ module.exports = {
   getAgentInfo,
   getProvider,
   isBonded,
+  getAgentScore,
   getScanState,
   restoreScanState,
   operatorStanding,

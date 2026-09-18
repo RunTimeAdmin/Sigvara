@@ -18,6 +18,8 @@ const {
   diversifiedVolume,
   diversifiedAttestations,
   distinctPayers,
+  trustMultiplier,
+  propagationScore,
   TRANSFER_TOPIC,
 } = require('./payments');
 
@@ -373,4 +375,68 @@ test('distinctPayers: counts counterparties, not payments', () => {
 test('readConfig: maxPerPayer defaults to 5 and 0 disables it', () => {
   assert.equal(readConfig({}).maxPerPayer, 5);
   assert.equal(readConfig({ PAYMENT_MAX_PER_PAYER: '0' }).maxPerPayer, 0);
+});
+
+// ---- web of trust ----------------------------------------------------------
+
+const TCFG = { halfLifeMs: H90, feeUnit: 100n, maxPerPayer: 5, trustWeight: 1 };
+const tev = (payer, amount, ok = true) => ({ ts: NOW, amount: String(amount), payer, success: ok });
+
+test('trustMultiplier: an unknown wallet is weighted exactly as before', () => {
+  assert.equal(trustMultiplier('0xstranger', {}, 1), 1);
+  assert.equal(trustMultiplier('0xstranger', null, 1), 1);
+});
+
+test('trustMultiplier: scales with the counterparty score, and is capped', () => {
+  assert.equal(trustMultiplier('0xa', { '0xa': 100 }, 1), 2);
+  assert.equal(trustMultiplier('0xa', { '0xa': 50 }, 1), 1.5);
+  assert.equal(trustMultiplier('0xa', { '0xa': 999 }, 1), 2, 'a bad score cannot inflate it');
+  assert.equal(trustMultiplier('0xa', { '0xa': -5 }, 1), 1);
+});
+
+test('trustMultiplier: a weight of 0 disables the web of trust', () => {
+  assert.equal(trustMultiplier('0xa', { '0xa': 100 }, 0), 1);
+});
+
+test('diversifiedVolume: a reputable counterparty counts for more', () => {
+  const heaps = [tev('0xa', 10000n)];
+  const anon = diversifiedVolume(heaps, TCFG, NOW, {});
+  const trusted = diversifiedVolume(heaps, TCFG, NOW, { '0xa': 100 });
+  assert.equal(anon, 500n);
+  assert.equal(trusted, 1000n, 'a perfectly scored counterparty counts double');
+});
+
+test('propagationScore: one point per fully trusted counterparty', () => {
+  const ev = ['0xa', '0xb', '0xc'].map(p => tev(p, 1n));
+  assert.equal(propagationScore(ev, { '0xa': 100, '0xb': 100, '0xc': 100 }), 3);
+});
+
+test('propagationScore: pro-rated, so half-trusted counterparties count half', () => {
+  const ev = ['0xa', '0xb', '0xc', '0xd'].map(p => tev(p, 1n));
+  const scores = { '0xa': 50, '0xb': 50, '0xc': 50, '0xd': 50 };
+  assert.equal(propagationScore(ev, scores), 2);
+});
+
+test('propagationScore: capped at 5 however many vouch', () => {
+  const ev = Array.from({ length: 50 }, (_, i) => tev('0xp' + i, 1n));
+  const scores = Object.fromEntries(ev.map(e => [e.payer, 100]));
+  assert.equal(propagationScore(ev, scores), 5);
+});
+
+test('propagationScore: a ring of unscored agents grants nothing', () => {
+  // The property that matters. A web of trust that bootstraps from nothing would be
+  // worse than none: a Sybil could stand up five identities and have them vouch.
+  const ev = ['0xa', '0xb', '0xc', '0xd', '0xe'].map(p => tev(p, 1n));
+  const scores = Object.fromEntries(ev.map(e => [e.payer, 0]));
+  assert.equal(propagationScore(ev, scores), 0);
+});
+
+test('propagationScore: breadth not size, one counterparty counts once', () => {
+  const ev = Array.from({ length: 20 }, () => tev('0xwhale', 100000n));
+  assert.equal(propagationScore(ev, { '0xwhale': 100 }), 1);
+});
+
+test('propagationScore: no scores available means no inherited trust', () => {
+  assert.equal(propagationScore([tev('0xa', 1n)], null), 0);
+  assert.equal(propagationScore([], {}), 0);
 });

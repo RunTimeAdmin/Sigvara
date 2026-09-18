@@ -78,22 +78,43 @@ const {
 // for feeScore and the raw attestation tally for successScore, and both are weighted
 // by age. Nulls keep computeScore on the old path. Used by the epoch and by /score so
 // the number served matches the number proposed.
-function measuredFactorsFor(didHash, now = Date.now()) {
+function measuredFactorsFor(didHash, now = Date.now(), payerScores = null) {
   if (!payments.required(paymentCfg)) {
-    return { measuredFeeScore: null, measuredAttestations: null, activity: null };
+    return { measuredFeeScore: null, measuredAttestations: null, activity: null, propagation: 0 };
   }
   const events = getPaymentEvents(didHash);
   // Diversified, not just decayed: one counterparty's evidence is capped, so a ring
-  // of wallets cannot substitute for a customer base.
-  const volume = payments.diversifiedVolume(events, paymentCfg, now);
+  // of wallets cannot substitute for a customer base. payerScores raises that cap for
+  // counterparties that are themselves scored agents.
+  const volume = payments.diversifiedVolume(events, paymentCfg, now, payerScores);
   return {
     measuredFeeScore: payments.feeScoreFromVolume(volume, paymentCfg.feeUnit),
-    measuredAttestations: payments.diversifiedAttestations(events, paymentCfg, now),
+    measuredAttestations: payments.diversifiedAttestations(events, paymentCfg, now, payerScores),
     distinctPayers: payments.distinctPayers(events, paymentCfg.halfLifeMs, now),
+    propagation: payments.propagationScore(events, payerScores),
     // Tenure replaces calendar age: time since registration cost nothing, so it
     // was the cheapest twenty points an idle farm could collect.
     activity: payments.activityWindow(events, paymentCfg.halfLifeMs, now),
   };
+}
+
+// Counterparty standing, for the web of trust. Resolved once per epoch per address:
+// an agent's payers repeat across epochs and within one, and each lookup is three
+// chain reads. Cleared at the start of every epoch so standings cannot go stale.
+let payerScoreCache = new Map();
+
+async function payerScoresFor(didHash) {
+  if (!payments.required(paymentCfg)) return null;
+  const out = {};
+  for (const e of getPaymentEvents(didHash)) {
+    const key = String(e.payer || '').toLowerCase();
+    if (key in out) continue;
+    if (!payerScoreCache.has(key)) {
+      payerScoreCache.set(key, await chain.getAgentScore(e.payer));
+    }
+    out[key] = payerScoreCache.get(key);
+  }
+  return out;
 }
 
 // ---- Epoch -----------------------------------------------------------------
@@ -127,6 +148,7 @@ async function runEpoch() {
 
 async function runEpochInner() {
   const start = Date.now();
+  payerScoreCache = new Map();
   console.log(`[oracle] epoch start — ${new Date().toISOString()}`);
   metrics.inc('epochsStarted');
 
@@ -253,7 +275,7 @@ async function runEpochInner() {
       const externalScore = (external.configured() && linkedId !== undefined)
         ? await external.externalScoreFor(linkedId, operator)
         : 0;
-      const measured  = measuredFactorsFor(didHash);
+      const measured  = measuredFactorsFor(didHash, Date.now(), await payerScoresFor(didHash));
       const scores    = computeScore({
         registeredAt,
         attestations: measured.measuredAttestations ?? att,
@@ -261,6 +283,7 @@ async function runEpochInner() {
         externalScore,
         measuredFeeScore: measured.measuredFeeScore,
         activity: measured.activity,
+        propagation: measured.propagation,
       });
 
       // Charge before proposing, not after. The coverage read above and the
@@ -525,7 +548,9 @@ const server = http.createServer(async (req, res) => {
       const externalScore = (external.configured() && linkedId !== undefined)
         ? await external.externalScoreFor(linkedId, operator)
         : 0;
-      const measured  = measuredFactorsFor(didHash);
+      // Same inputs as the epoch, including counterparty standing, or this endpoint
+      // would serve a number the oracle never proposes.
+      const measured  = measuredFactorsFor(didHash, Date.now(), await payerScoresFor(didHash));
       const scores    = computeScore({
         registeredAt,
         attestations: measured.measuredAttestations ?? att,
@@ -533,6 +558,7 @@ const server = http.createServer(async (req, res) => {
         externalScore,
         measuredFeeScore: measured.measuredFeeScore,
         activity: measured.activity,
+        propagation: measured.propagation,
       });
       return json(res, 200, {
         didHash,
@@ -546,6 +572,7 @@ const server = http.createServer(async (req, res) => {
           attestations: measured.measuredAttestations,
           distinctPayers: measured.distinctPayers,
           activity: measured.activity,
+          trustWeight: paymentCfg.trustWeight,
           halfLifeDays: paymentCfg.halfLifeMs / 86400000,
           maxPerPayer: paymentCfg.maxPerPayer,
         } } : {}),
