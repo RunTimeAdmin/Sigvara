@@ -15,6 +15,13 @@ contract RepStakeViewMock is IStakeView {
     function hasMinimumStake(bytes32) external view returns (bool) { return bonded; }
 }
 
+/// Stands in for SigvaraOracleBond.
+contract OperatorSetMock is IOperatorSet {
+    mapping(address => bool) public active;
+    function set(address who, bool v) external { active[who] = v; }
+    function isActiveOperator(address who) external view returns (bool) { return active[who]; }
+}
+
 contract SigvaraReputationTest is Test {
     SigvaraReputation rep;
     SigvaraIdentity identity;
@@ -631,6 +638,92 @@ contract SigvaraReputationTest is Test {
         vm.expectRevert();
         vm.prank(stranger);
         rep.setMaturityRate(10);
+    }
+
+    // -------------------------------------------------------------------------
+    // bonded oracles
+    // -------------------------------------------------------------------------
+
+    /// With no operator set configured the role alone governs, which is the
+    /// single-operator arrangement this protocol started from.
+    function test_operatorBond_unsetMeansTheCheckIsOff() public {
+        assertEq(address(rep.operatorBond()), address(0));
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore);
+        assertTrue(rep.getPendingScore(DID).exists);
+    }
+
+    /// Holding ORACLE_ROLE is no longer enough. The role says who may speak; the bond
+    /// is what they lose for speaking falsely.
+    function test_operatorBond_roleAloneIsNotEnoughOnceSet() public {
+        OperatorSetMock set = new OperatorSetMock();
+        vm.prank(admin);
+        rep.setOperatorBond(address(set));
+
+        assertTrue(rep.hasRole(rep.ORACLE_ROLE(), oracle), "still has the role");
+        vm.expectRevert(abi.encodeWithSelector(SigvaraReputation.OracleNotBonded.selector, oracle));
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore);
+    }
+
+    function test_operatorBond_admittedOperatorCanPropose() public {
+        OperatorSetMock set = new OperatorSetMock();
+        vm.prank(admin);
+        rep.setOperatorBond(address(set));
+        set.set(oracle, true);
+
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore);
+        assertTrue(rep.getPendingScore(DID).exists);
+    }
+
+    /// Bonding does not grant the right to speak on its own, or anyone able to post a
+    /// bond could write scores.
+    function test_operatorBond_bondWithoutTheRoleIsStillRefused() public {
+        OperatorSetMock set = new OperatorSetMock();
+        vm.prank(admin);
+        rep.setOperatorBond(address(set));
+        set.set(stranger, true);
+
+        vm.expectRevert();
+        vm.prank(stranger);
+        rep.proposeReputation(DID, maxScore);
+    }
+
+    /// An operator that exits must not strand the scores it already proposed.
+    /// Finalization is mechanical and stays permissionless.
+    function test_operatorBond_finalizeStillWorksAfterTheOracleExits() public {
+        OperatorSetMock set = new OperatorSetMock();
+        vm.prank(admin);
+        rep.setOperatorBond(address(set));
+        set.set(oracle, true);
+
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore);
+
+        set.set(oracle, false); // ejected, or unbonded, mid-window
+        vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
+        rep.finalizeReputation(DID);
+
+        assertEq(rep.getEarnedScore(DID), 100);
+    }
+
+    function test_operatorBond_canBeTurnedBackOff() public {
+        OperatorSetMock set = new OperatorSetMock();
+        vm.prank(admin);
+        rep.setOperatorBond(address(set));
+        vm.prank(admin);
+        rep.setOperatorBond(address(0));
+
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore);
+        assertTrue(rep.getPendingScore(DID).exists);
+    }
+
+    function test_operatorBond_onlyAdminCanSetIt() public {
+        vm.expectRevert();
+        vm.prank(stranger);
+        rep.setOperatorBond(address(1));
     }
 
     /// Registration costs only gas, so an unbonded agent must not be scoreable. It

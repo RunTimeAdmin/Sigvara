@@ -565,6 +565,20 @@ server.listen(cfg.port, cfg.host, () => {
   console.log(`[oracle] HTTP on ${cfg.host}:${cfg.port}  epoch every ${cfg.epochMs / 3_600_000}h  attest cooldown ${ATTEST_COOLDOWN_MS / 1000}s`);
   console.log(`[oracle] state path: ${getStatePath()}`);
   loadState();
+
+  // Reported, not enforced. The contract decides; this just means an oracle that
+  // cannot propose says so at boot instead of failing quietly once an hour.
+  chain.operatorStanding().then(({ enforced, allowed, operatorBond }) => {
+    if (!enforced) return;
+    if (allowed) {
+      console.log(`[oracle] bonded operator check passed (registry ${operatorBond})`);
+    } else {
+      console.warn(
+        `[oracle] WARNING: this wallet is not an admitted operator in ${operatorBond}. ` +
+        'Every proposeReputation will revert until it has bonded and been admitted.'
+      );
+    }
+  }).catch(() => {});
   runEpoch().catch(err => console.error('[oracle] startup epoch error:', err.message));
   setInterval(() => runEpoch().catch(err => console.error('[oracle] scheduled epoch error:', err.message)), cfg.epochMs);
 });
