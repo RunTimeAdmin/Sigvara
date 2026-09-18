@@ -93,7 +93,7 @@ never broadcast.** Delete it before the real run, or you will commit addresses
 that do not exist:
 
 ```powershell
-Remove-Item -Force deploymentsń2002.json
+Remove-Item -Force -ErrorAction SilentlyContinue deployments\5042002.json
 ```
 
 ## 4. Broadcast
