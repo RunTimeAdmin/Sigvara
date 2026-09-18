@@ -64,19 +64,26 @@ const {
   checkAttestCooldown,
   recordAttestation,
   creditPayment,
-  paymentVolume,
+  getPaymentEvents,
+  prunePaymentEvents,
   pruneExpiredCooldowns,
   isStatePathWritable,
   getStatePath,
   ATTEST_COOLDOWN_MS,
 } = require('./store');
 
-// With verification on, feeScore comes from settled payment volume rather than the
-// attestation-count proxy. null keeps computeScore on the old path. Used by both the
-// epoch and the /score endpoint so the number served matches the number proposed.
-function measuredFeeScoreFor(didHash) {
-  if (!payments.required(paymentCfg)) return null;
-  return payments.feeScoreFromVolume(paymentVolume(didHash), paymentCfg.feeUnit);
+// With verification on, the payment log replaces both the attestation-count proxy
+// for feeScore and the raw attestation tally for successScore, and both are weighted
+// by age. Nulls keep computeScore on the old path. Used by the epoch and by /score so
+// the number served matches the number proposed.
+function measuredFactorsFor(didHash, now = Date.now()) {
+  if (!payments.required(paymentCfg)) return { measuredFeeScore: null, measuredAttestations: null };
+  const events = getPaymentEvents(didHash);
+  const volume = payments.decayedVolume(events, paymentCfg.halfLifeMs, now);
+  return {
+    measuredFeeScore: payments.feeScoreFromVolume(volume, paymentCfg.feeUnit),
+    measuredAttestations: payments.decayedAttestations(events, paymentCfg.halfLifeMs, now),
+  };
 }
 
 // ---- Epoch -----------------------------------------------------------------
@@ -223,9 +230,13 @@ async function runEpochInner() {
       const externalScore = (external.configured() && linkedId !== undefined)
         ? await external.externalScoreFor(linkedId, operator)
         : 0;
+      const measured  = measuredFactorsFor(didHash);
       const scores    = computeScore({
-        registeredAt, attestations: att, flags: flagCount, externalScore,
-        measuredFeeScore: measuredFeeScoreFor(didHash),
+        registeredAt,
+        attestations: measured.measuredAttestations ?? att,
+        flags: flagCount,
+        externalScore,
+        measuredFeeScore: measured.measuredFeeScore,
       });
 
       // Charge before proposing, not after. The coverage read above and the
@@ -257,6 +268,15 @@ async function runEpochInner() {
       console.error(`[oracle]   ${didHash.slice(0, 10)}… error: ${err.message}`);
       metrics.inc('proposeErrors');
     }
+  }
+
+  // Once an event's weight is negligible it cannot move an integer score, so
+  // keeping it only grows the state file. Pruning here rather than on the write
+  // path keeps /attest fast and bounds the work to once an epoch.
+  const pruned = prunePaymentEvents(paymentCfg.halfLifeMs);
+  if (pruned > 0) {
+    console.log(`[oracle] pruned ${pruned} fully decayed payment event(s)`);
+    persistState();
   }
 
   console.log(`[oracle] epoch done — ${proposed} proposed, ${finalized} finalized in ${Date.now() - start}ms`);
@@ -392,7 +412,7 @@ const server = http.createServer(async (req, res) => {
       if (credited) {
         // Credit after the cooldown check so a rejected attestation does not burn
         // the receipt; the payer can retry once the cooldown clears.
-        if (!creditPayment(didHash, credited.txHash, credited.amount)) {
+        if (!creditPayment(didHash, credited.txHash, credited.amount, credited.payer, success)) {
           metrics.inc('attestRejectedPayment');
           return json(res, 409, { error: 'this settlement has already been credited', code: 'replayed' });
         }
@@ -471,11 +491,29 @@ const server = http.createServer(async (req, res) => {
       const externalScore = (external.configured() && linkedId !== undefined)
         ? await external.externalScoreFor(linkedId, operator)
         : 0;
+      const measured  = measuredFactorsFor(didHash);
       const scores    = computeScore({
-        registeredAt, attestations: att, flags: flagCount, externalScore,
-        measuredFeeScore: measuredFeeScoreFor(didHash),
+        registeredAt,
+        attestations: measured.measuredAttestations ?? att,
+        flags: flagCount,
+        externalScore,
+        measuredFeeScore: measured.measuredFeeScore,
       });
-      return json(res, 200, { didHash, status, scores, attestations: att, flags: flagCount, erc8004AgentId: linkedId ?? null });
+      return json(res, 200, {
+        didHash,
+        status,
+        scores,
+        attestations: att,
+        // Present only when payment verification is on. Shows what the score was
+        // actually computed from, which is age-weighted and so differs from the
+        // raw tally above.
+        ...(measured.measuredAttestations ? { weighted: {
+          attestations: measured.measuredAttestations,
+          halfLifeDays: paymentCfg.halfLifeMs / 86400000,
+        } } : {}),
+        flags: flagCount,
+        erc8004AgentId: linkedId ?? null,
+      });
     } catch (err) {
       return json(res, 500, { error: err.message });
     }

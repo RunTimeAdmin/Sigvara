@@ -28,10 +28,14 @@ const flags = new Map();
 const links = new Map();
 // "attester:didHash" → timestamp (ms) of last attestation — dedupe/cooldown guard
 const attestCooldowns = new Map();
-// didHash → { volume: string (base units, BigInt-as-string), count } of verified payments.
-// Stored as a string because JSON has no BigInt and the volume can exceed 2^53 on an
-// 18-decimal token.
-const payments = new Map();
+// didHash → [{ ts, amount: string, payer, success }] — one entry per verified payment.
+//
+// Individual events rather than a running total, because a total cannot be decayed:
+// weighting a payment by its age needs to know when it happened. Amounts are strings
+// because JSON has no BigInt and an 18-decimal token overflows a JSON number. The
+// payer is kept for the same reason the timestamp is, so that counting distinct
+// counterparties later is a scoring change and not a storage migration.
+const paymentEvents = new Map();
 // Settlement tx hashes already credited, so a receipt cannot be presented twice.
 const usedPaymentTxs = new Set();
 
@@ -42,7 +46,7 @@ function load() {
     for (const [k, v] of Object.entries(parsed.flags || {})) flags.set(k, v);
     for (const [k, v] of Object.entries(parsed.links || {})) links.set(k, v);
     for (const [k, v] of Object.entries(parsed.attestCooldowns || {})) attestCooldowns.set(k, v);
-    for (const [k, v] of Object.entries(parsed.payments || {})) payments.set(k, v);
+    for (const [k, v] of Object.entries(parsed.paymentEvents || {})) paymentEvents.set(k, v);
     for (const h of parsed.usedPaymentTxs || []) usedPaymentTxs.add(h);
     console.log(`[oracle] state loaded from ${STATE_PATH}: ${attestations.size} attestations, ${flags.size} flags, ${links.size} links, ${attestCooldowns.size} cooldowns`);
   } catch (err) {
@@ -63,7 +67,7 @@ function persist() {
       flags: Object.fromEntries(flags),
       links: Object.fromEntries(links),
       attestCooldowns: Object.fromEntries(attestCooldowns),
-      payments: Object.fromEntries(payments),
+      paymentEvents: Object.fromEntries(paymentEvents),
       usedPaymentTxs: [...usedPaymentTxs],
       savedAt: new Date().toISOString(),
     }));
@@ -100,20 +104,40 @@ function pruneExpiredCooldowns(now = Date.now()) {
 /// Records a verified payment against an agent. Returns false when this settlement
 /// has already been credited, which is the replay guard: the same receipt presented
 /// twice must not count twice.
-function creditPayment(didHash, txHash, amount) {
+function creditPayment(didHash, txHash, amount, payer, success, now = Date.now()) {
   const key = txHash.toLowerCase();
   if (usedPaymentTxs.has(key)) return false;
   usedPaymentTxs.add(key);
-  const current = payments.get(didHash) ?? { volume: '0', count: 0 };
-  payments.set(didHash, {
-    volume: (BigInt(current.volume) + BigInt(amount)).toString(),
-    count: current.count + 1,
-  });
+  const list = paymentEvents.get(didHash) ?? [];
+  list.push({ ts: now, amount: BigInt(amount).toString(), payer, success: !!success });
+  paymentEvents.set(didHash, list);
   return true;
 }
 
+function getPaymentEvents(didHash) {
+  return paymentEvents.get(didHash) ?? [];
+}
+
+/// Undecayed lifetime volume. Reported, not scored: scoring uses the decayed sum.
 function paymentVolume(didHash) {
-  return BigInt((payments.get(didHash) ?? { volume: '0' }).volume);
+  return getPaymentEvents(didHash).reduce((sum, e) => sum + BigInt(e.amount), 0n);
+}
+
+/// Drops events whose decayed weight has fallen below `minWeight`, so the log does
+/// not grow without bound. At a 90-day half-life and the default floor this keeps
+/// roughly the last three years, by which point an event contributes under a
+/// thousandth of its original value and cannot move an integer score.
+function prunePaymentEvents(halfLifeMs, minWeight = 0.001, now = Date.now()) {
+  if (!halfLifeMs || halfLifeMs <= 0) return 0;
+  const cutoff = now - halfLifeMs * (Math.log2(1 / minWeight));
+  let dropped = 0;
+  for (const [did, list] of paymentEvents.entries()) {
+    const kept = list.filter(e => e.ts >= cutoff);
+    dropped += list.length - kept.length;
+    if (kept.length === 0) paymentEvents.delete(did);
+    else if (kept.length !== list.length) paymentEvents.set(did, kept);
+  }
+  return dropped;
 }
 
 function isStatePathWritable() {
@@ -137,10 +161,12 @@ module.exports = {
   flags,
   links,
   attestCooldowns,
-  payments,
+  paymentEvents,
   usedPaymentTxs,
   creditPayment,
+  getPaymentEvents,
   paymentVolume,
+  prunePaymentEvents,
   load,
   persist,
   checkAttestCooldown,

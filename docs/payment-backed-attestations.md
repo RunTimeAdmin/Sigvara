@@ -69,6 +69,7 @@ payment path and means it cannot be fooled by a facilitator that lies.
 | `PAYMENT_MIN_AMOUNT` | Smallest payment that counts, in base units |
 | `PAYMENT_MIN_CONFIRMATIONS` | Confirmations before a settlement is accepted |
 | `PAYMENT_FEE_UNIT` | Base units of volume per point of `feeScore` |
+| `PAYMENT_HALF_LIFE_DAYS` | Days after which a payment counts half. 0 disables decay |
 
 Amounts are base units and are handled as BigInt throughout, so an 18-decimal
 token does not lose precision. A missing `PAYMENT_ASSET` with verification on
@@ -89,6 +90,29 @@ Mainnet should run `required`.
 The 502 case matters. A node having a bad minute must not read as a caller trying
 it on, so RPC failures are counted separately from rejected attestations and are
 not recorded against the caller.
+
+## Decay
+
+Payments are stored as individual events, not a running total, because a total
+cannot be aged. Each one is weighted by `0.5 ^ (age / half-life)` when the score
+is computed, so at the default 90 days a payment counts fully today, half after
+three months, a quarter after six, and about a sixteenth after a year.
+
+This applies to `successScore` as well as `feeScore`. Both halves of the success
+ratio decay together, so nine successes a year ago no longer mask a failure this
+week.
+
+Two reasons it matters. Without it the score answers "was this agent ever busy"
+rather than "is it busy now", and an agent that stopped working a year ago keeps
+full marks indefinitely. It also turns farmed reputation into a perishable asset:
+a burst of manufactured volume evaporates unless it is renewed, so gaming the
+score becomes a subscription rather than a one-off purchase.
+
+Weights are computed as scaled integers rather than floats, because amounts are
+BigInt and converting to a float to apply a fraction would discard the precision
+BigInt exists to preserve on an 18-decimal token. Events whose weight falls below
+a thousandth are pruned once per epoch; they cannot move an integer score and
+would otherwise grow the state file without bound.
 
 ## What this does not fix
 
