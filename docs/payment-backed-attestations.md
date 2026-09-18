@@ -41,6 +41,8 @@ The oracle then:
 4. takes the payer from the transfer log and uses it as the attester identity,
    ignoring anything the caller put in the `attester` field,
 5. records the settlement hash so the same receipt can never be credited twice,
+   and stamps the event with the block's timestamp rather than the time the receipt
+   arrived,
 6. computes `feeScore` from accumulated volume rather than a request count.
 
 An attestation now costs what the agent charges. The attester is whoever paid,
@@ -94,7 +96,14 @@ not recorded against the caller.
 ## Decay
 
 Payments are stored as individual events, not a running total, because a total
-cannot be aged. Each one is weighted by `0.5 ^ (age / half-life)` when the score
+cannot be aged. Each event carries the time the payment *settled*, taken from its
+block, not the time its receipt was handed in. Keying off submission made a
+year-old payment count as fresh, so receipts could be hoarded and released to keep
+a score alive without new work, and an agent's operating span collapsed to however
+fast its receipts were posted. With the settlement time, an old receipt arrives
+already decayed and hoarding buys nothing. If the block cannot be read the
+attestation is refused as an RPC error rather than falling back to the current
+time, which would silently restore the problem. Each one is weighted by `0.5 ^ (age / half-life)` when the score
 is computed, so at the default 90 days a payment counts fully today, half after
 three months, a quarter after six, and about a sixteenth after a year.
 

@@ -37,7 +37,9 @@ function transferLog({ asset = ASSET, from = PAYER, to = AGENT, value = 1_000_00
   };
 }
 
-function fakeProvider({ receipt, head = 100, receiptError = null, headError = null }) {
+const BLOCK_TS = 1_700_000_000; // seconds
+
+function fakeProvider({ receipt, head = 100, receiptError = null, headError = null, block = { timestamp: BLOCK_TS }, blockError = null }) {
   return {
     getTransactionReceipt: async () => {
       if (receiptError) throw new Error(receiptError);
@@ -46,6 +48,10 @@ function fakeProvider({ receipt, head = 100, receiptError = null, headError = nu
     getBlockNumber: async () => {
       if (headError) throw new Error(headError);
       return head;
+    },
+    getBlock: async () => {
+      if (blockError) throw new Error(blockError);
+      return block;
     },
   };
 }
@@ -156,6 +162,24 @@ test('verifyPayment: rejects a malformed tx hash before touching the network', a
   const provider = { getTransactionReceipt: async () => { called = true; return null; }, getBlockNumber: async () => 1 };
   await assert.rejects(() => verifyPayment({ provider, cfg: CFG }, '0xdeadbeef', AGENT), e => e.code === 'bad_tx_hash');
   assert.equal(called, false, 'did not call the provider');
+});
+
+test('verifyPayment: timestamps the payment when it settled, not when it was reported', async () => {
+  // Keying off the submission time made a year-old payment count as fresh, so
+  // receipts could be hoarded and released to keep a score alive without new work.
+  const provider = fakeProvider({ receipt: { status: 1, blockNumber: 99, logs: [transferLog()] } });
+  const out = await verifyPayment({ provider, cfg: CFG }, TX, AGENT);
+  assert.equal(out.settledAt, BLOCK_TS * 1000);
+  assert.ok(Math.abs(out.settledAt - Date.now()) > 1000, 'not the current time');
+});
+
+test('verifyPayment: an unreadable block is an RPC error, never a fallback to now', async () => {
+  // Falling back to the current time would silently restore the bug.
+  const rpcDown = fakeProvider({ receipt: { status: 1, blockNumber: 99, logs: [transferLog()] }, blockError: 'boom' });
+  await assert.rejects(() => verifyPayment({ provider: rpcDown, cfg: CFG }, TX, AGENT), e => e.code === 'rpc_error');
+
+  const noTs = fakeProvider({ receipt: { status: 1, blockNumber: 99, logs: [transferLog()] }, block: null });
+  await assert.rejects(() => verifyPayment({ provider: noTs, cfg: CFG }, TX, AGENT), e => e.code === 'rpc_error');
 });
 
 test('verifyPayment: a split payment counts as one, summed', async () => {
