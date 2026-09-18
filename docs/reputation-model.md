@@ -95,6 +95,25 @@ This factor is currently oracle-computed from the attestation graph and is the m
 
 ---
 
+## Maturity
+
+A score is earned as soon as it finalizes, but it becomes spendable only over time.
+`getTotalScore` returns the matured value, which climbs toward the earned one at a
+fixed number of points per day, and `getEarnedScore` returns the raw figure. Threshold
+checks use the matured value.
+
+The attack this addresses is farm-and-cash-out: build a score quickly, get trusted at
+the peak, leave. Decay already makes a farmed score perishable, but perishable is not
+the same as unusable, and a burst was spendable the moment it landed. Maturity puts a
+floor under how fast trust can be acquired, so the window where a farm is worth
+anything is a month rather than a week, and that month is long enough for the dispute,
+flagging and slashing machinery to be used.
+
+Two details matter. A rise is released from what the agent could actually spend at the
+last finalize, not from what it had earned, so re-proposing a high score does not reset
+the clock. And a fall is immediate: delaying bad news would protect the agent rather
+than whoever is relying on it.
+
 ## New Agent Ramp-Up
 
 A brand-new agent registers and immediately has:

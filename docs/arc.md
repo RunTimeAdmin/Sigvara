@@ -277,6 +277,36 @@ the point, but check who it affects before broadcasting:
 cast call <staking proxy> "hasMinimumStake(bytes32)(bool)" <didHash> --rpc-url arc_testnet
 ```
 
+### Score maturity
+
+An earned score becomes spendable over time rather than at once. `getTotalScore`
+now returns the matured value and `getEarnedScore` returns the raw one, so anything
+reading the old function gets the conservative number without changing.
+
+A rate of 0 means no maturity, which is what an upgraded proxy has until
+`initializeV4` runs. That is a working state, not a broken one, so this upgrade is
+safe to land in two steps if you want to watch it. New deployments get it from the
+deploy script, overridable with `MATURITY_RATE_PER_DAY`.
+
+```powershell
+$env:TARGET        = "reputation"
+$env:INIT_CALLDATA = "0xf903488b0000000000000000000000000000000000000000000000000000000000000004"
+forge script script/Upgrade.s.sol --rpc-url arc_testnet -vvvv              # simulate
+forge script script/Upgrade.s.sol --rpc-url arc_testnet --broadcast -vvvv
+```
+
+That calldata is `initializeV4(4)`: four points a day, so a perfect score takes 25
+days to become fully spendable. Regenerate for another rate with
+`cast calldata "initializeV4(uint256)" <points>`, and check what landed:
+
+```bash
+cast call <reputation proxy> "maturityRatePerDay()(uint256)" --rpc-url arc_testnet
+```
+
+Expect every existing agent to read 0 immediately after the rate is set, then climb.
+The anchor starts from what was spendable at the last finalize, which is zero for an
+agent that has never had one since the upgrade.
+
 Run `forge test --match-contract UpgradeTest` before broadcasting. Those tests
 cover the half the slot-pinning tests do not: that the upgrade executes, that
 only `UPGRADER_ROLE` can execute it, and that stakes, scores and queued
