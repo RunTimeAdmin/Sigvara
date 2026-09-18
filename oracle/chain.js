@@ -65,6 +65,43 @@ function reset() {
 // (chunking getLogs into windows of chunkSize to stay within free-tier RPC limits,
 // e.g. Alchemy: 10) and accumulates them into knownAgents, so repeated epochs don't
 // rescan chain history but every previously-seen agent is still rescored each epoch.
+/**
+ * queryFilter with backoff on a rate-limited node.
+ *
+ * A public RPC will refuse a burst, and an epoch that gives up on the first refusal
+ * loses the whole scan and retries the same burst an hour later. Backing off and
+ * retrying the one chunk costs seconds and keeps the epoch.
+ */
+async function queryWithBackoff(filter, start, end, attempts = 4) {
+  let delay = 1000;
+  for (let i = 0; ; i++) {
+    try {
+      return await identityContract.queryFilter(filter, start, end);
+    } catch (err) {
+      const msg = String(err && err.message || err);
+      const rateLimited = /rate limit|429|too many requests/i.test(msg);
+      if (!rateLimited || i >= attempts - 1) throw err;
+      console.log(`[oracle] rate limited scanning ${start}-${end}, retrying in ${delay}ms`);
+      await sleep(delay);
+      delay *= 2;
+    }
+  }
+}
+
+/// Scan progress, for the caller to persist. Without this a restart rescans the whole
+/// chain from FROM_BLOCK, which grows without bound and is what tripped the public
+/// RPC's rate limit after a day of blocks had accumulated.
+function getScanState() {
+  return { lastScannedBlock, agents: Array.from(knownAgents.values()) };
+}
+
+function restoreScanState(state) {
+  if (!state || typeof state.lastScannedBlock !== 'number') return false;
+  lastScannedBlock = state.lastScannedBlock;
+  knownAgents = new Map((state.agents || []).map(a => [a.didHash, a]));
+  return true;
+}
+
 async function getRegisteredAgents() {
   const chunkSize = cfg_.logChunkSize;
   const filter = identityContract.filters.AgentRegistered();
@@ -74,7 +111,7 @@ async function getRegisteredAgents() {
   if (fromBlock <= latest) {
     for (let start = fromBlock; start <= latest; start += chunkSize) {
       const end = Math.min(start + chunkSize - 1, latest);
-      const chunk = await identityContract.queryFilter(filter, start, end);
+      const chunk = await queryWithBackoff(filter, start, end);
       for (const e of chunk) {
         knownAgents.set(e.args.didHash, {
           didHash: e.args.didHash,
@@ -244,6 +281,8 @@ module.exports = {
   getAgentInfo,
   getProvider,
   isBonded,
+  getScanState,
+  restoreScanState,
   operatorStanding,
   proposeScore,
   finalizeScore,

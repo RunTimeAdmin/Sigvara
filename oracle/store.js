@@ -38,6 +38,10 @@ const attestCooldowns = new Map();
 const paymentEvents = new Map();
 // Settlement tx hashes already credited, so a receipt cannot be presented twice.
 const usedPaymentTxs = new Set();
+// Where the AgentRegistered log scan got to, and what it found. Persisted so a
+// restart resumes instead of replaying the chain from FROM_BLOCK, which grows with
+// every block and eventually trips a public RPC's rate limit.
+let scanState = null;
 
 function load() {
   try {
@@ -48,6 +52,7 @@ function load() {
     for (const [k, v] of Object.entries(parsed.attestCooldowns || {})) attestCooldowns.set(k, v);
     for (const [k, v] of Object.entries(parsed.paymentEvents || {})) paymentEvents.set(k, v);
     for (const h of parsed.usedPaymentTxs || []) usedPaymentTxs.add(h);
+    scanState = parsed.scanState || null;
     console.log(`[oracle] state loaded from ${STATE_PATH}: ${attestations.size} attestations, ${flags.size} flags, ${links.size} links, ${attestCooldowns.size} cooldowns`);
   } catch (err) {
     if (err.code === 'ENOENT') {
@@ -69,6 +74,7 @@ function persist() {
       attestCooldowns: Object.fromEntries(attestCooldowns),
       paymentEvents: Object.fromEntries(paymentEvents),
       usedPaymentTxs: [...usedPaymentTxs],
+      scanState,
       savedAt: new Date().toISOString(),
     }));
     fs.renameSync(tmp, STATE_PATH);
@@ -140,6 +146,9 @@ function prunePaymentEvents(halfLifeMs, minWeight = 0.001, now = Date.now()) {
   return dropped;
 }
 
+function getScanState() { return scanState; }
+function setScanState(state) { scanState = state; }
+
 function isStatePathWritable() {
   try {
     fs.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
@@ -164,6 +173,8 @@ module.exports = {
   paymentEvents,
   usedPaymentTxs,
   creditPayment,
+  getScanState,
+  setScanState,
   getPaymentEvents,
   paymentVolume,
   prunePaymentEvents,
