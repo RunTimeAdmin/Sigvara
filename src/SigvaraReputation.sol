@@ -153,6 +153,10 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
     /// type because it is an auto-generated mapping getter, which has no `.selector`.
     bytes4 private constant OPERATOR_CHANGED_AT = 0xcd46167a;
 
+    /// Bonded operator registry. Unset means the check is off, which is a deliberate
+    /// mode rather than a misconfiguration: the registry is a separate deployment.
+    IOperatorSet public operatorBond;
+
     /// Merkle root of the evidence behind each agent's finalized score.
     ///
     /// A score is computed off-chain from payments the oracle verified, and until now
@@ -161,11 +165,14 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
     /// commits to the evidence set at proposal time, so a third party can be handed the
     /// leaves, re-verify each payment against the chain itself, and confirm the set is
     /// the one that was actually scored.
+    ///
+    /// Declared LAST, after operatorBond, because operatorBond is already live on the
+    /// Arc testnet proxy. Inserting this above it moved operatorBond down one slot,
+    /// where it read zero, and zero is the "bonded-operator check disabled" mode: the
+    /// upgrade would have quietly removed the requirement without reverting anything.
+    /// Caught by the fork rehearsal in test/VerifyUpgradeFork.t.sol. Anything added
+    /// here goes below this line.
     mapping(bytes32 => bytes32) public evidenceRoots;
-
-    /// Bonded operator registry. Unset means the check is off, which is a deliberate
-    /// mode rather than a misconfiguration: the registry is a separate deployment.
-    IOperatorSet public operatorBond;
 
     // -------------------------------------------------------------------------
     // Events
