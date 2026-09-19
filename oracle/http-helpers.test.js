@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
-const { readBody, isAuthorized, parseScorePath, rateLimited, RATE_MAX, clientKey, adminTokenPolicyError } = require('./http-helpers');
+const { readBody, isAuthorized, mayAttestUnauthenticated, parseScorePath, rateLimited, RATE_MAX, clientKey, adminTokenPolicyError } = require('./http-helpers');
 
 // Minimal fake matching the subset of http.IncomingMessage that readBody uses:
 // an EventEmitter with data/end/error events plus a destroy() method.
@@ -207,4 +207,49 @@ test('clientKey: a proxied request with no forwarded header falls back to the so
 test('clientKey: a request with no socket is keyed, not crashed', () => {
   assert.equal(clientKey({}), 'unknown');
   assert.equal(clientKey(undefined), 'unknown');
+});
+
+// --- mayAttestUnauthenticated ----------------------------------------------
+// Decides who may write to the score without a token. A positive attestation is
+// self-credentialing because the payment behind it is verified against the chain;
+// a negative one is not, because successScore is successful/(total+prior) and the
+// payment proves money moved, never that the work failed.
+
+test('mayAttestUnauthenticated: a positive, payment-verified claim needs no token', () => {
+  assert.equal(mayAttestUnauthenticated(true, true), true);
+});
+
+test('mayAttestUnauthenticated: a negative claim always needs the token', () => {
+  // The griefing case. Without this, anyone who sends the agent one faucet token
+  // can lower its score, and on testnet that token is free.
+  assert.equal(mayAttestUnauthenticated(false, true), false);
+});
+
+test('mayAttestUnauthenticated: nothing is open when payments are not verified', () => {
+  // With verification off the attester is whatever the caller types, so there is no
+  // credential at all and the token is the only control left.
+  assert.equal(mayAttestUnauthenticated(true, false), false);
+  assert.equal(mayAttestUnauthenticated(false, false), false);
+});
+
+test('mayAttestUnauthenticated: truthy is not true', () => {
+  // This decides an authorisation question, so `success: "no"` must not slip through
+  // as a positive the way a plain truthiness check would let it.
+  for (const v of ['yes', 'no', 'false', 1, -1, [], {}, 'true']) {
+    assert.equal(mayAttestUnauthenticated(v, true), false, `${JSON.stringify(v)} must not count as true`);
+  }
+});
+
+test('mayAttestUnauthenticated: missing or empty values need the token', () => {
+  for (const v of [undefined, null, 0, '', NaN, false]) {
+    assert.equal(mayAttestUnauthenticated(v, true), false, `${String(v)} must not count as true`);
+  }
+});
+
+test('mayAttestUnauthenticated: paymentsRequired must be exactly true', () => {
+  // payments.required() returns a boolean today. If it ever returns a truthy config
+  // object instead, this must fail closed rather than open the endpoint.
+  assert.equal(mayAttestUnauthenticated(true, 'required'), false);
+  assert.equal(mayAttestUnauthenticated(true, 1), false);
+  assert.equal(mayAttestUnauthenticated(true, {}), false);
 });

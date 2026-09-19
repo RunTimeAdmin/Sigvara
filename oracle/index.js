@@ -7,7 +7,7 @@ const chain = require('./chain');
 const external = require('./external');
 const { computeScore } = require('./scoring');
 const { decideAction, epochIntervalError } = require('./epoch-policy');
-const { json, readBody, isAuthorized, parseScorePath, rateLimited, clientKey, adminTokenPolicyError } = require('./http-helpers');
+const { json, readBody, isAuthorized, mayAttestUnauthenticated, parseScorePath, rateLimited, clientKey, adminTokenPolicyError } = require('./http-helpers');
 const payments = require('./payments');
 const merkle = require('./merkle');
 const metrics = require('./metrics');
@@ -465,7 +465,6 @@ const server = http.createServer(async (req, res) => {
   // attester: unique ID for the party submitting the attestation (e.g. client address, API key hash).
   // Used for dedupe/cooldown: the same attester cannot attest the same agent within ATTEST_COOLDOWN_MS.
   if (req.method === 'POST' && pathname === '/attest') {
-    if (!isAuthorized(req.headers, cfg.adminToken)) return json(res, 401, { error: 'Unauthorized' });
     if (rateLimited(clientKey(req))) {
       metrics.inc('rateLimitHits');
       return json(res, 429, { error: 'Rate limited' });
@@ -473,6 +472,27 @@ const server = http.createServer(async (req, res) => {
     try {
       const body = await readBody(req);
       const { didHash, success } = body;
+
+      /* Authorisation depends on what is being claimed, so it is decided after the
+       * body is read rather than before.
+       *
+       * A positive attestation backed by a verified payment carries its own
+       * credential and needs no token: that is what lets a counterparty say "this
+       * agent did work for me" without asking us for anything. A negative one still
+       * needs the token, because it lowers the score directly and the payment proves
+       * only that money moved. See mayAttestUnauthenticated.
+       *
+       * Reading the body before authorising widens the unauthenticated surface to a
+       * 1 MB JSON parse, which the rate limit above already bounds.
+       */
+      if (!mayAttestUnauthenticated(success, payments.required(paymentCfg))
+          && !isAuthorized(req.headers, cfg.adminToken)) {
+        return json(res, 401, {
+          error: 'Unauthorized',
+          detail: 'a positive, payment-verified attestation needs no token; anything else does',
+        });
+      }
+
       let attester = body.attester;
       if (!didHash) {
         metrics.inc('attestRejectedOther');

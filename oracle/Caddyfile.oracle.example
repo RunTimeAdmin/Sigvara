@@ -6,8 +6,17 @@
 # /evidence exists so a third party can re-derive a score's inputs without trusting us,
 # and evidence nobody can fetch is evidence nobody can audit.
 #
-# This exposes only the read paths. /attest, /flag, /link and /epoch stay on loopback,
-# reachable from the box alone, so opening this changes nothing about who can write.
+# This exposes the read paths plus POST /attest. /flag, /link and /epoch stay on
+# loopback, reachable from the box alone.
+#
+# /attest is published but not thereby opened: the oracle decides per request. A
+# positive attestation carrying a payment it verifies against the chain needs no token,
+# because the payment is the credential and the payer is read from the transfer log
+# rather than asserted. A negative one still needs the token, because successScore is
+# successful/(total+prior) so a negative lowers the score directly, while the payment
+# proves only that money moved and never that the work failed. Leaving that open on a
+# testnet whose bond token comes from a free faucet would let anyone downgrade any
+# agent for the price of a faucet call.
 #
 # Caddy runs as a container here (countersig-caddy), sharing a host with other sites,
 # so this is appended to that stack's Caddyfile rather than installed as its own file.
@@ -37,6 +46,29 @@ oracle.sigvara.xyz {
 		path /evidence/*
 	}
 
+	# /attest is published too, but only POST. Publishing the path does not open the
+	# endpoint: the oracle decides per request whether a token is required. A positive
+	# attestation carrying a payment it verifies against the chain is self-credentialing;
+	# a negative one lowers the score directly and still needs the token. See
+	# mayAttestUnauthenticated in http-helpers.js.
+	@attest {
+		path /attest
+		method POST OPTIONS
+	}
+
+	handle @attest {
+		header Access-Control-Allow-Origin "https://sigvara.xyz"
+		header Access-Control-Allow-Methods "POST, OPTIONS"
+		header Access-Control-Allow-Headers "Content-Type, Authorization"
+		header Vary "Origin"
+
+		# Never cached: this is a write, and a cached 200 would tell a caller their
+		# attestation landed when it did not.
+		header Cache-Control "no-store"
+
+		reverse_proxy sigvara-oracle:3030
+	}
+
 	handle @public {
 		# Let a browser on the site read this directly. Only the site's own origin: the
 		# data is public, but a wildcard invites other pages to use this host as free
@@ -60,8 +92,8 @@ oracle.sigvara.xyz {
 		# shared Docker network and Caddy resolves the oracle by service name.
 		#
 		# This is also the safer arrangement. The port stays published on host loopback
-		# for admin use, so /attest and /epoch remain reachable only from a shell on the
-		# box, while Caddy reaches the read paths over the container network.
+		# for admin use, so /flag, /link and /epoch remain reachable only from a shell on
+		# the box, while Caddy reaches the published paths over the container network.
 
 		# X-Forwarded-For is left to Caddy, which sets it by default; an explicit
 		# header_up here only earns a warning that it is redundant.
@@ -78,7 +110,8 @@ oracle.sigvara.xyz {
 		reverse_proxy sigvara-oracle:3030
 	}
 
-	# Everything else, including /metrics and every write endpoint, is not served here.
+	# Everything else, including /metrics, /flag, /link and /epoch, is not served here.
+	# A GET to /attest lands here too: the matcher above takes POST only.
 	# /metrics is deliberately excluded: it is unauthenticated by design but publishes
 	# operational counters (epoch failures, rate-limit hits, RPC errors) that describe
 	# the operator rather than the protocol.

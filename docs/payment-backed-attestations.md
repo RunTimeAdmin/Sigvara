@@ -30,11 +30,26 @@ curl -X POST http://oracle/attest \
   -d '{"didHash":"0x84...","success":true,"payment":{"txHash":"0x3daf88..."}}'
 ```
 
-`http://oracle` here is the host running the oracle, reachable from that machine. It
-is not `oracle.sigvara.xyz`: that name serves only the read paths, and `/attest`
-answers 404 there. Verification makes an attestation expensive rather than free, but
-it does not make it something to accept from anyone, so on the Arc testnet deployment
-the write endpoints stay behind a bearer token and off the public proxy entirely.
+On the Arc testnet deployment this is open to anyone, at
+`https://oracle.sigvara.xyz/attest`, with no token:
+
+```bash
+curl -X POST https://oracle.sigvara.xyz/attest \
+  -H 'Content-Type: application/json' \
+  -d '{"didHash":"0x84...","success":true,"payment":{"txHash":"0x3daf88..."}}'
+```
+
+The payment is the credential. You do not identify yourself, because the oracle does
+not take your word for who you are: it reads the payer off the transfer log.
+
+**A negative attestation still needs the admin token.** The asymmetry is deliberate.
+`successScore` is `successful / (total + prior)`, so a negative lowers the score
+directly, and a verified payment proves money moved but never that the work failed.
+Leaving that open would mean anyone could downgrade any agent for the price of one
+`PAYMENT_MIN_AMOUNT` transfer — which, on a testnet whose bond token has an open
+faucet, is free. Negative outcomes therefore come from CounterAudit, which reports
+work it actually audited. Positive claims carry their own cost and can be left open;
+negative ones cannot.
 
 The oracle then:
 

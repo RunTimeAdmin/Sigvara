@@ -50,6 +50,28 @@ function isAuthorized(headers, adminToken) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+/**
+ * Whether an /attest call may proceed without the admin token.
+ *
+ * A verified payment is a credential: the payer is read from the transfer log rather
+ * than asserted, self-payment is refused, and one counterparty's evidence is capped.
+ * That is enough to let a stranger say "this agent did work for me".
+ *
+ * It is not enough to let them say the opposite. successScore is
+ * successful / (total + prior), so a negative attestation lowers the score directly,
+ * and the payment proves only that money moved, never that the work failed. On a
+ * testnet whose bond token comes from an open faucet, that would put every agent's
+ * score at the mercy of anyone willing to spend a free token. Negatives therefore
+ * still need the token, which is how CounterAudit reports outcomes it actually audited.
+ *
+ * Strictly `true`, not merely truthy: this decides an authorisation question, and
+ * `success: "no"` must not read as a positive. The tally below keeps its original
+ * truthiness for authorised callers, so nothing that works today breaks.
+ */
+function mayAttestUnauthenticated(success, paymentsRequired) {
+  return success === true && paymentsRequired === true;
+}
+
 // Returns the didHash from a /score/:didHash path, or null if it doesn't match.
 function parseScorePath(pathname) {
   const match = pathname.match(SCORE_PATH_RE);
@@ -119,6 +141,7 @@ module.exports = {
   json,
   readBody,
   isAuthorized,
+  mayAttestUnauthenticated,
   parseScorePath,
   rateLimited,
 };

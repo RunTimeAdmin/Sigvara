@@ -38,7 +38,9 @@ docker compose -f docker-compose.oracle.yml up -d
 
 The compose file mounts `oracle_state` volume to `/data` for persistence. The HTTP port is published as `127.0.0.1:3030` (localhost only), so nothing reaches the service without a reverse proxy in front of it.
 
-Do not simply proxy the whole service. The write endpoints are gated by a bearer token, but that token is the only thing between the internet and the scoring, whereas keeping them off the proxy entirely means an attacker needs a shell on the box first. [`Caddyfile.oracle.example`](Caddyfile.oracle.example) publishes `/health`, `/score/*` and `/evidence/*` and answers 404 for everything else, which is the arrangement running on the Arc testnet deployment at `oracle.sigvara.xyz`.
+Do not simply proxy the whole service. [`Caddyfile.oracle.example`](Caddyfile.oracle.example) publishes `/health`, `/score/*`, `/evidence/*` and `POST /attest`, and answers 404 for everything else, which is the arrangement running on the Arc testnet deployment at `oracle.sigvara.xyz`. `/flag`, `/link` and `/epoch` stay off the proxy: they are token-gated, but keeping them unreachable means an attacker needs a shell on the box before the token matters at all.
+
+`/attest` being published does not make it open. The oracle decides per request: a **positive** attestation carrying a payment it verifies against the chain needs no token, because the payment is the credential and the payer is read from the transfer log rather than asserted. A **negative** one still requires the token. `successScore` is `successful / (total + prior)`, so a negative lowers the score directly, while the payment proves only that money moved and never that the work failed — leaving it open would let anyone downgrade any agent for the price of one minimum transfer, which on a faucet-backed testnet is free.
 
 The read paths are deliberately unauthenticated: `/evidence` exists so a third party can re-derive a score without trusting the operator, and evidence nobody can fetch is evidence nobody can audit. They are rate-limited instead, as described under the endpoints below. `/metrics` is excluded from the proxy despite being harmless to serve, because its counters describe the operator rather than the protocol.
 
@@ -87,10 +89,14 @@ sigvara_oracle_epochs_total{status="failed"} 1
 
 Scrape at `/metrics` with Prometheus or compatible tools.
 
-### `POST /attest` (auth required)
+### `POST /attest` (token required only for a negative outcome)
 
 Submit an attestation for an agent's task outcome. The request shape depends on
 `PAYMENT_VERIFICATION`.
+
+With verification required, `{"success": true}` needs no token: the verified payment is
+the credential. `{"success": false}`, a missing `success`, or any non-boolean value
+returns 401 without one. `success` must be exactly `true` — `"yes"` is not a positive.
 
 **With `PAYMENT_VERIFICATION=required`** (what mainnet should run) the attestation must
 carry the settlement transaction of a real payment to the agent — the `transaction`
@@ -180,8 +186,10 @@ can ask for once the read paths are proxied to the internet.
 The caller is identified by socket address, or by the last `X-Forwarded-For` entry when
 the connection arrives over loopback. Behind a reverse proxy the socket address is always
 `127.0.0.1`, so keying on it alone would put every visitor in one bucket and let a single
-abuser lock out everyone. See [`Caddyfile.oracle.example`](Caddyfile.oracle.example),
-which sets that header explicitly.
+abuser lock out everyone. Caddy sets that header itself, and the **last** entry is read
+because a proxy appends to whatever the client sent, so a forged one cannot buy a fresh
+bucket. Verify that if the proxy is ever replaced: trip the limit, then retry with a
+forged `X-Forwarded-For`. A 200 means the limiter is bypassable.
 
 **Response (200):**
 ```json
