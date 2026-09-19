@@ -6,7 +6,7 @@ const http = require('http');
 const chain = require('./chain');
 const external = require('./external');
 const { computeScore } = require('./scoring');
-const { decideAction } = require('./epoch-policy');
+const { decideAction, epochIntervalError } = require('./epoch-policy');
 const { json, readBody, isAuthorized, parseScorePath, rateLimited, clientKey, adminTokenPolicyError } = require('./http-helpers');
 const payments = require('./payments');
 const merkle = require('./merkle');
@@ -43,6 +43,14 @@ const cfg = {
 
 if (!cfg.rpcUrl || !cfg.privateKey || !cfg.identityAddress || !cfg.reputationAddress) {
   console.error('[oracle] Missing required env vars. Copy .env.example to .env and fill it in.');
+  process.exit(1);
+}
+
+// Checked before anything starts, because the failure is silent: a bad interval does
+// not throw, it just runs the epoch loop flat out against the RPC.
+const epochErr = epochIntervalError(cfg.epochMs);
+if (epochErr) {
+  console.error(`[oracle] ${epochErr}`);
   process.exit(1);
 }
 
