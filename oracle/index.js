@@ -656,7 +656,18 @@ const server = http.createServer(async (req, res) => {
       return json(res, 429, { error: 'Rate limited' });
     }
     try {
-      const { operator, registeredAt, status } = await chain.getAgentInfo(didHash);
+      // Upstream failures are reported as 502, the way /attest already reports them.
+      // A node having a bad minute is not a bad request, and answering 500 told a
+      // caller the oracle was broken when the chain was the thing that was unreachable.
+      let info;
+      try {
+        info = await chain.getAgentInfo(didHash);
+      } catch (err) {
+        metrics.inc('scoreRpcErrors');
+        console.warn(`[oracle] /score chain read failed for ${didHash}: ${err.message}`);
+        return json(res, 502, { error: 'could not read the chain', code: 'rpc_error' });
+      }
+      const { operator, registeredAt, status } = info;
       const att       = attestations.get(didHash) ?? { successful: 0, total: 0 };
       const flagCount = flags.get(didHash) ?? 0;
       const linkedId  = links.get(didHash);
@@ -695,7 +706,17 @@ const server = http.createServer(async (req, res) => {
         erc8004AgentId: linkedId ?? null,
       });
     } catch (err) {
-      return json(res, 500, { error: err.message });
+      /* Anything reaching here is a bug or an upstream failure outside the guarded
+       * read above, so it is logged in full and reported generically.
+       *
+       * This endpoint is unauthenticated and public. It used to return err.message
+       * verbatim, which hands an anonymous caller whatever an ethers or provider
+       * error happens to contain, including upstream URLs. /attest can echo its
+       * errors because a bearer token gates it; this cannot.
+       */
+      metrics.inc('scoreErrors');
+      console.error(`[oracle] /score failed for ${didHash}:`, err);
+      return json(res, 500, { error: 'could not compute the score' });
     }
   }
 

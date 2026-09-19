@@ -26,6 +26,8 @@ const counters = {
   skippedUnbonded: 0,
   flagsReceived: 0,
   linksCreated: 0,
+  scoreRpcErrors: 0,
+  scoreErrors: 0,
   rateLimitHits: 0,
   httpRequests: 0,
 };
@@ -111,6 +113,16 @@ function toPrometheusText() {
   lines.push('# HELP sigvara_oracle_links_total Links created');
   lines.push('# TYPE sigvara_oracle_links_total counter');
   lines.push(`sigvara_oracle_links_total ${counters.linksCreated}`);
+
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_score_rpc_errors_total /score reads that failed upstream, answered 502');
+  lines.push('# TYPE sigvara_oracle_score_rpc_errors_total counter');
+  lines.push(`sigvara_oracle_score_rpc_errors_total ${counters.scoreRpcErrors}`);
+
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_score_errors_total /score failures that were not upstream, answered 500');
+  lines.push('# TYPE sigvara_oracle_score_errors_total counter');
+  lines.push(`sigvara_oracle_score_errors_total ${counters.scoreErrors}`);
 
   lines.push('');
   lines.push('# HELP sigvara_oracle_rate_limit_hits_total Rate limit rejections');
