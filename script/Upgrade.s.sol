@@ -33,9 +33,10 @@ import "../src/SigvaraEpochFees.sol";
  *
  * Optional env vars:
  *   PROXY                — proxy address override. Without it the address is read
- *                          from deployments/<chainId>.json, which only carries the
- *                          three core registries; oracleBond and epochFees are
- *                          deployed by their own scripts and need this override.
+ *                          from deployments/<chainId>.json under the target's own key.
+ *                          On Arc testnet that file carries oracleBond as well as the
+ *                          three core registries, so only a target missing from the
+ *                          artifact (epochFees today) needs this.
  *   INIT_CALLDATA        — abi-encoded call executed atomically with the upgrade
  *                          (a reinitializer). Empty by default. A bare upgrade that
  *                          needed an initializer would leave the new storage at
