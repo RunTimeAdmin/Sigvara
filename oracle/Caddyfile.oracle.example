@@ -62,15 +62,19 @@ oracle.sigvara.xyz {
 		# This is also the safer arrangement. The port stays published on host loopback
 		# for admin use, so /attest and /epoch remain reachable only from a shell on the
 		# box, while Caddy reaches the read paths over the container network.
-		reverse_proxy sigvara-oracle:3030 {
-			# The oracle rate-limits /score and /evidence per caller, and it only reads
-			# this header from a loopback connection. Set it explicitly rather than
-			# letting the default append to whatever the client sent: with one value
-			# there is nothing to misparse, and without the header every visitor would
-			# key on 127.0.0.1 and share a single bucket, so one abuser would lock out
-			# everyone.
-			header_up X-Forwarded-For {remote_host}
-		}
+		# X-Forwarded-For is left to Caddy, which sets it by default; an explicit
+		# header_up here only earns a warning that it is redundant.
+		#
+		# The oracle depends on this header: it rate-limits /score and /evidence per
+		# caller, and behind a proxy every request otherwise keys on one address and
+		# shares a single bucket, so one abuser would lock out everyone. Caddy appends
+		# the real address to whatever the client sent, and the oracle reads the LAST
+		# entry for exactly that reason, so a forged header cannot win a fresh bucket.
+		#
+		# If this proxy is ever replaced, verify that behaviour rather than assuming it:
+		# trip the limit, then retry with a forged X-Forwarded-For. A 200 means the
+		# limiter is bypassable.
+		reverse_proxy sigvara-oracle:3030
 	}
 
 	# Everything else, including /metrics and every write endpoint, is not served here.
