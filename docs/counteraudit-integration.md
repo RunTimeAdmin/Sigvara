@@ -1,23 +1,27 @@
 # CounterAudit Integration Guide
 
-> **Status: designed, not built.** This describes an intended integration, in the future
-> tense throughout. CounterAudit does not currently read Sigvara identity or scores, and
-> does not report outcomes to the oracle. Its published API does not accept `agent_did`:
-> the field appears nowhere in [`api.counteraudit.io/openapi.yaml`](https://api.counteraudit.io/openapi.yaml),
-> and no enrichment code exists in its repository.
+> **Status: implemented, and broken since 17 September 2026.**
 >
-> Earlier versions of this guide and of the README described the integration in the
-> present tense, which was wrong. Corrected 19 September 2026.
+> The code exists in CounterAudit (`src/services/countersigService.js`, plus the
+> outcome-to-oracle and ERC-8004 paths) and is wired into the ingest route. It predates
+> this protocol's rename from Countersig, and it still parses `did:countersig:` and
+> derives the DID hash from that prefix. A current `did:sigvara:` DID is rejected
+> outright; even bypassing that, the hash would not match what the contract holds, so the
+> agent reads as unregistered. Renaming the protocol changed what the hash commits to and
+> this code was never updated to follow.
+>
+> It is also absent from CounterAudit's `openapi.yaml`, so the feature is undiscoverable
+> from the published API contract.
+>
+> Follow this guide once the scheme is corrected, not before.
 
-CounterAudit is a tamper-evident AI audit trail service. The integration below would let
-an `agent_did` field on an ingest call enrich each sealed packet with the agent's on-chain
-Sigvara identity and reputation score before sealing, so the enrichment sits inside the
-AES-GCM seal and is covered by the same tamper-evidence and RFC 3161 timestamp as the rest
-of the packet.
+CounterAudit is a tamper-evident AI audit trail service. An `agent_did` field on an ingest
+call enriches each sealed packet with the agent's on-chain Sigvara identity and reputation
+score before sealing, so the enrichment sits inside the AES-GCM seal and is covered by the
+same tamper-evidence and RFC 3161 timestamp as the rest of the packet.
 
-The design is worth keeping because the property it buys is real: a reputation score
-frozen into a tamper-evident record at the moment of the action, rather than looked up
-afterwards. Nothing below is implemented yet.
+The property it buys is a reputation score frozen into a tamper-evident record at the
+moment of the action, rather than looked up afterwards from a score that has since moved.
 
 ---
 
@@ -40,6 +44,11 @@ This means the reputation score is frozen in time. If an agent's reputation chan
 ### Self-hosted CounterAudit
 
 Add these variables to your `.env`:
+
+The variable names below are the intended post-fix ones. The code currently on
+CounterAudit's `main` reads `COUNTERSIG_RPC_URL`, `COUNTERSIG_IDENTITY_ADDRESS`,
+`COUNTERSIG_REPUTATION_ADDRESS`, `COUNTERSIG_CHAIN_ID` and `COUNTERSIG_ENRICH_TIMEOUT_MS`,
+carried over from the old name.
 
 ```bash
 # Sigvara identity enrichment (Arc testnet)
@@ -66,7 +75,9 @@ If the three required vars are absent, the service silently no-ops. No existing 
 
 ### Managed CounterAudit (api.counteraudit.io)
 
-Contact CounterAudit to enable Sigvara enrichment on your organization. The managed service is already running the integration.
+Contact CounterAudit to enable Sigvara enrichment on your organization. Note that the
+managed service runs the same code as above and is subject to the same DID-scheme defect
+until it is fixed.
 
 ---
 

@@ -73,9 +73,10 @@ The consequence is that the factor measures rate *and* volume together:
 The full 25 is approached, never reached. These figures assume fresh evidence; decayed
 weights are fractional and pull every row down as the record ages.
 
-Outcomes are submitted by the oracle operator today. The design is for CounterAudit to
-report them for work it audits, turning a verified packet into a reputation signal, but
-that integration is **not built**: see [counteraudit-integration.md](counteraudit-integration.md).
+CounterAudit reports outcomes for work it audits, turning a verified packet into a
+reputation signal. That path is implemented but **currently broken** by a DID-scheme
+mismatch, so outcomes are submitted by the oracle operator until it is repaired: see
+[counteraudit-integration.md](counteraudit-integration.md).
 
 ### Tenure (20 pts)
 
