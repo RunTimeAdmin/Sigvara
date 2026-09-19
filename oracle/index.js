@@ -519,7 +519,7 @@ const server = http.createServer(async (req, res) => {
         txHash: e.txHash ?? null,
         payer: e.payer,
         amount: e.amount,
-        settledAt: e.ts,
+        settledAt: merkle.settledSeconds(e),
         success: e.success,
         leaf: tree.leaves[i],
         proof: merkle.proofFor(tree, i),

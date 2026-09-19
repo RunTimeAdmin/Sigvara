@@ -176,6 +176,16 @@ the amount and the settlement time, rebuilds the leaf, and checks it against the
 contract holds, either locally or through `verifyEvidence(didHash, leaf, proof)`. Nothing
 in that path requires trusting the oracle.
 
+The leaf is `keccak256(keccak256(abi.encode(bytes32 txHash, address payer, uint256 amount,
+uint256 settledAt, bool success)))`, and **`settledAt` is in seconds**: the block's own
+timestamp, exactly as `eth_getBlockByNumber` reports it. The oracle stores that time in
+milliseconds internally, because the decay arithmetic works in milliseconds, and converts
+on the way into both the leaf and the `/evidence` response. The unit is worth stating
+because it briefly was not: the leaf committed to milliseconds while the documented
+procedure told a verifier to read seconds off the chain, so an honest oracle and an honest
+verifier computed different roots. A commitment that refutes itself under inspection is
+worse than none, since the disagreement looks exactly like the oracle lying.
+
 Leaves are double-hashed so a leaf can never pose as an internal node, and an odd node is
 promoted rather than duplicated, which would otherwise let a tree be extended with the
 repeated leaf and keep the same root. Pairs hash in sorted order, matching OpenZeppelin's
