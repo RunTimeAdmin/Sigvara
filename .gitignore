@@ -69,3 +69,6 @@ test/Verify*.t.sol
 
 # Site deployment archive, rebuilt by scripts/package-site.mjs on every deploy
 sigvara-site.zip
+
+# Private planning notes. Local only, deliberately not published.
+PLANNING-*.md

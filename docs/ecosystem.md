@@ -22,9 +22,47 @@ The bond. An agent registers first and lands in `PendingBond`; the first deposit
 
 An off-chain service that watches the `AgentRegistered` events on Identity, aggregates its signals (payment volume verified on chain, outcomes reported by whoever paid, tenure, counterparty standing, watchdog flags, external ERC-8004 trust), and calls `proposeReputation()` on the Reputation contract every epoch, committing to the evidence it used with a Merkle root. Proposed scores sit through a challenge window (rejectable by the slashing committee) before anyone can call `finalizeReputation()` to make them live. The reference implementation is in `oracle/`. It is a single operator today, bonded in `SigvaraOracleBond` so a bad proposal costs its proposer; replacing it with several bonded operators that can challenge each other is the next step.
 
-### CounterAudit (integration partner)
+### CounterAudit (first integration, common ownership — see below)
 
 CounterAudit is a tamper-evident AI audit trail service. When an ingest call includes an `agent_did` field, CounterAudit queries Sigvara at seal time, embeds the agent's current on-chain identity and reputation score inside the AES-GCM seal, and attaches an RFC 3161 timestamp. The enrichment is forensically significant: it captures what the agent's reputation was *at the moment of the action*, not today.
+
+---
+
+## Where Sigvara sits in CounterAegis
+
+Sigvara shares an owner with [CounterAegis](https://counteraegis.com), a suite of three
+trust products. Stating that plainly matters more than the positioning does, so it comes
+first: **CounterAudit is not an arm's-length third party.** It reads Sigvara scores and it
+is the designated source of negative outcome attestations, and the same people run both.
+Anyone weighing how independent this reputation signal is should weigh that too. It is a
+single-operator oracle today by the same token, which the README says as well.
+
+The suite divides by question:
+
+| Question | Product | |
+|---|---|---|
+| Who acted? | [Countersig](https://countersig.com) | identity, policy and auth for humans and agents |
+| What was touched? | [ProvenanceAI](https://provenanceai.network) | content fingerprinting, verification, lineage |
+| Can we prove it? | [CounterAudit](https://counteraudit.io) | sealed packets, hash chain, RFC 3161, regulator exports |
+
+Sigvara answers a fourth that none of them do: **should this agent be trusted, and what
+does it lose if it defects?** The three products establish and evidence what happened
+inside an organisation's boundary. Sigvara is what makes an agent's track record portable
+and costly to fake outside it, because the bond and the score live on a public chain
+rather than in anyone's database.
+
+A naming note, since the history is confusing: this protocol was **Countersig Network**
+until 17 September 2026 and is unrelated to the Countersig product above, which is
+enterprise identity software. The rename to Sigvara removed the collision. See
+[lineage.md](lineage.md).
+
+### The coupling rule
+
+Integrations are optional connectors, never runtime dependencies, in both directions.
+CounterAudit already states it "runs standalone (no Countersig or ProvenanceAI runtime
+dependency)", and Sigvara holds the same line: enrichment failures never block a seal, and
+the oracle has no CounterAegis service in its critical path. A protocol whose liveness
+depends on its owner's SaaS is not infrastructure, it is a product with extra steps.
 
 ---
 

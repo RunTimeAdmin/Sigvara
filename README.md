@@ -537,7 +537,7 @@ Sigvara is designed as an open identity layer. Any system that needs to know *wh
 
 ### CounterAudit
 
-[CounterAudit](https://counteraudit.io) is the first integration partner, and it works in both directions. When an ingest call includes `agent_did`, CounterAudit queries the Sigvara contracts at seal time and embeds the agent's identity and reputation score inside the AES-GCM seal, covered by an RFC 3161 timestamp — forensically proving what the agent's reputation was at the moment of each action. When that ingest also carries an `outcome` (`success` / `failure`) for a registered agent, CounterAudit reports it to the reputation oracle, so audited work outcomes feed back into the agent's Success Rate and Fee Activity factors. Reading and writing the same reputation closes the loop.
+[CounterAudit](https://counteraudit.io) is the first integration, and it works in both directions. It shares an owner with Sigvara, as part of the [CounterAegis](https://counteraegis.com) suite, so it is not an arm's-length third party — see [docs/ecosystem.md](docs/ecosystem.md). When an ingest call includes `agent_did`, CounterAudit queries the Sigvara contracts at seal time and embeds the agent's identity and reputation score inside the AES-GCM seal, covered by an RFC 3161 timestamp — forensically proving what the agent's reputation was at the moment of each action. When that ingest also carries an `outcome` (`success` / `failure`) for a registered agent, CounterAudit reports it to the reputation oracle, so audited work outcomes feed back into the agent's Success Rate and Fee Activity factors. Reading and writing the same reputation closes the loop.
 
 ```typescript
 // Every action your agent takes gets sealed with identity + reputation
