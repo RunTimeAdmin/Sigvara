@@ -1,20 +1,29 @@
 # Public read surface for the oracle.
 #
-# The oracle binds 127.0.0.1 and the VPS firewall drops 3030, so nothing outside the
-# box can reach it. That is correct for the write endpoints and wrong for the read ones:
+# The oracle's port is published on host loopback and the VPS firewall drops 3030, so
+# nothing outside the box can reach it. That is correct for the write endpoints and
+# wrong for the read ones:
 # /evidence exists so a third party can re-derive a score's inputs without trusting us,
 # and evidence nobody can fetch is evidence nobody can audit.
 #
 # This exposes only the read paths. /attest, /flag, /link and /epoch stay on loopback,
 # reachable from the box alone, so opening this changes nothing about who can write.
 #
-# Install on the host running the oracle:
-#   /etc/caddy/Caddyfile  (or an import from it)
-#   caddy validate --config /etc/caddy/Caddyfile
-#   systemctl reload caddy
+# Caddy runs as a container here (countersig-caddy), sharing a host with other sites,
+# so this is appended to that stack's Caddyfile rather than installed as its own file.
+# Append, never overwrite: the same Caddy serves counteraudit.io, and a reload with a
+# truncated config takes every site on the box down, not just this one.
 #
-# DNS: point oracle.sigvara.xyz at this host first, or Caddy's certificate request fails
-# and the site will not come up.
+#   docker exec countersig-caddy caddy validate --config /etc/caddy/Caddyfile
+#   docker exec countersig-caddy caddy reload   --config /etc/caddy/Caddyfile
+#
+# Prerequisites, both of which are easy to miss:
+#
+#   DNS: oracle.sigvara.xyz must already resolve to this host, or the certificate
+#   request fails and the site never comes up.
+#
+#   Network: Caddy and the oracle must share a Docker network. See the upstream
+#   comment below for why the obvious address does not work.
 
 oracle.sigvara.xyz {
 	encode gzip
@@ -42,7 +51,18 @@ oracle.sigvara.xyz {
 		# ignores it, which is why the oracle meters these paths itself.
 		header Cache-Control "public, max-age=30"
 
-		reverse_proxy 127.0.0.1:3030 {
+		# By container name, not 127.0.0.1.
+		#
+		# Caddy runs in a container, so its 127.0.0.1 is its own loopback and reaches
+		# nothing. The host's address does not work either: the oracle publishes on
+		# 127.0.0.1:3030:3030, which binds host loopback only and is deliberately not
+		# on any interface a container can route to. Both containers therefore join a
+		# shared Docker network and Caddy resolves the oracle by service name.
+		#
+		# This is also the safer arrangement. The port stays published on host loopback
+		# for admin use, so /attest and /epoch remain reachable only from a shell on the
+		# box, while Caddy reaches the read paths over the container network.
+		reverse_proxy sigvara-oracle:3030 {
 			# The oracle rate-limits /score and /evidence per caller, and it only reads
 			# this header from a loopback connection. Set it explicitly rather than
 			# letting the default append to whatever the client sent: with one value
