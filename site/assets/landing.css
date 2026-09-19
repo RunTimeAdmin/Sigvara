@@ -94,7 +94,7 @@ h1 .gradient { color: var(--violet-bright); background: linear-gradient(110deg, 
 .score-copy { color: #8d96af; font-size: 11px; text-align: right; line-height: 1.4; }
 .score-copy strong { color: var(--violet-bright); font-size: 12px; }
 .bars { display: grid; gap: 10px; }
-.bar-line { display: grid; grid-template-columns: 80px 1fr 26px; align-items: center; gap: 10px; color: #8d96af; font-size: 10px; }
+.bar-line { display: grid; grid-template-columns: 82px 1fr 40px; align-items: center; gap: 10px; color: #8d96af; font-size: 10px; }
 .bar-track { height: 5px; overflow: hidden; border-radius: 99px; background: #242841; }
 .bar-fill { height: 100%; border-radius: inherit; background: linear-gradient(90deg, #8f71ff, #6fe5ea); }
 .bar-line b { color: #cfd5e8; font-size: 10px; text-align: right; font-weight: 600; }
@@ -176,4 +176,12 @@ footer { padding: 26px 0 34px; border-top: 1px solid var(--line); color: #6d7691
 a:focus-visible, button:focus-visible { outline: 3px solid rgba(111,229,234,.55); outline-offset: 3px; }
 
 /* Static bar widths on the hero card (formerly inline styles). */
-.w-94 { width: 94%; } .w-88 { width: 88%; } .w-79 { width: 79%; } .w-91 { width: 91%; }
+
+/* Hero card bar widths: each factor as a share of its own cap, so the bar and the
+   value agree. 28/30, 22/25, 18/20, 11/15, 5/5, 3/5. */
+.w-60 { width: 60%; }
+.w-73 { width: 73%; }
+.w-88 { width: 88%; }
+.w-90 { width: 90%; }
+.w-93 { width: 93%; }
+.w-100 { width: 100%; }
