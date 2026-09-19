@@ -24,6 +24,7 @@ const ATTEST_COOLDOWN_MS = Number(process.env.ATTEST_COOLDOWN_MS) || DEFAULT_ATT
 const attestations = new Map();
 // didHash → unresolved flag count
 const flags = new Map();
+
 // didHash → ERC-8004 agentId (string) this agent is linked to (ownership-verified at link time)
 const links = new Map();
 // "attester:didHash" → timestamp (ms) of last attestation — dedupe/cooldown guard
@@ -42,6 +43,33 @@ const usedPaymentTxs = new Set();
 // restart resumes instead of replaying the chain from FROM_BLOCK, which grows with
 // every block and eventually trips a public RPC's rate limit.
 let scanState = null;
+
+/**
+ * Clear `count` flags from an agent, and report what actually changed.
+ *
+ * Flagging was one-way: /flag incremented and nothing anywhere decremented, so a flag
+ * was permanent short of hand-editing the state file on the host. That is a problem as
+ * soon as anything automated produces flags, because a threshold that misfires costs an
+ * agent two Community points per flag with no way back. Community is only worth five
+ * points, so three bad flags take it to zero and pin it there.
+ *
+ * Clamped rather than validated: resolving more flags than exist leaves zero, and the
+ * result says how many were really removed. The caller learns the truth without having
+ * to read the count first and race whoever else is writing.
+ *
+ * The entry is deleted at zero rather than left as 0, so the state file does not grow a
+ * permanent record of every agent ever flagged.
+ */
+function resolveFlags(didHash, count = 1) {
+  const before = flags.get(didHash) ?? 0;
+  const n = Math.floor(Number(count));
+  if (!Number.isFinite(n) || n < 1) return { before, after: before, resolved: 0 };
+
+  const after = Math.max(0, before - n);
+  if (after === 0) flags.delete(didHash);
+  else flags.set(didHash, after);
+  return { before, after, resolved: before - after };
+}
 
 function load() {
   try {
@@ -171,6 +199,7 @@ function getStatePath() {
 module.exports = {
   attestations,
   flags,
+  resolveFlags,
   links,
   attestCooldowns,
   paymentEvents,

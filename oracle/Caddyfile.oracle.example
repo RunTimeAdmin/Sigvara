@@ -6,8 +6,8 @@
 # /evidence exists so a third party can re-derive a score's inputs without trusting us,
 # and evidence nobody can fetch is evidence nobody can audit.
 #
-# This exposes the read paths plus POST /attest. /flag, /link and /epoch stay on
-# loopback, reachable from the box alone.
+# This exposes the read paths plus POST /attest. /flag, /flag/resolve, /link and /epoch
+# stay on loopback, reachable from the box alone.
 #
 # /attest is published but not thereby opened: the oracle decides per request. A
 # positive attestation carrying a payment it verifies against the chain needs no token,
@@ -92,8 +92,9 @@ oracle.sigvara.xyz {
 		# shared Docker network and Caddy resolves the oracle by service name.
 		#
 		# This is also the safer arrangement. The port stays published on host loopback
-		# for admin use, so /flag, /link and /epoch remain reachable only from a shell on
-		# the box, while Caddy reaches the published paths over the container network.
+		# for admin use, so /flag, /flag/resolve, /link and /epoch remain reachable only
+		# from a shell on the box, while Caddy reaches the published paths over the
+		# container network.
 
 		# X-Forwarded-For is left to Caddy, which sets it by default; an explicit
 		# header_up here only earns a warning that it is redundant.
@@ -110,8 +111,8 @@ oracle.sigvara.xyz {
 		reverse_proxy sigvara-oracle:3030
 	}
 
-	# Everything else, including /metrics, /flag, /link and /epoch, is not served here.
-	# A GET to /attest lands here too: the matcher above takes POST only.
+	# Everything else is not served here: /metrics, /flag, /flag/resolve, /link and
+	# /epoch. A GET to /attest lands here too, because that matcher takes POST only.
 	# /metrics is deliberately excluded: it is unauthenticated by design but publishes
 	# operational counters (epoch failures, rate-limit hits, RPC errors) that describe
 	# the operator rather than the protocol.

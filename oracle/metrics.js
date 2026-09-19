@@ -25,6 +25,7 @@ const counters = {
   paymentRpcErrors: 0,
   skippedUnbonded: 0,
   flagsReceived: 0,
+  flagsResolved: 0,
   linksCreated: 0,
   scoreRpcErrors: 0,
   scoreErrors: 0,
@@ -108,6 +109,11 @@ function toPrometheusText() {
   lines.push('# HELP sigvara_oracle_flags_total Flags received');
   lines.push('# TYPE sigvara_oracle_flags_total counter');
   lines.push(`sigvara_oracle_flags_total ${counters.flagsReceived}`);
+
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_flags_resolved_total Flags cleared by an operator');
+  lines.push('# TYPE sigvara_oracle_flags_resolved_total counter');
+  lines.push(`sigvara_oracle_flags_resolved_total ${counters.flagsResolved}`);
 
   lines.push('');
   lines.push('# HELP sigvara_oracle_links_total Links created');

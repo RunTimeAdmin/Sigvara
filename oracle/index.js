@@ -63,6 +63,7 @@ external.init(cfg);
 const {
   attestations,
   flags,
+  resolveFlags,
   links,
   load: loadState,
   persist: persistState,
@@ -639,6 +640,37 @@ const server = http.createServer(async (req, res) => {
       persistState();
       metrics.inc('flagsReceived');
       return json(res, 200, { didHash, flags: flags.get(didHash) });
+    } catch (err) {
+      return json(res, 400, { error: err.message });
+    }
+  }
+
+  // POST /flag/resolve — body: { didHash, count? }
+  //
+  // The counterpart /flag never had. Flagging was one-way, so a flag raised in error
+  // cost two Community points until someone edited the state file by hand. That is
+  // tolerable while flags arrive from a person and untenable once a threshold in some
+  // other service produces them, which is the direction this is heading.
+  //
+  // Token-gated like /flag, and for a stronger reason: this one raises a score. It
+  // stays off the public proxy entirely.
+  if (req.method === 'POST' && pathname === '/flag/resolve') {
+    if (!isAuthorized(req.headers, cfg.adminToken)) return json(res, 401, { error: 'Unauthorized' });
+    if (rateLimited(clientKey(req))) {
+      metrics.inc('rateLimitHits');
+      return json(res, 429, { error: 'Rate limited' });
+    }
+    try {
+      const { didHash, count } = await readBody(req);
+      if (!didHash) return json(res, 400, { error: 'didHash required' });
+
+      const result = resolveFlags(didHash, count ?? 1);
+      // Persist only on a real change, so a no-op call does not rewrite the state file.
+      if (result.resolved > 0) {
+        persistState();
+        metrics.inc('flagsResolved', result.resolved);
+      }
+      return json(res, 200, { didHash, ...result });
     } catch (err) {
       return json(res, 400, { error: err.message });
     }

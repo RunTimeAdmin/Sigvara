@@ -3,6 +3,8 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const {
+  flags,
+  resolveFlags,
   checkAttestCooldown,
   recordAttestation,
   pruneExpiredCooldowns,
@@ -168,4 +170,75 @@ test('prunePaymentEvents: does nothing when decay is off', () => {
   creditPayment(did, '0x' + 'f3'.repeat(32), 1n, '0xa', true, 1);
   assert.equal(prunePaymentEvents(0, 0.001, 1_000_000_000_000), 0);
   assert.equal(getPaymentEvents(did).length, 1);
+});
+
+// --- resolveFlags ----------------------------------------------------------
+// /flag only ever incremented, so before this a flag raised in error cost two
+// Community points permanently. Community is worth five, so three bad flags pinned
+// it at zero with no way back short of editing the state file on the host.
+
+const DID_A = '0xaaa1';
+const DID_B = '0xbbb2';
+
+test('resolveFlags: clears one by default', () => {
+  flags.set(DID_A, 3);
+  assert.deepEqual(resolveFlags(DID_A), { before: 3, after: 2, resolved: 1 });
+  assert.equal(flags.get(DID_A), 2);
+  flags.delete(DID_A);
+});
+
+test('resolveFlags: clears a run of them in one call', () => {
+  // The motivating case: an automated producer misfires and raises several.
+  flags.set(DID_A, 5);
+  assert.deepEqual(resolveFlags(DID_A, 4), { before: 5, after: 1, resolved: 4 });
+  flags.delete(DID_A);
+});
+
+test('resolveFlags: over-resolving clamps to zero and reports the truth', () => {
+  // Clamped rather than rejected, so a caller does not have to read the count first
+  // and race whoever else is writing. `resolved` is what actually happened, not what
+  // was asked for.
+  flags.set(DID_A, 2);
+  assert.deepEqual(resolveFlags(DID_A, 99), { before: 2, after: 0, resolved: 2 });
+  flags.delete(DID_A);
+});
+
+test('resolveFlags: the entry is deleted at zero, not left as 0', () => {
+  // Otherwise the state file accumulates a permanent row for every agent ever
+  // flagged, and `flags.size` in the startup log stops meaning anything.
+  flags.set(DID_A, 1);
+  resolveFlags(DID_A);
+  assert.equal(flags.has(DID_A), false, 'zero must remove the key');
+});
+
+test('resolveFlags: an unflagged agent is a no-op, not an error', () => {
+  assert.deepEqual(resolveFlags('0xnever-flagged'), { before: 0, after: 0, resolved: 0 });
+  assert.equal(flags.has('0xnever-flagged'), false, 'must not create an entry');
+});
+
+test('resolveFlags: junk counts change nothing', () => {
+  // resolved === 0 is what the route keys on to skip persisting, so these must not
+  // report a change they did not make.
+  flags.set(DID_A, 2);
+  for (const bad of [0, -1, NaN, 'three', null, undefined, Infinity]) {
+    const r = resolveFlags(DID_A, bad);
+    assert.equal(r.resolved, bad === undefined ? 1 : 0, `count=${String(bad)}`);
+    if (bad === undefined) flags.set(DID_A, 2); // the default applies, so restore
+  }
+  assert.equal(flags.get(DID_A), 2);
+  flags.delete(DID_A);
+});
+
+test('resolveFlags: a fractional count is floored, never rounded up', () => {
+  flags.set(DID_A, 3);
+  assert.equal(resolveFlags(DID_A, 1.9).resolved, 1, 'must not clear two');
+  flags.delete(DID_A);
+});
+
+test('resolveFlags: one agent does not affect another', () => {
+  flags.set(DID_A, 2);
+  flags.set(DID_B, 2);
+  resolveFlags(DID_A, 2);
+  assert.equal(flags.get(DID_B), 2, 'B untouched');
+  flags.delete(DID_B);
 });

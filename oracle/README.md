@@ -38,7 +38,7 @@ docker compose -f docker-compose.oracle.yml up -d
 
 The compose file mounts `oracle_state` volume to `/data` for persistence. The HTTP port is published as `127.0.0.1:3030` (localhost only), so nothing reaches the service without a reverse proxy in front of it.
 
-Do not simply proxy the whole service. [`Caddyfile.oracle.example`](Caddyfile.oracle.example) publishes `/health`, `/score/*`, `/evidence/*` and `POST /attest`, and answers 404 for everything else, which is the arrangement running on the Arc testnet deployment at `oracle.sigvara.xyz`. `/flag`, `/link` and `/epoch` stay off the proxy: they are token-gated, but keeping them unreachable means an attacker needs a shell on the box before the token matters at all.
+Do not simply proxy the whole service. [`Caddyfile.oracle.example`](Caddyfile.oracle.example) publishes `/health`, `/score/*`, `/evidence/*` and `POST /attest`, and answers 404 for everything else, which is the arrangement running on the Arc testnet deployment at `oracle.sigvara.xyz`. `/flag`, `/flag/resolve`, `/link` and `/epoch` stay off the proxy: they are token-gated, but keeping them unreachable means an attacker needs a shell on the box before the token matters at all.
 
 `/attest` being published does not make it open. The oracle decides per request: a **positive** attestation carrying a payment it verifies against the chain needs no token, because the payment is the credential and the payer is read from the transfer log rather than asserted. A **negative** one still requires the token. `successScore` is `successful / (total + prior)`, so a negative lowers the score directly, while the payment proves only that money moved and never that the work failed — leaving it open would let anyone downgrade any agent for the price of one minimum transfer, which on a faucet-backed testnet is free.
 
@@ -150,12 +150,37 @@ the full model.
 
 ### `POST /flag` (auth required)
 
-Flag an agent for community review.
+Flag an agent for community review. Each flag costs two points of the five-point
+Community factor: `max(0, 5 - flags * 2)`.
 
 **Request:**
 ```json
 { "didHash": "0x..." }
 ```
+
+### `POST /flag/resolve` (auth required)
+
+Clear flags previously raised. Without this, flagging was one-way and a flag raised in
+error cost an agent two Community points until someone edited the state file on the host
+by hand — fine while flags come from a person, untenable once a threshold in another
+service produces them.
+
+**Request:** `count` defaults to 1.
+```json
+{ "didHash": "0x...", "count": 2 }
+```
+
+**Response (200):**
+```json
+{ "didHash": "0x...", "before": 3, "after": 1, "resolved": 2 }
+```
+
+Resolving more flags than exist clamps to zero rather than failing, and `resolved` reports
+what actually changed, so a caller need not read the count first and race another writer.
+At zero the entry is removed rather than stored as `0`.
+
+This endpoint raises a score, so it is token-gated like `/flag` and stays off the public
+proxy. Flags do not decay on their own; clearing one is a deliberate act.
 
 ### `POST /link` (auth required)
 
