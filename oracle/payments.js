@@ -320,6 +320,20 @@ function propagationScore(events, payerScores, max = 5) {
   return Math.min(max, Math.floor(trust));
 }
 
+/// Scale for the fractional trust multiplier: a float cannot survive BigInt arithmetic,
+/// so it is scaled up, applied, and divided back.
+const TRUST_SCALE = 1000n;
+
+/// `base` raised by the payer's own standing. Extracted because the identical scaled
+/// integer idiom sat in both diversified* functions, and two copies of fiddly BigInt
+/// arithmetic is how the two quietly stop agreeing.
+function cappedAt(base, payer, payerScores, trustWeight) {
+  const mult = BigInt(Math.round(
+    trustMultiplier(payer, payerScores, trustWeight) * Number(TRUST_SCALE)
+  ));
+  return (base * mult) / TRUST_SCALE;
+}
+
 /**
  * Age-weighted volume with each counterparty's contribution capped.
  *
@@ -328,14 +342,16 @@ function propagationScore(events, payerScores, max = 5) {
  * `maxPerPayer` together set the cap: no payer contributes more than
  * `maxPerPayer` points of feeScore however much it sends.
  */
-function diversifiedVolume(events, cfg, now = Date.now(), payerScores = null) {
+// `grouped` is an optional pre-computed byPayer() map, last so every existing caller is
+// unaffected. measuredFactorsFor now groups once and hands the same map to all three
+// consumers instead of each rebuilding it. Deliberately an extra argument rather than a
+// second "fast path" implementation: one body means the capping rules cannot diverge.
+function diversifiedVolume(events, cfg, now = Date.now(), payerScores = null, grouped = null) {
   const { halfLifeMs, feeUnit, maxPerPayer, trustWeight } = cfg;
   if (!maxPerPayer || maxPerPayer <= 0) return decayedVolume(events, halfLifeMs, now);
   let total = 0n;
-  for (const [payer, { volume }] of byPayer(events, halfLifeMs, now)) {
-    // Scaled by 1000 and divided back so a fractional multiplier survives BigInt.
-    const mult = BigInt(Math.round(trustMultiplier(payer, payerScores, trustWeight) * 1000));
-    const cap = (BigInt(feeUnit) * BigInt(maxPerPayer) * mult) / 1000n;
+  for (const [payer, { volume }] of (grouped ?? byPayer(events, halfLifeMs, now))) {
+    const cap = cappedAt(BigInt(feeUnit) * BigInt(maxPerPayer), payer, payerScores, trustWeight);
     total += volume > cap ? cap : volume;
   }
   return total;
@@ -349,13 +365,12 @@ function diversifiedVolume(events, cfg, now = Date.now(), payerScores = null) {
  * capped its successes are scaled by the same factor, so the cap changes how much
  * its opinion counts without changing what its opinion was.
  */
-function diversifiedAttestations(events, cfg, now = Date.now(), payerScores = null) {
+function diversifiedAttestations(events, cfg, now = Date.now(), payerScores = null, grouped = null) {
   const { halfLifeMs, maxPerPayer, trustWeight } = cfg;
   if (!maxPerPayer || maxPerPayer <= 0) return decayedAttestations(events, halfLifeMs, now);
   let successful = 0n, total = 0n;
-  for (const [payer, { weight, successWeight }] of byPayer(events, halfLifeMs, now)) {
-    const mult = BigInt(Math.round(trustMultiplier(payer, payerScores, trustWeight) * 1000));
-    const cap = (BigInt(maxPerPayer) * WEIGHT_SCALE * mult) / 1000n;
+  for (const [payer, { weight, successWeight }] of (grouped ?? byPayer(events, halfLifeMs, now))) {
+    const cap = cappedAt(BigInt(maxPerPayer) * WEIGHT_SCALE, payer, payerScores, trustWeight);
     if (weight <= cap) { total += weight; successful += successWeight; }
     else { total += cap; successful += (successWeight * cap) / weight; }
   }

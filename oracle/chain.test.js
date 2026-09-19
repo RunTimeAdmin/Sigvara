@@ -350,3 +350,63 @@ test('getRegisteredAgents: keeps progress when a chunk fails part way through', 
   assert.equal(state.lastScannedBlock, 1199, 'kept the two chunks that succeeded');
   assert.equal(state.agents.length, 2, 'kept the agents those chunks found');
 });
+
+// ---------------------------------------------------------------- didHash derivation --
+
+const { ethers } = require('ethers');
+
+// Verified against the deployed registry on Arc testnet: computeDidHash for this agent
+// address returns exactly this hash. Pinned so a change to the derivation, the packing
+// or the chain id fails here rather than silently scoring every counterparty as unknown.
+const REAL_AGENT = '0xCc52Cd92963f8A86d04dB29a4810d1e01D193910';
+const REAL_DID   = '0x8414ce0bf4f1e1695193623e0a656a9439e356f8bed0b8bf249b179fe77c7e19';
+
+test('didHashOf reproduces what the deployed registry computes', () => {
+  assert.equal(chain.didHashOf(REAL_AGENT, 5042002), REAL_DID);
+  // Checksummed or not, the address packs the same.
+  assert.equal(chain.didHashOf(REAL_AGENT.toLowerCase(), 5042002), REAL_DID);
+  // The chain id is part of the identity: the same key elsewhere is a different DID.
+  assert.notEqual(chain.didHashOf(REAL_AGENT, 1), REAL_DID);
+});
+
+test('verifyDidHashDerivation enables local derivation only when the registry agrees', async () => {
+  chain.reset();
+  chain.init(CFG, {
+    provider: { ...makeFakeProvider(1), getNetwork: async () => ({ chainId: 5042002n }) },
+    wallet: {},
+    identityContract: {
+      ...makeFakeIdentityContract(),
+      computeDidHash: async addr => chain.didHashOf(addr, 5042002),
+    },
+    reputationContract: makeFakeReputationContract(),
+  });
+  assert.equal(await chain.verifyDidHashDerivation(), true);
+});
+
+test('a registry that disagrees leaves the oracle reading the chain', async () => {
+  chain.reset();
+  chain.init(CFG, {
+    provider: { ...makeFakeProvider(1), getNetwork: async () => ({ chainId: 5042002n }) },
+    wallet: {},
+    identityContract: {
+      ...makeFakeIdentityContract(),
+      // A registry using some other scheme. Deriving locally here would resolve every
+      // counterparty to an unregistered DID and quietly flatten the web of trust, so the
+      // check has to fail closed rather than assume.
+      computeDidHash: async () => ethers.ZeroHash,
+    },
+    reputationContract: makeFakeReputationContract(),
+  });
+  assert.equal(await chain.verifyDidHashDerivation(), false);
+});
+
+test('an unreachable registry also leaves it reading the chain', async () => {
+  chain.reset();
+  chain.init(CFG, {
+    provider: { ...makeFakeProvider(1), getNetwork: async () => { throw new Error('rpc down'); } },
+    wallet: {},
+    identityContract: makeFakeIdentityContract(),
+    reputationContract: makeFakeReputationContract(),
+  });
+  assert.equal(await chain.verifyDidHashDerivation(), false);
+});
