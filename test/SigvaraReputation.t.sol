@@ -472,6 +472,57 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
         assertEq(packed, expected);
     }
 
+    /**
+     * Pins every storage variable to its literal slot.
+     *
+     * The test above only pinned slot 0, and the convention was carried in a comment
+     * saying new variables go at the end. A comment does not fail a build: `evidenceRoots`
+     * was declared above `operatorBond`, which on a live proxy moved operatorBond down a
+     * slot to read zero. Zero is the "bonded-operator check disabled" mode, so the upgrade
+     * would have silently removed the requirement while every existing test passed.
+     *
+     * The unit tests could not catch it because they upgrade from the current source to
+     * the current source, so both sides share whatever layout is in the file. Only a fork
+     * against the deployed bytecode noticed. This makes the layout explicit instead, so an
+     * insertion breaks here rather than on chain.
+     *
+     * If you add a variable: append it to the contract, add a line here, and never
+     * renumber. If this test fails after a deliberate append, the append was not at the end.
+     */
+    function test_storageLayout_allSlotsPinned() public {
+        OperatorSetMock set = new OperatorSetMock();
+        vm.startPrank(admin);
+        rep.setChallengeWindow(3 hours);
+        rep.setMaturityRate(7);
+        rep.setOperatorBond(address(set));
+        vm.stopPrank();
+
+        assertEq(uint256(vm.load(address(rep), bytes32(uint256(2)))), 3 hours,
+            "slot 2 is challengeWindow");
+        assertEq(address(uint160(uint256(vm.load(address(rep), bytes32(uint256(3)))))),
+            address(rep.identityRegistry()), "slot 3 is identityRegistry");
+        assertEq(uint256(vm.load(address(rep), bytes32(uint256(4)))), 7,
+            "slot 4 is maturityRatePerDay");
+        assertEq(address(uint160(uint256(vm.load(address(rep), bytes32(uint256(7)))))),
+            address(set), "slot 7 is operatorBond");
+
+        // Mappings: the declared slot is the hashing seed, so probe a written key.
+        bytes32 root = keccak256("evidence");
+        vm.prank(admin);
+        rep.setOperatorBond(address(0)); // let the plain oracle propose
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, root);
+        vm.warp(block.timestamp + 3 hours + 1);
+        rep.finalizeReputation(DID);
+
+        assertEq(uint8(uint256(vm.load(address(rep), keccak256(abi.encode(DID, uint256(5)))))),
+            rep.maturedScore(DID), "slot 5 is maturedScore");
+        assertEq(uint256(vm.load(address(rep), keccak256(abi.encode(DID, uint256(6))))),
+            rep.maturedAt(DID), "slot 6 is maturedAt");
+        assertEq(vm.load(address(rep), keccak256(abi.encode(DID, uint256(8)))), root,
+            "slot 8 is evidenceRoots");
+    }
+
     function test_initializeV2_grantsCommitteeAndSetsWindow_onceOnly() public {
         // Deliberately not the shared proxy: setUp() runs initializeV3 on that one,
         // which consumes initializer version 3 and puts version 2 permanently out of
