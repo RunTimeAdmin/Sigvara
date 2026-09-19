@@ -61,6 +61,9 @@ function resetStakeViewCache() { stakeViewContract = undefined; }
 function reset() {
   lastScannedBlock = null;
   knownAgents = new Map();
+  // Cleared too: a test that swaps in a different registry must not inherit the
+  // previous one's verdict on whether local derivation is safe.
+  localDidHash = null;
 }
 
 // Returns ALL agents registered so far. Only scans new blocks since the last call
@@ -192,9 +195,58 @@ async function operatorStanding() {
  * Failures read as 0. An unknown counterparty and an unreachable node both mean "no
  * evidence of standing", and the safe direction is to grant no bonus.
  */
+/**
+ * The DID hash, derived rather than fetched.
+ *
+ * keccak256(abi.encodePacked("did:sigvara:", chainid, ":", agentAddress)) — the same
+ * expression SigvaraIdentity evaluates, and the reason it is computed on chain at
+ * registration is precisely so anyone can reproduce it without asking.
+ */
+function didHashOf(address, chainId) {
+  return ethers.keccak256(ethers.solidityPacked(
+    ['string', 'uint256', 'string', 'address'],
+    ['did:sigvara:', BigInt(chainId), ':', ethers.getAddress(address)]
+  ));
+}
+
+// Whether the local derivation has been checked against the deployed registry. Null
+// until checked, so an unchecked process falls back to the chain rather than guessing.
+let localDidHash = null;
+
+/**
+ * Check the local derivation once, against the registry, and use it only if it agrees.
+ *
+ * A locally derived hash that drifted from the contract would not be slow, it would be
+ * wrong: every counterparty would resolve to an unregistered DID and score 0, quietly
+ * flattening the web of trust. One round trip per process is a cheap way never to have
+ * that argument. Failure leaves it off, which is the old behaviour.
+ */
+async function verifyDidHashDerivation() {
+  const probe = '0x0000000000000000000000000000000000000001';
+  try {
+    const chainId = (await provider.getNetwork()).chainId;
+    const onchain = await identityContract.computeDidHash(probe);
+    localDidHash = onchain === didHashOf(probe, chainId) ? { chainId } : null;
+    if (!localDidHash) {
+      console.warn('[oracle] local didHash derivation disagrees with the registry; using the chain');
+    }
+    return localDidHash !== null;
+  } catch {
+    localDidHash = null;
+    return false;
+  }
+}
+
 async function getAgentScore(address) {
   try {
-    const didHash = await identityContract.computeDidHash(address);
+    // Was three serial round trips per counterparty. The first is now arithmetic when
+    // the derivation has been verified, so it is two, and those two are genuinely
+    // dependent. At ~124 ms a call on Arc that is a third off every payer lookup, and
+    // payer lookups are the bulk of what an epoch spends its time on.
+    const didHash = localDidHash
+      ? didHashOf(address, localDidHash.chainId)
+      : await identityContract.computeDidHash(address);
+
     const id = await identityContract.getIdentity(didHash);
     if (Number(id.registeredAt) === 0) return 0;
     if (Number(id.status) === STATUS_SLASHED) return 0;
@@ -307,6 +359,8 @@ async function chargeEpoch(didHash) {
 module.exports = {
   init,
   reset,
+  verifyDidHashDerivation,
+  didHashOf,
   resetStakeViewCache,
   getRegisteredAgents,
   getAgentInfo,

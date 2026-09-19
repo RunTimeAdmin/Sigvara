@@ -118,14 +118,60 @@ async function rpcRead(to, data) {
   if (j.error) throw new Error(j.error.message);
   return j.result;
 }
+
+// Many reads, one request.
+//
+// A lookup used to be six sequential round trips because each read awaited the last,
+// even though nothing after the first depended on anything but the didHash. At ~124 ms
+// a trip that is most of a second of staring at a spinner. JSON-RPC allows a batch array
+// and Arc's node answers one, so the whole lookup costs a single round trip.
+//
+// Responses may come back in any order, so results are matched on id rather than
+// position, and one failed call reports itself rather than silently shifting the rest.
+async function rpcBatch(calls) {
+  if (calls.length === 0) return [];
+  const body = calls.map((c, i) => ({
+    jsonrpc: "2.0", id: i, method: "eth_call",
+    params: [{ to: c.to, data: c.data }, "latest"],
+  }));
+  const res = await fetch(RPC, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const arr = await res.json();
+  if (!Array.isArray(arr)) throw new Error(arr?.error?.message ?? "batch call failed");
+  const byId = new Map(arr.map(r => [r.id, r]));
+  return calls.map((_, i) => {
+    const r = byId.get(i);
+    if (!r || r.error) throw new Error(r?.error?.message ?? "missing result in batch");
+    return r.result;
+  });
+}
+
+// challengeWindow is a per-deployment constant, so it is fetched once rather than on
+// every lookup.
+let challengeWindowCache = null;
+async function getChallengeWindow() {
+  if (challengeWindowCache === null) {
+    challengeWindowCache = Number(BigInt(await rpcRead(REPUTATION, SEL.challengeWindow)));
+  }
+  return challengeWindowCache;
+}
 async function sendTx(to, data) {
   const hash = await wallet.request({
     method: "eth_sendTransaction",
     params: [{ from: account, to, data }],
   });
   logLine(`tx sent ${txLink(hash)} — waiting…`);
+  // Arc produces a block roughly every half second. A flat 2.5s poll added over a second
+  // of dead time to every confirmation for nothing, so start at the block interval and
+  // widen only if the transaction is genuinely slow. Same 60-attempt ceiling, which now
+  // spans longer in wall clock than it used to rather than less.
+  let wait = 500;
   for (let i = 0; i < 60; i++) {
-    await new Promise(r => setTimeout(r, 2500));
+    await new Promise(r => setTimeout(r, wait));
+    if (wait < 2500) wait = Math.min(2500, wait * 1.5);
     const rec = await wallet.request({ method: "eth_getTransactionReceipt", params: [hash] });
     if (rec) {
       if (rec.status === "0x1") { logLine(`<span class="pill-ok">confirmed</span> in block ${parseInt(rec.blockNumber, 16)}`); return; }
@@ -194,26 +240,44 @@ async function lookup() {
   if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) { logLine('<span class="pill-err">Enter a valid 0x address.</span>'); return; }
   currentAgent = addr;
   try {
-    const didHash = await rpcRead(IDENTITY, SEL.computeDidHash + encAddr(addr));
+    // No round trip: didHash is a pure function of the chain id and the address, which
+    // is exactly why SigvaraIdentity derives it on chain at registration. This used to
+    // be an eth_call for arithmetic the page could already do, and did.js now carries
+    // the keccak256 that demo.js always had.
+    const didHash = SigvaraDid.computeDidHash(addr, CHAIN_ID);
     currentDidHash = didHash;
-    const ident = await rpcRead(IDENTITY, SEL.identities + pad32(didHash));
+
+    // Everything below depends only on didHash, so it goes in one request rather than
+    // five sequential ones. Fee reads are appended only when the registry is live, so
+    // the batch never carries a call to an address with no code.
+    const reads = [
+      { to: IDENTITY,   data: SEL.identities      + pad32(didHash) },
+      { to: REPUTATION, data: SEL.getTotalScore   + pad32(didHash) },
+      { to: REPUTATION, data: SEL.getPendingScore + pad32(didHash) },
+      { to: REPUTATION, data: SEL.getReputation   + pad32(didHash) },
+    ];
+    if (FEES_LIVE) reads.push(
+      { to: FEES, data: SEL.balance   + pad32(didHash) },
+      { to: FEES, data: SEL.isCovered + pad32(didHash) },
+    );
+    const [ident, scoreRaw, pendingRaw, rep, balRaw, coveredRaw] = await rpcBatch(reads);
+
     const registeredAt = BigInt(word(ident, 4));
     const statusNum = Number(BigInt(word(ident, 3)));
     // Index matches SigvaraIdentity.AgentStatus. PendingBond means registered but
     // never bonded: not slashable, not scoreable, not yet an agent to rely on.
     const statusStr = ["Active", "Suspended", "Slashed", "awaiting bond"][statusNum] ?? "?";
-    const bal = FEES_LIVE ? BigInt(await rpcRead(FEES, SEL.balance + pad32(didHash))) : 0n;
-    const covered = FEES_LIVE && BigInt(await rpcRead(FEES, SEL.isCovered + pad32(didHash))) === 1n;
+    const bal = FEES_LIVE ? BigInt(balRaw) : 0n;
+    const covered = FEES_LIVE && BigInt(coveredRaw) === 1n;
     $("didStr").textContent = `did:sigvara:${CHAIN_ID}:${addr}`;
     $("didHash").textContent = didHash;
     if (registeredAt !== 0n) {
-      const score = BigInt(await rpcRead(REPUTATION, SEL.getTotalScore + pad32(didHash)));
+      const score = BigInt(scoreRaw);
       $("regStatus").innerHTML = `<span class="pill-ok">yes — ${esc(statusStr)}</span>`;
       // A proposed score sits in a separate slot until its challenge window closes.
       // Showing only the finalized value reads as "no reputation" for any agent
       // whose first score is still open to challenge.
-      $("score").innerHTML = `${score} / 100` + await pendingNote(didHash);
-      const rep = await rpcRead(REPUTATION, SEL.getReputation + pad32(didHash));
+      $("score").innerHTML = `${score} / 100` + await pendingNote(pendingRaw);
       $("breakdown").innerHTML = FACTORS
         .map(([name, i, max]) => `${name} ${Number(BigInt(word(rep, i)))}/${max}`)
         .join(" &nbsp;·&nbsp; ")
@@ -240,13 +304,12 @@ async function lookup() {
 
 // Returns markup describing a score that is proposed but not yet finalized,
 // or an empty string when nothing is pending.
-async function pendingNote(didHash) {
+// Takes the pending blob the lookup already fetched, rather than fetching it again.
+async function pendingNote(raw) {
   try {
-    const raw = await rpcRead(REPUTATION, SEL.getPendingScore + pad32(didHash));
     if (BigInt(word(raw, 8)) !== 1n) return "";
     const total = FACTORS.reduce((sum, [, i]) => sum + Number(BigInt(word(raw, i))), 0);
-    const opensAt = Number(BigInt(word(raw, 7)))
-      + Number(BigInt(await rpcRead(REPUTATION, SEL.challengeWindow)));
+    const opensAt = Number(BigInt(word(raw, 7))) + await getChallengeWindow();
     const when = new Date(opensAt * 1000).toISOString().replace("T", " ").slice(0, 16);
     return ` <span class="pill-warn">${total} proposed, finalizes after ${esc(when)} UTC</span>`;
   } catch (_) {

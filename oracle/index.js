@@ -84,14 +84,22 @@ function measuredFactorsFor(didHash, now = Date.now(), payerScores = null) {
     return { measuredFeeScore: null, measuredAttestations: null, activity: null, propagation: 0 };
   }
   const events = getPaymentEvents(didHash);
+
+  // Group once. diversifiedVolume, diversifiedAttestations and distinctPayers each used
+  // to call byPayer independently, so one agent's evidence was walked three times an
+  // epoch with the BigInt decay arithmetic run on each pass. Same answers, a third of
+  // the work — though at ~2 ms per agent this is tidiness, not the bottleneck: the
+  // round trips above are worth sixty times more.
+  const grouped = payments.byPayer(events, paymentCfg.halfLifeMs, now);
+
   // Diversified, not just decayed: one counterparty's evidence is capped, so a ring
   // of wallets cannot substitute for a customer base. payerScores raises that cap for
   // counterparties that are themselves scored agents.
-  const volume = payments.diversifiedVolume(events, paymentCfg, now, payerScores);
+  const volume = payments.diversifiedVolume(events, paymentCfg, now, payerScores, grouped);
   return {
     measuredFeeScore: payments.feeScoreFromVolume(volume, paymentCfg.feeUnit),
-    measuredAttestations: payments.diversifiedAttestations(events, paymentCfg, now, payerScores),
-    distinctPayers: payments.distinctPayers(events, paymentCfg.halfLifeMs, now),
+    measuredAttestations: payments.diversifiedAttestations(events, paymentCfg, now, payerScores, grouped),
+    distinctPayers: grouped.size,
     propagation: payments.propagationScore(events, payerScores),
     // Tenure replaces calendar age: time since registration cost nothing, so it
     // was the cheapest twenty points an idle farm could collect.
@@ -106,15 +114,32 @@ let payerScoreCache = new Map();
 
 async function payerScoresFor(didHash) {
   if (!payments.required(paymentCfg)) return null;
-  const out = {};
+
+  // Unique payers first: an address recurs across an agent's events, and this way it is
+  // neither looked up nor awaited twice.
+  const unique = new Map(); // lowercased key => the address as recorded
   for (const e of getPaymentEvents(didHash)) {
     const key = String(e.payer || '').toLowerCase();
-    if (key in out) continue;
-    if (!payerScoreCache.has(key)) {
-      payerScoreCache.set(key, await chain.getAgentScore(e.payer));
-    }
-    out[key] = payerScoreCache.get(key);
+    if (!unique.has(key)) unique.set(key, e.payer);
   }
+
+  // Resolve the cache misses together rather than one at a time.
+  //
+  // These reads are independent, and awaiting them in sequence cost a full round trip
+  // each. ethers batches calls issued in the same tick into one JSON-RPC request, which
+  // a for-loop with an await inside defeats completely. Measured against Arc testnet:
+  // twelve calls take 1,491 ms sequentially and 118 ms concurrently.
+  //
+  // getAgentScore swallows its own failures and returns 0, so this cannot reject: an
+  // unreachable counterparty reads as "no standing", which is what it already meant.
+  const misses = [...unique].filter(([key]) => !payerScoreCache.has(key));
+  if (misses.length > 0) {
+    const scores = await Promise.all(misses.map(([, addr]) => chain.getAgentScore(addr)));
+    misses.forEach(([key], i) => payerScoreCache.set(key, scores[i]));
+  }
+
+  const out = {};
+  for (const [key] of unique) out[key] = payerScoreCache.get(key);
   return out;
 }
 
@@ -200,127 +225,157 @@ async function runEpochInner() {
     })
   );
 
-  // Phase 2: writes share the oracle wallet's nonce, so they stay sequential.
-  for (const { didHash, operator, registeredAt, status, pending, covered, error } of agentInfos) {
-    if (error) {
-      console.error(`[oracle]   ${didHash.slice(0, 10)}… error: ${error.message}`);
+  // Agents worth writing for, filtered from the phase-1 batch before any further reads.
+  const candidates = [];
+  for (const info of agentInfos) {
+    if (info.error) {
+      console.error(`[oracle]   ${info.didHash.slice(0, 10)}… error: ${info.error.message}`);
       continue;
     }
-    try {
-      // Slashed agents are terminal — their score was zeroed by SigvaraStaking.
-      if (status === chain.STATUS_SLASHED) {
-        chain.pruneAgent(didHash);
+    // Slashed agents are terminal — their score was zeroed by SigvaraStaking.
+    if (info.status === chain.STATUS_SLASHED) {
+      chain.pruneAgent(info.didHash);
+      continue;
+    }
+    // Uncovered agents fall out of the active scoring run (tokenomics §4).
+    if (gatingActive && !info.covered) {
+      console.log(`[oracle]   ${info.didHash.slice(0, 10)}… uncovered (no epoch fee), skipping`);
+      continue;
+    }
+    candidates.push(info);
+  }
+
+  // Phase 2: writes share the oracle wallet's nonce, so they stay sequential. The two
+  // guard reads before each write do not, and used to be sequential awaits inside the
+  // loop — two full round trips per agent, about 248 ms each on Arc, before any work
+  // happened. At a thousand agents that alone is four minutes of an epoch spent waiting.
+  //
+  // Both guards are gas savers, not safety checks: SigvaraReputation._requireScorable
+  // enforces AgentSlashed and AgentNotBonded itself, so acting on a read that went stale
+  // costs a reverted proposal and nothing else. Reading a chunk ahead rather than
+  // hoisting the lot keeps the guards close to the writes they guard, so the window
+  // stays bounded by the chunk instead of by the epoch.
+  const GUARD_CHUNK = 32;
+
+  for (let c = 0; c < candidates.length; c += GUARD_CHUNK) {
+    const chunk = candidates.slice(c, c + GUARD_CHUNK);
+    // One batch for the whole chunk: ethers folds calls issued in the same tick into a
+    // single JSON-RPC request, so this is one round trip rather than 2 x chunk.
+    const guards = await Promise.all(chunk.map(async a => {
+      try {
+        const [fresh, bonded] = await Promise.all([
+          chain.getAgentInfo(a.didHash),
+          chain.isBonded(a.didHash),
+        ]);
+        return { fresh, bonded, guardError: null };
+      } catch (guardError) {
+        return { fresh: null, bonded: false, guardError };
+      }
+    }));
+
+    for (let k = 0; k < chunk.length; k++) {
+      const { didHash, operator, registeredAt, pending } = chunk[k];
+      const { fresh, bonded, guardError } = guards[k];
+      if (guardError) {
+        console.error(`[oracle]   ${didHash.slice(0, 10)}… error: ${guardError.message}`);
         continue;
       }
-
-      // Uncovered agents fall out of the active scoring run (tokenomics §4).
-      if (gatingActive && !covered) {
-        console.log(`[oracle]   ${didHash.slice(0, 10)}… uncovered (no epoch fee), skipping`);
-        continue;
-      }
-
-      // The status above came from the concurrent phase-1 batch. Writes are
-      // sequential, so by the time this agent's turn arrives a slash may have
-      // executed — and proposing then writes a fresh score onto a terminated
-      // identity that nothing will ever correct. Re-read immediately before
-      // writing so the check is one block from the write, not one batch.
-      const fresh = await chain.getAgentInfo(didHash);
-      if (fresh.status === chain.STATUS_SLASHED) {
-        console.log(`[oracle]   ${didHash.slice(0, 10)}… slashed since the batch read, skipping`);
-        chain.pruneAgent(didHash);
-        continue;
-      }
-
-      // Reputation refuses to score an unbonded agent. Checking here saves the gas
-      // of a proposal that would revert; the contract remains the authority.
-      if (!(await chain.isBonded(didHash))) {
-        console.log(`[oracle]   ${didHash.slice(0, 10)}… below minimum stake, skipping`);
-        metrics.inc('skippedUnbonded');
-        continue;
-      }
-
-      const action = decideAction(pending, challengeWindow, chainNow);
-
-      if (action === 'skip') {
-        console.log(`[oracle]   ${didHash.slice(0, 10)}… score still pending, waiting out challenge window`);
-        continue;
-      }
-
-      if (action === 'finalize-then-propose') {
-        metrics.inc('finalizeAttempts');
-        try {
-          const finalizeTx = await chain.finalizeScore(didHash);
-          console.log(`[oracle]   ${didHash.slice(0, 10)}… finalized tx=${finalizeTx.slice(0, 10)}…`);
-          finalized++;
-          metrics.inc('finalizeSuccesses');
-        } catch (finalizeErr) {
-          // finalizeReputation is permissionless, so another party can front-run
-          // us. If the pending proposal is gone, that's exactly what happened —
-          // the score is live, carry on and propose fresh. Anything else is a
-          // real failure and should skip this agent via the outer catch.
-          const still = await chain.getPendingScore(didHash);
-          if (still.exists) {
-            metrics.inc('finalizeErrors');
-            throw finalizeErr;
-          }
-          console.log(`[oracle]   ${didHash.slice(0, 10)}… already finalized by another party`);
-          metrics.inc('finalizeSuccesses');
-        }
-      }
-
-      const att       = attestations.get(didHash) ?? { successful: 0, total: 0 };
-      const flagCount = flags.get(didHash) ?? 0;
-      // externalScore: only for agents linked to an ERC-8004 identity they own.
-      // Ownership is re-verified inside externalScoreFor; any failure yields 0.
-      const linkedId  = links.get(didHash);
-      const externalScore = (external.configured() && linkedId !== undefined)
-        ? await external.externalScoreFor(linkedId, operator)
-        : 0;
-      const measured  = measuredFactorsFor(didHash, Date.now(), await payerScoresFor(didHash));
-      const scores    = computeScore({
-        registeredAt,
-        attestations: measured.measuredAttestations ?? att,
-        flags: flagCount,
-        externalScore,
-        measuredFeeScore: measured.measuredFeeScore,
-        activity: measured.activity,
-        propagation: measured.propagation,
-      });
-
-      // Charge before proposing, not after. The coverage read above and the
-      // charge are separated by at least the propose transaction, and an
-      // operator can withdraw in that gap: they would be scored for free, and
-      // because the charge used to be fire-and-forget the failure was silent.
-      // Taking the fee first means a withdrawal after the charge costs them
-      // nothing to us. The trade-off is that an agent charged for an epoch whose
-      // proposal then fails has paid for a run it did not get; that is logged
-      // and counted, and is the lesser of the two errors.
-      if (gatingActive) {
-        try {
-          await chain.chargeEpoch(didHash);
-          metrics.inc('feeCharges');
-        } catch (chargeErr) {
-          console.error(`[oracle]   ${didHash.slice(0, 10)}… epoch-fee charge failed, not scoring: ${chargeErr.message}`);
-          metrics.inc('feeChargeErrors');
+      try {
+        if (fresh.status === chain.STATUS_SLASHED) {
+          console.log(`[oracle]   ${didHash.slice(0, 10)}… slashed since the batch read, skipping`);
+          chain.pruneAgent(didHash);
           continue;
         }
+
+        if (!bonded) {
+          console.log(`[oracle]   ${didHash.slice(0, 10)}… below minimum stake, skipping`);
+          metrics.inc('skippedUnbonded');
+          continue;
+        }
+
+        const action = decideAction(pending, challengeWindow, chainNow);
+
+        if (action === 'skip') {
+          console.log(`[oracle]   ${didHash.slice(0, 10)}… score still pending, waiting out challenge window`);
+          continue;
+        }
+
+        if (action === 'finalize-then-propose') {
+          metrics.inc('finalizeAttempts');
+          try {
+            const finalizeTx = await chain.finalizeScore(didHash);
+            console.log(`[oracle]   ${didHash.slice(0, 10)}… finalized tx=${finalizeTx.slice(0, 10)}…`);
+            finalized++;
+            metrics.inc('finalizeSuccesses');
+          } catch (finalizeErr) {
+            // finalizeReputation is permissionless, so another party can front-run
+            // us. If the pending proposal is gone, that's exactly what happened —
+            // the score is live, carry on and propose fresh. Anything else is a
+            // real failure and should skip this agent via the outer catch.
+            const still = await chain.getPendingScore(didHash);
+            if (still.exists) {
+              metrics.inc('finalizeErrors');
+              throw finalizeErr;
+            }
+            console.log(`[oracle]   ${didHash.slice(0, 10)}… already finalized by another party`);
+            metrics.inc('finalizeSuccesses');
+          }
+        }
+
+        const att       = attestations.get(didHash) ?? { successful: 0, total: 0 };
+        const flagCount = flags.get(didHash) ?? 0;
+        // externalScore: only for agents linked to an ERC-8004 identity they own.
+        // Ownership is re-verified inside externalScoreFor; any failure yields 0.
+        const linkedId  = links.get(didHash);
+        const externalScore = (external.configured() && linkedId !== undefined)
+          ? await external.externalScoreFor(linkedId, operator)
+          : 0;
+        const measured  = measuredFactorsFor(didHash, Date.now(), await payerScoresFor(didHash));
+        const scores    = computeScore({
+          registeredAt,
+          attestations: measured.measuredAttestations ?? att,
+          flags: flagCount,
+          externalScore,
+          measuredFeeScore: measured.measuredFeeScore,
+          activity: measured.activity,
+          propagation: measured.propagation,
+        });
+
+        // Charge before proposing, not after. The coverage read above and the
+        // charge are separated by at least the propose transaction, and an
+        // operator can withdraw in that gap: they would be scored for free, and
+        // because the charge used to be fire-and-forget the failure was silent.
+        // Taking the fee first means a withdrawal after the charge costs them
+        // nothing to us. The trade-off is that an agent charged for an epoch whose
+        // proposal then fails has paid for a run it did not get; that is logged
+        // and counted, and is the lesser of the two errors.
+        if (gatingActive) {
+          try {
+            await chain.chargeEpoch(didHash);
+            metrics.inc('feeCharges');
+          } catch (chargeErr) {
+            console.error(`[oracle]   ${didHash.slice(0, 10)}… epoch-fee charge failed, not scoring: ${chargeErr.message}`);
+            metrics.inc('feeChargeErrors');
+            continue;
+          }
+        }
+
+        metrics.inc('proposeAttempts');
+        // Commit to the evidence alongside the score. Without it the only record of
+        // which payments produced this number is the oracle's own state file, and a
+        // third party checking the arithmetic would have to take that on trust.
+        const evidenceRoot = payments.required(paymentCfg)
+          ? merkle.rootFor(getPaymentEvents(didHash))
+          : undefined;
+        const txHash    = await chain.proposeScore(didHash, scores, evidenceRoot);
+        metrics.inc('proposeSuccesses');
+
+        console.log(`[oracle]   ${didHash.slice(0, 10)}… proposed score=${scores.total}/100 tx=${txHash.slice(0, 10)}…`);
+        proposed++;
+      } catch (err) {
+        console.error(`[oracle]   ${didHash.slice(0, 10)}… error: ${err.message}`);
+        metrics.inc('proposeErrors');
       }
-
-      metrics.inc('proposeAttempts');
-      // Commit to the evidence alongside the score. Without it the only record of
-      // which payments produced this number is the oracle's own state file, and a
-      // third party checking the arithmetic would have to take that on trust.
-      const evidenceRoot = payments.required(paymentCfg)
-        ? merkle.rootFor(getPaymentEvents(didHash))
-        : undefined;
-      const txHash    = await chain.proposeScore(didHash, scores, evidenceRoot);
-      metrics.inc('proposeSuccesses');
-
-      console.log(`[oracle]   ${didHash.slice(0, 10)}… proposed score=${scores.total}/100 tx=${txHash.slice(0, 10)}…`);
-      proposed++;
-    } catch (err) {
-      console.error(`[oracle]   ${didHash.slice(0, 10)}… error: ${err.message}`);
-      metrics.inc('proposeErrors');
     }
   }
 
@@ -647,6 +702,13 @@ server.listen(cfg.port, cfg.host, () => {
   if (chain.restoreScanState(loadScanState())) {
     console.log(`[oracle] resuming log scan from block ${loadScanState().lastScannedBlock + 1}`);
   }
+
+  // Check once whether didHash can be derived locally instead of fetched. Doing it here
+  // rather than lazily means the answer is settled before the first epoch, and the one
+  // round trip it costs is paid per process rather than per counterparty.
+  chain.verifyDidHashDerivation().then(ok => {
+    if (ok) console.log('[oracle] didHash derived locally (verified against the registry)');
+  }).catch(() => {});
 
   // Reported, not enforced. The contract decides; this just means an oracle that
   // cannot propose says so at boot instead of failing quietly once an hour.
