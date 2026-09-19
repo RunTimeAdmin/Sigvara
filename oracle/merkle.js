@@ -18,25 +18,38 @@
 const { ethers } = require('ethers');
 
 /**
+ * The settlement time a leaf commits to: SECONDS, matching the block timestamp.
+ *
+ * The store keeps `ts` in milliseconds because the decay maths works in ms, and the
+ * leaf used to encode that value directly. It was self-consistent and unverifiable:
+ * a verifier following the documented procedure reads the block timestamp off the
+ * chain, gets seconds, rebuilds the leaf, and computes a different root. The one
+ * mechanism that exists to prove the oracle honest would have made it look dishonest.
+ *
+ * So the conversion lives here, in one place, and both the leaf and the /evidence
+ * response go through it. `ts` is the store's field and the only accepted input: the
+ * endpoint publishes `settledAt` already in seconds, and refusing that name back here
+ * means a served record can never be fed in and silently re-divided.
+ */
+function settledSeconds(event) {
+  const ms = event.ts;
+  if (ms === undefined) {
+    throw new Error('payment event has no settlement time (ts, in milliseconds)');
+  }
+  return Math.floor(Number(ms) / 1000);
+}
+
+/**
  * The leaf for one verified payment.
  *
  * Double-hashed, which is the standard guard against second preimage attacks: an
  * internal node is a hash of two 32-byte values, and a leaf hashed once could be made
- * to collide with one. Anyone can rebuild this from the transaction alone.
+ * to collide with one. Anyone can rebuild this from the transaction alone: the hash
+ * identifies it, and the payer, amount and settlement time all come off the receipt
+ * and its block.
  */
 function leafFor(event) {
   const { txHash, payer, amount, success } = event;
-
-  // `settledAt` here, `ts` in the store. The two names drifted apart and nothing
-  // noticed: these tests build their own fixtures and never go through
-  // creditPayment, so each side passed its own suite while the pair was broken.
-  // Every propose threw "Cannot convert undefined to a BigInt" the first time the
-  // oracle ran against real stored events. Accept both rather than rename a field
-  // that is already persisted in live state files.
-  const settledAt = event.settledAt ?? event.ts;
-  if (settledAt === undefined) {
-    throw new Error('payment event has no settlement time (settledAt or ts)');
-  }
 
   // A leaf with no settlement hash cannot be rebuilt from the chain, so committing
   // to it would put something in the root that no verifier could ever check. That is
@@ -53,7 +66,7 @@ function leafFor(event) {
       String(txHash).toLowerCase(),
       ethers.getAddress(payer),
       BigInt(amount),
-      BigInt(settledAt),
+      BigInt(settledSeconds(event)),
       Boolean(success),
     ]
   );
@@ -115,4 +128,4 @@ function verifyProof(leaf, proof, root) {
   return computed.toLowerCase() === String(root).toLowerCase();
 }
 
-module.exports = { leafFor, buildTree, rootFor, proofFor, verifyProof, hashPair };
+module.exports = { leafFor, buildTree, rootFor, proofFor, verifyProof, hashPair, settledSeconds };

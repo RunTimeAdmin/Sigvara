@@ -3,13 +3,13 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { ethers } = require('ethers');
-const { leafFor, buildTree, rootFor, proofFor, verifyProof, hashPair } = require('./merkle');
+const { leafFor, buildTree, rootFor, proofFor, verifyProof, hashPair, settledSeconds } = require('./merkle');
 
 const ev = (i, over = {}) => ({
   txHash: '0x' + String(i).padStart(2, '0').repeat(32),
   payer: ethers.Wallet.createRandom().address,
   amount: String(1000n * BigInt(i + 1)),
-  settledAt: 1_700_000_000 + i,
+  ts: (1_700_000_000 + i) * 1000,   // the store's shape: milliseconds
   success: i % 3 !== 0,
   ...over,
 });
@@ -44,7 +44,7 @@ test('the root changes if any field of any payment changes', () => {
 
   assert.notEqual(mutate(1, { amount: '999' }), root, 'amount');
   assert.notEqual(mutate(1, { success: !base[1].success }), root, 'outcome');
-  assert.notEqual(mutate(1, { settledAt: base[1].settledAt + 1 }), root, 'settlement time');
+  assert.notEqual(mutate(1, { ts: base[1].ts + 1000 }), root, 'settlement time');
   assert.notEqual(mutate(1, { payer: ethers.Wallet.createRandom().address }), root, 'payer');
   assert.notEqual(mutate(1, { txHash: '0x' + 'ff'.repeat(32) }), root, 'transaction');
 });
@@ -84,7 +84,7 @@ test('leaves are double-hashed, guarding against a leaf posing as an internal no
   const e = ev(0);
   const inner = ethers.AbiCoder.defaultAbiCoder().encode(
     ['bytes32', 'address', 'uint256', 'uint256', 'bool'],
-    [e.txHash, e.payer, BigInt(e.amount), BigInt(e.settledAt), e.success]
+    [e.txHash, e.payer, BigInt(e.amount), BigInt(e.ts / 1000), e.success]
   );
   assert.equal(leafFor(e), ethers.keccak256(ethers.keccak256(inner)));
   assert.notEqual(leafFor(e), ethers.keccak256(inner));
@@ -123,11 +123,8 @@ test('buildTree: accepts events exactly as creditPayment wrote them', () => {
   const root = rootFor(stored);
   assert.notEqual(root, ethers.ZeroHash);
 
-  // And the leaf must match the one a verifier rebuilds from the /evidence shape,
-  // which renames ts to settledAt on the way out.
-  const asServed = { ...stored[0], settledAt: stored[0].ts };
-  delete asServed.ts;
-  assert.equal(leafFor(asServed), leafFor(stored[0]), 'ts and settledAt must agree');
+  // What /evidence publishes is what the leaf commits to, in the same unit.
+  assert.equal(settledSeconds(stored[0]), 1_700_000_000, 'served settledAt is seconds');
 });
 
 test('leafFor: refuses an event with no settlement hash', () => {
@@ -135,4 +132,36 @@ test('leafFor: refuses an event with no settlement hash', () => {
     () => leafFor({ payer: PAYER, amount: 1n, settledAt: 1, success: true }),
     /settlement hash/
   );
+});
+
+// The property the whole commitment rests on: a verifier who reads the block off the
+// chain must arrive at the leaf the oracle published. The chain reports seconds, so the
+// leaf commits to seconds. Encoding the store's milliseconds instead was self-consistent
+// and unverifiable, which is the worst of both: the root looks like proof and refutes
+// itself the moment anyone checks it.
+test('the leaf commits to the block timestamp a verifier reads off the chain', () => {
+  const blockTimestamp = 1_789_734_970;              // seconds, as eth_getBlockByNumber gives it
+  const stored = {
+    txHash: '0x' + 'cd'.repeat(32),
+    payer: PAYER,
+    amount: '20000000000000000000',
+    ts: blockTimestamp * 1000,                        // what verifyPayment records
+    success: true,
+  };
+
+  assert.equal(settledSeconds(stored), blockTimestamp);
+
+  const rebuiltByVerifier = ethers.keccak256(ethers.keccak256(
+    ethers.AbiCoder.defaultAbiCoder().encode(
+      ['bytes32', 'address', 'uint256', 'uint256', 'bool'],
+      [stored.txHash, stored.payer, BigInt(stored.amount), BigInt(blockTimestamp), true]
+    )
+  ));
+  assert.equal(leafFor(stored), rebuiltByVerifier);
+});
+
+test('settledSeconds refuses a record served by /evidence, which is already seconds', () => {
+  // Round-tripping a served record would divide by 1000 twice and silently produce a
+  // leaf for some moment in 1970. Better to reject the field name outright.
+  assert.throws(() => settledSeconds({ settledAt: 1_789_734_970 }), /milliseconds/);
 });
