@@ -14,13 +14,19 @@ Runtime dependencies are `ethers` v6 and `tweetnacl`. Node 18 or newer.
 
 - **Agent identity.** Generate an Ed25519 keypair, derive the agent's
   `did:sigvara:<chainId>:<address>` and its on-chain `didHash`, and register
-  the agent from the operator wallet.
+  the agent from the operator wallet, with a proof of control signed by the
+  agent address.
 - **Agent-to-agent auth.** Issue a challenge to a peer, sign one with the
   agent's key, and verify a signature against the public key stored on chain.
 - **Reads.** Identity, status, six-factor reputation, `meetsThreshold`, stake
   and minimum-stake checks, and a W3C DID Document built from chain state.
 - **Stake.** `depositStake` handles the ERC-20 approval and the deposit in one
-  call.
+  call, and is what moves a newly registered agent from `PendingBond` to
+  `Active`.
+
+Scores come in two forms. The earned score is what the oracle last finalized; the total
+score is the matured one, which climbs toward it over time and is what `meetsThreshold`
+checks. A newly bonded agent has earned a score before it can spend it.
 
 ## Quick start
 
@@ -35,7 +41,12 @@ const addresses = { identity: '0x…', reputation: '0x…', staking: '0x…' }; 
 // Operator side: create, register and bond an agent
 const { agent, privateKey } = SigvaraAgent.generate({ agentAddress: '0xAgent…', chainId: CHAIN_ID });
 const operator = new ethers.Wallet(process.env.OPERATOR_KEY!, new ethers.JsonRpcProvider(RPC));
-await registerAgent(operator, agent.agentAddress, agent.publicKeyBytes32, addresses.identity);
+
+// The agent address must prove control of itself. Pass a signer for it, or
+// { signature } if it was signed elsewhere (HSM, Safe, any ERC-1271 contract).
+await registerAgent(operator, agent.agentAddress, agent.publicKeyBytes32, addresses.identity, { agentSigner });
+
+// Registration leaves the agent PendingBond. This deposit is what activates it.
 await depositStake(operator, agent.didHash, 1000n * 10n ** 18n, addresses.staking);
 
 // Counterparty side: challenge the agent, verify the signature, read status and score

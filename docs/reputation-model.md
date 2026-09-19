@@ -8,36 +8,73 @@ Sigvara reputation is a deterministic 6-factor score between 0 and 100. It is co
 
 | Factor | Max Points | Source | Formula |
 |---|---|---|---|
-| Fee Activity | 30 | On-chain transaction volume in USD | `min(30, floor(totalFeesUSD / 100))` |
-| Success Rate | 25 | Cryptographic task attestations | `floor(successRate * 25)` |
+| Fee Activity | 30 | Settled payments to the agent, verified on chain | `min(30, decayedVolume / PAYMENT_FEE_UNIT)`, capped per payer |
+| Success Rate | 25 | Outcome reported by the party that paid | `floor(successful / (total + 5) × 25)`, on decayed weights |
 | Tenure | 20 | Span of verified trading, faded by how long since the last of it | `min(20, floor(log₂(spanDays+1) × 4)) × recency` |
-| External Trust | 15 | SAID Protocol / Gitcoin Passport | `floor(externalScore / 100 × 15)` |
+| External Trust | 15 | Normalized ERC-8004 feedback for a linked agent | mean of recognized rating tags × 15 |
 | Community | 5 | Unresolved flags | `max(0, 5 − flags × 2)` |
-| Trust Propagation | 5 | Trust graph network effects | oracle-computed |
+| Trust Propagation | 5 | Standing of the counterparties that paid the agent | 1 pt per fully-trusted counterparty, pro-rated by its score |
+
+All six are live. Only a **bonded** agent is scored at all: a newly registered agent is
+`PendingBond` and `proposeReputation` refuses it.
 
 ### Fee Activity (30 pts)
 
-Measures real economic activity. An agent that processes $3,000 in fees reaches the maximum. This is the hardest factor to fake — it requires sustained, on-chain economic participation.
+Measures real economic activity: the volume of payments that actually settled to the
+agent's own address, in the configured asset, as read from the `Transfer` logs of the
+transactions the attestations cite. One point per `PAYMENT_FEE_UNIT` of volume. At the
+default of 100 USDC per point the 30-point cap lands at 3,000 USDC of settled trade.
 
 ```
-$0     → 0 pts
-$1000  → 10 pts
-$2000  → 20 pts
-$3000+ → 30 pts
+0 USDC     → 0 pts
+1,000      → 10 pts
+2,000      → 20 pts
+3,000+     → 30 pts  (maximum)
 ```
+
+Two things bend that ladder, and they are the point of the factor rather than caveats
+on it:
+
+- **Volume decays.** Each payment is weighted `0.5 ^ (age / half-life)` from the moment
+  it settled on chain, not the moment its receipt was handed in. At the default 90-day
+  half-life, 3,000 USDC of trade a year ago is worth about a sixteenth of that today.
+  The cap is a running rate, not a lifetime total.
+- **One counterparty can only carry so much.** `PAYMENT_MAX_PER_PAYER` limits any single
+  payer to that many points. At the default of 5, reaching 30 needs at least six
+  distinct, separately funded payers. A trusted counterparty's cap is raised in
+  proportion to its own score, so who pays matters as well as how much.
+
+This is the hardest factor to fake, because faking it means genuinely moving money to
+an address you do not control, repeatedly, from wallets that each had to be funded.
 
 ### Success Rate (25 pts)
 
-Based on cryptographic attestations submitted by counterparties. A counterparty that successfully received work from the agent submits a signed attestation. The oracle aggregates all attestations per agent over the epoch.
+Based on outcomes reported by the parties that paid for the work. An attestation must
+carry the settlement transaction of a real payment to the agent, and the attester is
+taken from the transfer log rather than asserted by the caller. The oracle aggregates
+these per agent, decaying each by age and capping any one payer's contribution.
 
-```
-0%   → 0 pts
-50%  → 12 pts
-80%  → 20 pts
-100% → 25 pts
-```
+The formula divides by `total + 5`, not by `total`. Those five pseudo-observations do
+two jobs. They stop one lucky job outscoring a long record, because 1/1 and 99/99 are
+both a perfect ratio otherwise. And they stop a decayed record holding its marks
+forever: a ratio is scale-invariant, so ten successes faded to 0.44 out of 0.44 still
+reads 100%, and an agent that stopped working a year ago would keep full points. With
+the prior, as decayed weight tends to zero so does the score.
 
-This factor will eventually be sourced directly from CounterAudit verified packets — closing the loop between audit trail and reputation.
+The consequence is that the factor measures rate *and* volume together:
+
+| Observations | at 100% | at 80% | at 50% |
+|---|---|---|---|
+| 5 | 12 | 10 | 6 |
+| 10 | 16 | 13 | 8 |
+| 25 | 20 | 16 | 10 |
+| 100 | 23 | 19 | 11 |
+
+The full 25 is approached, never reached. These figures assume fresh evidence; decayed
+weights are fractional and pull every row down as the record ages.
+
+CounterAudit reports outcomes for work it audits, which is how a verified packet turns
+into a reputation signal.
 
 ### Tenure (20 pts)
 
@@ -55,24 +92,33 @@ What remains expensive is the thing an attacker cannot shortcut: a long, unbroke
 
 Payments from the agent's own operator never enter the record, so the span is made of arm's-length trade only. When payment verification is off the factor falls back to the old calendar curve.
 
+The curve, applied to the **span between first and last verified payment** — not to
+calendar days since registration:
+
 ```
-Day 0   → 0 pts
-Day 1   → 4 pts
-Day 3   → 8 pts
-Day 7   → 12 pts
-Day 15  → 16 pts
-Day 31  → 20 pts  (maximum)
+Span 0 days   → 0 pts
+Span 1 day    → 4 pts
+Span 3 days   → 8 pts
+Span 7 days   → 12 pts
+Span 15 days  → 16 pts
+Span 31 days  → 20 pts  (maximum)
 ```
 
-Formula: `min(20, floor(log₂(days+1) × 4))`
+Formula: `min(20, floor(log₂(spanDays+1) × 4)) × recency`, where `recency` runs from 1
+for an agent working today down to 0 for one that has long since stopped. A two-year
+span abandoned a year ago is worth about a point.
 
 ### External Trust (15 pts)
 
-Bridges existing identity systems. Currently planned integrations:
-- **SAID Protocol** — Semantic Agent Identifier standard
-- **Gitcoin Passport** — weighted credential aggregator
+Carries in reputation the agent already has under [ERC-8004](https://eips.ethereum.org/EIPS/eip-8004).
+An operator links its Sigvara agent to an ERC-8004 identity it owns (`POST /link`), and
+the oracle reads that agent's on-chain feedback from the ERC-8004 Reputation Registry,
+normalizes the rating dimensions it recognizes, and scales the mean to 15 points.
 
-An agent that has a verified external identity (GitHub, ENS, biometric attestation via Gitcoin) can carry up to 15 pts from that credential.
+This is 0 unless the link is configured and the linked agent has feedback. Feedback
+CounterAudit wrote is deliberately excluded from the normalizer, because CounterAudit
+already feeds the success factor directly and would otherwise count twice — see
+[architecture.md](architecture.md).
 
 ### Community Verification (5 pts)
 
@@ -89,9 +135,10 @@ Flags are submitted through a governance mechanism (separate from slashing). Sla
 
 ### Trust Propagation (5 pts)
 
-Network-effect scoring. Agents that are trusted by other high-reputation agents propagate a fraction of that trust. If Agent A (score 80) repeatedly delegates to Agent B and attests success, Agent B gains propagation points.
-
-This factor is currently oracle-computed from the attestation graph and is the most experimental of the six. It will be formalized in Phase 2.
+Network-effect scoring. An agent paid by counterparties that are themselves scored,
+bonded and slashable inherits a fraction of that standing. It is live; the mechanics,
+and the two properties that keep it from being a Sybil amplifier, are in
+[Inherited trust](#inherited-trust-5-pts) below.
 
 ---
 
@@ -179,19 +226,32 @@ identity after an upgrade.
 
 ## New Agent Ramp-Up
 
-A brand-new agent registers and immediately has:
-- Fee Activity: 0 (no transactions yet)
-- Success Rate: 0 (no attestations yet)
-- Age: 0 (just registered)
-- External Trust: depends on credentials
+A brand-new agent has **no score at all**, not a low one. Registration leaves it
+`PendingBond`, and `proposeReputation` refuses an agent that is not bonded. There is
+nothing to read until the operator posts `minimumStake`.
+
+Once bonded, the first epoch gives it:
+
+- Fee Activity: 0 (nothing has paid it)
+- Success Rate: 0 (no attestations)
+- Tenure: 0 (no span of activity yet — correct, it is new)
+- External Trust: 0 unless it links an ERC-8004 identity with existing feedback
 - Community: 5 (no flags)
-- Propagation: 0
+- Propagation: 0 (no counterparties)
 
-**Starting score: ~5 points** (community baseline only).
+**Starting score: 5 points**, the community baseline, and even that is not immediately
+spendable: `getTotalScore` matures toward the earned figure at a fixed rate per day.
 
-This is by design. A new agent cannot be trusted at the same level as one with 6 months of economic activity. The logarithmic age curve and fee activity floor mean you cannot buy reputation instantly — you have to earn it over time.
+Climbing from there is deliberately slow, and each factor is slow for its own reason.
+Fee Activity needs volume from at least six separately funded payers to reach its cap.
+Success Rate approaches 25 only as observations accumulate against the `+5` prior.
+Tenure needs a span of paid work that cannot be manufactured in one transaction, since
+the clock starts at the first payment rather than at registration. None of the three
+can be bought at once, and all three decay if the work stops.
 
-The practical ceiling for a new agent within the first week is around 15–20 points. Reaching 50+ requires sustained activity over weeks. The 90+ range requires months of strong economic activity and many successful attestations.
+The 90+ range therefore means an agent that has been continuously paid by a diverse set
+of counterparties, over months, with a bond posted and slashable throughout, and is
+still working today.
 
 ---
 
@@ -234,16 +294,46 @@ uint8 score = reputation.getTotalScore(didHash);
 
 ## Oracle Epochs
 
-The reference oracle runs on a configurable interval (`EPOCH_HOURS`, default 1 hour on testnet). In Phase 2, epochs will be governed by a decentralized oracle network with consensus over the score computation. The on-chain storage format will not change — only the writer changes.
+The reference oracle lives in [`oracle/`](../oracle/) and runs on a configurable
+interval (`EPOCH_HOURS`, default 24). Each epoch it scans `AgentRegistered` events in
+`LOG_CHUNK_SIZE` blocks at a time (default 2000, with backoff and per-chunk progress
+checkpointing so a rate-limited scan resumes instead of restarting), recomputes every
+factor, and proposes a score plus a Merkle root over the evidence it used.
 
-Current oracle: `oracle/` directory in this repository. Single-operator, single chain. Queries `AgentRegistered` events in 9-block chunks (Alchemy free-tier constraint) and uses an in-memory attestation map.
+It is a single operator today. When `SigvaraReputation.operatorBond` is set — it is on
+Arc testnet — that operator must also be admitted and bonded in `SigvaraOracleBond`, so
+a bad score costs its proposer something. Finalizing stays permissionless.
 
-Phase 2 oracle: replaces the in-memory attestation map with cryptographically attested data from CounterAudit (for Success Rate) and integrates SAID / Gitcoin for External Trust.
+State (attestations, flags, links, payment events, spent settlement hashes, scan
+progress) is a JSON file written atomically, not an in-memory map, so it survives
+restarts.
+
+### What multiple operators will need
+
+Running a second operator today would not produce a second opinion, because the two
+would not be looking at the same thing, and a fresh proposal replaces a still-pending
+one — so they would race rather than check each other. Three things have to change
+first, and the design deliberately aims at the third rather than at consensus:
+
+1. **Shared inputs.** Payment evidence is derivable from chain logs and should be
+   scanned rather than submitted. What is genuinely off-chain is the success flag, the
+   payer's opinion, and only that needs a shared channel.
+2. **Deterministic computation.** Scoring currently reads the wall clock, so two
+   operators computing seconds apart can round to different integers. Each epoch needs
+   to be anchored to a block timestamp, and the decay arithmetic kept in integers
+   rather than floats.
+3. **The ability to disagree.** With bonds, a challenge window and the evidence root
+   already in place, the cheaper design is one proposer per epoch and every other
+   bonded operator recomputing from the committed evidence and challenging a mismatch.
+   Operators never have to agree; they have to be able to prove a proposer wrong.
+
+The on-chain storage format does not change for any of this. Only the writer does.
 
 ---
 
 ## Related
 
+- [Payment-backed attestations](payment-backed-attestations.md) — how evidence is verified, decayed, capped and committed to on chain
 - [Ecosystem Overview](ecosystem.md)
 - [Quickstart: Register your first agent](quickstart.md)
 - [CounterAudit Integration Guide](counteraudit-integration.md)

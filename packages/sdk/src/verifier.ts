@@ -188,8 +188,10 @@ export async function registerAgent(
     const digest: string = await contract.registrationDigest(
       agentAddress, operator, ed25519PubKeyBytes32
     );
-    // The digest is already an EIP-191 prefixed hash, so sign the raw bytes rather
-    // than letting the signer prefix it a second time.
+    // The digest comes back UNPREFIXED; the contract applies the EIP-191 prefix
+    // itself when it verifies. Passing the raw 32 bytes makes signMessage apply
+    // exactly that prefix, once. Passing the hex STRING instead would prefix its 66
+    // ASCII characters and produce a signature that never recovers to the agent.
     signature = await proof.agentSigner.signMessage(ethers.getBytes(digest));
   }
 

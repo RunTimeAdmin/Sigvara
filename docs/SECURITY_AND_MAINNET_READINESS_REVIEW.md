@@ -7,6 +7,41 @@
 
 ---
 
+> ## Status since this review — 2026-09-19
+>
+> The body below is left as written on 17 September and is **not** a current statement
+> of readiness. What has changed since:
+>
+> **Closed.**
+> - `deployments/5042002.json` is committed, and the protocol is deployed and running on
+>   Arc testnet.
+> - `SigvaraOracleBond` is deployed and wired into `SigvaraReputation.operatorBond`; the
+>   oracle operator is bonded and admitted, so proposing a score now costs something if
+>   it is wrong.
+> - Reputation is bound to identity: an unregistered or slashed agent cannot be scored.
+> - Agents are no longer `Active` on registration. Registration mints `PendingBond` and
+>   requires a signature from the agent address proving control; the bond is what
+>   activates, and every transition into `Active` re-checks collateral. An invariant test
+>   covers it, and found a real escape via the dispute path while it was being written.
+> - Attestations are payment-backed, decayed on a half-life, capped per counterparty, and
+>   refused for self-payments. Calendar age is replaced by tenure. Scores mature over days
+>   rather than landing at once, and a transfer restarts maturity.
+> - Every proposal commits to a Merkle root over the evidence behind it, servable and
+>   re-verifiable against the chain.
+>
+> **Still open, and still mainnet blockers.**
+> - No external security audit.
+> - Mainnet bond asset undecided; SVR has not launched.
+> - The oracle is a single operator. It is bonded, but bonded is not decentralized, and
+>   scoring still reads the wall clock rather than the chain clock, so two operators would
+>   not agree even on identical inputs.
+> - Every privileged role on testnet is a single EOA, including the slashing committee.
+>   Admin and upgrade rights are not on a timelock or Safe.
+> - No slash has been run end to end on a live network.
+> - No public challenge watcher.
+
+---
+
 ## Executive Summary
 
 Sigvara is a **computed reputation and staked slashing layer for autonomous AI agents**, built on top of ERC-8004. The protocol is well-architected with clear separation of concerns, comprehensive test coverage, and thoughtful security considerations. However, **mainnet deployment should be blocked** pending completion of several critical items:

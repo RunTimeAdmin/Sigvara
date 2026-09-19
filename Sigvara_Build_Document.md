@@ -1,5 +1,18 @@
 # Sigvara: Technical Build Document
 
+> **This is the original design document, not a description of the running system.**
+> It records the intended architecture at the point the protocol moved off a centralized
+> SaaS, and is kept for that context. Several specifics have since been superseded —
+> notably the scoring formulas in §5, which describe a fee factor keyed to USD volume,
+> external trust sourced from SAID / Gitcoin, and propagation stubbed to zero. None of
+> those match what runs today.
+>
+> For current behaviour see [README](README.md),
+> [docs/reputation-model.md](docs/reputation-model.md),
+> [docs/payment-backed-attestations.md](docs/payment-backed-attestations.md) and
+> [docs/architecture.md](docs/architecture.md). Where this document and those disagree,
+> those are right.
+
 ## 1. Executive Summary
 
 Sigvara is a decentralized identity and trust protocol designed explicitly for autonomous AI agents. As AI agents evolve into independent economic actors, the lack of verifiable Non-Human Identity (NHI) presents a systemic risk, enabling Sybil attacks, reputation manipulation, and unaccountable execution.
