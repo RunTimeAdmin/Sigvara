@@ -113,15 +113,20 @@ console.log(agent.did);
         <div class="qs-step">
           <div class="qs-header"><div class="qs-num">4</div><h3>Register on-chain, then post the bond</h3></div>
           <div class="qs-body">
-            <p>Registration comes first: the staking contract only accepts deposits for an agent that is already Active. <code>registerAgent</code> is one transaction; <code>depositStake</code> checks your allowance, sends the ERC-20 approval only if it is short, then deposits. The contract computes your <code>didHash</code> from the agent address and chain ID.</p>
+            <p>Registration comes first, and the bond is what activates the agent — not the other way round. <code>registerAgent</code> leaves it <code>PendingBond</code>: resolvable, but not Active, not scoreable and not slashable. The first <code>depositStake</code> that carries it over <code>minimumStake</code> makes it Active. <code>depositStake</code> checks your allowance, sends the ERC-20 approval only if it is short, then deposits. The contract computes your <code>didHash</code> from the agent address and chain ID.</p>
+            <p>The agent address must also sign for its own registration, which is what stops anyone claiming an address they do not control and choosing the key verifiers would check against it. Pass a signer for that address, or <code>{ signature }</code> if it was signed elsewhere — an HSM, a Safe, or any ERC-1271 contract agent.</p>
             <pre><code><span class="kw">import</span> { <span class="fn">registerAgent</span>, <span class="fn">depositStake</span> } <span class="kw">from</span> <span class="str">'@sigvara/protocol-sdk'</span>;
 
 <span class="kw">const</span> IDENTITY_ADDRESS = <span class="str">'0x7e3aFC532eE5d922ab3cc3FFb510c7C8151477Dd'</span>;
 <span class="kw">const</span> STAKING_ADDRESS  = <span class="str">'0xA69d62B2a6774D21A2c15d5d83b27277eD31d35B'</span>;
 <span class="kw">const</span> minStake = ethers.<span class="fn">parseEther</span>(<span class="str">'1000'</span>); <span class="cm">// minimumStake on testnet</span>
 
+<span class="cm">// agentSigner proves control of the agent address. Often the same wallet as the
+// operator; when it is not, pass { signature } and sign with its key separately.</span>
+<span class="kw">const</span> agentSigner = signer;
+
 <span class="kw">const</span> { didHash, txHash } = <span class="kw">await</span> <span class="fn">registerAgent</span>(
-  signer, agent.agentAddress, agent.publicKeyBytes32, IDENTITY_ADDRESS
+  signer, agent.agentAddress, agent.publicKeyBytes32, IDENTITY_ADDRESS, { agentSigner }
 );
 console.log(<span class="str">'Registered:'</span>, `https://explorer.testnet.arc.io/tx/${txHash}`);
 
@@ -147,7 +152,8 @@ console.log(<span class="str">'Bonded:'</span>, bond.txHash, bond.approveTxHash 
 console.log(identity.status);   <span class="cm">// → Active</span>
 
 <span class="kw">const</span> score = <span class="kw">await</span> verifier.<span class="fn">getTotalScore</span>(agent.did);
-console.log(score);             <span class="cm">// → 5 (community baseline — grows with activity)</span></code></pre>
+console.log(score);             <span class="cm">// → 0 until the first epoch finalizes</span></code></pre>
+            <p class="u-muted-13">Two reasons that reads 0 at first. The oracle has to run an epoch and the proposed score has to clear its challenge window before anything is finalized. And <code>getTotalScore</code> returns the <em>matured</em> score, which climbs toward the earned one over days rather than landing at once — <code>getEarnedScore</code> shows the raw figure. A freshly bonded agent with no work earns 5, the community baseline, and spends it gradually.</p>
           </div>
         </div>
 
