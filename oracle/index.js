@@ -400,8 +400,20 @@ const server = http.createServer(async (req, res) => {
   const { pathname } = url;
   metrics.inc('httpRequests');
 
+  /* HEAD is routed as GET.
+   *
+   * Without this every HEAD fell through to the catch-all 404, so an uptime monitor
+   * probing /health with the default HEAD read a healthy service as down. HTTP also
+   * requires HEAD wherever GET is offered.
+   *
+   * Node suppresses the response body for HEAD by itself, so routing is the whole fix
+   * and the handlers below need no special case. Only the read routes see this: the
+   * POST routes keep testing req.method directly, so HEAD cannot reach a write.
+   */
+  const readMethod = req.method === 'HEAD' ? 'GET' : req.method;
+
   // GET /health — extended for production alerting
-  if (req.method === 'GET' && pathname === '/health') {
+  if (readMethod === 'GET' && pathname === '/health') {
     const lastEpoch = metrics.get('lastSuccessfulEpochMs');
     const timeSinceLastEpoch = lastEpoch ? Date.now() - lastEpoch : null;
     const storeWritable = isStatePathWritable();
@@ -422,7 +434,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   // GET /metrics — Prometheus text format
-  if (req.method === 'GET' && pathname === '/metrics') {
+  if (readMethod === 'GET' && pathname === '/metrics') {
     res.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4; charset=utf-8' });
     return res.end(metrics.toPrometheusText());
   }
@@ -553,7 +565,7 @@ const server = http.createServer(async (req, res) => {
   // read off the chain, and the root can be compared with the one the reputation
   // contract holds. Deliberately unauthenticated, like /score: evidence nobody can
   // fetch is evidence nobody can audit.
-  if (req.method === 'GET' && pathname.startsWith('/evidence/')) {
+  if (readMethod === 'GET' && pathname.startsWith('/evidence/')) {
     // Unauthenticated does not mean unmetered. Every call rebuilds a Merkle tree over
     // the agent's payment history, so this is the most expensive thing a stranger can
     // ask for once the read paths are proxied to the public internet.
@@ -635,7 +647,7 @@ const server = http.createServer(async (req, res) => {
 
   // GET /score/:didHash  — preview computed score without writing to chain
   const didHash = parseScorePath(pathname);
-  if (req.method === 'GET' && didHash) {
+  if (readMethod === 'GET' && didHash) {
     // Each call costs several RPC round trips (agent info, payer standing, and the
     // external score when one is linked), so it is metered like the writes despite
     // needing no token.
