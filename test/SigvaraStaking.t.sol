@@ -676,6 +676,66 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
         assertEq(vm.load(address(staking), proposalSlot), didHash);
     }
 
+    /**
+     * Pins every slot, not just the two mappings above.
+     *
+     * The append-only rule is stated in four comments in this contract and enforced by
+     * none of them. The identical gap in SigvaraReputation let `evidenceRoots` be declared
+     * above `operatorBond`, which on the live proxy moved operatorBond into an empty slot
+     * where it read zero — the "bonded-operator check disabled" mode, reached silently by
+     * an upgrade that reverted nothing. This contract holds the bond, so it gets the same
+     * treatment.
+     *
+     * Adding a variable: append it, add a line here, never renumber. A failure here after
+     * a deliberate append means the append was not at the end.
+     */
+    function test_storageLayout_allSlotsPinned() public {
+        assertEq(address(uint160(uint256(vm.load(address(staking), bytes32(uint256(0)))))),
+            address(svr), "slot 0 is svrToken");
+        assertEq(address(uint160(uint256(vm.load(address(staking), bytes32(uint256(1)))))),
+            address(identity), "slot 1 is identityRegistry");
+        assertEq(address(uint160(uint256(vm.load(address(staking), bytes32(uint256(2)))))),
+            address(rep), "slot 2 is reputationRegistry");
+        assertEq(uint256(vm.load(address(staking), bytes32(uint256(3)))),
+            staking.minimumStake(), "slot 3 is minimumStake");
+        assertEq(uint256(vm.load(address(staking), bytes32(uint256(4)))),
+            staking.challengePeriod(), "slot 4 is challengePeriod");
+        // 5 = stakes, 6 = slashProposals, pinned by the two tests above.
+        assertEq(uint256(vm.load(address(staking), bytes32(uint256(7)))),
+            staking.unbondingPeriod(), "slot 7 is unbondingPeriod");
+
+        // 8 = claimable. A mapping's declared slot is only a hashing seed, so probe a key
+        // that has a balance rather than reading the slot itself.
+        _deposit();
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "evidence");
+        vm.warp(block.timestamp + CHALLENGE + 1);
+        staking.executeSlash(didHash);
+        assertGt(staking.claimable(victim), 0, "victim owed something to probe");
+        assertEq(uint256(vm.load(address(staking), keccak256(abi.encode(victim, uint256(8))))),
+            staking.claimable(victim), "slot 8 is claimable");
+    }
+
+    /**
+     * SigvaraStaking inherits the NON-upgradeable ReentrancyGuard. That is safe only
+     * because OpenZeppelin >= 5.1 keeps `_status` in a namespaced slot; the older version
+     * used a plain `uint256 private _status`, which in this inheritance chain would claim
+     * slot 0 and shift svrToken and everything after it — on the one contract holding the
+     * bond, and without reverting anything.
+     *
+     * So the assumption gets a test rather than a comment. If an OZ bump ever reintroduces
+     * sequential storage here, this fails in CI instead of on a proxy; the fix would be to
+     * switch to ReentrancyGuardUpgradeable and add __ReentrancyGuard_init to a
+     * reinitializer.
+     */
+    function test_reentrancyGuardConsumesNoSequentialSlot() public view {
+        assertEq(
+            address(uint160(uint256(vm.load(address(staking), bytes32(uint256(0)))))),
+            address(svr),
+            "ReentrancyGuard took slot 0 - every storage variable has shifted"
+        );
+    }
+
     function test_initializeV2_setsUnbondingPeriod_onceOnly() public {
         vm.prank(admin);
         staking.initializeV2(30 days);

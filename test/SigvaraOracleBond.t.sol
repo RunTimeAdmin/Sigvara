@@ -255,8 +255,80 @@ contract SigvaraOracleBondTest is Test {
     }
 
     // -------------------------------------------------------------------------
+    // Bond requirement binds on incumbents
+    // -------------------------------------------------------------------------
+
+    /// Raising the bar must take effect for operators already admitted under a lower one.
+    /// `admit` checks the bond once, so before isActiveOperator re-read it an operator let
+    /// in at 1,000 kept proposing after the requirement moved to 5,000, and governance
+    /// could only tighten the rule by removing each incumbent by hand.
+    function test_raisingBondAmount_demotesIncumbentsOnRead() public {
+        _bondAndAdmit(op1, BOND);
+        assertTrue(bond.isActiveOperator(op1), "active under the original requirement");
+
+        vm.prank(admin);
+        bond.setBondAmount(BOND * 5);
+
+        assertFalse(bond.isActiveOperator(op1), "under-bonded once the bar rose");
+        // Status is untouched: only removeOperator clears the record, and topping up
+        // must be enough to restore standing without a second admission.
+        vm.prank(op1);
+        bond.depositBond(BOND * 4);
+        assertTrue(bond.isActiveOperator(op1), "restored by topping up");
+    }
+
+    /// Lowering it re-qualifies, for the same reason and by the same path.
+    function test_loweringBondAmount_reQualifiesIncumbents() public {
+        _bondAndAdmit(op1, BOND);
+        vm.prank(admin);
+        bond.setBondAmount(BOND * 5);
+        assertFalse(bond.isActiveOperator(op1));
+
+        vm.prank(admin);
+        bond.setBondAmount(BOND);
+        assertTrue(bond.isActiveOperator(op1), "qualified again without re-admission");
+    }
+
+    /// Zero would make the gate vacuous while still looking configured. That mode already
+    /// exists — leave SigvaraReputation.operatorBond unset — and should not be reachable
+    /// by passing an empty argument to a setter.
+    function test_setBondAmount_rejectsZero() public {
+        vm.expectRevert(SigvaraOracleBond.ZeroAmount.selector);
+        vm.prank(admin);
+        bond.setBondAmount(0);
+        assertEq(bond.bondAmount(), BOND, "unchanged after the refusal");
+    }
+
+    // -------------------------------------------------------------------------
     // Storage layout — pins operators mapping to slot 5
     // -------------------------------------------------------------------------
+
+    /**
+     * Pins slots 0-4, which nothing covered: only the operators mapping was guarded.
+     *
+     * Same reasoning as the equivalents in Staking, Identity and Reputation. The one in
+     * Reputation exists because this exact gap let a mapping be declared above
+     * `operatorBond` and move it into a slot reading zero.
+     *
+     * Adding a variable: append it, add a line here, never renumber.
+     */
+    function test_storageLayout_allSlotsPinned() public {
+        vm.prank(admin);
+        bond.setBondAmount(BOND);          // write a known value rather than trusting init
+        _bondAndAdmit(op1, BOND);          // so activeCount is non-zero and probeable
+
+        assertEq(address(uint160(uint256(vm.load(address(bond), bytes32(uint256(0)))))),
+            address(svr), "slot 0 is svr");
+        assertEq(uint256(vm.load(address(bond), bytes32(uint256(1)))),
+            bond.bondAmount(), "slot 1 is bondAmount");
+        assertEq(uint256(vm.load(address(bond), bytes32(uint256(2)))),
+            bond.unbondingPeriod(), "slot 2 is unbondingPeriod");
+        assertEq(address(uint160(uint256(vm.load(address(bond), bytes32(uint256(3)))))),
+            beneficiary, "slot 3 is slashBeneficiary");
+        assertEq(uint256(vm.load(address(bond), bytes32(uint256(4)))),
+            bond.activeCount(), "slot 4 is activeCount");
+        assertEq(bond.activeCount(), 1, "probe value was actually written");
+    }
 
     function test_storageLayout_operatorsPinnedToSlot5() public {
         vm.prank(op1);

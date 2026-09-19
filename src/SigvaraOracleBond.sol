@@ -251,7 +251,22 @@ contract SigvaraOracleBond is
     // Admin params
     // -------------------------------------------------------------------------
 
+    /**
+     * @notice Set the bond required of an operator.
+     * @dev    Zero is refused. An operator set with no bond requirement admits anyone the
+     *         admin admits and puts nothing at risk, which is indistinguishable from having
+     *         no operator set at all — and that mode already exists, by leaving
+     *         SigvaraReputation.operatorBond unset. Reaching it by passing an empty
+     *         argument to a setter is how a guarantee disappears without anyone noticing.
+     *         Same reasoning as SigvaraIdentity.setStakeView.
+     *
+     *         Raising this does not walk the operator set; status is only recomputed on
+     *         deposit, slash and admission. isActiveOperator re-reads the bond instead, so
+     *         a raise binds immediately on the check that actually gates proposing, without
+     *         an unbounded loop here.
+     */
     function setBondAmount(uint256 newBondAmount) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (newBondAmount == 0) revert ZeroAmount();
         bondAmount = newBondAmount;
         emit BondAmountUpdated(newBondAmount);
     }
@@ -271,8 +286,19 @@ contract SigvaraOracleBond is
     // Views
     // -------------------------------------------------------------------------
 
+    /**
+     * @dev Status AND bond, deliberately. Reading status alone made admission permanent:
+     *      `admit` tests the bond once, at admission, so an operator let in under a lower
+     *      requirement kept proposing after the bar was raised, and governance had no way
+     *      to tighten the rule for incumbents short of removing each one by hand. The bond
+     *      is the thing being relied on, so the bond is what gets read.
+     *
+     *      Belt and braces with the demotion in `slash`, which keeps activeCount honest.
+     *      This one keeps the answer honest even when nothing has called in to recompute.
+     */
     function isActiveOperator(address operator) external view returns (bool) {
-        return operators[operator].status == Status.Active;
+        Operator storage op = operators[operator];
+        return op.status == Status.Active && op.bond >= bondAmount;
     }
 
     function bondOf(address operator) external view returns (uint256) {

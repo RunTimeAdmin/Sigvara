@@ -713,6 +713,43 @@ contract SigvaraIdentityTest is Test, RegistrationHelper {
         assertEq(uint256(vm.load(address(identity), slot)), 1);
     }
 
+    /**
+     * Pins the slots appended after slashSuspended, which nothing covered.
+     *
+     * The three tests above stop a variable being inserted above the original mappings.
+     * They say nothing about the four appended since, and the same blind spot in
+     * SigvaraReputation is what let `evidenceRoots` land above `operatorBond` and move it
+     * into a slot reading zero — which is that contract's "check disabled" mode, reached by
+     * an upgrade that reverted nothing.
+     *
+     * Adding a variable: append it, add a line here, never renumber.
+     */
+    function test_storageLayout_appendedSlotsPinned() public {
+        bytes32 didHash = _register();
+        address buyer = makeAddr("buyer");
+
+        // 3 = stakeView, a plain address rather than a mapping.
+        assertEq(address(uint160(uint256(vm.load(address(identity), bytes32(uint256(3)))))),
+            address(stakeView), "slot 3 is stakeView");
+
+        // 4 = pendingOperator. Probe with a live offer rather than reading the seed slot.
+        vm.prank(operator);
+        identity.offerOperatorTransfer(didHash, buyer);
+        assertEq(
+            address(uint160(uint256(vm.load(address(identity), keccak256(abi.encode(didHash, uint256(4))))))),
+            buyer, "slot 4 is pendingOperator"
+        );
+
+        vm.prank(buyer);
+        identity.acceptOperatorTransfer(didHash);
+
+        // 5 = operatorChangedAt, 6 = operatorTransferCount, both written by the accept.
+        assertEq(uint256(vm.load(address(identity), keccak256(abi.encode(didHash, uint256(5))))),
+            identity.operatorChangedAt(didHash), "slot 5 is operatorChangedAt");
+        assertEq(uint256(vm.load(address(identity), keccak256(abi.encode(didHash, uint256(6))))),
+            identity.operatorTransferCount(didHash), "slot 6 is operatorTransferCount");
+    }
+
     function test_storageLayout_slashSuspendedPinnedToSlot2() public {
         bytes32 didHash = _register();
         vm.prank(staking);
