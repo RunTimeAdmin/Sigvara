@@ -62,6 +62,14 @@ jobs:
       - run: npm ci
       - run: node --test
 
+      # Runs here because this job already has node and ethers installed. The check
+      # reads src/*.sol and asserts the site and docs still describe it accurately:
+      # selectors, the status enum, published addresses, and claims that were true
+      # once. All of those drifted silently before anything was watching them.
+      - name: Docs and site match the contracts
+        working-directory: .
+        run: node scripts/check-docs.mjs
+
   slither:
     name: Static analysis (slither)
     runs-on: ubuntu-latest
