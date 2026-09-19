@@ -101,3 +101,38 @@ test('hashPair sorts, matching OpenZeppelin MerkleProof', () => {
   const b = ethers.keccak256('0x02');
   assert.equal(hashPair(a, b), hashPair(b, a));
 });
+
+// Regression: the tree must build from what the store actually writes.
+//
+// Every test above builds its own fixture with a `settledAt` field. The store writes
+// `ts`. Nothing exercised the pair, so both suites passed while rootFor threw on any
+// real event, and it only surfaced when the oracle ran against a live state file.
+const PAYER = ethers.Wallet.createRandom().address;
+
+test('buildTree: accepts events exactly as creditPayment wrote them', () => {
+  const store = require('./store');
+  const did = '0x' + '11'.repeat(32);
+  const txHash = '0x' + 'ab'.repeat(32);
+
+  assert.equal(store.creditPayment(did, txHash, 5n * 10n ** 18n, PAYER, true, 1_700_000_000_000), true);
+  const stored = store.getPaymentEvents(did);
+  assert.equal(stored.length, 1);
+  assert.ok(stored[0].ts !== undefined, 'store writes ts');
+  assert.equal(stored[0].settledAt, undefined, 'store does not write settledAt');
+
+  const root = rootFor(stored);
+  assert.notEqual(root, ethers.ZeroHash);
+
+  // And the leaf must match the one a verifier rebuilds from the /evidence shape,
+  // which renames ts to settledAt on the way out.
+  const asServed = { ...stored[0], settledAt: stored[0].ts };
+  delete asServed.ts;
+  assert.equal(leafFor(asServed), leafFor(stored[0]), 'ts and settledAt must agree');
+});
+
+test('leafFor: refuses an event with no settlement hash', () => {
+  assert.throws(
+    () => leafFor({ payer: PAYER, amount: 1n, settledAt: 1, success: true }),
+    /settlement hash/
+  );
+});
