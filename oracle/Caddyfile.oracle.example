@@ -38,10 +38,19 @@ oracle.sigvara.xyz {
 
 		# Scores change once per epoch and evidence only when a score is proposed, so a
 		# short cache absorbs a burst of readers without serving anything stale enough
-		# to mislead.
+		# to mislead. This is a hint to browsers and CDNs, not a control: a script
+		# ignores it, which is why the oracle meters these paths itself.
 		header Cache-Control "public, max-age=30"
 
-		reverse_proxy 127.0.0.1:3030
+		reverse_proxy 127.0.0.1:3030 {
+			# The oracle rate-limits /score and /evidence per caller, and it only reads
+			# this header from a loopback connection. Set it explicitly rather than
+			# letting the default append to whatever the client sent: with one value
+			# there is nothing to misparse, and without the header every visitor would
+			# key on 127.0.0.1 and share a single bucket, so one abuser would lock out
+			# everyone.
+			header_up X-Forwarded-For {remote_host}
+		}
 	}
 
 	# Everything else, including /metrics and every write endpoint, is not served here.

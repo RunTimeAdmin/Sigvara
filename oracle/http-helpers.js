@@ -74,6 +74,33 @@ function rateLimited(key, now = Date.now(), max = RATE_MAX, windowMs = RATE_WIND
   return bucket.count > max;
 }
 
+const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+
+/**
+ * The rate-limiter key for a request: the caller's address, as best it can be known.
+ *
+ * The socket address alone is wrong once a reverse proxy is in front. The oracle binds
+ * loopback, so every proxied request reports 127.0.0.1 and the whole internet shares a
+ * single bucket: one abuser locks out everybody, which is worse than no limit at all.
+ *
+ * X-Forwarded-For carries the real address, but only the hop that wrote it can vouch
+ * for it, so it is read only when the connection itself arrived over loopback. A
+ * request from anywhere else keeps its socket address and cannot win a fresh bucket by
+ * sending the header itself.
+ *
+ * The LAST entry is the caller. A proxy appends to any header the client supplied, so
+ * the leading entries are attacker-controlled; the final one was written by the nearest
+ * hop. Reading the first entry instead would let anyone mint unlimited buckets.
+ */
+function clientKey(req) {
+  const socketAddr = req?.socket?.remoteAddress || 'unknown';
+  if (!LOOPBACK.has(socketAddr)) return socketAddr;
+  const fwd = req?.headers?.['x-forwarded-for'];
+  if (!fwd) return socketAddr;
+  const parts = String(fwd).split(',');
+  return parts[parts.length - 1].trim() || socketAddr;
+}
+
 // Loopback binds may run without an admin token (local testing). Anything else
 // must have one, or /attest, /flag and /epoch are open to the network. Returns
 // null when the configuration is acceptable, otherwise the reason to refuse startup.
@@ -85,6 +112,7 @@ function adminTokenPolicyError(host, adminToken) {
 
 module.exports = {
   adminTokenPolicyError,
+  clientKey,
   MAX_BODY_SIZE,
   RATE_WINDOW_MS,
   RATE_MAX,

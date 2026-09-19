@@ -7,7 +7,7 @@ const chain = require('./chain');
 const external = require('./external');
 const { computeScore } = require('./scoring');
 const { decideAction } = require('./epoch-policy');
-const { json, readBody, isAuthorized, parseScorePath, rateLimited, adminTokenPolicyError } = require('./http-helpers');
+const { json, readBody, isAuthorized, parseScorePath, rateLimited, clientKey, adminTokenPolicyError } = require('./http-helpers');
 const payments = require('./payments');
 const merkle = require('./merkle');
 const metrics = require('./metrics');
@@ -16,10 +16,6 @@ const metrics = require('./metrics');
 // process rather than silently disabling verification on the first request.
 const paymentCfg = payments.readConfig();
 
-// Per-client key for rate limiting. Behind the container's 127.0.0.1 port map all
-// requests may share one source IP, so this degrades to a global cap — still a
-// useful flood guard for the write endpoints.
-const clientKey = req => req.socket?.remoteAddress || 'unknown';
 
 // ---- Config ----------------------------------------------------------------
 
@@ -558,6 +554,13 @@ const server = http.createServer(async (req, res) => {
   // contract holds. Deliberately unauthenticated, like /score: evidence nobody can
   // fetch is evidence nobody can audit.
   if (req.method === 'GET' && pathname.startsWith('/evidence/')) {
+    // Unauthenticated does not mean unmetered. Every call rebuilds a Merkle tree over
+    // the agent's payment history, so this is the most expensive thing a stranger can
+    // ask for once the read paths are proxied to the public internet.
+    if (rateLimited(clientKey(req))) {
+      metrics.inc('rateLimitHits');
+      return json(res, 429, { error: 'Rate limited' });
+    }
     const didHash = pathname.slice('/evidence/'.length);
     if (!/^0x[0-9a-fA-F]{64}$/.test(didHash)) {
       return json(res, 400, { error: 'didHash must be a 32-byte hex string' });
@@ -633,6 +636,13 @@ const server = http.createServer(async (req, res) => {
   // GET /score/:didHash  — preview computed score without writing to chain
   const didHash = parseScorePath(pathname);
   if (req.method === 'GET' && didHash) {
+    // Each call costs several RPC round trips (agent info, payer standing, and the
+    // external score when one is linked), so it is metered like the writes despite
+    // needing no token.
+    if (rateLimited(clientKey(req))) {
+      metrics.inc('rateLimitHits');
+      return json(res, 429, { error: 'Rate limited' });
+    }
     try {
       const { operator, registeredAt, status } = await chain.getAgentInfo(didHash);
       const att       = attestations.get(didHash) ?? { successful: 0, total: 0 };

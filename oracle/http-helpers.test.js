@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
-const { readBody, isAuthorized, parseScorePath, rateLimited, RATE_MAX, adminTokenPolicyError } = require('./http-helpers');
+const { readBody, isAuthorized, parseScorePath, rateLimited, RATE_MAX, clientKey, adminTokenPolicyError } = require('./http-helpers');
 
 // Minimal fake matching the subset of http.IncomingMessage that readBody uses:
 // an EventEmitter with data/end/error events plus a destroy() method.
@@ -156,4 +156,55 @@ test('adminTokenPolicyError: a non-loopback bind without a token is refused', ()
 
 test('adminTokenPolicyError: any bind is fine once a token is set', () => {
   assert.equal(adminTokenPolicyError('0.0.0.0', 'secret'), null);
+});
+
+// --- clientKey -------------------------------------------------------------
+// The oracle sits behind a reverse proxy, so the socket address is 127.0.0.1 for
+// every caller. Getting this wrong in either direction is a real failure: trust the
+// header too much and anyone mints unlimited buckets, trust it too little and one
+// abuser rate-limits the whole internet.
+
+const asReq = (remoteAddress, headers = {}) => ({ socket: { remoteAddress }, headers });
+
+test('clientKey: a direct connection uses its socket address', () => {
+  assert.equal(clientKey(asReq('203.0.113.7')), '203.0.113.7');
+});
+
+test('clientKey: a direct caller cannot spoof a different key with X-Forwarded-For', () => {
+  const req = asReq('203.0.113.7', { 'x-forwarded-for': '198.51.100.1' });
+  assert.equal(clientKey(req), '203.0.113.7', 'the header is ignored off loopback');
+});
+
+test('clientKey: a proxied request is keyed on the forwarded address, not loopback', () => {
+  assert.equal(clientKey(asReq('127.0.0.1', { 'x-forwarded-for': '198.51.100.1' })), '198.51.100.1');
+  assert.equal(clientKey(asReq('::1', { 'x-forwarded-for': '198.51.100.2' })), '198.51.100.2');
+  assert.equal(clientKey(asReq('::ffff:127.0.0.1', { 'x-forwarded-for': '198.51.100.3' })), '198.51.100.3');
+});
+
+test('clientKey: two proxied clients get separate buckets', () => {
+  const a = clientKey(asReq('127.0.0.1', { 'x-forwarded-for': '198.51.100.1' }));
+  const b = clientKey(asReq('127.0.0.1', { 'x-forwarded-for': '198.51.100.2' }));
+  assert.notEqual(a, b, 'otherwise one abuser locks out every visitor');
+});
+
+test('clientKey: a client-supplied X-Forwarded-For cannot win a fresh bucket', () => {
+  // The proxy appends the real address, so the header arrives as "spoofed, real".
+  // Reading the first entry would let one attacker mint a new bucket per request.
+  const req = asReq('127.0.0.1', { 'x-forwarded-for': '10.0.0.1, 198.51.100.9' });
+  assert.equal(clientKey(req), '198.51.100.9');
+
+  const flood = ['a', 'b', 'c'].map(s =>
+    clientKey(asReq('127.0.0.1', { 'x-forwarded-for': `${s}, 198.51.100.9` })));
+  assert.deepEqual(flood, ['198.51.100.9', '198.51.100.9', '198.51.100.9'],
+    'every spoof attempt lands in the same bucket');
+});
+
+test('clientKey: a proxied request with no forwarded header falls back to the socket', () => {
+  assert.equal(clientKey(asReq('127.0.0.1')), '127.0.0.1');
+  assert.equal(clientKey(asReq('127.0.0.1', { 'x-forwarded-for': '   ' })), '127.0.0.1');
+});
+
+test('clientKey: a request with no socket is keyed, not crashed', () => {
+  assert.equal(clientKey({}), 'unknown');
+  assert.equal(clientKey(undefined), 'unknown');
 });

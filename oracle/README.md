@@ -168,6 +168,17 @@ Preview the computed score for an agent without writing to chain.
 The payments behind an agent's score, with Merkle proofs. Unauthenticated on purpose:
 evidence nobody can fetch is evidence nobody can audit.
 
+Both read endpoints are rate-limited at 60 requests per caller per minute, the same cap
+the writes use. Unauthenticated is not unmetered: `/score` costs several RPC round trips
+and `/evidence` rebuilds a Merkle tree, so these are the most expensive things a stranger
+can ask for once the read paths are proxied to the internet.
+
+The caller is identified by socket address, or by the last `X-Forwarded-For` entry when
+the connection arrives over loopback. Behind a reverse proxy the socket address is always
+`127.0.0.1`, so keying on it alone would put every visitor in one bucket and let a single
+abuser lock out everyone. See [`Caddyfile.oracle.example`](Caddyfile.oracle.example),
+which sets that header explicitly.
+
 **Response (200):**
 ```json
 {
