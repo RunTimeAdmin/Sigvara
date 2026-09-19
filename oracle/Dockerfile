@@ -5,6 +5,32 @@ WORKDIR /app
 COPY package.json ./
 RUN npm install --omit=dev
 
-COPY index.js chain.js scoring.js epoch-policy.js http-helpers.js store.js external.js ./
+# Copy the source wholesale rather than naming each file.
+#
+# The list used to be enumerated, and it silently stopped matching reality: payments.js,
+# merkle.js and metrics.js were all added afterwards and none were copied, so the image
+# built cleanly and the container died on MODULE_NOT_FOUND the moment it started. Nobody
+# noticed because the oracle was being run with `node index.js` on a desktop rather than
+# from this image.
+#
+# .dockerignore keeps secrets, local state and tests out, so adding a module now works
+# without touching this file.
+COPY . .
+
+# Fail the build if any local require has no file behind it, which is precisely how the
+# enumerated COPY broke. Static check rather than requiring index.js, because requiring
+# it starts the HTTP server and the epoch loop.
+RUN node -e "\
+const fs = require('fs'); \
+const missing = []; \
+for (const f of fs.readdirSync('.').filter(n => n.endsWith('.js'))) { \
+  for (const m of fs.readFileSync(f, 'utf8').matchAll(/require\('\.\/([\w.-]+)'\)/g)) { \
+    const t = m[1].endsWith('.js') ? m[1] : m[1] + '.js'; \
+    if (!fs.existsSync(t)) missing.push(f + ' -> ' + m[1]); \
+  } \
+} \
+if (missing.length) { console.error('unresolved local requires:', missing); process.exit(1); } \
+console.log('module graph ok'); \
+"
 
 CMD ["node", "index.js"]

@@ -1,0 +1,10 @@
+# Secrets and local state never enter the image. The key is injected at runtime by the
+# orchestrator, and the state file lives on a mounted volume so it survives rebuilds.
+.env
+.env.*
+!.env.example
+.state/
+node_modules/
+
+# Tests and their fixtures are not needed to run the oracle.
+*.test.js
