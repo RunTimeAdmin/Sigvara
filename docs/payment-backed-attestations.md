@@ -30,6 +30,12 @@ curl -X POST http://oracle/attest \
   -d '{"didHash":"0x84...","success":true,"payment":{"txHash":"0x3daf88..."}}'
 ```
 
+`http://oracle` here is the host running the oracle, reachable from that machine. It
+is not `oracle.sigvara.xyz`: that name serves only the read paths, and `/attest`
+answers 404 there. Verification makes an attestation expensive rather than free, but
+it does not make it something to accept from anyone, so on the Arc testnet deployment
+the write endpoints stay behind a bearer token and off the public proxy entirely.
+
 The oracle then:
 
 1. reads the agent's own address from the identity registry, which is part of the
@@ -168,8 +174,11 @@ Each proposal now carries a Merkle root over the evidence behind it, stored next
 score and readable from `evidenceRoots(didHash)`. The oracle serves the leaves:
 
 ```bash
-curl http://oracle/evidence/0x8414ce0b…
+curl https://oracle.sigvara.xyz/evidence/0x8414ce0bf4f1e1695193623e0a656a9439e356f8bed0b8bf249b179fe77c7e19
 ```
+
+That endpoint is public and needs no token. It has to be: a commitment only the party
+that made it can open is not a commitment to anyone else.
 
 A verifier takes each payment, reads the transaction off the chain to confirm the payer,
 the amount and the settlement time, rebuilds the leaf, and checks it against the root the

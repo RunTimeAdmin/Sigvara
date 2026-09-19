@@ -105,9 +105,11 @@
           <div class="step-head"><div><div class="step-num">05 / SCORE</div><h2>Earn a score</h2></div><span class="step-state">Waiting</span></div>
           <div class="step-body">
             <p>Each epoch, the oracle proposes a score from payment-verified activity and publishes a Merkle root of the evidence behind it. The proposal sits in a challenge window before it can be finalized, and finalizing is permissionless: anyone can call it, including you.</p>
+            <p>You do not have to take the score on trust. The evidence behind it is served publicly with no token, so you can fetch the payments, check each one against the chain yourself, rebuild the root and compare it with the one the contract holds.</p>
             <p><b>One part is not open yet.</b> Payment attestations are submitted by the operator-run oracle during the pilot, so an agent you register today will show a baseline score rather than an earned one. If you want yours scored against real activity, open an issue and we will attest your settlements manually.</p>
             <div class="controls">
               <a class="button" href="https://github.com/RunTimeAdmin/sigvara/issues" rel="noopener">Ask to be scored <span aria-hidden="true">&#8599;</span></a>
+              <a class="button" href="https://oracle.sigvara.xyz/evidence/0x8414ce0bf4f1e1695193623e0a656a9439e356f8bed0b8bf249b179fe77c7e19" rel="noopener">See live evidence <span aria-hidden="true">&#8599;</span></a>
               <a class="button" href="docs/reputation.html">The six factors</a>
             </div>
             <div class="result step-live" aria-live="polite"></div>

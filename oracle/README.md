@@ -36,7 +36,11 @@ node --test
 docker compose -f docker-compose.oracle.yml up -d
 ```
 
-The compose file mounts `oracle_state` volume to `/data` for persistence. The HTTP port is published as `127.0.0.1:3030` (localhost only) — reverse-proxy with authentication before exposing to the internet.
+The compose file mounts `oracle_state` volume to `/data` for persistence. The HTTP port is published as `127.0.0.1:3030` (localhost only), so nothing reaches the service without a reverse proxy in front of it.
+
+Do not simply proxy the whole service. The write endpoints are gated by a bearer token, but that token is the only thing between the internet and the scoring, whereas keeping them off the proxy entirely means an attacker needs a shell on the box first. [`Caddyfile.oracle.example`](Caddyfile.oracle.example) publishes `/health`, `/score/*` and `/evidence/*` and answers 404 for everything else, which is the arrangement running on the Arc testnet deployment at `oracle.sigvara.xyz`.
+
+The read paths are deliberately unauthenticated: `/evidence` exists so a third party can re-derive a score without trusting the operator, and evidence nobody can fetch is evidence nobody can audit. They are rate-limited instead, as described under the endpoints below. `/metrics` is excluded from the proxy despite being harmless to serve, because its counters describe the operator rather than the protocol.
 
 ## API Endpoints
 

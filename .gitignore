@@ -66,3 +66,6 @@ sigvara-site-*.zip
 # Local probes that assert unfixed vulnerable behaviour. Kept out of the repo
 # until the corresponding fixes land (see D:\Sigvara-private\security-findings).
 test/Verify*.t.sol
+
+# Site deployment archive, rebuilt by scripts/package-site.mjs on every deploy
+sigvara-site.zip

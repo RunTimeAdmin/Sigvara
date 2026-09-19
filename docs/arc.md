@@ -104,8 +104,18 @@ The testnet oracle runs on a dedicated VPS as a Docker Compose project with
 `restart: unless-stopped`, cloning this repository at container start, so a push to
 `main` reaches it on the next restart. The host is deliberately not named here: it
 holds the oracle signing key, and nothing about operating the protocol requires a
-reader to know which machine it is. The service binds to loopback and is not
-reachable from the internet.
+reader to know which machine it is.
+
+The read and write halves of the service are reachable differently, on purpose. The
+process publishes its port on host loopback only, and the host firewall drops it, so
+nothing reaches the service directly. A reverse proxy then republishes three paths at
+`oracle.sigvara.xyz`: `/health`, `/score/:didHash` and `/evidence/:didHash`. Those are
+unauthenticated by design — evidence nobody can fetch is evidence nobody can audit, and
+the point of publishing a Merkle root is that a third party can re-derive it. Every
+other path, including `/attest`, `/flag`, `/link`, `/epoch` and `/metrics`, is not
+proxied and answers 404, so the write surface is still reachable only from a shell on
+the box. The read paths are rate-limited per caller, not because they are sensitive but
+because `/score` costs several chain reads and `/evidence` rebuilds a Merkle tree.
 
 It used to run as `node index.js` on a desktop. That is worth naming rather than
 quietly fixing: a reputation oracle whose liveness depends on a laptop staying awake

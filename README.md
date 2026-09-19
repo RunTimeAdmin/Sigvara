@@ -340,7 +340,9 @@ sequenceDiagram
 
 Every proposal commits to the evidence behind it. `evidenceRoots(didHash)` holds a
 Merkle root over the payments the oracle counted; the oracle serves the leaves from
-`GET /evidence/:didHash`, and anyone can re-verify each payment against the chain,
+`GET /evidence/:didHash`, unauthenticated at
+[`oracle.sigvara.xyz`](https://oracle.sigvara.xyz/evidence/0x8414ce0bf4f1e1695193623e0a656a9439e356f8bed0b8bf249b179fe77c7e19),
+and anyone can re-verify each payment against the chain,
 rebuild the root and compare — locally or through `verifyEvidence(didHash, leaf, proof)`.
 This makes a quietly dropped or invented payment detectable. It does not prove the
 oracle counted everything it should have; a payment nobody ever submitted leaves no
@@ -464,7 +466,7 @@ Everything below runs offline, with no network access and no deployed contracts.
 | Suite | Count | Command |
 |---|---|---|
 | Contracts — unit, fuzz, E2E, upgrade and 6 invariants | 246 | `forge test` |
-| Oracle | 193 | `cd oracle && node --test` |
+| Oracle | 207 | `cd oracle && node --test` |
 | SDK | 58 | `cd packages/sdk && npx vitest run` |
 
 ### Unit Tests (default)
