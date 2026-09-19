@@ -100,10 +100,12 @@ not depend on Arc. Leave it as-is.
 
 ### Where it runs
 
-The testnet oracle runs on a VPS (`srv1296981`), as the Docker Compose project
-`sigvara-oracle` under `/docker/sigvara-oracle`, with `restart: unless-stopped`.
-It clones this repository at container start, so a push to `main` reaches it on the
-next restart.
+The testnet oracle runs on a dedicated VPS as a Docker Compose project with
+`restart: unless-stopped`, cloning this repository at container start, so a push to
+`main` reaches it on the next restart. The host is deliberately not named here: it
+holds the oracle signing key, and nothing about operating the protocol requires a
+reader to know which machine it is. The service binds to loopback and is not
+reachable from the internet.
 
 It used to run as `node index.js` on a desktop. That is worth naming rather than
 quietly fixing: a reputation oracle whose liveness depends on a laptop staying awake
