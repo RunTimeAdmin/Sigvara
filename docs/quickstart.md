@@ -90,9 +90,12 @@ import { registerAgent, depositStake } from '@sigvara/protocol-sdk';
 
 const minStake = ethers.parseEther('1000'); // minimumStake on testnet
 
-// agentSigner proves control of agentAddress. It is often the same wallet as the
-// operator; when it is not, pass `{ signature }` instead and sign elsewhere, which is
-// how an HSM, a Safe or any ERC-1271 contract agent registers.
+// agentSigner proves control of agentAddress. Here the agent address IS the operator
+// wallet (step 4), so the same signer does both jobs. When they differ, pass a signer
+// for the agent address instead — or `{ signature }` and sign elsewhere, which is how
+// an HSM, a Safe or any ERC-1271 contract agent registers.
+const agentSigner = signer;
+
 const { didHash, txHash } = await registerAgent(
   signer,
   agentAddress,
@@ -107,7 +110,7 @@ const bond = await depositStake(signer, didHash, minStake, STAKING_ADDRESS);
 console.log('bond tx:', bond.txHash, bond.approveTxHash ? '(approval sent first)' : '');
 ```
 
-After a few blocks the oracle will detect the `AgentRegistered` event and begin tracking the agent. The initial score will be low (age=0, activity=0) and will grow over time.
+After a few blocks the oracle will detect the `AgentRegistered` event and begin tracking the agent. It will not propose a score until the bond lands. The first one will be low (tenure=0, no payments yet) and grows only as verified, paid work accrues — see the [Reputation Model](reputation-model.md).
 
 ## 6. Verify registration
 
@@ -125,8 +128,14 @@ console.log('Status:', identity.status);   // → Active
 console.log('Registered at block:', identity.registeredAt);
 
 const score = await verifier.getTotalScore(agent.did);
-console.log('Reputation score:', score);   // → 5 (new agent baseline)
+console.log('Reputation score:', score);   // → 0 until the first epoch finalizes
 ```
+
+Two reasons that reads 0 at first. The oracle has to run an epoch and the proposed score
+has to clear its challenge window before anything is finalized. And `getTotalScore`
+returns the *matured* score, which climbs toward the earned one over days rather than
+landing at once — `getEarnedScore` shows the raw figure. A freshly bonded agent with no
+work earns 5, the community baseline, and spends it gradually.
 
 ## 7. Sign a challenge (agent-to-agent authentication)
 

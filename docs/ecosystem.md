@@ -16,11 +16,11 @@ The reputation store. The oracle writes a 6-factor score (0–100) here every ep
 
 ### SigvaraStaking (on-chain)
 
-The bond. Agents post a stake before registration. If the agent misbehaves, a 3-of-5 slashing committee initiates a slash: the agent is suspended, a 7-day challenge window opens, and if unchallenged the bond is burned/distributed, reputation is zeroed, and the agent is permanently terminated.
+The bond. An agent registers first and lands in `PendingBond`; the first deposit that carries it over `minimumStake` is what makes it `Active`, scoreable and slashable. If the agent misbehaves, the slashing committee initiates a slash: the agent is suspended, a 7-day challenge window opens, and if unchallenged the bond is burned/distributed, reputation is zeroed, and the agent is permanently terminated.
 
 ### Oracle
 
-An off-chain service that watches the `AgentRegistered` events on Identity, aggregates on-chain signals (fee volume, attestations, age, external trust), and calls `proposeReputation()` on the Reputation contract every epoch. Proposed scores sit through a challenge window (rejectable by the slashing committee) before anyone can call `finalizeReputation()` to make them live. The reference implementation is in `oracle/`. In Phase 2 this will be replaced by a decentralized oracle network.
+An off-chain service that watches the `AgentRegistered` events on Identity, aggregates its signals (payment volume verified on chain, outcomes reported by whoever paid, tenure, counterparty standing, watchdog flags, external ERC-8004 trust), and calls `proposeReputation()` on the Reputation contract every epoch, committing to the evidence it used with a Merkle root. Proposed scores sit through a challenge window (rejectable by the slashing committee) before anyone can call `finalizeReputation()` to make them live. The reference implementation is in `oracle/`. It is a single operator today, bonded in `SigvaraOracleBond` so a bad proposal costs its proposer; replacing it with several bonded operators that can challenge each other is the next step.
 
 ### CounterAudit (integration partner)
 
@@ -38,7 +38,7 @@ graph LR
     OC["Oracle\n(score computation)"]
     REP["SigvaraReputation\n(score store)"]
 
-    A -->|"1. post a stake + register"| ID
+    A -->|"1. register, then bond"| ID
     ID -->|"2. emits AgentRegistered"| OC
     A -->|"3. sends actions with agent_did"| CA
     CA -->|"4. reads identity + score at seal time"| REP
@@ -49,8 +49,8 @@ graph LR
 
 Step by step:
 
-1. The operator generates an Ed25519 keypair, posts a stake, and calls `registerAgent()`. The DID is now globally resolvable.
-2. The oracle detects the `AgentRegistered` event and begins tracking the agent.
+1. The operator generates an Ed25519 keypair and calls `registerAgent()`, with a signature from the agent address proving it controls itself. The DID is now globally resolvable, but the agent is `PendingBond`. A `depositStake()` over `minimumStake` makes it `Active`.
+2. The oracle detects the `AgentRegistered` event and begins tracking the agent. It will not propose a score until the agent is bonded.
 3. The agent does work. Every action is submitted to CounterAudit with the `agent_did` field.
 4. Before sealing each packet, CounterAudit reads `getIdentity(didHash)` and `getTotalScore(didHash)` on-chain.
 5. The oracle computes the 6-factor score from on-chain signals and writes it to SigvaraReputation.
@@ -69,7 +69,7 @@ Every CounterAudit packet whose ingest call includes `agent_did` will contain th
 | `agent_did_hash` | hex string | The on-chain index key (`keccak256` of the packed DID) |
 | `agent_chain_id` | number | EVM chain ID |
 | `agent_reputation_score` | 0–100 | Total score at the moment of ingest |
-| `agent_identity_status` | string | `Active`, `Suspended`, or `Slashed` |
+| `agent_identity_status` | string | `PendingBond`, `Active`, `Suspended`, or `Slashed` |
 | `agent_identity_verified` | boolean | `true` if registered and status is Active |
 | `agent_enriched_at` | ISO 8601 | Timestamp of the enrichment query |
 

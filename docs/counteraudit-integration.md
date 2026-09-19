@@ -155,7 +155,7 @@ The decrypted `packet` object contains:
 | `agent_did_hash` | hex string | DID parses successfully | On-chain index key |
 | `agent_chain_id` | number | DID registered | EVM chain ID |
 | `agent_reputation_score` | 0–100 | DID registered | Total score at seal time |
-| `agent_identity_status` | string | DID registered | `Active`, `Suspended`, or `Slashed` |
+| `agent_identity_status` | string | DID registered | `PendingBond`, `Active`, `Suspended`, or `Slashed` |
 | `agent_identity_verified` | boolean | Always | `true` if registered and Active |
 | `agent_enriched_at` | ISO 8601 | Always | When the enrichment query ran |
 | `agent_enrichment_error` | string | On failure only | Reason (see below) |

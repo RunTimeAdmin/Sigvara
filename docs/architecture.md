@@ -43,22 +43,39 @@ graph TB
 
 The oracle recomputes every factor each epoch from observable data:
 
-- **Attestations** — a consuming platform reports, per completed job, whether
-  the agent succeeded or failed. [CounterAudit](counteraudit-integration.md) does
-  this today; it drives the success-rate and fee-activity factors.
+- **Payment-backed attestations** — a consuming platform reports, per completed
+  job, whether the agent succeeded or failed, and cites the settlement
+  transaction of the payment for that job.
+  [CounterAudit](counteraudit-integration.md) does this today. The oracle
+  verifies the transfer on chain and takes the payer from the log rather than
+  from the request, which is what makes the attester an identity rather than a
+  claim. This drives the success-rate and fee-activity factors.
 - **Flags** — watchdog scanners (e.g. rug detectors on the same chain) report
   misbehaving agents. Flags subtract from the community factor.
 - **ERC-8004 feedback** — for an agent linked to an ERC-8004 identity it owns,
   the oracle reads that agent's on-chain feedback and normalizes the rating
   dimensions it recognizes into the external-trust factor (`externalScore`).
-- **Identity + age** — the agent's registration and how long it has existed.
+- **Counterparty standing** — the matured scores of the agents that paid, which
+  raise how much their evidence is worth and feed the propagation factor.
+- **Tenure** — the span between the agent's first and most recent verified
+  payment, faded by how long ago that last one was. Deliberately not calendar
+  age since registration: waiting is free, and trading is not.
 
 ## Score out
 
-The oracle proposes the computed score to `SigvaraReputation`; after a
-challenge window (rejectable) it finalizes on-chain. `SigvaraStaking` can
-slash a misbehaving agent, which zeroes its score. Consumers read the finalized
-score with a single view call (`getTotalScore` / `meetsThreshold`).
+The oracle proposes the computed score to `SigvaraReputation`, together with a Merkle
+root over the evidence behind it; after a challenge window (rejectable) it finalizes
+on-chain. `SigvaraStaking` can slash a misbehaving agent, which zeroes its score.
+Consumers read the finalized score with a single view call (`getTotalScore` /
+`meetsThreshold`).
+
+Two gates sit on that path. Only a bonded agent can be scored at all, and when
+`operatorBond` is wired only a bonded oracle operator can propose. Finalizing stays
+permissionless, so nobody can hold a score hostage by declining to write it.
+
+The evidence root is what makes the off-chain half checkable: the oracle serves the
+leaves it counted, and anyone can re-verify each payment against the chain, rebuild the
+root, and compare it with what the contract holds.
 
 ## A deliberate loop-break
 
