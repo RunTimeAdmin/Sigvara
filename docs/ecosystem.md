@@ -26,7 +26,7 @@ An off-chain service that watches the `AgentRegistered` events on Identity, aggr
 
 CounterAudit is a tamper-evident AI audit trail service. An ingest call carrying an `agent_did` field makes CounterAudit query Sigvara at seal time, embed the agent's on-chain identity and reputation score inside the AES-GCM seal, and attach an RFC 3161 timestamp. The property that makes it worth having is that the score is captured *at the moment of the action* and frozen into a tamper-evident record, rather than looked up later from a score that has since moved.
 
-> **Broken since 17 September 2026.** The code exists and is wired end to end, but it predates this protocol's rename from Countersig: it parses `did:countersig:` only, and derives the DID hash from that prefix. A current `did:sigvara:` DID is rejected, and the hash it would compute does not match what the contract holds, so the agent reads as unregistered. Renaming the protocol changed what the hash commits to and this code was not updated to follow. Fix pending; nothing below works until it lands.
+> **Live as of 19 September 2026.** It was broken for the two days after the rename — the code still parsed `did:countersig:` and hashed that prefix, and was still pointed at the predecessor deployment on Robinhood Chain — so every lookup silently missed. Both are fixed and verified against a real sealed packet. The reverse path, reporting outcomes to the oracle, is still not working: it posts without the `payment.txHash` the oracle requires.
 
 ---
 
@@ -40,10 +40,9 @@ token-gated because they can be weaponised, so anyone weighing how independent t
 reputation signal is should weigh that too. It is a single-operator oracle today by the
 same token, which the README says as well.
 
-That concentration is currently dormant rather than absent: the integration is implemented
-but broken, so nothing outside the oracle operator writes to the score today. It resumes
-the moment the DID scheme is fixed, which is a reason to settle the independence question
-before then rather than after.
+CounterAudit reads the score today but does not yet write to it, because the outcome path
+is still broken. The concentration therefore remains partly prospective — worth settling
+the independence question before that path lands, rather than after.
 
 The suite divides by question:
 
@@ -76,9 +75,8 @@ depends on its owner's SaaS is not infrastructure, it is a product with extra st
 
 ## The Ecosystem Loop
 
-**Steps 3, 4 and 6 are implemented but currently broken** by the DID-scheme mismatch above.
-Registration, bonding, oracle scoring and the on-chain score (1, 2, 5, 7) run today on Arc
-testnet.
+All seven steps run today on Arc testnet. Steps 3, 4 and 6 went live on 19 September once
+the DID-scheme mismatch above was fixed.
 
 
 ```mermaid
@@ -102,17 +100,17 @@ Step by step:
 
 1. The operator generates an Ed25519 keypair and calls `registerAgent()`, with a signature from the agent address proving it controls itself. The DID is now globally resolvable, but the agent is `PendingBond`. A `depositStake()` over `minimumStake` makes it `Active`.
 2. The oracle detects the `AgentRegistered` event and begins tracking the agent. It will not propose a score until the agent is bonded.
-3. The agent does work. Every action is submitted to CounterAudit with the `agent_did` field. (Implemented; undocumented in CounterAudit's `openapi.yaml`.)
-4. Before sealing each packet, CounterAudit reads `getIdentity(didHash)` and `getTotalScore(didHash)` on-chain. (Implemented; currently derives the wrong `didHash`.)
+3. The agent does work. Every action is submitted to CounterAudit with the `agent_did` field.
+4. Before sealing each packet, CounterAudit reads `getIdentity(didHash)` and `getTotalScore(didHash)` on-chain.
 5. The oracle computes the 6-factor score from on-chain signals and writes it to SigvaraReputation.
-6. The score — plus status, DID hash, chain ID, and enrichment timestamp — is embedded inside the sealed, timestamped packet. (Implemented.)
+6. The score — plus status, DID hash, chain ID, and enrichment timestamp — is embedded inside the sealed, timestamped packet.
 7. Consumers query the sealed record. A low-reputation agent's packets are flagged. A high-reputation agent's packets carry a verified track record. Over time, reputation determines which agents get work.
 
 ---
 
 ## What Gets Sealed
 
-These fields are implemented. They are absent from packets today only because the DID scheme mismatch above makes every lookup fail.
+These fields are in sealed packets today. Verified against a live packet on api.counteraudit.io.
 
 
 Every CounterAudit packet whose ingest call includes `agent_did` will contain these fields inside the seal:
@@ -133,7 +131,7 @@ If enrichment fails for any reason (unregistered DID, RPC timeout, unsupported c
 
 ## Why This Matters
 
-Why it is worth repairing rather than dropping.
+Why this combination is the point.
 
 
 Without Sigvara, an AI agent can claim to be anything. An audit trail records *what* happened but not *who* did it in any verifiable sense.
@@ -151,7 +149,7 @@ This is the combination that makes the ecosystem defensible: staked identity + a
 
 ## Data Flow Reference
 
-The call path as implemented, in `src/services/countersigService.js` on the CounterAudit side. The function is named for the protocol's former name.
+The call path as implemented, in `src/services/sigvaraService.js` on the CounterAudit side.
 
 
 ```

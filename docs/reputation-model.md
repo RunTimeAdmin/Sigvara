@@ -73,10 +73,10 @@ The consequence is that the factor measures rate *and* volume together:
 The full 25 is approached, never reached. These figures assume fresh evidence; decayed
 weights are fractional and pull every row down as the record ages.
 
-CounterAudit reports outcomes for work it audits, turning a verified packet into a
-reputation signal. That path is implemented but **currently broken** by a DID-scheme
-mismatch, so outcomes are submitted by the oracle operator until it is repaired: see
-[counteraudit-integration.md](counteraudit-integration.md).
+CounterAudit seals the agent's identity and score into every audited packet, which went
+live on 19 September. Reporting outcomes back the other way is **not** working yet: it
+posts without the settlement hash the oracle requires, so outcomes are still submitted by
+the oracle operator. See [counteraudit-integration.md](counteraudit-integration.md).
 
 ### Tenure (20 pts)
 

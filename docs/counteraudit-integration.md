@@ -1,19 +1,18 @@
 # CounterAudit Integration Guide
 
-> **Status: implemented, and broken since 17 September 2026.**
+> **Status: live as of 19 September 2026.**
 >
-> The code exists in CounterAudit (`src/services/countersigService.js`, plus the
-> outcome-to-oracle and ERC-8004 paths) and is wired into the ingest route. It predates
-> this protocol's rename from Countersig, and it still parses `did:countersig:` and
-> derives the DID hash from that prefix. A current `did:sigvara:` DID is rejected
-> outright; even bypassing that, the hash would not match what the contract holds, so the
-> agent reads as unregistered. Renaming the protocol changed what the hash commits to and
-> this code was never updated to follow.
+> Enrichment works and is running on `api.counteraudit.io`, verified against a real
+> sealed packet carrying `agent_chain_id: 5042002` with the correct DID hash and the
+> live score. It had been broken for the two days since the rename: the code parsed
+> `did:countersig:`, hashed that prefix, and was pointed at the predecessor deployment
+> on Robinhood Chain.
 >
-> It is also absent from CounterAudit's `openapi.yaml`, so the feature is undiscoverable
-> from the published API contract.
->
-> Follow this guide once the scheme is corrected, not before.
+> **The reverse path is not live.** CounterAudit posts outcomes to the oracle's
+> `/attest` without a `payment.txHash`, which the oracle requires under
+> `PAYMENT_VERIFICATION=required`, so they are rejected. That is a design gap rather
+> than a naming one — CounterAudit does not hold the settlement transaction for the
+> work it audits — and is tracked separately.
 
 CounterAudit is a tamper-evident AI audit trail service. An `agent_did` field on an ingest
 call enriches each sealed packet with the agent's on-chain Sigvara identity and reputation
@@ -45,10 +44,8 @@ This means the reputation score is frozen in time. If an agent's reputation chan
 
 Add these variables to your `.env`:
 
-The variable names below are the intended post-fix ones. The code currently on
-CounterAudit's `main` reads `COUNTERSIG_RPC_URL`, `COUNTERSIG_IDENTITY_ADDRESS`,
-`COUNTERSIG_REPUTATION_ADDRESS`, `COUNTERSIG_CHAIN_ID` and `COUNTERSIG_ENRICH_TIMEOUT_MS`,
-carried over from the old name.
+`SIGVARA_*` is read first; the older `COUNTERSIG_*` spellings still work as a fallback
+so an existing deployment keeps running across the rename.
 
 ```bash
 # Sigvara identity enrichment (Arc testnet)
@@ -75,9 +72,8 @@ If the three required vars are absent, the service silently no-ops. No existing 
 
 ### Managed CounterAudit (api.counteraudit.io)
 
-Contact CounterAudit to enable Sigvara enrichment on your organization. Note that the
-managed service runs the same code as above and is subject to the same DID-scheme defect
-until it is fixed.
+The managed service runs this integration against Arc testnet. Contact CounterAudit to
+enable it for your organization.
 
 ---
 
