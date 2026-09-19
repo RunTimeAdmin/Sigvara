@@ -9,7 +9,23 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 import "./SigvaraIdentity.sol";
-import "./SigvaraReputation.sol";
+
+/**
+ * @notice The slice of SigvaraReputation this contract needs.
+ * @dev    One function, no shared types, so the whole contract need not be imported to
+ *         call it. That import pulled SigvaraReputation (and transitively SigvaraIdentity
+ *         again) into this compile graph for a single `zeroReputation(bytes32)`.
+ *
+ *         SigvaraIdentity is deliberately NOT narrowed the same way. This contract reads
+ *         `AgentIdentity` and compares `AgentStatus` in sixteen places, so an interface
+ *         would have to redeclare both. A redeclared enum that drifted from the real one
+ *         would not fail to compile; it would silently reinterpret the status of every
+ *         live agent, which is the failure this codebase keeps appending storage to avoid.
+ *         Sharing one definition is worth the import.
+ */
+interface IReputationZero {
+    function zeroReputation(bytes32 didHash) external;
+}
 
 /**
  * @title SigvaraStaking
@@ -37,7 +53,10 @@ contract SigvaraStaking is
     // Roles
     // -------------------------------------------------------------------------
 
-    /// 3-of-5 multisig on testnet. Replaced by on-chain arbitration on mainnet.
+    /// @dev A single EOA on Arc testnet today, not a multisig: verified on chain, and the
+    ///      readiness review lists it as a mainnet blocker. The 3-of-5 multisig, and then
+    ///      on-chain arbitration (UMA or Kleros), are the path rather than the present
+    ///      state. Saying otherwise here made the weakest link read as the strongest.
     bytes32 public constant SLASHING_COMMITTEE_ROLE = keccak256("SLASHING_COMMITTEE_ROLE");
 
     bytes32 public constant UPGRADER_ROLE = keccak256("UPGRADER_ROLE");
@@ -80,9 +99,15 @@ contract SigvaraStaking is
     // Storage
     // -------------------------------------------------------------------------
 
+    /// @dev Assumed to move exactly `amount` on transfer: no fee on transfer, no rebasing.
+    ///      depositStake credits the requested amount rather than the observed balance
+    ///      delta, so a token that deducts on transfer would over-credit every deposit and
+    ///      leave the last withdrawer unable to claim. SVR is a plain fixed-supply ERC-20,
+    ///      but this contract accepts any IERC20 at deploy and the README says as much, so
+    ///      the requirement belongs where the assumption is made rather than in prose.
     IERC20 public svrToken;
     SigvaraIdentity public identityRegistry;
-    SigvaraReputation public reputationRegistry;
+    IReputationZero public reputationRegistry;
 
     uint256 public minimumStake;
     uint256 public challengePeriod; // seconds
@@ -178,7 +203,7 @@ contract SigvaraStaking is
         _grantRole(UPGRADER_ROLE, admin);
 
         identityRegistry = SigvaraIdentity(identityRegistry_);
-        reputationRegistry = SigvaraReputation(reputationRegistry_);
+        reputationRegistry = IReputationZero(reputationRegistry_);
         svrToken = IERC20(svrToken_);
         minimumStake = minimumStake_;
         challengePeriod = challengePeriod_;
@@ -267,6 +292,11 @@ contract SigvaraStaking is
         if (st == SlashState.Pending || st == SlashState.Disputed) {
             revert SlashAlreadyPending(didHash);
         }
+
+        // Named, rather than letting the subtraction below panic. Asking to withdraw more
+        // than you hold is an ordinary mistake, and a bare arithmetic panic tells the
+        // caller nothing about which number was wrong.
+        if (amount > s.amount) revert InsufficientStake(didHash, s.amount, amount);
 
         uint256 remaining = s.amount - amount;
         // While Active, the remaining active stake must stay at or above minimumStake —

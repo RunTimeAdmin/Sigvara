@@ -98,6 +98,23 @@ contract SigvaraIdentity is Initializable, AccessControlUpgradeable, UUPSUpgrade
     /// can decide for itself what a frequently traded identity is worth.
     mapping(bytes32 => uint32) public operatorTransferCount;
 
+    /**
+     * Position of a didHash inside its operator's list, stored as index + 1 so that an
+     * unset entry reads 0 rather than pointing at the first element.
+     *
+     * `_removeFromOperatorIndex` used to scan the list linearly, justified by a comment
+     * saying an operator's list is short. Nothing enforced that, and registration became
+     * free when agents started at PendingBond: an operator who registers enough of them
+     * makes the scan exceed the block gas limit, at which point acceptOperatorTransfer
+     * reverts for every agent they hold, permanently. Self-inflicted, but a stated
+     * invariant the code did not keep.
+     *
+     * Appended last, like everything else. Agents registered before this existed have no
+     * position recorded, so removal falls back to the scan for them; the fallback is the
+     * old behaviour, and it disappears as those agents are transferred or never runs again.
+     */
+    mapping(bytes32 => uint256) private operatorAgentIndex;
+
     // -------------------------------------------------------------------------
     // Events
     // -------------------------------------------------------------------------
@@ -281,7 +298,7 @@ contract SigvaraIdentity is Initializable, AccessControlUpgradeable, UUPSUpgrade
             registeredAt: block.timestamp
         });
 
-        operatorAgents[msg.sender].push(didHash);
+        _pushToOperatorIndex(msg.sender, didHash);
 
         emit AgentRegistered(didHash, msg.sender, agentAddress, ed25519PubKey);
     }
@@ -425,7 +442,7 @@ contract SigvaraIdentity is Initializable, AccessControlUpgradeable, UUPSUpgrade
         delete pendingOperator[didHash];
 
         _removeFromOperatorIndex(previous, didHash);
-        operatorAgents[msg.sender].push(didHash);
+        _pushToOperatorIndex(msg.sender, didHash);
 
         operatorChangedAt[didHash] = block.timestamp;
         operatorTransferCount[didHash] += 1;
@@ -433,18 +450,52 @@ contract SigvaraIdentity is Initializable, AccessControlUpgradeable, UUPSUpgrade
         emit OperatorTransferred(didHash, previous, msg.sender);
     }
 
-    /// @dev Swap-and-pop. The index is a convenience view, not consensus state, and an
-    ///      operator's list is short, so the cost of keeping it honest is small.
+    /// @dev Appends and records the position, so removal never has to search for it.
+    function _pushToOperatorIndex(address operator, bytes32 didHash) private {
+        bytes32[] storage list = operatorAgents[operator];
+        list.push(didHash);
+        operatorAgentIndex[didHash] = list.length; // index + 1
+    }
+
+    /**
+     * @dev Swap-and-pop in constant time, using the recorded position.
+     *
+     *      Previously a linear scan. The index is a convenience view rather than consensus
+     *      state, but the scan sat on the transfer path, so an operator with a long enough
+     *      list could no longer transfer any agent at all: the removal alone exceeded the
+     *      block gas limit and there was no way back.
+     *
+     *      The fallback scan remains for agents registered before positions were recorded.
+     *      It is the old cost for the old rows only, and it also covers the case where a
+     *      recorded position no longer matches, which should not happen and is cheaper to
+     *      absorb than to trust.
+     */
     function _removeFromOperatorIndex(address operator, bytes32 didHash) private {
         bytes32[] storage list = operatorAgents[operator];
         uint256 n = list.length;
-        for (uint256 i = 0; i < n; i++) {
-            if (list[i] == didHash) {
-                list[i] = list[n - 1];
-                list.pop();
-                return;
+        if (n == 0) return;
+
+        uint256 pos = operatorAgentIndex[didHash];
+        if (pos == 0 || pos > n || list[pos - 1] != didHash) {
+            pos = 0;
+            for (uint256 i = 0; i < n; i++) {
+                if (list[i] == didHash) {
+                    pos = i + 1;
+                    break;
+                }
             }
+            if (pos == 0) return; // not in this operator's list
         }
+
+        uint256 target = pos - 1;
+        bytes32 moved = list[n - 1];
+        list[target] = moved;
+        // Record the moved element's new home before popping. When the removed item WAS
+        // the last one, moved == didHash and this write is undone by the delete below,
+        // which is the correct end state.
+        operatorAgentIndex[moved] = target + 1;
+        list.pop();
+        delete operatorAgentIndex[didHash];
     }
 
     /**
@@ -497,8 +548,47 @@ contract SigvaraIdentity is Initializable, AccessControlUpgradeable, UUPSUpgrade
         return id.registeredAt != 0 && id.status == AgentStatus.Active;
     }
 
+    /**
+     * @notice Every agent an operator controls.
+     * @dev    Unbounded: the list has no cap, so an operator with enough agents makes this
+     *         exceed the gas an on-chain caller can spend. Fine off-chain, where eth_call
+     *         has no such limit, and kept unchanged because consumers already use it. A
+     *         contract reading this should page through it instead.
+     */
     function getOperatorAgents(address operator) external view returns (bytes32[] memory) {
         return operatorAgents[operator];
+    }
+
+    /// @notice How many agents an operator controls. Read this before paging.
+    function operatorAgentCount(address operator) external view returns (uint256) {
+        return operatorAgents[operator].length;
+    }
+
+    /**
+     * @notice A slice of an operator's agents, for callers that cannot afford the whole list.
+     * @dev    Returns fewer than `limit` entries at the end of the list, and an empty array
+     *         when `offset` is past it, rather than reverting: paging to the end is ordinary
+     *         use, not an error.
+     *
+     *         The order is not stable. Removal is swap-and-pop, so an entry can move while a
+     *         caller pages. Read `operatorAgentCount` first and treat a page as a snapshot.
+     */
+    function getOperatorAgentsPaged(address operator, uint256 offset, uint256 limit)
+        external
+        view
+        returns (bytes32[] memory page)
+    {
+        bytes32[] storage list = operatorAgents[operator];
+        uint256 n = list.length;
+        if (offset >= n) return new bytes32[](0);
+
+        uint256 end = offset + limit;
+        if (end > n) end = n;
+
+        page = new bytes32[](end - offset);
+        for (uint256 i = offset; i < end; i++) {
+            page[i - offset] = list[i];
+        }
     }
 
     // -------------------------------------------------------------------------
