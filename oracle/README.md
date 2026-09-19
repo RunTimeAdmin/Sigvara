@@ -153,6 +153,12 @@ the full model.
 Flag an agent for community review. Each flag costs two points of the five-point
 Community factor: `max(0, 5 - flags * 2)`.
 
+Flags decay on a half-life, `FLAG_HALF_LIFE_DAYS` (default 30), so the count the score
+uses is age-weighted and fractional: a flag one half-life old counts 0.5 and costs one
+point instead of two. A penalty has to be renewed to keep costing, which is the same rule
+the payment evidence follows and means a watchdog feed that misfires once does not mark an
+agent permanently. Set `FLAG_HALF_LIFE_DAYS=0` to disable decay.
+
 **Request:**
 ```json
 { "didHash": "0x..." }
@@ -180,7 +186,12 @@ what actually changed, so a caller need not read the count first and race anothe
 At zero the entry is removed rather than stored as `0`.
 
 This endpoint raises a score, so it is token-gated like `/flag` and stays off the public
-proxy. Flags do not decay on their own; clearing one is a deliberate act.
+proxy. Flags decay on their own as well; resolving is for clearing one outright rather
+than waiting it out.
+
+`before`, `after` and `resolved` are raw counts, not decayed weights: an operator undoing
+a mistake is asking about the flags they raised, not what the score currently charges for
+them.
 
 ### `POST /link` (auth required)
 

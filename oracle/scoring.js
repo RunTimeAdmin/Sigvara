@@ -82,7 +82,13 @@ function ageScore(registeredAtSeconds, activity = null, nowMs = Date.now()) {
 function communityScore(unresolvedFlags) {
   // 0 flags → 5 pts, 1 flag → 3 pts, 2 flags → 1 pt, 3+ flags → 0
   // Formula: max(0, 5 - flags*2)
-  return Math.max(0, 5 - unresolvedFlags * 2);
+  //
+  // Floored because the count is age-weighted and therefore fractional: a flag one
+  // half-life old counts 0.5 and costs one point rather than two. Without the floor the
+  // total is fractional and proposeReputation takes uint8s. Flooring rather than
+  // rounding matches every other factor here, and keeps the penalty until the flag has
+  // genuinely decayed instead of writing it off early.
+  return Math.max(0, Math.floor(5 - unresolvedFlags * 2));
 }
 
 /**

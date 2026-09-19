@@ -12,6 +12,10 @@
 
 const fs = require('fs');
 const path = require('path');
+// The decay curve lives in payments.js. Imported rather than reimplemented so flags and
+// payments age on exactly the same function; payments.js requires only ethers, so this
+// direction of dependency is not circular.
+const { decayWeight, WEIGHT_SCALE } = require('./payments');
 
 const STATE_PATH = process.env.ORACLE_STATE_PATH || '/data/oracle-state.json';
 
@@ -22,8 +26,22 @@ const ATTEST_COOLDOWN_MS = Number(process.env.ATTEST_COOLDOWN_MS) || DEFAULT_ATT
 
 // didHash → { successful, total }
 const attestations = new Map();
-// didHash → unresolved flag count
+// didHash → array of flag timestamps (ms), oldest first.
+//
+// A bare count until 19 Sep 2026, which made flags the one signal in the model that
+// never decayed: a flag raised a year ago weighed exactly as much as one raised this
+// morning. Everything else decays on purpose, so that manufactured evidence evaporates
+// unless renewed, and the same argument runs in reverse for a penalty — an agent that
+// has behaved for months should not still be paying for a single old flag. Storing the
+// times is what makes that possible; a count cannot be aged.
 const flags = new Map();
+
+// Shorter than the 90-day payment half-life by default. A flag is an accusation
+// nobody has had to substantiate, so it should fade faster than evidence that was
+// verified against the chain.
+const DEFAULT_FLAG_HALF_LIFE_DAYS = 30;
+const FLAG_HALF_LIFE_MS =
+  Number(process.env.FLAG_HALF_LIFE_DAYS ?? DEFAULT_FLAG_HALF_LIFE_DAYS) * 86_400_000;
 
 // didHash → ERC-8004 agentId (string) this agent is linked to (ownership-verified at link time)
 const links = new Map();
@@ -61,21 +79,96 @@ let scanState = null;
  * permanent record of every agent ever flagged.
  */
 function resolveFlags(didHash, count = 1) {
-  const before = flags.get(didHash) ?? 0;
+  const list = flags.get(didHash) ?? [];
+  const before = list.length;
   const n = Math.floor(Number(count));
   if (!Number.isFinite(n) || n < 1) return { before, after: before, resolved: 0 };
 
+  // Newest first. The case this exists for is an automated producer misfiring, and the
+  // flags it just raised are the ones at the end. Removing the oldest would leave the
+  // mistake in place and clear whatever legitimate flag preceded it.
   const after = Math.max(0, before - n);
   if (after === 0) flags.delete(didHash);
-  else flags.set(didHash, after);
+  else flags.set(didHash, list.slice(0, after));
   return { before, after, resolved: before - after };
+}
+
+/// Raise a flag. Returns the new raw count, which is what the endpoint reports: an
+/// operator asking "did that land" wants to see their flag, not a decayed weight that
+/// starts at 1 and immediately begins falling.
+function addFlag(didHash, now = Date.now()) {
+  const list = flags.get(didHash) ?? [];
+  list.push(now);
+  flags.set(didHash, list);
+  return list.length;
+}
+
+/// Raw, undecayed count. For display and for the resolve endpoint's arithmetic.
+function flagCount(didHash) {
+  return (flags.get(didHash) ?? []).length;
+}
+
+/**
+ * Age-weighted flag count, which is what the score should use.
+ *
+ * Reuses payments.decayWeight so there is exactly one decay curve in the codebase; a
+ * second implementation here would drift from it the first time either was tuned. That
+ * function returns a BigInt scaled by WEIGHT_SCALE because token amounts need the
+ * precision — flags are small integers, so the float conversion is safe and is the same
+ * idiom payments.js already uses for its recency figure.
+ *
+ * Fractional by design. communityScore is max(0, 5 - flags*2) floored, so a flag decays
+ * out of the penalty in steps rather than vanishing at an arbitrary cutoff.
+ */
+function decayedFlagCount(didHash, now = Date.now(), halfLifeMs = FLAG_HALF_LIFE_MS) {
+  const list = flags.get(didHash);
+  if (!list || list.length === 0) return 0;
+  let sum = 0;
+  for (const ts of list) {
+    sum += Number(decayWeight(now - ts, halfLifeMs)) / Number(WEIGHT_SCALE);
+  }
+  return sum;
+}
+
+/// Drops flags whose weight has fallen far enough that they can no longer move the
+/// integer score, so the array does not grow forever. At a 30-day half-life the default
+/// floor keeps roughly the last ten months; below it, two hundred such flags together
+/// would not cost a single point.
+function pruneFlags(minWeight = 0.001, now = Date.now(), halfLifeMs = FLAG_HALF_LIFE_MS) {
+  for (const [didHash, list] of flags.entries()) {
+    const kept = list.filter(
+      ts => Number(decayWeight(now - ts, halfLifeMs)) / Number(WEIGHT_SCALE) >= minWeight
+    );
+    if (kept.length === 0) flags.delete(didHash);
+    else if (kept.length !== list.length) flags.set(didHash, kept);
+  }
 }
 
 function load() {
   try {
     const parsed = JSON.parse(fs.readFileSync(STATE_PATH, 'utf8'));
     for (const [k, v] of Object.entries(parsed.attestations || {})) attestations.set(k, v);
-    for (const [k, v] of Object.entries(parsed.flags || {})) flags.set(k, v);
+    /* Flags were a bare count before 19 Sep 2026 and are timestamps now.
+     *
+     * A legacy file has no record of when each flag was raised, so the best available
+     * estimate is the moment the file was last written: not later than that, and
+     * usually not much earlier. Stamping them "now" instead would silently grant every
+     * historical flag a fresh 30-day lease, which is the opposite of the intent.
+     *
+     * Missing savedAt falls back to now, which errs toward keeping the penalty rather
+     * than discarding it, because a flag we cannot date is not evidence it was cleared. */
+    const legacyFlagTs = Date.parse(parsed.savedAt || '') || Date.now();
+    let migratedFlags = 0;
+    for (const [k, v] of Object.entries(parsed.flags || {})) {
+      if (Array.isArray(v)) { flags.set(k, v); continue; }
+      const n = Math.max(0, Math.floor(Number(v) || 0));
+      if (n === 0) continue;
+      flags.set(k, Array(n).fill(legacyFlagTs));
+      migratedFlags += n;
+    }
+    if (migratedFlags > 0) {
+      console.log(`[oracle] migrated ${migratedFlags} legacy flag(s) to timestamps, dated ${new Date(legacyFlagTs).toISOString()}`);
+    }
     for (const [k, v] of Object.entries(parsed.links || {})) links.set(k, v);
     for (const [k, v] of Object.entries(parsed.attestCooldowns || {})) attestCooldowns.set(k, v);
     for (const [k, v] of Object.entries(parsed.paymentEvents || {})) paymentEvents.set(k, v);
@@ -199,7 +292,12 @@ function getStatePath() {
 module.exports = {
   attestations,
   flags,
+  addFlag,
+  flagCount,
+  decayedFlagCount,
+  pruneFlags,
   resolveFlags,
+  FLAG_HALF_LIFE_MS,
   links,
   attestCooldowns,
   paymentEvents,

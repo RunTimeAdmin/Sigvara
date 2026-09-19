@@ -4,6 +4,10 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const {
   flags,
+  addFlag,
+  flagCount,
+  decayedFlagCount,
+  pruneFlags,
   resolveFlags,
   checkAttestCooldown,
   recordAttestation,
@@ -15,6 +19,7 @@ const {
   paymentVolume,
   ATTEST_COOLDOWN_MS,
 } = require('./store');
+const { communityScore } = require('./scoring');
 
 function clearCooldowns() {
   attestCooldowns.clear();
@@ -181,15 +186,15 @@ const DID_A = '0xaaa1';
 const DID_B = '0xbbb2';
 
 test('resolveFlags: clears one by default', () => {
-  flags.set(DID_A, 3);
+  flags.set(DID_A, [1, 2, 3]);
   assert.deepEqual(resolveFlags(DID_A), { before: 3, after: 2, resolved: 1 });
-  assert.equal(flags.get(DID_A), 2);
+  assert.equal(flags.get(DID_A).length, 2);
   flags.delete(DID_A);
 });
 
 test('resolveFlags: clears a run of them in one call', () => {
   // The motivating case: an automated producer misfires and raises several.
-  flags.set(DID_A, 5);
+  flags.set(DID_A, [1, 2, 3, 4, 5]);
   assert.deepEqual(resolveFlags(DID_A, 4), { before: 5, after: 1, resolved: 4 });
   flags.delete(DID_A);
 });
@@ -198,7 +203,7 @@ test('resolveFlags: over-resolving clamps to zero and reports the truth', () => 
   // Clamped rather than rejected, so a caller does not have to read the count first
   // and race whoever else is writing. `resolved` is what actually happened, not what
   // was asked for.
-  flags.set(DID_A, 2);
+  flags.set(DID_A, [1, 2]);
   assert.deepEqual(resolveFlags(DID_A, 99), { before: 2, after: 0, resolved: 2 });
   flags.delete(DID_A);
 });
@@ -206,7 +211,7 @@ test('resolveFlags: over-resolving clamps to zero and reports the truth', () => 
 test('resolveFlags: the entry is deleted at zero, not left as 0', () => {
   // Otherwise the state file accumulates a permanent row for every agent ever
   // flagged, and `flags.size` in the startup log stops meaning anything.
-  flags.set(DID_A, 1);
+  flags.set(DID_A, [1]);
   resolveFlags(DID_A);
   assert.equal(flags.has(DID_A), false, 'zero must remove the key');
 });
@@ -219,26 +224,125 @@ test('resolveFlags: an unflagged agent is a no-op, not an error', () => {
 test('resolveFlags: junk counts change nothing', () => {
   // resolved === 0 is what the route keys on to skip persisting, so these must not
   // report a change they did not make.
-  flags.set(DID_A, 2);
+  flags.set(DID_A, [1, 2]);
   for (const bad of [0, -1, NaN, 'three', null, undefined, Infinity]) {
     const r = resolveFlags(DID_A, bad);
     assert.equal(r.resolved, bad === undefined ? 1 : 0, `count=${String(bad)}`);
-    if (bad === undefined) flags.set(DID_A, 2); // the default applies, so restore
+    if (bad === undefined) flags.set(DID_A, [1, 2]); // the default applies, so restore
   }
-  assert.equal(flags.get(DID_A), 2);
+  assert.equal(flags.get(DID_A).length, 2);
   flags.delete(DID_A);
 });
 
 test('resolveFlags: a fractional count is floored, never rounded up', () => {
-  flags.set(DID_A, 3);
+  flags.set(DID_A, [1, 2, 3]);
   assert.equal(resolveFlags(DID_A, 1.9).resolved, 1, 'must not clear two');
   flags.delete(DID_A);
 });
 
 test('resolveFlags: one agent does not affect another', () => {
-  flags.set(DID_A, 2);
-  flags.set(DID_B, 2);
+  flags.set(DID_A, [1, 2]);
+  flags.set(DID_B, [1, 2]);
   resolveFlags(DID_A, 2);
-  assert.equal(flags.get(DID_B), 2, 'B untouched');
+  assert.equal(flags.get(DID_B).length, 2, 'B untouched');
   flags.delete(DID_B);
+});
+
+// --- flag decay ------------------------------------------------------------
+// Flags were the one signal in the model that never decayed. Everything else ages
+// deliberately, so manufactured evidence evaporates unless renewed; the same argument
+// in reverse says an agent that has behaved for months should stop paying for one old
+// flag. These use an explicit half-life rather than the configured one, so the tests
+// do not change meaning if FLAG_HALF_LIFE_DAYS is ever retuned.
+
+const DAY = 86_400_000;
+const HL = 30 * DAY;
+const DID_D = '0xdecay';
+
+test('decayedFlagCount: a fresh flag counts in full', () => {
+  const now = 1_000_000_000_000;
+  flags.set(DID_D, [now]);
+  assert.equal(decayedFlagCount(DID_D, now, HL), 1);
+  flags.delete(DID_D);
+});
+
+test('decayedFlagCount: one half-life halves it', () => {
+  const now = 1_000_000_000_000;
+  flags.set(DID_D, [now - HL]);
+  assert.ok(Math.abs(decayedFlagCount(DID_D, now, HL) - 0.5) < 1e-6);
+  flags.delete(DID_D);
+});
+
+test('decayedFlagCount: flags of different ages sum', () => {
+  const now = 1_000_000_000_000;
+  flags.set(DID_D, [now, now - HL, now - 2 * HL]);
+  // 1 + 0.5 + 0.25
+  assert.ok(Math.abs(decayedFlagCount(DID_D, now, HL) - 1.75) < 1e-6);
+  flags.delete(DID_D);
+});
+
+test('decayedFlagCount: an unflagged agent is 0, and no entry is created', () => {
+  assert.equal(decayedFlagCount('0xclean', Date.now(), HL), 0);
+  assert.equal(flags.has('0xclean'), false);
+});
+
+test('flag decay actually returns the Community points', () => {
+  // The whole point, expressed as score rather than weight. Two fresh flags cost four
+  // of the five points; after two half-lives the same two flags cost one.
+  const now = 1_000_000_000_000;
+  flags.set(DID_D, [now, now]);
+  assert.equal(communityScore(decayedFlagCount(DID_D, now, HL)), 1, 'two fresh flags');
+
+  flags.set(DID_D, [now - 2 * HL, now - 2 * HL]);
+  assert.equal(communityScore(decayedFlagCount(DID_D, now, HL)), 4, 'the same two, aged');
+  flags.delete(DID_D);
+});
+
+test('communityScore: floors a fractional count rather than returning a fraction', () => {
+  // proposeReputation takes uint8s, so a fractional total would be rejected on chain.
+  assert.equal(communityScore(0.7), 3, '5 - 1.4 = 3.6 -> 3');
+  assert.equal(communityScore(1.75), 1, '5 - 3.5 = 1.5 -> 1');
+  assert.equal(Number.isInteger(communityScore(0.3)), true);
+});
+
+test('communityScore: unchanged for whole numbers', () => {
+  // The floor must not move any existing behaviour.
+  assert.equal(communityScore(0), 5);
+  assert.equal(communityScore(1), 3);
+  assert.equal(communityScore(2), 1);
+  assert.equal(communityScore(3), 0);
+  assert.equal(communityScore(99), 0);
+});
+
+test('pruneFlags: drops flags too old to move the score, keeps the rest', () => {
+  const now = 1_000_000_000_000;
+  flags.set(DID_D, [now, now - 30 * DAY, now - 400 * DAY]);
+  pruneFlags(0.001, now, HL);
+  assert.equal(flagCount(DID_D), 2, 'the 400-day-old one is dead weight');
+  flags.delete(DID_D);
+});
+
+test('pruneFlags: removes the agent entirely when nothing survives', () => {
+  const now = 1_000_000_000_000;
+  flags.set(DID_D, [now - 500 * DAY]);
+  pruneFlags(0.001, now, HL);
+  assert.equal(flags.has(DID_D), false, 'no empty array left behind');
+});
+
+test('addFlag: appends and reports the raw count', () => {
+  const now = 1_000_000_000_000;
+  assert.equal(addFlag(DID_D, now), 1);
+  assert.equal(addFlag(DID_D, now + 1), 2);
+  assert.equal(flagCount(DID_D), 2);
+  flags.delete(DID_D);
+});
+
+test('resolveFlags: clears the newest first', () => {
+  // An automated producer misfiring raises the most recent flags. Clearing the oldest
+  // would leave the mistake and remove whatever legitimate flag preceded it.
+  const old = 1_000, recent = 9_000;
+  flags.set(DID_D, [old, recent]);
+  resolveFlags(DID_D, 1);
+  assert.deepEqual(flags.get(DID_D), [old], 'the older flag survives');
+  flags.delete(DID_D);
 });

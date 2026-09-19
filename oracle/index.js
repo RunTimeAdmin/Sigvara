@@ -63,6 +63,10 @@ external.init(cfg);
 const {
   attestations,
   flags,
+  addFlag,
+  flagCount,
+  decayedFlagCount,
+  pruneFlags,
   resolveFlags,
   links,
   load: loadState,
@@ -328,7 +332,9 @@ async function runEpochInner() {
         }
 
         const att       = attestations.get(didHash) ?? { successful: 0, total: 0 };
-        const flagCount = flags.get(didHash) ?? 0;
+        // Age-weighted, not the raw count: a flag decays out of the penalty rather than
+        // costing two points forever. See store.decayedFlagCount.
+        const flagWeight = decayedFlagCount(didHash);
         // externalScore: only for agents linked to an ERC-8004 identity they own.
         // Ownership is re-verified inside externalScoreFor; any failure yields 0.
         const linkedId  = links.get(didHash);
@@ -339,7 +345,7 @@ async function runEpochInner() {
         const scores    = computeScore({
           registeredAt,
           attestations: measured.measuredAttestations ?? att,
-          flags: flagCount,
+          flags: flagWeight,
           externalScore,
           measuredFeeScore: measured.measuredFeeScore,
           activity: measured.activity,
@@ -391,6 +397,9 @@ async function runEpochInner() {
   setScanState(chain.getScanState());
 
   const pruned = prunePaymentEvents(paymentCfg.halfLifeMs);
+  // Same reason, same place: a flag too old to move an integer score is dead weight
+  // in the state file.
+  pruneFlags();
   if (pruned > 0) console.log(`[oracle] pruned ${pruned} fully decayed payment event(s)`);
   persistState();
 
@@ -636,10 +645,10 @@ const server = http.createServer(async (req, res) => {
     try {
       const { didHash } = await readBody(req);
       if (!didHash) return json(res, 400, { error: 'didHash required' });
-      flags.set(didHash, (flags.get(didHash) ?? 0) + 1);
+      const raised = addFlag(didHash);
       persistState();
       metrics.inc('flagsReceived');
-      return json(res, 200, { didHash, flags: flags.get(didHash) });
+      return json(res, 200, { didHash, flags: raised });
     } catch (err) {
       return json(res, 400, { error: err.message });
     }
@@ -729,7 +738,7 @@ const server = http.createServer(async (req, res) => {
       }
       const { operator, registeredAt, status } = info;
       const att       = attestations.get(didHash) ?? { successful: 0, total: 0 };
-      const flagCount = flags.get(didHash) ?? 0;
+      const flagWeight = decayedFlagCount(didHash);
       const linkedId  = links.get(didHash);
       const externalScore = (external.configured() && linkedId !== undefined)
         ? await external.externalScoreFor(linkedId, operator)
@@ -740,7 +749,7 @@ const server = http.createServer(async (req, res) => {
       const scores    = computeScore({
         registeredAt,
         attestations: measured.measuredAttestations ?? att,
-        flags: flagCount,
+        flags: flagWeight,
         externalScore,
         measuredFeeScore: measured.measuredFeeScore,
         activity: measured.activity,
@@ -762,7 +771,10 @@ const server = http.createServer(async (req, res) => {
           halfLifeDays: paymentCfg.halfLifeMs / 86400000,
           maxPerPayer: paymentCfg.maxPerPayer,
         } } : {}),
-        flags: flagCount,
+        // Both: the raw count is what an operator raised, the weight is what the
+        // score actually charged for it.
+        flags: flagCount(didHash),
+        flagWeight: Number(flagWeight.toFixed(4)),
         erc8004AgentId: linkedId ?? null,
       });
     } catch (err) {
