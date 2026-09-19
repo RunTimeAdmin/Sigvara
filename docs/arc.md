@@ -230,10 +230,22 @@ forge script script/Upgrade.s.sol --rpc-url arc_testnet -vvvv              # sim
 forge script script/Upgrade.s.sol --rpc-url arc_testnet --broadcast -vvvv
 ```
 
-`oracleBond` and `epochFees` are deployed by their own scripts and are not in
-the artifact, so pass `PROXY=0x...` for those. When the new implementation adds
-state that must not start at zero, pass `INIT_CALLDATA` with the encoded
-reinitializer call so it lands in the same transaction as the upgrade.
+The proxy address is read from `deployments/<chainId>.json` under the target's own
+key. On Arc testnet that file carries `oracleBond` as well as the three core
+registries, so only `epochFees` — which has never been deployed — needs
+`PROXY=0x...`. When the new implementation adds state that must not start at zero,
+pass `INIT_CALLDATA` with the encoded reinitializer call so it lands in the same
+transaction as the upgrade.
+
+**Rehearse against a fork before broadcasting.** The simulation proves the
+transaction succeeds; it does not prove the storage still means what it did. A
+layout mistake never reverts, it silently reinterprets live data, and the in-memory
+upgrade tests cannot catch that because they build their own fixtures rather than
+reading the chain. Fork Arc at head, prank as the upgrader, move the proxies, and
+assert the real agent, bond and score survive. That check is what caught a mapping
+declared one line too high, which would have moved `operatorBond` into an empty slot
+where it reads zero — the "bonded-operator check disabled" mode, reached by an
+upgrade that reverted nothing and logged nothing.
 
 ### The reputation identity binding
 
@@ -381,6 +393,92 @@ withdrawals read back unchanged afterwards.
 
 On mainnet `UPGRADER_ROLE` belongs to the governance timelock, so this script is
 used to simulate and to produce the calldata, not to broadcast.
+
+### Proof of control, PendingBond and evidence roots
+
+Deployed 19 Sep 2026 to `identity`, `staking` and `reputation`, in that order.
+
+`registerAgent` now takes a third argument: a signature from the agent address over
+`registrationDigest(agentAddress, operator, ed25519PubKey)`. Without it anyone could
+register an address they did not control and choose the public key verifiers would
+check against it. The digest is returned **unprefixed** on purpose — a standard signer
+applies the EIP-191 prefix itself, and returning it pre-prefixed makes every wallet
+double-prefix and produce signatures the contract rejects.
+
+Registration now mints `PendingBond` rather than `Active`. An unbonded agent cannot be
+slashed, so it was accruing standing while being unaccountable by construction. The
+first `depositStake` that carries it over `minimumStake` activates it, and nothing ever
+returns to `PendingBond`.
+
+Every proposal carries a Merkle root over the evidence behind it, readable from
+`evidenceRoots(didHash)` once finalized and checkable through
+`verifyEvidence(didHash, leaf, proof)`. `proposeReputation` gained the root as a third
+parameter, so **the oracle must be upgraded in step with the reputation proxy** — an
+oracle on the old two-argument ABI cannot propose to the new contract, and the reverse
+reverts on every epoch.
+
+The leaf commits to the settlement time in **seconds**, matching the block timestamp a
+verifier reads off the chain. The oracle stores that time in milliseconds internally,
+because the decay arithmetic works in milliseconds, and converts at the boundary. That
+unit is load-bearing: committing to milliseconds was self-consistent and unverifiable,
+so an honest oracle and an honest verifier computed different roots.
+
+### The oracle bond binds, and the operator index is constant time
+
+Deployed 19 Sep 2026 to `identity`, `staking` and `oracleBond`. `reputation` was
+byte-identical to what was already deployed and was deliberately left alone.
+
+`SigvaraOracleBond.isActiveOperator` now reads the bond as well as the status. `admit`
+checks `bond >= bondAmount` once, at admission, so raising the requirement demoted
+nobody: an operator let in at 1,000 kept proposing after the bar moved to 10,000, and
+governance could only tighten the rule by removing each incumbent by hand.
+`setBondAmount(0)` is refused for the same reason `setStakeView` refuses zero — a gate
+that looks configured and admits everyone should not be reachable by passing an empty
+argument.
+
+**Check the operator's headroom before you raise the bar.** An operator sitting exactly
+at `bondAmount` qualifies by equality, and any slash at all will then stop it proposing
+at the next epoch, silently:
+
+```bash
+cast call <oracleBond proxy> "bondOf(address)(uint256)" <oracle wallet> --rpc-url arc_testnet
+cast call <oracleBond proxy> "bondAmount()(uint256)" --rpc-url arc_testnet
+cast call <oracleBond proxy> "isActiveOperator(address)(bool)" <oracle wallet> --rpc-url arc_testnet
+```
+
+`SigvaraIdentity` records each agent's position in its operator's list, so removal on
+the transfer path is constant time instead of a linear scan. The scan was justified by
+a comment saying an operator's list is short; nothing enforced that, and registration
+became free once agents started at `PendingBond`, so an operator who registered enough
+of them could push the removal past the block gas limit and lose the ability to transfer
+any agent at all. Agents registered before this fall back to the scan. `getOperatorAgents`
+still returns the whole list for existing consumers; `operatorAgentCount` and
+`getOperatorAgentsPaged` are there for callers that cannot afford an unbounded return.
+
+`initiateWithdrawal` reverts with `InsufficientStake` rather than an arithmetic panic
+when you ask for more than you hold.
+
+### Implementation history
+
+Proxy addresses never change; these are the implementations behind them, newest first.
+
+| Proxy | Implementation | Released |
+|---|---|---|
+| `identity` | `0xb2616f4a449726b195951b6a576aba6847e174ef` | 19 Sep, operator index |
+| | `0x95d8592e7681550bee0c3e06c275ac1b94c873c6` | 19 Sep, proof of control + PendingBond |
+| | `0x486b1c2230c80a77dbec68835ff5b58eccd164ab` | 18 Sep, operator transfer |
+| `staking` | `0x3501f936f629dbc2e97ae0717c501456ca8215e0` | 19 Sep, narrowed coupling |
+| | `0x28c23b766c2dabb5f2930905a5eeb660919b71ef` | 19 Sep, PendingBond activation |
+| `reputation` | `0x0dc80134817e6fea978c06497f48391371a8413d` | 19 Sep, evidence roots |
+| | `0xea5940bc23d7bf82113316dd03a3b1bb1bc2f084` | 18 Sep, maturity |
+| `oracleBond` | `0xf8464144726850d222a06b85a230c8030673b933` | 19 Sep, bond binds on read |
+| | `0x826fc09041a8a678b06336a253c55bd84f1fdc50` | 18 Sep, initial |
+
+Read the current one straight from the proxy rather than trusting this table:
+
+```bash
+cast storage <proxy> 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc --rpc-url arc_testnet
+```
 
 ## 6. Mainnet (5042)
 
