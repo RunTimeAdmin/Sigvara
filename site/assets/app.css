@@ -1,4 +1,6 @@
-.app-wrap { max-width: 760px; margin: 48px auto; padding: 0 24px; }
+/* The site nav is position:fixed and 72px tall, so a 48px top margin put the h1
+   24px underneath it. Clear the nav, then add the intended gap. */
+.app-wrap { max-width: 760px; margin: 0 auto; padding: calc(72px + 48px) 24px 48px; }
 .app-card { background: var(--surface, #0d1017); border: 1px solid var(--border); border-radius: 12px; padding: 28px; margin-bottom: 24px; }
 .app-card h2 { margin: 0 0 6px; font-size: 20px; }
 .app-card .sub { color: var(--muted); font-size: 14px; margin-bottom: 18px; }

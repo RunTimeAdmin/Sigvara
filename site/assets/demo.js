@@ -73,7 +73,7 @@
     factors: [
       { key: 'feeScore', label: 'Fee activity', max: 30 },
       { key: 'successScore', label: 'Success rate', max: 25 },
-      { key: 'ageScore', label: 'Registration age', max: 20 },
+      { key: 'ageScore', label: 'Tenure', max: 20 },
       { key: 'externalScore', label: 'External trust', max: 15 },
       { key: 'communityScore', label: 'Community', max: 5 },
       { key: 'propagationScore', label: 'Trust propagation', max: 5 }
@@ -81,12 +81,29 @@
   };
 
   // docs/reputation-model.md formulas.
+  // Mirrors oracle/scoring.js. Two details here are the whole point of the model and
+  // were wrong in this demo while the live oracle had moved on.
+  //
+  // Success divides by (total + PRIOR), not by total. A bare ratio makes one lucky job
+  // score the same as ninety-nine out of a hundred, and it is scale invariant, so
+  // decaying both halves leaves it untouched and a farmed score sits forever.
+  //
+  // Tenure is the span of PAID work, not days since registration. Registering and
+  // waiting was the cheapest twenty points an idle farm could collect, so an agent with
+  // no attestations scores zero here however long it has existed.
+  var SUCCESS_PRIOR = 5;
+
   function computeFactors(input) {
-    var success = input.attestations > 0 ? input.successes / input.attestations : 0;
+    var paid = input.attestations > 0;
     return {
+      // One point per 100 of settled volume, capped at 30. The live oracle also decays
+      // each payment and caps any single payer; this simulation does neither, so treat
+      // it as the ceiling rather than the number a real agent would hold.
       feeScore: Math.min(30, Math.floor(input.feesUsd / 100)),
-      successScore: Math.floor(success * 25),
-      ageScore: Math.min(20, Math.floor(Math.log2(input.days + 1) * 4)),
+      successScore: paid
+        ? Math.floor((input.successes / (input.attestations + SUCCESS_PRIOR)) * 25)
+        : 0,
+      ageScore: paid ? Math.min(20, Math.floor(Math.log2(input.days + 1) * 4)) : 0,
       externalScore: Math.floor((input.external / 100) * 15),
       communityScore: Math.max(0, 5 - input.flags * 2),
       propagationScore: Math.max(0, Math.min(5, input.propagation))
