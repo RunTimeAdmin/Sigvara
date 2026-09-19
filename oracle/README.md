@@ -128,9 +128,14 @@ field of an x402 `X-PAYMENT-RESPONSE`, or any transfer that settled on chain:
 {
   "didHash": "0x...",
   "success": true,
-  "payment": { "txHash": "0x3daf88..." }
+  "payment": { "txHash": "0x3daf88..." },
+  "packetId": "56ccbfd3-3868-4b98-8e56-97faa0aec031"
 }
 ```
+
+`packetId` is optional cross-evidence: the identifier of a sealed, timestamped record
+of the same work. Stored beside the payment and served from `/evidence`, never part of
+the Merkle leaf. Validated for shape only.
 
 The oracle reads the agent's own address from the identity registry, finds transfers of
 `PAYMENT_ASSET` to it in that receipt, checks the amount and confirmations, and takes
@@ -235,6 +240,18 @@ Preview the computed score for an agent without writing to chain.
 
 The payments behind an agent's score, with Merkle proofs. Unauthenticated on purpose:
 evidence nobody can fetch is evidence nobody can audit.
+
+The response names `committedFields` — the exact fields the root commits to, in leaf
+order — so a verifier need not read this source to know what is covered.
+
+`counterauditPacketId` appears on an event when the attestation carried one. It is
+**corroboration, not evidence, and is deliberately not in the leaf**: it identifies a
+tamper-evident, independently timestamped record of the same work, which a verifier
+fetches from CounterAudit and checks for themselves. Two separate things then have to
+be forged for the evidence to be fabricated. Committing to it would have changed the
+leaf format and made roots already published on chain unreproducible, for a field the
+verifier confirms elsewhere regardless. This oracle never calls CounterAudit to
+validate it — an evidence path that depends on someone's SaaS is not evidence.
 
 Both read endpoints are rate-limited at 60 requests per caller per minute, the same cap
 the writes use. Unauthenticated is not unmetered: `/score` costs several RPC round trips

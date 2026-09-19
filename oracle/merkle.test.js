@@ -165,3 +165,33 @@ test('settledSeconds refuses a record served by /evidence, which is already seco
   // leaf for some moment in 1970. Better to reject the field name outright.
   assert.throws(() => settledSeconds({ settledAt: 1_789_734_970 }), /milliseconds/);
 });
+
+// --- cross-evidence: packetId must not enter the commitment -------------------
+// A CounterAudit packet id is corroboration, not evidence: it identifies an
+// independently timestamped record of the same work. It is stored on the event and
+// served by /evidence, and it must never reach the leaf — the root 0xb07cdfc2… is
+// already on Arc and must stay reproducible from the five committed fields alone.
+
+test('leafFor ignores packetId entirely', () => {
+  const base = {
+    txHash: '0xc94ed4acfd17e4e514caf2deef67e46eda7bdd449a964d6fac813804a4432487',
+    payer: '0x016F40f44E74cf1907434b83D50D8d833847896a',
+    amount: '20000000000000000000',
+    ts: 1789734970000,
+    success: true,
+  };
+  const without = leafFor(base);
+  const with_ = leafFor({ ...base, packetId: '56ccbfd3-3868-4b98-8e56-97faa0aec031' });
+  assert.equal(with_, without, 'adding a packet id must not change the leaf');
+});
+
+test('a tree built with packet ids has the same root as one without', () => {
+  // The regression that would break every published root at once.
+  const events = [
+    { txHash: '0x' + '11'.repeat(32), payer: '0x016F40f44E74cf1907434b83D50D8d833847896a', amount: '1000', ts: 1789734970000, success: true },
+    { txHash: '0x' + '22'.repeat(32), payer: '0xaCc2362C6254B67954cB813399173fa631A1fA8e', amount: '2000', ts: 1789734973000, success: false },
+  ];
+  const plain = buildTree(events).root;
+  const tagged = buildTree(events.map((e, i) => ({ ...e, packetId: `packet-${i}` }))).root;
+  assert.equal(tagged, plain, 'the root must not depend on corroboration metadata');
+});

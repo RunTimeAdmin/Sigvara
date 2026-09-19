@@ -485,7 +485,7 @@ const server = http.createServer(async (req, res) => {
     }
     try {
       const body = await readBody(req);
-      const { didHash, success } = body;
+      const { didHash, success, packetId } = body;
 
       /* Authorisation depends on what is being claimed, so it is decided after the
        * body is read rather than before.
@@ -579,8 +579,14 @@ const server = http.createServer(async (req, res) => {
       if (credited) {
         // Credit after the cooldown check so a rejected attestation does not burn
         // the receipt; the payer can retry once the cooldown clears.
+        // packetId is optional corroboration: an identifier for a tamper-evident,
+        // independently timestamped record of the same work, so a verifier can check
+        // the payment on chain AND that such a record existed. Validated for shape
+        // only — this oracle does not call CounterAudit to confirm it, because an
+        // evidence path that depends on someone's SaaS is not evidence.
+        const packet = /^[0-9a-fA-F-]{36}$/.test(String(packetId || '')) ? String(packetId) : null;
         if (!creditPayment(
-          didHash, credited.txHash, credited.amount, credited.payer, success, credited.settledAt
+          didHash, credited.txHash, credited.amount, credited.payer, success, credited.settledAt, packet
         )) {
           metrics.inc('attestRejectedPayment');
           return json(res, 409, { error: 'this settlement has already been credited', code: 'replayed' });
@@ -625,6 +631,13 @@ const server = http.createServer(async (req, res) => {
       didHash,
       evidenceRoot: tree.root,
       count: events.length,
+      // Exactly what the root commits to, in leaf order, so nobody has to read this
+      // service's source to know which fields are covered. counterauditPacketId is
+      // deliberately absent: it identifies an independently timestamped record of the
+      // same work, which a verifier fetches and checks for themselves, and committing
+      // to it would have changed the leaf format and made roots already published on
+      // chain unreproducible.
+      committedFields: ['txHash', 'payer', 'amount', 'settledAt', 'success'],
       // The leaf is derivable from the payment, so a verifier rebuilds it rather than
       // trusting the one served here; it is included to make that comparison easy.
       evidence: events.map((e, i) => ({
@@ -635,6 +648,8 @@ const server = http.createServer(async (req, res) => {
         success: e.success,
         leaf: tree.leaves[i],
         proof: merkle.proofFor(tree, i),
+        // Corroboration, NOT part of the leaf. See committedFields below.
+        ...(e.packetId ? { counterauditPacketId: e.packetId } : {}),
       })),
     });
   }

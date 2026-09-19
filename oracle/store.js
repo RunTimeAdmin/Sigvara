@@ -231,7 +231,7 @@ function pruneExpiredCooldowns(now = Date.now()) {
 /// Records a verified payment against an agent. Returns false when this settlement
 /// has already been credited, which is the replay guard: the same receipt presented
 /// twice must not count twice.
-function creditPayment(didHash, txHash, amount, payer, success, now = Date.now()) {
+function creditPayment(didHash, txHash, amount, payer, success, now = Date.now(), packetId = null) {
   const key = txHash.toLowerCase();
   if (usedPaymentTxs.has(key)) return false;
   usedPaymentTxs.add(key);
@@ -239,8 +239,17 @@ function creditPayment(didHash, txHash, amount, payer, success, now = Date.now()
   // The settlement hash is kept, not just used for dedupe: it is what lets a third
   // party pull the payment off the chain and check it for themselves, which is the
   // whole point of committing to the evidence.
-  list.push({ txHash: key, ts: now, amount: BigInt(amount).toString(), payer, success: !!success });
-  paymentEvents.set(didHash, list);
+  //
+  // packetId is corroboration, not evidence, and is deliberately NOT in the Merkle
+  // leaf. Two reasons. Putting it there would change the leaf format and make roots
+  // already published on chain unreproducible, which is a poor trade for a field a
+  // verifier checks elsewhere anyway. And the corroboration works without it: the
+  // verifier fetches that packet from CounterAudit directly, so Sigvara vouching for
+  // the identifier adds nothing it could not confirm itself. /evidence says which
+  // fields the root covers so this cannot be mistaken for a commitment.
+  const event = { txHash: key, ts: now, amount: BigInt(amount).toString(), payer, success: !!success };
+  if (packetId) event.packetId = String(packetId);
+  paymentEvents.set(didHash, [...list, event]);
   return true;
 }
 
