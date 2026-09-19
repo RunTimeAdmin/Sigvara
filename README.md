@@ -216,7 +216,7 @@ No slash has been executed end to end on Arc testnet yet. The lifecycle below is
 ```mermaid
 sequenceDiagram
     participant V as Victim
-    participant CM as Committee (3-of-5)
+    participant CM as Slashing committee
     participant ST as SigvaraStaking
     participant ID as SigvaraIdentity
     participant REP as SigvaraReputation
