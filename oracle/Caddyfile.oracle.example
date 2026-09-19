@@ -62,6 +62,7 @@ oracle.sigvara.xyz {
 		# This is also the safer arrangement. The port stays published on host loopback
 		# for admin use, so /attest and /epoch remain reachable only from a shell on the
 		# box, while Caddy reaches the read paths over the container network.
+
 		# X-Forwarded-For is left to Caddy, which sets it by default; an explicit
 		# header_up here only earns a warning that it is redundant.
 		#
