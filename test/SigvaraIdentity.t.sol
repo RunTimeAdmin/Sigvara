@@ -160,6 +160,87 @@ contract SigvaraIdentityTest is Test, RegistrationHelper {
         assertEq(identity.operatorTransferCount(didHash), 1);
     }
 
+    /**
+     * Removal is swap-and-pop, and the element that gets swapped in must have its recorded
+     * position updated. If it does not, nothing looks broken — the fallback scan still
+     * finds it — so the only visible symptom is that removal quietly costs O(n) again,
+     * which is exactly the property this index exists to provide. Hence reading the slot.
+     */
+    function test_transfer_swapUpdatesTheMovedAgentsRecordedPosition() public {
+        bytes32 didA = _register();
+        (, uint256 pkB) = makeAddrAndKey("agentB");
+        bytes32 didB = registerSigned(identity, operator, pkB, PUB_KEY_2);
+        address buyer = makeAddr("buyer");
+
+        // operatorAgentIndex is private and lives at slot 7; index + 1, so these read 1 and 2.
+        assertEq(uint256(vm.load(address(identity), keccak256(abi.encode(didA, uint256(7))))), 1);
+        assertEq(uint256(vm.load(address(identity), keccak256(abi.encode(didB, uint256(7))))), 2);
+
+        // Remove the FIRST one, so the last is swapped into its place.
+        vm.prank(operator);
+        identity.offerOperatorTransfer(didA, buyer);
+        vm.prank(buyer);
+        identity.acceptOperatorTransfer(didA);
+
+        bytes32[] memory left = identity.getOperatorAgents(operator);
+        assertEq(left.length, 1);
+        assertEq(left[0], didB, "B was swapped down into A's place");
+        assertEq(uint256(vm.load(address(identity), keccak256(abi.encode(didB, uint256(7))))), 1,
+            "B's recorded position followed it");
+        // A didHash belongs to exactly one operator at a time, so one global position map is
+        // unambiguous. The accept clears A's old position and immediately records its new
+        // one in the buyer's list, in the same transaction, so this reads 1 rather than 0.
+        assertEq(uint256(vm.load(address(identity), keccak256(abi.encode(didA, uint256(7))))), 1,
+            "A re-recorded at the head of the buyer's list");
+
+        // And B is still removable afterwards, which is what a stale position would break.
+        vm.prank(operator);
+        identity.offerOperatorTransfer(didB, buyer);
+        vm.prank(buyer);
+        identity.acceptOperatorTransfer(didB);
+        assertEq(identity.getOperatorAgents(operator).length, 0, "seller holds nothing");
+        assertEq(identity.getOperatorAgents(buyer).length, 2, "buyer holds both");
+    }
+
+    /// Removing the only element: `moved` is the removed agent itself, so the write and the
+    /// delete touch the same key and the delete must win.
+    function test_transfer_removingTheOnlyAgentClearsItsPosition() public {
+        bytes32 didHash = _register();
+        address buyer = makeAddr("buyer");
+
+        vm.prank(operator);
+        identity.offerOperatorTransfer(didHash, buyer);
+        vm.prank(buyer);
+        identity.acceptOperatorTransfer(didHash);
+
+        // Cleared for the seller, then re-recorded as position 1 under the buyer.
+        assertEq(uint256(vm.load(address(identity), keccak256(abi.encode(didHash, uint256(7))))), 1,
+            "re-recorded for the new operator");
+        assertEq(identity.getOperatorAgents(operator).length, 0);
+    }
+
+    function test_operatorAgentsPaged_boundaries() public {
+        bytes32 didA = _register();
+        (, uint256 pkB) = makeAddrAndKey("agentPageB");
+        bytes32 didB = registerSigned(identity, operator, pkB, PUB_KEY_2);
+
+        assertEq(identity.operatorAgentCount(operator), 2);
+
+        bytes32[] memory first = identity.getOperatorAgentsPaged(operator, 0, 1);
+        assertEq(first.length, 1);
+        assertEq(first[0], didA);
+
+        // A limit past the end truncates rather than reverting: paging to the end is
+        // ordinary use.
+        bytes32[] memory rest = identity.getOperatorAgentsPaged(operator, 1, 99);
+        assertEq(rest.length, 1);
+        assertEq(rest[0], didB);
+
+        // An offset past the end is empty, not a revert.
+        assertEq(identity.getOperatorAgentsPaged(operator, 2, 10).length, 0);
+        assertEq(identity.getOperatorAgentsPaged(operator, 0, 0).length, 0);
+    }
+
     /// The index has to follow the agent, or the seller keeps listing something it no
     /// longer controls and the buyer cannot find what it bought.
     function test_transfer_movesTheAgentBetweenOperatorIndexes() public {
@@ -748,6 +829,11 @@ contract SigvaraIdentityTest is Test, RegistrationHelper {
             identity.operatorChangedAt(didHash), "slot 5 is operatorChangedAt");
         assertEq(uint256(vm.load(address(identity), keccak256(abi.encode(didHash, uint256(6))))),
             identity.operatorTransferCount(didHash), "slot 6 is operatorTransferCount");
+
+        // 7 = operatorAgentIndex. Private, so there is no getter to compare against: the
+        // agent is the buyer's only one, so its recorded position is index 0 + 1.
+        assertEq(uint256(vm.load(address(identity), keccak256(abi.encode(didHash, uint256(7))))),
+            1, "slot 7 is operatorAgentIndex");
     }
 
     function test_storageLayout_slashSuspendedPinnedToSlot2() public {

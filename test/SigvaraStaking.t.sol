@@ -689,6 +689,19 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
      * Adding a variable: append it, add a line here, never renumber. A failure here after
      * a deliberate append means the append was not at the end.
      */
+    /// Asking for more than you hold is an ordinary mistake, and a bare arithmetic panic
+    /// names neither number. The subtraction would have reverted either way; this says why.
+    function test_initiateWithdrawal_moreThanHeld_revertsNamed() public {
+        _deposit(); // 2 * MIN_STAKE
+        uint256 held = MIN_STAKE * 2;
+
+        vm.expectRevert(abi.encodeWithSelector(
+            SigvaraStaking.InsufficientStake.selector, didHash, held, held + 1
+        ));
+        vm.prank(operator);
+        staking.initiateWithdrawal(didHash, held + 1);
+    }
+
     function test_storageLayout_allSlotsPinned() public {
         assertEq(address(uint160(uint256(vm.load(address(staking), bytes32(uint256(0)))))),
             address(svr), "slot 0 is svrToken");
