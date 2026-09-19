@@ -144,3 +144,12 @@ footer { padding: 26px 0 34px; border-top: 1px solid var(--line); color: #6d7691
 
 /* Former inline styles. */
 .u-mt-12 { margin-top: 12px; } .u-minw-0 { min-width: 0; }
+
+/* On-ramp variant. The demo collapses locked steps because it is a sequential
+   walkthrough and showing step 5 before step 1 would be noise. The on-ramp page is the
+   opposite: the explanation of each step is the reason to read it, so locked steps stay
+   open and dimmed, and the heads are not clickable. */
+.steps-open .step[data-state="locked"] .step-body { display: block; }
+.steps-open .step-head { cursor: default; }
+.steps-open .step-live { margin-top: 14px; }
+.note-fine { color: #7e88a5; font-size: 11px; line-height: 1.5; margin: 0; }

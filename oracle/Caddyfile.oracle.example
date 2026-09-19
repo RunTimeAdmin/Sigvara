@@ -1,0 +1,66 @@
+# Public read surface for the oracle.
+#
+# The oracle binds 127.0.0.1 and the VPS firewall drops 3030, so nothing outside the
+# box can reach it. That is correct for the write endpoints and wrong for the read ones:
+# /evidence exists so a third party can re-derive a score's inputs without trusting us,
+# and evidence nobody can fetch is evidence nobody can audit.
+#
+# This exposes only the read paths. /attest, /flag, /link and /epoch stay on loopback,
+# reachable from the box alone, so opening this changes nothing about who can write.
+#
+# Install on the host running the oracle:
+#   /etc/caddy/Caddyfile  (or an import from it)
+#   caddy validate --config /etc/caddy/Caddyfile
+#   systemctl reload caddy
+#
+# DNS: point oracle.sigvara.xyz at this host first, or Caddy's certificate request fails
+# and the site will not come up.
+
+oracle.sigvara.xyz {
+	encode gzip
+
+	# Read-only surface, listed explicitly. A path not named here is not proxied, so a
+	# future endpoint is private until someone deliberately adds it — the safe default
+	# when the same server also holds the signing key.
+	@public {
+		path /health
+		path /score/*
+		path /evidence/*
+	}
+
+	handle @public {
+		# Let a browser on the site read this directly. Only the site's own origin: the
+		# data is public, but a wildcard invites other pages to use this host as free
+		# RPC amplification, and every /evidence call costs chain reads.
+		header Access-Control-Allow-Origin "https://sigvara.xyz"
+		header Access-Control-Allow-Methods "GET, OPTIONS"
+		header Vary "Origin"
+
+		# Scores change once per epoch and evidence only when a score is proposed, so a
+		# short cache absorbs a burst of readers without serving anything stale enough
+		# to mislead.
+		header Cache-Control "public, max-age=30"
+
+		reverse_proxy 127.0.0.1:3030
+	}
+
+	# Everything else, including /metrics and every write endpoint, is not served here.
+	# /metrics is deliberately excluded: it is unauthenticated by design but publishes
+	# operational counters (epoch failures, rate-limit hits, RPC errors) that describe
+	# the operator rather than the protocol.
+	handle {
+		respond "Not found" 404
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	log {
+		output file /var/log/caddy/oracle.log
+		format json
+	}
+}

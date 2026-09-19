@@ -56,6 +56,11 @@ function signatureOf(name) {
     }
     const mapping = text.match(new RegExp(`mapping\\s*\\(\\s*(\\w+)\\s*=>[^;]*?\\)\\s*public\\s+${name}\\s*;`));
     if (mapping) return `${name}(${mapping[1]})`;
+    // A public scalar generates a getter too, and it takes no arguments. Without this
+    // branch `minimumStake` resolves to null and the selector check skips it in
+    // silence, which is indistinguishable from not checking it at all.
+    const scalar = text.match(new RegExp(`\\b(?:address|bool|bytes\\d*|u?int\\d*|string)\\s+public\\s+(?:constant\\s+|immutable\\s+)?${name}\\s*[;=]`));
+    if (scalar) return `${name}()`;
   }
   return null;
 }
@@ -64,19 +69,22 @@ function signatureOf(name) {
 // 1. The site's 4-byte selector table must match the deployed functions.
 //    This is the check that would have caught registerAgent gaining an argument.
 // ---------------------------------------------------------------------------
-const appJs = read('site/assets/app.js');
-const selBlock = appJs.match(/const SEL = \{([\s\S]*?)\};/);
-if (!selBlock) fail('site/assets/app.js', 'could not find the SEL selector table');
-else {
-  // ERC-20 and anything not defined in src/ is out of scope for this check.
-  const external = new Set(['approve', 'allowance', 'balanceOf', 'symbol', 'decimals', 'transfer']);
+// ERC-20 and anything not defined in src/ is out of scope for this check.
+const externalSelectors = new Set(['approve', 'allowance', 'balanceOf', 'symbol', 'decimals', 'transfer']);
+
+// Every page that calls the contracts directly is checked. A page left off this list
+// keeps working until a signature changes and then reads zeros forever, so a new page
+// with its own SEL table belongs here on the day it is written.
+for (const file of ['site/assets/app.js', 'site/assets/testnet.js']) {
+  const selBlock = read(file).match(/(?:const|var|let) SEL = \{([\s\S]*?)\};/);
+  if (!selBlock) { fail(file, 'could not find the SEL selector table'); continue; }
   for (const [, name, sel] of selBlock[1].matchAll(/(\w+)\s*:\s*"(0x[0-9a-fA-F]{8})"/g)) {
-    if (external.has(name)) continue;
+    if (externalSelectors.has(name)) continue;
     const sig = signatureOf(name);
     if (!sig) continue;              // struct params, or defined outside src/
     const want = ethers.id(sig).slice(0, 10);
     if (want.toLowerCase() !== sel.toLowerCase()) {
-      fail('site/assets/app.js SEL', `${name}: table has ${sel}, ${sig} is ${want}`);
+      fail(`${file} SEL`, `${name}: table has ${sel}, ${sig} is ${want}`);
     }
   }
 }
@@ -89,12 +97,12 @@ const enumMatch = read('src/SigvaraIdentity.sol').match(/enum AgentStatus \{([^}
 if (!enumMatch) fail('src/SigvaraIdentity.sol', 'could not find the AgentStatus enum');
 else {
   const onchain = enumMatch[1].split(',').map(s => s.trim()).filter(Boolean).length;
-  const labels = appJs.match(/\[\s*"Active"[^\]]*\]/);
-  if (!labels) fail('site/assets/app.js', 'could not find the status label list');
-  else {
+  for (const file of ['site/assets/app.js', 'site/assets/testnet.js']) {
+    const labels = read(file).match(/\[\s*"Active"[^\]]*\]/);
+    if (!labels) { fail(file, 'could not find the status label list'); continue; }
     const shown = labels[0].split(',').length;
     if (shown !== onchain) {
-      fail('site status labels', `contract has ${onchain} AgentStatus values, the site labels ${shown}`);
+      fail(`${file} status labels`, `contract has ${onchain} AgentStatus values, the page labels ${shown}`);
     }
   }
 }

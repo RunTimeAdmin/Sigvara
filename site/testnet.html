@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Try Sigvara on Arc testnet</title>
+  <meta name="description" content="Five steps to run an agent on Sigvara's Arc testnet deployment: get gas, claim bond tokens, register an identity, post the bond, earn a score. Paste an address to see which steps it has already cleared.">
+  <link rel="icon" type="image/svg+xml" href="assets/sigvara-avatar.svg">
+  <link rel="stylesheet" href="assets/demo-page.css?v=testnet1">
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <nav aria-label="Primary navigation">
+        <a class="brand" href="./" aria-label="Sigvara home">
+          <svg class="brand-mark" viewBox="0 0 64 64" role="img" aria-label="Sigvara mark">
+            <defs><linearGradient id="brand-gradient" x1="8" y1="8" x2="56" y2="56" gradientUnits="userSpaceOnUse"><stop stop-color="#c5b7ff"/><stop offset=".55" stop-color="#9475ff"/><stop offset="1" stop-color="#6fe5ea"/></linearGradient></defs>
+            <rect x="1" y="1" width="62" height="62" rx="19" fill="#15172b" stroke="rgba(197,183,255,.25)"/>
+            <path d="M46.5 20.5c-4.5-5-12.5-6.8-19.2-4.1-6.5 2.7-8.5 9.4-3.4 13.2 2.3 1.7 5.1 2.1 8.7 2.7 5.8.9 8 2.6 7.1 6.2-1.1 4.6-7.4 7-12.9 5.8-3.4-.8-6-2.4-8.2-5.3" fill="none" stroke="url(#brand-gradient)" stroke-width="5.2" stroke-linecap="round"/>
+            <circle cx="47" cy="20" r="3.1" fill="#6fe5ea"/><circle cx="18.5" cy="39" r="3.1" fill="#c5b7ff"/>
+          </svg>
+          <span class="brand-name">sig<span>vara</span></span>
+        </a>
+        <div class="nav-links">
+          <a href="./#protocol">Protocol</a>
+          <a href="demo.html">Demo</a>
+          <a href="testnet.html" aria-current="page">Try it</a>
+          <a href="docs/quickstart.html">Docs</a>
+          <a href="https://github.com/RunTimeAdmin/sigvara" rel="noopener">Source</a>
+          <a class="nav-cta" href="app.html">Testnet app <span aria-hidden="true">&#8599;</span></a>
+        </div>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="intro">
+      <div class="wrap">
+        <div class="eyebrow">Arc testnet</div>
+        <h1>Five steps to a <span class="gradient">live agent.</span></h1>
+        <p class="lede">Everything below is permissionless and already deployed. No allowlist, no signup, no approval from us. Paste an address and each step tells you whether that address has cleared it, read straight from the chain.</p>
+        <div class="net-strip" role="note">
+          <span><b>Network</b> Arc testnet &#183; chain ID <span class="mono">5042002</span> &#183; <a id="explorerLink" href="https://explorer.testnet.arc.io" rel="noopener">explorer</a></span>
+          <span><b>Gas</b> USDC is the native token</span>
+          <span><b>Bond</b> a testnet faucet ERC-20 called SVR &#183; mainnet SVR <span class="pending">not launched</span></span>
+          <span><b>Time</b> about ten minutes</span>
+        </div>
+      </div>
+    </section>
+
+    <div class="wrap layout">
+      <div class="steps steps-open" id="steps">
+
+        <article class="step" data-step="1" data-state="active">
+          <div class="step-head"><div><div class="step-num">01 / GAS</div><h2>Get testnet USDC</h2></div><span class="step-state">Your turn</span></div>
+          <div class="step-body">
+            <p>Arc uses USDC as its native gas token, so a fresh wallet cannot send anything until it holds some. Circle's faucet dispenses it. Select <b>Arc testnet</b> in the network picker, not one of the other chains on the same page.</p>
+            <div class="controls">
+              <a class="button button-primary" href="https://faucet.circle.com" rel="noopener">Circle faucet <span aria-hidden="true">&#8599;</span></a>
+            </div>
+            <div class="result step-live" aria-live="polite"></div>
+          </div>
+        </article>
+
+        <article class="step" data-step="2" data-state="locked">
+          <div class="step-head"><div><div class="step-num">02 / TOKENS</div><h2>Claim bond tokens</h2></div><span class="step-state">Waiting</span></div>
+          <div class="step-body">
+            <p>The bond is posted in SVR, a plain ERC-20 deployed for the testnet with an open faucet: 10,000 tokens per address per day, no gate. Call <span class="mono">faucet(amount)</span> on the token, or use the button in the testnet app, which does the same call.</p>
+            <p>This token has no value and is not the mainnet SVR. If a mainnet token is ever issued, its address will be published here first.</p>
+            <div class="controls">
+              <a class="button" href="app.html">Open the app <span aria-hidden="true">&#8599;</span></a>
+              <a class="button" href="https://explorer.testnet.arc.io/address/0x41De2D6D55318e197a00E8f5B496eA2790e23E6c" rel="noopener">SVR contract</a>
+            </div>
+            <div class="result step-live" aria-live="polite"></div>
+          </div>
+        </article>
+
+        <article class="step" data-step="3" data-state="locked">
+          <div class="step-head"><div><div class="step-num">03 / REGISTER</div><h2>Register the agent</h2></div><span class="step-state">Waiting</span></div>
+          <div class="step-body">
+            <p>Registration binds an agent address to an Ed25519 key you hold. The contract derives the DID from the chain ID and the address, so anyone can recompute it without asking us for anything. You sign a digest with the agent key to prove control, which is what stops one operator from registering someone else's address.</p>
+            <p>The app generates the key in your browser and never transmits it. The DID that comes out is the identifier every other step keys on.</p>
+            <div class="controls">
+              <a class="button button-primary" href="app.html">Register in the app</a>
+              <a class="button" href="docs/quickstart.html">Do it from the CLI</a>
+            </div>
+            <div class="result step-live" aria-live="polite"></div>
+          </div>
+        </article>
+
+        <article class="step" data-step="4" data-state="locked">
+          <div class="step-head"><div><div class="step-num">04 / BOND</div><h2>Post the bond</h2></div><span class="step-state">Waiting</span></div>
+          <div class="step-body">
+            <p>Approve the staking contract, then deposit. Below <span class="mono">minimumStake</span> the agent sits in <b>PendingBond</b>: registered and visible on chain, but not an agent anyone should rely on and not eligible to be scored. At or above it, the agent goes Active.</p>
+            <p>The bond is what makes a score cost something. Slashing takes from it, so an agent with nothing at stake has nothing to lose by lying.</p>
+            <div class="controls">
+              <a class="button button-primary" href="app.html">Bond in the app</a>
+              <a class="button" href="docs/reputation.html">How scoring works</a>
+            </div>
+            <div class="result step-live" aria-live="polite"></div>
+          </div>
+        </article>
+
+        <article class="step" data-step="5" data-state="locked">
+          <div class="step-head"><div><div class="step-num">05 / SCORE</div><h2>Earn a score</h2></div><span class="step-state">Waiting</span></div>
+          <div class="step-body">
+            <p>Each epoch, the oracle proposes a score from payment-verified activity and publishes a Merkle root of the evidence behind it. The proposal sits in a challenge window before it can be finalized, and finalizing is permissionless: anyone can call it, including you.</p>
+            <p><b>One part is not open yet.</b> Payment attestations are submitted by the operator-run oracle during the pilot, so an agent you register today will show a baseline score rather than an earned one. If you want yours scored against real activity, open an issue and we will attest your settlements manually.</p>
+            <div class="controls">
+              <a class="button" href="https://github.com/RunTimeAdmin/sigvara/issues" rel="noopener">Ask to be scored <span aria-hidden="true">&#8599;</span></a>
+              <a class="button" href="docs/reputation.html">The six factors</a>
+            </div>
+            <div class="result step-live" aria-live="polite"></div>
+          </div>
+        </article>
+
+      </div>
+
+      <aside class="side">
+        <div class="agent-card">
+          <div class="card-top">
+            <div class="card-id u-minw-0">
+              <div class="mini-mark" aria-hidden="true">
+                <svg viewBox="0 0 64 64"><path d="M46.5 20.5c-4.5-5-12.5-6.8-19.2-4.1-6.5 2.7-8.5 9.4-3.4 13.2 2.3 1.7 5.1 2.1 8.7 2.7 5.8.9 8 2.6 7.1 6.2-1.1 4.6-7.4 7-12.9 5.8-3.4-.8-6-2.4-8.2-5.3" fill="none" stroke="#e8e3ff" stroke-width="5.5" stroke-linecap="round"/></svg>
+              </div>
+              <div class="u-minw-0">
+                <div class="agent-label">Your agent</div>
+                <div class="agent-did mono" id="cardDid">paste an address to check</div>
+              </div>
+            </div>
+            <span class="status" id="cardStatus" data-s="None"><i aria-hidden="true"></i>None</span>
+          </div>
+
+          <div class="score-row">
+            <div class="score" id="cardScore">&#8212;</div>
+            <div class="score-copy"><strong>On-chain score</strong>finalized, not proposed</div>
+          </div>
+
+          <dl class="kv">
+            <dt>Operator</dt><dd id="cardOperator">&#8212;</dd>
+            <dt>Gas</dt><dd id="cardGas">&#8212;</dd>
+            <dt>SVR spare</dt><dd id="cardSvr">&#8212;</dd>
+            <dt>Bonded / min</dt><dd id="cardStake">&#8212;</dd>
+          </dl>
+        </div>
+
+        <div class="agent-card">
+          <label class="field" for="addr">Agent address
+            <input id="addr" type="text" inputmode="latin" spellcheck="false" placeholder="0x…" autocomplete="off">
+          </label>
+          <div class="controls u-mt-12">
+            <button class="button button-primary" id="checkBtn" type="button">Check status</button>
+          </div>
+          <p class="note-fine u-mt-12">Read-only. Nothing is sent anywhere except public RPC calls to Arc.</p>
+        </div>
+      </aside>
+    </div>
+  </main>
+
+  <footer>
+    <div class="wrap footer-row">
+      <div><strong>sigvara.xyz</strong> <span aria-hidden="true">&#183;</span> protocol infrastructure for autonomous agents</div>
+      <div class="footer-links"><a href="docs/quickstart.html">Docs</a><a href="https://github.com/RunTimeAdmin/sigvara" rel="noopener">GitHub</a><a href="https://x.com/defiauditccie" rel="noopener">X</a><a href="https://protocol14019.com/" rel="noopener">protocol14019</a></div>
+    </div>
+  </footer>
+
+  <script src="assets/did.js?v=testnet1"></script>
+  <script src="assets/testnet.js?v=testnet1"></script>
+</body>
+</html>
