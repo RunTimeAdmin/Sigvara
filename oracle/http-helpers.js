@@ -37,17 +37,58 @@ async function readBody(req, maxBodySize = MAX_BODY_SIZE) {
   });
 }
 
-// Takes the raw headers object and the configured admin token directly
-// (rather than the whole request/config) so it's trivial to unit test.
-function isAuthorized(headers, adminToken) {
-  if (!adminToken) return true; // auth disabled if no token configured
-  const header = headers['authorization'] || '';
-  const expected = `Bearer ${adminToken}`;
-  // Constant-time compare to avoid leaking the token via response timing.
-  // timingSafeEqual requires equal-length buffers, so length-mismatch fails first.
-  const a = Buffer.from(header);
-  const b = Buffer.from(expected);
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
+/**
+ * The service credentials the oracle will accept, as name → token.
+ *
+ * One shared token was fine while the operator was the only writer. It stops being a
+ * secret the moment a second service holds it: revoking one integration means rotating
+ * every integration, so in practice nobody revokes anything, and the write log cannot
+ * say which service acted.
+ *
+ * Each `ORACLE_TOKEN_<NAME>` is an independent credential. Deleting one variable
+ * revokes exactly that caller and leaves the others working.
+ *
+ * `ORACLE_ADMIN_TOKEN` is still honoured, as the credential named `admin`. Dropping it
+ * would lock the operator out of a running oracle at the next restart, which is a poor
+ * trade for tidiness.
+ */
+function readCredentials(env = process.env) {
+  const creds = new Map();
+  if (env.ORACLE_ADMIN_TOKEN) creds.set('admin', env.ORACLE_ADMIN_TOKEN);
+  for (const [key, value] of Object.entries(env)) {
+    if (!key.startsWith('ORACLE_TOKEN_') || !value) continue;
+    const name = key.slice('ORACLE_TOKEN_'.length).toLowerCase();
+    if (name) creds.set(name, value);
+  }
+  return creds;
+}
+
+/**
+ * Which credential presented this request, or null.
+ *
+ * Returns the name rather than a boolean so a write can be attributed. "Someone with
+ * the token flagged this agent" is not an answer once several services hold tokens.
+ *
+ * Every candidate is compared even after a match, so the time taken does not reveal
+ * how far down the list a guess landed. Each comparison is constant-time, and a
+ * length mismatch is rejected first because timingSafeEqual requires equal lengths.
+ *
+ * No credentials configured means auth is disabled, which is the old behaviour for
+ * local runs and is why adminTokenPolicyError refuses a non-loopback bind in that
+ * state. The caller is named `unauthenticated` so a log line cannot be mistaken for
+ * an authorised one.
+ */
+function identifyCaller(headers, credentials) {
+  if (!credentials || credentials.size === 0) return 'unauthenticated';
+  const presented = Buffer.from((headers && headers['authorization']) || '');
+  let matched = null;
+  for (const [name, token] of credentials) {
+    const expected = Buffer.from(`Bearer ${token}`);
+    const ok = presented.length === expected.length
+      && crypto.timingSafeEqual(presented, expected);
+    if (ok && matched === null) matched = name;
+  }
+  return matched;
 }
 
 /**
@@ -123,13 +164,19 @@ function clientKey(req) {
   return parts[parts.length - 1].trim() || socketAddr;
 }
 
-// Loopback binds may run without an admin token (local testing). Anything else
-// must have one, or /attest, /flag and /epoch are open to the network. Returns
+// Loopback binds may run with no credentials at all (local testing). Anything else
+// must have at least one, or /flag, /link and /epoch are open to the network. Returns
 // null when the configuration is acceptable, otherwise the reason to refuse startup.
-function adminTokenPolicyError(host, adminToken) {
+//
+// Takes the credential map rather than one token, so an oracle configured purely with
+// per-service tokens and no ORACLE_ADMIN_TOKEN still starts.
+function adminTokenPolicyError(host, credentials) {
   const loopback = host === '127.0.0.1' || host === 'localhost' || host === '::1';
-  if (adminToken || loopback) return null;
-  return `ORACLE_ADMIN_TOKEN is unset but HOST=${host} is not loopback; refusing to expose unauthenticated write endpoints. Set ORACLE_ADMIN_TOKEN (openssl rand -hex 32) or bind to 127.0.0.1.`;
+  const count = typeof credentials === 'string'
+    ? (credentials ? 1 : 0)            // legacy: a bare token
+    : (credentials ? credentials.size : 0);
+  if (count > 0 || loopback) return null;
+  return `no write credentials are configured but HOST=${host} is not loopback; refusing to expose unauthenticated write endpoints. Set ORACLE_ADMIN_TOKEN or an ORACLE_TOKEN_<NAME> (openssl rand -hex 32), or bind to 127.0.0.1.`;
 }
 
 module.exports = {
@@ -140,7 +187,8 @@ module.exports = {
   RATE_MAX,
   json,
   readBody,
-  isAuthorized,
+  readCredentials,
+  identifyCaller,
   mayAttestUnauthenticated,
   parseScorePath,
   rateLimited,

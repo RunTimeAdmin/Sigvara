@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
-const { readBody, isAuthorized, mayAttestUnauthenticated, parseScorePath, rateLimited, RATE_MAX, clientKey, adminTokenPolicyError } = require('./http-helpers');
+const { readBody, readCredentials, identifyCaller, mayAttestUnauthenticated, parseScorePath, rateLimited, RATE_MAX, clientKey, adminTokenPolicyError } = require('./http-helpers');
 
 // Minimal fake matching the subset of http.IncomingMessage that readBody uses:
 // an EventEmitter with data/end/error events plus a destroy() method.
@@ -14,28 +14,100 @@ function makeFakeRequest() {
 }
 
 // -------------------------------------------------------------------------
-// isAuthorized
+// identifyCaller — the same cases the single-token isAuthorized covered, plus the
+// multi-credential behaviour that replaced it.
 // -------------------------------------------------------------------------
 
-test('isAuthorized: no admin token configured -> always authorized', () => {
-  assert.equal(isAuthorized({}, ''), true);
-  assert.equal(isAuthorized({ authorization: 'garbage' }, ''), true);
+const one = new Map([['admin', 'secret']]);
+
+test('identifyCaller: nothing configured -> auth disabled', () => {
+  // Old behaviour for local runs, and why adminTokenPolicyError refuses a non-loopback
+  // bind in this state. Named rather than `true` so a log line cannot be mistaken for
+  // an authorised one.
+  assert.equal(identifyCaller({}, new Map()), 'unauthenticated');
+  assert.equal(identifyCaller({ authorization: 'garbage' }, new Map()), 'unauthenticated');
 });
 
-test('isAuthorized: token configured, missing header -> unauthorized', () => {
-  assert.equal(isAuthorized({}, 'secret'), false);
+test('identifyCaller: configured, missing header -> null', () => {
+  assert.equal(identifyCaller({}, one), null);
 });
 
-test('isAuthorized: token configured, wrong header -> unauthorized', () => {
-  assert.equal(isAuthorized({ authorization: 'Bearer wrong' }, 'secret'), false);
+test('identifyCaller: configured, wrong token -> null', () => {
+  assert.equal(identifyCaller({ authorization: 'Bearer wrong' }, one), null);
 });
 
-test('isAuthorized: token configured, correct bearer header -> authorized', () => {
-  assert.equal(isAuthorized({ authorization: 'Bearer secret' }, 'secret'), true);
+test('identifyCaller: configured, correct token -> the credential name', () => {
+  assert.equal(identifyCaller({ authorization: 'Bearer secret' }, one), 'admin');
 });
 
-test('isAuthorized: header without Bearer prefix does not match', () => {
-  assert.equal(isAuthorized({ authorization: 'secret' }, 'secret'), false);
+test('identifyCaller: a header without the Bearer prefix does not match', () => {
+  assert.equal(identifyCaller({ authorization: 'secret' }, one), null);
+});
+
+test('identifyCaller: names the credential that presented, not just that one did', () => {
+  // The point of the change: a write can be attributed to a service.
+  const many = new Map([['admin', 'a'], ['counteraudit', 'b'], ['hoodscan', 'c']]);
+  assert.equal(identifyCaller({ authorization: 'Bearer a' }, many), 'admin');
+  assert.equal(identifyCaller({ authorization: 'Bearer b' }, many), 'counteraudit');
+  assert.equal(identifyCaller({ authorization: 'Bearer c' }, many), 'hoodscan');
+});
+
+test('identifyCaller: revoking one credential leaves the others working', () => {
+  // The reason per-service tokens exist at all. Removing counteraudit must not
+  // require rotating hoodscan.
+  const after = new Map([['admin', 'a'], ['hoodscan', 'c']]);
+  assert.equal(identifyCaller({ authorization: 'Bearer b' }, after), null, 'revoked');
+  assert.equal(identifyCaller({ authorization: 'Bearer c' }, after), 'hoodscan', 'unaffected');
+});
+
+test('identifyCaller: a token valid for one name is not valid under another', () => {
+  const many = new Map([['admin', 'a'], ['counteraudit', 'b']]);
+  assert.notEqual(identifyCaller({ authorization: 'Bearer b' }, many), 'admin');
+});
+
+test('identifyCaller: no credentials object at all is treated as unconfigured', () => {
+  assert.equal(identifyCaller({}, null), 'unauthenticated');
+  assert.equal(identifyCaller({}, undefined), 'unauthenticated');
+});
+
+// -------------------------------------------------------------------------
+// readCredentials
+// -------------------------------------------------------------------------
+
+test('readCredentials: ORACLE_ADMIN_TOKEN still works, as `admin`', () => {
+  // Dropping it would lock the operator out of a running oracle at the next restart.
+  const c = readCredentials({ ORACLE_ADMIN_TOKEN: 'x' });
+  assert.deepEqual([...c], [['admin', 'x']]);
+});
+
+test('readCredentials: collects ORACLE_TOKEN_<NAME>, lowercased', () => {
+  const c = readCredentials({ ORACLE_TOKEN_COUNTERAUDIT: 'b', ORACLE_TOKEN_HoodScan: 'c' });
+  assert.deepEqual([...c.keys()].sort(), ['counteraudit', 'hoodscan']);
+});
+
+test('readCredentials: ignores empty values and unrelated variables', () => {
+  // An empty variable is how a credential gets revoked without deleting the line, so
+  // it must not register as a usable token.
+  const c = readCredentials({ ORACLE_TOKEN_GONE: '', ORACLE_ADMIN_TOKEN: '', PATH: '/bin', ORACLE_STATE_PATH: '/data/x' });
+  assert.equal(c.size, 0);
+});
+
+test('readCredentials: nothing configured yields an empty map, not a crash', () => {
+  assert.equal(readCredentials({}).size, 0);
+});
+
+// -------------------------------------------------------------------------
+// adminTokenPolicyError, with credentials
+// -------------------------------------------------------------------------
+
+test('adminTokenPolicyError: per-service tokens alone satisfy it', () => {
+  // An oracle configured with no ORACLE_ADMIN_TOKEN at all must still start.
+  assert.equal(adminTokenPolicyError('0.0.0.0', new Map([['counteraudit', 'b']])), null);
+});
+
+test('adminTokenPolicyError: an empty credential map on a public bind is refused', () => {
+  const err = adminTokenPolicyError('0.0.0.0', new Map());
+  assert.match(err, /no write credentials/);
 });
 
 // -------------------------------------------------------------------------
@@ -149,8 +221,12 @@ test('adminTokenPolicyError: loopback binds may run without a token', () => {
 });
 
 test('adminTokenPolicyError: a non-loopback bind without a token is refused', () => {
+  // The message names both ways to configure one now, since ORACLE_ADMIN_TOKEN is no
+  // longer the only option.
   const err = adminTokenPolicyError('0.0.0.0', '');
-  assert.match(err, /ORACLE_ADMIN_TOKEN is unset/);
+  assert.match(err, /no write credentials/);
+  assert.match(err, /ORACLE_ADMIN_TOKEN/);
+  assert.match(err, /ORACLE_TOKEN_/);
   assert.match(err, /HOST=0.0.0.0/);
 });
 

@@ -7,7 +7,7 @@ const chain = require('./chain');
 const external = require('./external');
 const { computeScore } = require('./scoring');
 const { decideAction, epochIntervalError } = require('./epoch-policy');
-const { json, readBody, isAuthorized, mayAttestUnauthenticated, parseScorePath, rateLimited, clientKey, adminTokenPolicyError } = require('./http-helpers');
+const { json, readBody, readCredentials, identifyCaller, mayAttestUnauthenticated, parseScorePath, rateLimited, clientKey, adminTokenPolicyError } = require('./http-helpers');
 const payments = require('./payments');
 const merkle = require('./merkle');
 const metrics = require('./metrics');
@@ -30,6 +30,9 @@ const cfg = {
   fromBlock:         Number(process.env.FROM_BLOCK  || 0),
   logChunkSize:      Number(process.env.LOG_CHUNK_SIZE || 2000),
   adminToken:        process.env.ORACLE_ADMIN_TOKEN || '',
+  // name -> token, from ORACLE_ADMIN_TOKEN and every ORACLE_TOKEN_<NAME>. Read once so
+  // a credential cannot be added or revoked without a restart anyone can see.
+  credentials:       readCredentials(),
   // Optional: SigvaraEpochFees address. When set (and its on-chain epochFee > 0),
   // the oracle only scores agents with fee coverage and charges them per epoch.
   feeRegistryAddress: process.env.FEE_REGISTRY_ADDRESS || '',
@@ -461,7 +464,8 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'POST' && pathname === '/epoch') {
     // Gated: a manual epoch submits on-chain tx's paid from the oracle wallet, so
     // it must not be triggerable by anyone who can reach the port.
-    if (!isAuthorized(req.headers, cfg.adminToken)) return json(res, 401, { error: 'Unauthorized' });
+    const caller = identifyCaller(req.headers, cfg.credentials);
+    if (!caller) return json(res, 401, { error: 'Unauthorized' });
     if (rateLimited(clientKey(req))) {
       metrics.inc('rateLimitHits');
       return json(res, 429, { error: 'Rate limited' });
@@ -495,8 +499,8 @@ const server = http.createServer(async (req, res) => {
        * Reading the body before authorising widens the unauthenticated surface to a
        * 1 MB JSON parse, which the rate limit above already bounds.
        */
-      if (!mayAttestUnauthenticated(success, payments.required(paymentCfg))
-          && !isAuthorized(req.headers, cfg.adminToken)) {
+      const caller = identifyCaller(req.headers, cfg.credentials);
+      if (!mayAttestUnauthenticated(success, payments.required(paymentCfg)) && !caller) {
         return json(res, 401, {
           error: 'Unauthorized',
           detail: 'a positive, payment-verified attestation needs no token; anything else does',
@@ -637,7 +641,8 @@ const server = http.createServer(async (req, res) => {
 
   // POST /flag  — body: { didHash }
   if (req.method === 'POST' && pathname === '/flag') {
-    if (!isAuthorized(req.headers, cfg.adminToken)) return json(res, 401, { error: 'Unauthorized' });
+    const caller = identifyCaller(req.headers, cfg.credentials);
+    if (!caller) return json(res, 401, { error: 'Unauthorized' });
     if (rateLimited(clientKey(req))) {
       metrics.inc('rateLimitHits');
       return json(res, 429, { error: 'Rate limited' });
@@ -648,6 +653,9 @@ const server = http.createServer(async (req, res) => {
       const raised = addFlag(didHash);
       persistState();
       metrics.inc('flagsReceived');
+      // Attributed. "Someone with the token flagged this agent" stops being an answer
+      // once several services hold tokens, and a flag costs an agent real points.
+      console.log(`[oracle] flag raised on ${didHash} by ${caller} (now ${raised})`);
       return json(res, 200, { didHash, flags: raised });
     } catch (err) {
       return json(res, 400, { error: err.message });
@@ -664,7 +672,8 @@ const server = http.createServer(async (req, res) => {
   // Token-gated like /flag, and for a stronger reason: this one raises a score. It
   // stays off the public proxy entirely.
   if (req.method === 'POST' && pathname === '/flag/resolve') {
-    if (!isAuthorized(req.headers, cfg.adminToken)) return json(res, 401, { error: 'Unauthorized' });
+    const caller = identifyCaller(req.headers, cfg.credentials);
+    if (!caller) return json(res, 401, { error: 'Unauthorized' });
     if (rateLimited(clientKey(req))) {
       metrics.inc('rateLimitHits');
       return json(res, 429, { error: 'Rate limited' });
@@ -678,6 +687,7 @@ const server = http.createServer(async (req, res) => {
       if (result.resolved > 0) {
         persistState();
         metrics.inc('flagsResolved', result.resolved);
+        console.log(`[oracle] ${result.resolved} flag(s) cleared on ${didHash} by ${caller}`);
       }
       return json(res, 200, { didHash, ...result });
     } catch (err) {
@@ -689,7 +699,8 @@ const server = http.createServer(async (req, res) => {
   // ERC-8004 identity so its 8004 feedback drives externalScore. Accepted only
   // if the 8004 agent NFT is owned by the same wallet as the Sigvara operator.
   if (req.method === 'POST' && pathname === '/link') {
-    if (!isAuthorized(req.headers, cfg.adminToken)) return json(res, 401, { error: 'Unauthorized' });
+    const caller = identifyCaller(req.headers, cfg.credentials);
+    if (!caller) return json(res, 401, { error: 'Unauthorized' });
     if (rateLimited(clientKey(req))) {
       metrics.inc('rateLimitHits');
       return json(res, 429, { error: 'Rate limited' });
@@ -796,7 +807,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 {
-  const policyError = adminTokenPolicyError(cfg.host, cfg.adminToken);
+  const policyError = adminTokenPolicyError(cfg.host, cfg.credentials);
   if (policyError) {
     console.error(`[oracle] ${policyError}`);
     process.exit(1);
@@ -808,6 +819,9 @@ server.listen(cfg.port, cfg.host, () => {
     console.warn('[oracle] WARNING: ORACLE_ADMIN_TOKEN is unset — /attest, /flag, and /epoch are UNAUTHENTICATED. Set a token before exposing this service.');
   }
   console.log(`[oracle] HTTP on ${cfg.host}:${cfg.port}  epoch every ${cfg.epochMs / 3_600_000}h  attest cooldown ${ATTEST_COOLDOWN_MS / 1000}s`);
+  // Names only, never the tokens. Revoking a credential means deleting its variable and
+  // restarting, so the startup line is where you confirm it actually went.
+  console.log(`[oracle] write credentials: ${cfg.credentials.size ? [...cfg.credentials.keys()].join(', ') : 'NONE (writes are unauthenticated)'}`);
   console.log(`[oracle] state path: ${getStatePath()}`);
   loadState();
 

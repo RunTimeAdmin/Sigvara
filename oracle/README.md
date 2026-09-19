@@ -44,6 +44,28 @@ Do not simply proxy the whole service. [`Caddyfile.oracle.example`](Caddyfile.or
 
 The read paths are deliberately unauthenticated: `/evidence` exists so a third party can re-derive a score without trusting the operator, and evidence nobody can fetch is evidence nobody can audit. They are rate-limited instead, as described under the endpoints below. `/metrics` is excluded from the proxy despite being harmless to serve, because its counters describe the operator rather than the protocol.
 
+## Write credentials
+
+Write endpoints take a bearer token. Configure one per service rather than sharing one:
+
+```
+ORACLE_ADMIN_TOKEN=...            # the operator, named `admin`
+ORACLE_TOKEN_COUNTERAUDIT=...     # named `counteraudit`
+ORACLE_TOKEN_HOODSCAN=...         # named `hoodscan`
+```
+
+Any of them authorises any write; the names exist for **revocation and attribution**, not
+for different permissions. Deleting one variable revokes exactly that caller and leaves
+the rest working, which a single shared token cannot do — revoking one integration would
+mean rotating all of them. The name is logged on every write, so `flag raised on 0x… by
+counteraudit` is answerable where "someone with the token" was not.
+
+Credentials are read once at startup and the banner lists the names it loaded, never the
+values. Revoking means editing the environment and restarting, and that line is where you
+confirm it took effect.
+
+`ORACLE_ADMIN_TOKEN` keeps working exactly as before. Nothing needs to change to upgrade.
+
 ## API Endpoints
 
 ### `GET /health`
