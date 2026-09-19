@@ -22,9 +22,11 @@ The bond. An agent registers first and lands in `PendingBond`; the first deposit
 
 An off-chain service that watches the `AgentRegistered` events on Identity, aggregates its signals (payment volume verified on chain, outcomes reported by whoever paid, tenure, counterparty standing, watchdog flags, external ERC-8004 trust), and calls `proposeReputation()` on the Reputation contract every epoch, committing to the evidence it used with a Merkle root. Proposed scores sit through a challenge window (rejectable by the slashing committee) before anyone can call `finalizeReputation()` to make them live. The reference implementation is in `oracle/`. It is a single operator today, bonded in `SigvaraOracleBond` so a bad proposal costs its proposer; replacing it with several bonded operators that can challenge each other is the next step.
 
-### CounterAudit (first integration, common ownership — see below)
+### CounterAudit (planned integration, common ownership — see below)
 
-CounterAudit is a tamper-evident AI audit trail service. When an ingest call includes an `agent_did` field, CounterAudit queries Sigvara at seal time, embeds the agent's current on-chain identity and reputation score inside the AES-GCM seal, and attaches an RFC 3161 timestamp. The enrichment is forensically significant: it captures what the agent's reputation was *at the moment of the action*, not today.
+CounterAudit is a tamper-evident AI audit trail service. **The integration described here is designed but not built**, and the rest of this section is written in the conditional for that reason. CounterAudit does not read Sigvara scores today and does not report outcomes to the oracle; `agent_did` appears nowhere in its published API. This section previously described it in the present tense, which was wrong, and was corrected on 19 September 2026.
+
+The design: an ingest call carrying an `agent_did` field would make CounterAudit query Sigvara at seal time, embed the agent's on-chain identity and reputation score inside the AES-GCM seal, and attach an RFC 3161 timestamp. The property that makes it worth building is that the score would be captured *at the moment of the action* and frozen into a tamper-evident record, rather than looked up later from a score that has since moved.
 
 ---
 
@@ -32,10 +34,15 @@ CounterAudit is a tamper-evident AI audit trail service. When an ingest call inc
 
 Sigvara shares an owner with [CounterAegis](https://counteraegis.com), a suite of three
 trust products. Stating that plainly matters more than the positioning does, so it comes
-first: **CounterAudit is not an arm's-length third party.** It reads Sigvara scores and it
-is the designated source of negative outcome attestations, and the same people run both.
-Anyone weighing how independent this reputation signal is should weigh that too. It is a
-single-operator oracle today by the same token, which the README says as well.
+first: **CounterAudit is not an arm's-length third party.** The same people run both. It is
+the intended source of negative outcome attestations, which are the ones that stay
+token-gated because they can be weaponised, so anyone weighing how independent this
+reputation signal is should weigh that too. It is a single-operator oracle today by the
+same token, which the README says as well.
+
+Today that concentration is theoretical rather than actual, because the integration is not
+built: nothing outside the oracle operator writes to the score at all. That is a smaller
+problem than it sounds and a larger one than it looks, depending on which way you read it.
 
 The suite divides by question:
 
@@ -68,6 +75,10 @@ depends on its owner's SaaS is not infrastructure, it is a product with extra st
 
 ## The Ecosystem Loop
 
+**Steps 3, 4 and 6 below are the unbuilt part.** Registration, bonding, oracle scoring and
+the on-chain score (1, 2, 5, 7) all run today on Arc testnet. The CounterAudit legs do not.
+
+
 ```mermaid
 graph LR
     A["Agent\n(Ed25519 keypair)"]
@@ -89,15 +100,18 @@ Step by step:
 
 1. The operator generates an Ed25519 keypair and calls `registerAgent()`, with a signature from the agent address proving it controls itself. The DID is now globally resolvable, but the agent is `PendingBond`. A `depositStake()` over `minimumStake` makes it `Active`.
 2. The oracle detects the `AgentRegistered` event and begins tracking the agent. It will not propose a score until the agent is bonded.
-3. The agent does work. Every action is submitted to CounterAudit with the `agent_did` field.
-4. Before sealing each packet, CounterAudit reads `getIdentity(didHash)` and `getTotalScore(didHash)` on-chain.
+3. The agent does work. Every action is submitted to CounterAudit with the `agent_did` field. (Not built: the field is not in CounterAudit's API.)
+4. Before sealing each packet, CounterAudit *would* read `getIdentity(didHash)` and `getTotalScore(didHash)` on-chain. (Not built.)
 5. The oracle computes the 6-factor score from on-chain signals and writes it to SigvaraReputation.
-6. The score — plus status, DID hash, chain ID, and enrichment timestamp — is embedded inside the sealed, timestamped packet.
+6. The score — plus status, DID hash, chain ID, and enrichment timestamp — *would be* embedded inside the sealed, timestamped packet. (Not built.)
 7. Consumers query the sealed record. A low-reputation agent's packets are flagged. A high-reputation agent's packets carry a verified track record. Over time, reputation determines which agents get work.
 
 ---
 
 ## What Gets Sealed
+
+**Proposed fields, not current ones.** Nothing below is in a CounterAudit packet today.
+
 
 Every CounterAudit packet whose ingest call includes `agent_did` will contain these fields inside the seal:
 
@@ -117,6 +131,9 @@ If enrichment fails for any reason (unregistered DID, RPC timeout, unsupported c
 
 ## Why This Matters
 
+The argument for building it, not a description of what runs.
+
+
 Without Sigvara, an AI agent can claim to be anything. An audit trail records *what* happened but not *who* did it in any verifiable sense.
 
 With Sigvara embedded in CounterAudit:
@@ -131,6 +148,9 @@ This is the combination that makes the ecosystem defensible: staked identity + a
 ---
 
 ## Data Flow Reference
+
+The intended call path. `enrichWithSigvara` does not exist yet.
+
 
 ```
 POST /v1/audit/ingest

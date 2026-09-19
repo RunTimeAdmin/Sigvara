@@ -1,8 +1,23 @@
 # CounterAudit Integration Guide
 
-CounterAudit is a tamper-evident AI audit trail service. When you add an `agent_did` field to your ingest calls, CounterAudit enriches each sealed packet with the agent's live on-chain Sigvara identity and reputation score before sealing. The enrichment is embedded inside the AES-GCM seal, so it is covered by the same tamper-evidence and RFC 3161 timestamp as the rest of the packet.
+> **Status: designed, not built.** This describes an intended integration, in the future
+> tense throughout. CounterAudit does not currently read Sigvara identity or scores, and
+> does not report outcomes to the oracle. Its published API does not accept `agent_did`:
+> the field appears nowhere in [`api.counteraudit.io/openapi.yaml`](https://api.counteraudit.io/openapi.yaml),
+> and no enrichment code exists in its repository.
+>
+> Earlier versions of this guide and of the README described the integration in the
+> present tense, which was wrong. Corrected 19 September 2026.
 
-This guide is for CounterAudit customers who want to add Sigvara identity enrichment to their existing setup.
+CounterAudit is a tamper-evident AI audit trail service. The integration below would let
+an `agent_did` field on an ingest call enrich each sealed packet with the agent's on-chain
+Sigvara identity and reputation score before sealing, so the enrichment sits inside the
+AES-GCM seal and is covered by the same tamper-evidence and RFC 3161 timestamp as the rest
+of the packet.
+
+The design is worth keeping because the property it buys is real: a reputation score
+frozen into a tamper-evident record at the moment of the action, rather than looked up
+afterwards. Nothing below is implemented yet.
 
 ---
 
