@@ -98,6 +98,30 @@ The ERC-8004 external-score feed (`EXTERNAL_RPC`, `EXTERNAL_IDENTITY_ADDRESS`,
 `EXTERNAL_REPUTATION_ADDRESS`) is a separate read against Base Sepolia and does
 not depend on Arc. Leave it as-is.
 
+### Where it runs
+
+The testnet oracle runs on a VPS (`srv1296981`), as the Docker Compose project
+`sigvara-oracle` under `/docker/sigvara-oracle`, with `restart: unless-stopped`.
+It clones this repository at container start, so a push to `main` reaches it on the
+next restart.
+
+It used to run as `node index.js` on a desktop. That is worth naming rather than
+quietly fixing: a reputation oracle whose liveness depends on a laptop staying awake
+is a single point of failure that no amount of on-chain design makes up for, and it
+was already demonstrated once — an unclean shutdown took the oracle down for fourteen
+hours and corrupted the repository's git metadata in the same moment.
+
+Two operational notes:
+
+- **Only one instance may run at a time.** They share the oracle wallet, so two
+  instances submit transactions with colliding nonces.
+- **`paymentEvents` is the only state that cannot be recovered by rescanning.**
+  Attestations arrive over HTTP, so a fresh state file loses them and every
+  payment-derived factor collapses to zero. They can be re-seeded by re-posting the
+  settlement hashes to `/attest`: the oracle re-verifies each against the chain and
+  re-reads the settlement time from the block, so decay and tenure come out
+  identical. Everything else — the log scan cursor, the agent set — rebuilds itself.
+
 ## 4. SDK live integration tests
 
 Addresses below are the live Arc testnet deployment, from
