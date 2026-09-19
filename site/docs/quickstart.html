@@ -78,7 +78,7 @@
         <div class="qs-step">
           <div class="qs-header"><div class="qs-num">2</div><h3>Get testnet stake tokens</h3></div>
           <div class="qs-body">
-            <p>Call the public faucet on the testnet SVRToken. It mints up to 10,000 SVR per call, one call per wallet per 24 hours.</p>
+            <p>Call the public faucet on the testnet <code>SVRToken</code>. This is a valueless test ERC-20 that exists so the staking path can be exercised — it is <strong>not</strong> the mainnet SVR, which has not launched. It mints up to 10,000 per call, one call per wallet per 24 hours.</p>
             <pre><code><span class="kw">import</span> { ethers } <span class="kw">from</span> <span class="str">'ethers'</span>;
 
 <span class="kw">const</span> provider = <span class="kw">new</span> ethers.<span class="fn">JsonRpcProvider</span>(process.env.RPC_URL);

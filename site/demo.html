@@ -41,7 +41,7 @@
         <p class="lede">Register an agent, post its bond, earn a score, prove who it is to a counterparty, and see what slashing costs. The keys and signatures are real Ed25519. The chain is simulated with the protocol's actual rules, so every window and every number is the one the contracts enforce.</p>
         <div class="net-strip" role="note">
           <span><b>Rules</b> Arc testnet parameters · chain ID <span class="mono">5042002</span></span>
-          <span><b>Bond</b> <span class="mono">SVR</span> testnet faucet token · mainnet SVR <span class="pending">not launched</span>, address appears on this site first</span>
+          <span><b>Bond</b> a testnet faucet ERC-20, <em>not</em> SVR · mainnet SVR <span class="pending">not launched</span>, its address will appear on this site first</span>
           <span><b>Mode</b> browser simulation, no wallet, nothing leaves this page</span>
           <span><a href="app.html">Live testnet app →</a></span>
         </div>
@@ -81,10 +81,10 @@
           <div class="step-body">
             <p>Every epoch the oracle computes six factors from on-chain activity and counterparty attestations, then proposes the score. A 6-hour challenge window lets the committee reject a bad proposal; after that, anyone can finalize it. Move the inputs and run an epoch.</p>
             <div class="controls grid2">
-              <label class="field">Fees processed (USD) <span class="mono" id="vFees">1200</span><input id="inFees" type="range" min="0" max="4000" step="50" value="1200"></label>
+              <label class="field">Settled payment volume <span class="mono" id="vFees">1200</span><input id="inFees" type="range" min="0" max="4000" step="50" value="1200"></label>
               <label class="field">Attestations received <span class="mono" id="vAtt">12</span><input id="inAtt" type="range" min="0" max="40" step="1" value="12"></label>
               <label class="field">Of which successful <span class="mono" id="vSucc">11</span><input id="inSucc" type="range" min="0" max="40" step="1" value="11"></label>
-              <label class="field">Days since registration <span class="mono" id="vDays">14</span><input id="inDays" type="range" min="0" max="120" step="1" value="14"></label>
+              <label class="field">Days of paid activity <span class="mono" id="vDays">14</span><input id="inDays" type="range" min="0" max="120" step="1" value="14"></label>
               <label class="field">External trust (0 to 100) <span class="mono" id="vExt">60</span><input id="inExt" type="range" min="0" max="100" step="5" value="60"></label>
               <label class="field">Unresolved flags <span class="mono" id="vFlags">0</span><input id="inFlags" type="range" min="0" max="3" step="1" value="0"></label>
               <label class="field">Propagation points <span class="mono" id="vProp">1</span><input id="inProp" type="range" min="0" max="5" step="1" value="1"></label>
@@ -193,7 +193,7 @@
 
   <script src="assets/vendor/nacl-fast.min.js?v=e5a6705"></script>
   <script src="assets/did.js?v=32000f8"></script>
-  <script src="assets/demo.js?v=32000f8"></script>
+  <script src="assets/demo.js?v=3ccf76d"></script>
   <script src="assets/demo-page.js?v=e5a6705"></script>
 
 </body>
