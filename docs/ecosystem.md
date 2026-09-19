@@ -26,7 +26,7 @@ An off-chain service that watches the `AgentRegistered` events on Identity, aggr
 
 CounterAudit is a tamper-evident AI audit trail service. An ingest call carrying an `agent_did` field makes CounterAudit query Sigvara at seal time, embed the agent's on-chain identity and reputation score inside the AES-GCM seal, and attach an RFC 3161 timestamp. The property that makes it worth having is that the score is captured *at the moment of the action* and frozen into a tamper-evident record, rather than looked up later from a score that has since moved.
 
-> **Live as of 19 September 2026.** It was broken for the two days after the rename — the code still parsed `did:countersig:` and hashed that prefix, and was still pointed at the predecessor deployment on Robinhood Chain — so every lookup silently missed. Both are fixed and verified against a real sealed packet. The reverse path, reporting outcomes to the oracle, is still not working: it posts without the `payment.txHash` the oracle requires.
+> **Live as of 19 September 2026, both directions.** It was broken for the two days after the rename — the code still parsed `did:countersig:` and hashed that prefix, and was still pointed at the predecessor deployment on Robinhood Chain — so every lookup silently missed. Outcome reporting was separately broken, posting without the `payment.txHash` the oracle requires. All fixed and verified against real traffic.
 
 ---
 
@@ -40,9 +40,10 @@ token-gated because they can be weaponised, so anyone weighing how independent t
 reputation signal is should weigh that too. It is a single-operator oracle today by the
 same token, which the README says as well.
 
-CounterAudit reads the score today but does not yet write to it, because the outcome path
-is still broken. The concentration therefore remains partly prospective — worth settling
-the independence question before that path lands, rather than after.
+CounterAudit now both reads the score and writes to it, so that concentration is live
+rather than prospective. It is bounded by the same rules as any other attester: the
+payment is verified on chain, one counterparty's evidence is capped, and everything
+decays. Worth settling the independence question sooner rather than later.
 
 The suite divides by question:
 

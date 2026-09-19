@@ -8,11 +8,12 @@
 > `did:countersig:`, hashed that prefix, and was pointed at the predecessor deployment
 > on Robinhood Chain.
 >
-> **The reverse path is not live.** CounterAudit posts outcomes to the oracle's
-> `/attest` without a `payment.txHash`, which the oracle requires under
-> `PAYMENT_VERIFICATION=required`, so they are rejected. That is a design gap rather
-> than a naming one — CounterAudit does not hold the settlement transaction for the
-> work it audits — and is tracked separately.
+> **Outcome reporting is live too.** Add `outcome` (`success`/`failure`) and
+> `payment_tx_hash` to an ingest and the result is attested to the oracle, feeding the
+> agent's Success Rate and Fee Activity. The settlement hash is required because the
+> payment is the credential: the oracle re-reads that transaction from the chain and
+> takes the payer from the transfer log rather than trusting the caller. CounterAudit
+> relays it and is not trusted for it — a forged hash fails at the oracle.
 
 CounterAudit is a tamper-evident AI audit trail service. An `agent_did` field on an ingest
 call enriches each sealed packet with the agent's on-chain Sigvara identity and reputation
