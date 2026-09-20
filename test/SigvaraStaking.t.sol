@@ -588,8 +588,8 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
 
     function test_executeSlash_zerosReputation() public {
         SigvaraReputation.ReputationData memory data = SigvaraReputation.ReputationData({
-            feeScore: 30, successScore: 25, ageScore: 20,
-            externalScore: 15, communityScore: 5, propagationScore: 5,
+            feeScore: 20, successScore: 15, ageScore: 30,
+            externalScore: 25, communityScore: 5, propagationScore: 5,
             lastUpdated: 0
         });
         // Scoring now requires a bond, so the agent has to be staked before it can

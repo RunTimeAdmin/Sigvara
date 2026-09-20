@@ -18,6 +18,13 @@
  * An attacker paying its own agent from its own wallets is not spending the payments,
  * only floating them. The cost is gas and working capital, not the volume.
  *
+ * That fact is why the weights are what they are. Fee and success together were 55 of
+ * the 100 points, and both measure activity, which is exactly what a ring manufactures.
+ * They are now 35, and the 20 points released went to tenure and external trust:
+ * elapsed paid activity cannot be bought at any price, and standing in a registry this
+ * protocol does not control cannot be minted. The numbers below are what that bought,
+ * and section 5.4 of the whitepaper is what it did not.
+ *
  *   node --test oracle/adversarial.test.js
  */
 
@@ -107,7 +114,9 @@ test('splitting one payer across many small payments does not defeat the cap', (
 
 test('MEASURED: what a wash ring buys, by wallet count', () => {
   // Each wallet contributes at most maxPerPayer points, so the attacker's lever is
-  // wallet count, not money. The money returns to them either way.
+  // wallet count, not money. The money returns to them either way. Four wallets now
+  // max the factor rather than six, because the reweight cut it from 30 to 20 without
+  // changing maxPerPayer: the ring saturates sooner, but on a smaller prize.
   const rows = [];
   for (const wallets of [1, 3, 6, 10, 20]) {
     const s = scoreOf(washRing(wallets, 600));
@@ -118,9 +127,10 @@ test('MEASURED: what a wash ring buys, by wallet count', () => {
   for (const r of rows) {
     console.log(`  ${String(r.wallets).padStart(7)} | ${String(r.fee).padStart(3)} | ${String(r.success).padStart(7)} | ${String(r.age).padStart(6)} | ${String(r.community).padStart(9)} | ${String(r.total).padStart(5)}`);
   }
-  // Six wallets is the documented threshold for maxing fee score.
   const six = rows.find(r => r.wallets === 6);
-  assert.equal(six.fee, 30, 'six payers should max the 30-point fee factor');
+  assert.equal(six.fee, 20, 'six payers should max the 20-point fee factor');
+  const one = rows.find(r => r.wallets === 1);
+  assert.equal(one.fee, cfg.maxPerPayer, 'a single payer should be held to maxPerPayer');
 });
 
 test('MEASURED: the ceiling a ring reaches with no external identity and no real time', () => {
@@ -129,7 +139,13 @@ test('MEASURED: the ceiling a ring reaches with no external identity and no real
     ` (fee ${s.feeScore}, success ${s.successScore}, tenure ${s.ageScore},` +
     ` external ${s.externalScore}, community ${s.communityScore}, propagation ${s.propagationScore})`);
   // Recorded as a bound, not an aspiration. If a change makes this cheaper, this fails.
-  assert.ok(s.total <= 85, `ring reached ${s.total}; the factors that should resist are not resisting`);
+  //
+  // Was 85 when fee and success were worth 30 and 25, and the ring reached 68 of it.
+  // Moving those 20 points to tenure and external trust took the ring to 55, because it
+  // holds neither: it has no outside standing at all, and its tenure is bounded by how
+  // long the attacker has actually been paying, which is the one input that cannot be
+  // bought. The bound is tightened to match rather than left slack.
+  assert.ok(s.total <= 60, `ring reached ${s.total}; the factors that should resist are not resisting`);
 });
 
 // ---------------------------------------------------------------------------------
@@ -156,8 +172,8 @@ test('MEASURED: farming the sybils themselves now buys nothing', () => {
   const ring = washRing(6, 600);
   const cases = [
     ['farmed to 100, no ERC-8004', 0],
-    ['real 8004 standing 7/15', 7],
-    ['full 8004 standing 15/15', 15],
+    ['real 8004 standing 12/25', 12],
+    ['full 8004 standing 25/25', 25],
   ];
   console.log('');
   console.log('  6-wallet ring, by the counterparties HARD standing:');
@@ -181,7 +197,7 @@ test('MEASURED: farming the sybils themselves now buys nothing', () => {
 // ---------------------------------------------------------------------------------
 
 test('MEASURED: tenure against elapsed span, the factor money cannot buy', () => {
-  console.log('\n  tenure (max 20) by span of paid activity, ring active to today:');
+  console.log('\n  tenure (max 30) by span of paid activity, ring active to today:');
   for (const span of [1, 7, 31, 90, 365]) {
     const s = scoreOf(washRing(6, 600, span));
     console.log(`  ${String(span).padStart(4)} days -> tenure ${s.ageScore}, total ${s.total}`);

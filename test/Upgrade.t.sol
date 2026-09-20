@@ -130,7 +130,7 @@ contract UpgradeTest is Test, RegistrationHelper {
 
     function test_upgrade_reputation_preservesFinalizedScore() public {
         SigvaraReputation.ReputationData memory data = SigvaraReputation.ReputationData({
-            feeScore: 12, successScore: 22, ageScore: 15,
+            feeScore: 12, successScore: 12, ageScore: 25,
             externalScore: 9, communityScore: 5, propagationScore: 1,
             lastUpdated: 0
         });

@@ -71,10 +71,10 @@
     disputeResolutionPeriod: 14 * 24 * 3600,
     faucetGrant: 10000n * 10n ** 18n,
     factors: [
-      { key: 'feeScore', label: 'Fee activity', max: 30 },
-      { key: 'successScore', label: 'Success rate', max: 25 },
-      { key: 'ageScore', label: 'Tenure', max: 20 },
-      { key: 'externalScore', label: 'External trust', max: 15 },
+      { key: 'feeScore', label: 'Fee activity', max: 20 },
+      { key: 'successScore', label: 'Success rate', max: 15 },
+      { key: 'ageScore', label: 'Tenure', max: 30 },
+      { key: 'externalScore', label: 'External trust', max: 25 },
       { key: 'communityScore', label: 'Community', max: 5 },
       { key: 'propagationScore', label: 'Trust propagation', max: 5 }
     ]
@@ -96,15 +96,15 @@
   function computeFactors(input) {
     var paid = input.attestations > 0;
     return {
-      // One point per 100 of settled volume, capped at 30. The live oracle also decays
+      // One point per 100 of settled volume, capped at 20. The live oracle also decays
       // each payment and caps any single payer; this simulation does neither, so treat
       // it as the ceiling rather than the number a real agent would hold.
-      feeScore: Math.min(30, Math.floor(input.feesUsd / 100)),
+      feeScore: Math.min(20, Math.floor(input.feesUsd / 100)),
       successScore: paid
-        ? Math.floor((input.successes / (input.attestations + SUCCESS_PRIOR)) * 25)
+        ? Math.floor((input.successes / (input.attestations + SUCCESS_PRIOR)) * 15)
         : 0,
-      ageScore: paid ? Math.min(20, Math.floor(Math.log2(input.days + 1) * 4)) : 0,
-      externalScore: Math.floor((input.external / 100) * 15),
+      ageScore: paid ? Math.min(30, Math.floor(Math.log2(input.days + 1) * 3)) : 0,
+      externalScore: Math.floor((input.external / 100) * 25),
       communityScore: Math.max(0, 5 - input.flags * 2),
       propagationScore: Math.max(0, Math.min(5, input.propagation))
     };

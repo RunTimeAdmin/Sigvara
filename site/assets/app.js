@@ -32,8 +32,8 @@ const SEL = {
 };
 // factor label, on-chain word index, and max — mirrors SigvaraReputation.ReputationData
 const FACTORS = [
-  ["fee", 0, 30], ["success", 1, 25], ["age", 2, 20],
-  ["external", 3, 15], ["community", 4, 5], ["propagation", 5, 5],
+  ["fee", 0, 20], ["success", 1, 15], ["age", 2, 30],
+  ["external", 3, 25], ["community", 4, 5], ["propagation", 5, 5],
 ];
 
 // ABI-encodes a trailing dynamic `bytes` argument. `headWords` is the number of

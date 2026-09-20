@@ -16,9 +16,10 @@ picked forty names. During testnet bring-up we did exactly that by accident: for
 requests named `client-1` through `client-40` moved an agent from 5 to 32, with no
 keys, no money and no relationship to the agent.
 
-It was worse than it looks, because `feeScore` was the largest of the six factors
-at 30 points and was computed as attestation count divided by ten. The factor
-documented as on-chain fee volume was a count of HTTP requests.
+It was worse than it looks, because `feeScore` was then the largest of the six
+factors at 30 points and was computed as attestation count divided by ten. The
+factor documented as on-chain fee volume was a count of HTTP requests. It is worth
+20 today, and tenure rather than fee volume is now the heaviest factor.
 
 ## What changed
 
@@ -166,7 +167,7 @@ a second wallet, but it raises the floor from free to deliberate.
 ten times is worth exactly as much as ten wallets paying once, so a small ring is
 as good as a customer base. `PAYMENT_MAX_PER_PAYER` limits any one payer to that
 many points of `feeScore` and that many attestations of weight. At the default of
-5, reaching the 30-point cap needs at least six distinct payers.
+5, reaching the 20-point cap needs at least four distinct payers.
 
 Capping scales a payer's successes by the same factor as its weight, so the cap
 changes how much an opinion counts without changing what the opinion was. A payer

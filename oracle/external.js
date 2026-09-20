@@ -1,13 +1,13 @@
 'use strict';
 
-// externalScore — the ERC-8004 cross-protocol trust factor (max 15).
+// externalScore — the ERC-8004 cross-protocol trust factor (max 25).
 //
 // ERC-8004's Reputation Registry stores only raw, signed client feedback
 // (int128 value + free-text tag) and leaves scoring off-chain. In the wild
 // every client invents its own tag and scale (quality=85 on 0-100, win-rate=0.5
 // on 0-1, glicko2-mu=1500, e2e-test=4.5 on 0-5), so the registry's own average
 // is meaningless. This module reads an agent's 8004 feedback and normalizes the
-// dimensions it recognizes into a single 0-15 factor — the opinionated judgment
+// dimensions it recognizes into a single 0-25 factor — the opinionated judgment
 // the standard deliberately omits.
 //
 // Trust: an ERC-8004 identity is a transferable ERC-721. Before using an agent's
@@ -24,7 +24,7 @@ const REP_ABI = [
   'function readFeedback(uint256 agentId, address clientAddress, uint64 feedbackIndex) view returns (int128 value, uint8 valueDecimals, string tag1, string tag2, bool isRevoked)',
 ];
 
-const MAX_EXTERNAL_SCORE = 15;
+const MAX_EXTERNAL_SCORE = 25;
 const READ_TIMEOUT_MS = 8000;
 
 // ---- pure normalization (the oracle's judgment; curated deliberately) -------

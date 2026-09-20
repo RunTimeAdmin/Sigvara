@@ -143,10 +143,10 @@ contract E2EIntegrationTest is Test, RegistrationHelper {
         // Step 3: Oracle proposes reputation score
         // -------------------------------------------------------------------------
         SigvaraReputation.ReputationData memory scoreData = SigvaraReputation.ReputationData({
-            feeScore: 30,
-            successScore: 25,
-            ageScore: 20,
-            externalScore: 15,
+            feeScore: 20,
+            successScore: 15,
+            ageScore: 30,
+            externalScore: 25,
             communityScore: 5,
             propagationScore: 5,
             lastUpdated: 0
@@ -157,7 +157,7 @@ contract E2EIntegrationTest is Test, RegistrationHelper {
 
         SigvaraReputation.PendingScore memory pending = reputation.getPendingScore(didHash);
         assertTrue(pending.exists, "Pending score should exist");
-        assertEq(pending.data.feeScore, 30, "Fee score mismatch");
+        assertEq(pending.data.feeScore, reputation.MAX_FEE_SCORE(), "Fee score mismatch");
 
         // -------------------------------------------------------------------------
         // Step 4: Finalize after challenge window
@@ -278,8 +278,8 @@ contract E2EIntegrationTest is Test, RegistrationHelper {
 
         // Oracle proposes suspiciously high score
         SigvaraReputation.ReputationData memory inflated = SigvaraReputation.ReputationData({
-            feeScore: 30, successScore: 25, ageScore: 20,
-            externalScore: 15, communityScore: 5, propagationScore: 5,
+            feeScore: 20, successScore: 15, ageScore: 30,
+            externalScore: 25, communityScore: 5, propagationScore: 5,
             lastUpdated: 0
         });
         vm.prank(oracle);
@@ -395,8 +395,8 @@ contract E2EIntegrationTest is Test, RegistrationHelper {
         // Epoch 3: Max score achieved
         vm.warp(block.timestamp + 1 hours);
         SigvaraReputation.ReputationData memory epoch3 = SigvaraReputation.ReputationData({
-            feeScore: 30, successScore: 25, ageScore: 20,
-            externalScore: 15, communityScore: 5, propagationScore: 5,
+            feeScore: 20, successScore: 15, ageScore: 30,
+            externalScore: 25, communityScore: 5, propagationScore: 5,
             lastUpdated: 0
         });
         vm.prank(oracle);

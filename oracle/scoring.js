@@ -7,13 +7,13 @@
 // configured. propagationScore is inherited trust: see payments.propagationScore.
 
 function feeScore(attestationTotal) {
-  // Proxy for fee activity: 1 point per 10 attestations received, capped at 30.
+  // Proxy for fee activity: 1 point per 10 attestations received, capped at 20.
   //
   // Only used when payment verification is off. It counts HTTP requests, not fees,
   // so with an unauthenticated /attest the largest factor in the score was whatever
   // the loudest caller chose to send. When PAYMENT_VERIFICATION=required the oracle
   // passes measured volume instead and this is not consulted. See payments.js.
-  return Math.min(30, Math.floor(attestationTotal / 10));
+  return Math.min(20, Math.floor(attestationTotal / 10));
 }
 
 // Pseudo-observations added to the denominator of the success rate.
@@ -32,11 +32,11 @@ const SUCCESS_PRIOR = 5;
 
 function successScore(successful, total, prior = SUCCESS_PRIOR) {
   if (total <= 0) return 0;
-  return Math.floor((successful / (total + prior)) * 25);
+  return Math.floor((successful / (total + prior)) * 15);
 }
 
-// Logarithmic curve over the span of paid activity, reaching the cap of 20 around day
-// 1023: log2(1024) * 2 = 20.
+// Logarithmic curve over the span of paid activity, reaching the cap of 30 around day
+// 1023: log2(1024) * 3 = 30.
 //
 // The multiplier was 4, which capped at day 31. That contradicted the paragraph below,
 // which says two years of sustained paid operation is the part an attacker cannot
@@ -54,7 +54,7 @@ function successScore(successful, total, prior = SUCCESS_PRIOR) {
 // a month distinguishes nobody.
 function ageCurve(days) {
   if (!(days > 0)) return 0;
-  return Math.min(20, Math.floor(Math.log2(days + 1) * 2));
+  return Math.min(30, Math.floor(Math.log2(days + 1) * 3));
 }
 
 /**
@@ -119,13 +119,15 @@ function computeScore({
 
   // measuredFeeScore is supplied when payments are verified: real volume beats the
   // attestation-count proxy. null means payment verification is off.
-  const fs = measuredFeeScore === null ? feeScore(total) : Math.max(0, Math.min(30, measuredFeeScore));
+  const fs = measuredFeeScore === null ? feeScore(total) : Math.max(0, Math.min(20, measuredFeeScore));
   const ss = successScore(successful, total, successPrior);
   const as = ageScore(registeredAt, activity);
   // externalScore comes from ERC-8004 cross-protocol feedback (see external.js),
   // 0 when unlinked or unconfigured. Clamp to the contract's cap so a bad input
-  // can never make proposeReputation revert.
-  const es = Math.max(0, Math.min(15, Math.trunc(externalScore) || 0));
+  // can never make proposeReputation revert. The cap is 25: it was 15, and it took
+  // 10 of the 20 points released by cutting fee and success, because standing in a
+  // registry this protocol does not control is not something an attacker can mint.
+  const es = Math.max(0, Math.min(25, Math.trunc(externalScore) || 0));
   const cs = communityScore(flags ?? 0);
   // Inherited trust from counterparties that are themselves scored agents. 0 when
   // payment verification is off, since there are no identified counterparties to

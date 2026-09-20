@@ -8,28 +8,28 @@ Sigvara reputation is a deterministic 6-factor score between 0 and 100. It is co
 
 | Factor | Max Points | Source | Formula |
 |---|---|---|---|
-| Fee Activity | 30 | Settled payments to the agent, verified on chain | `min(30, decayedVolume / PAYMENT_FEE_UNIT)`, capped per payer |
-| Success Rate | 25 | Outcome reported by the party that paid | `floor(successful / (total + 5) × 25)`, on decayed weights |
-| Tenure | 20 | Span of verified trading, faded by how long since the last of it | `min(20, floor(log₂(spanDays+1) × 4)) × recency` |
-| External Trust | 15 | Normalized ERC-8004 feedback for a linked agent | mean of recognized rating tags × 15 |
+| Fee Activity | 20 | Settled payments to the agent, verified on chain | `min(20, decayedVolume / PAYMENT_FEE_UNIT)`, capped per payer |
+| Success Rate | 15 | Outcome reported by the party that paid | `floor(successful / (total + 5) × 15)`, on decayed weights |
+| Tenure | 30 | Span of verified trading, faded by how long since the last of it | `min(30, floor(log₂(spanDays+1) × 3)) × recency` |
+| External Trust | 25 | Normalized ERC-8004 feedback for a linked agent | mean of recognized rating tags × 25 |
 | Community | 5 | Unresolved flags | `max(0, 5 − flags × 2)` |
 | Trust Propagation | 5 | Standing of the counterparties that paid the agent | 1 pt per fully-trusted counterparty, pro-rated by its score |
 
 All six are live. Only a **bonded** agent is scored at all: a newly registered agent is
 `PendingBond` and `proposeReputation` refuses it.
 
-### Fee Activity (30 pts)
+### Fee Activity (20 pts)
 
 Measures real economic activity: the volume of payments that actually settled to the
 agent's own address, in the configured asset, as read from the `Transfer` logs of the
 transactions the attestations cite. One point per `PAYMENT_FEE_UNIT` of volume. At the
-default of 100 USDC per point the 30-point cap lands at 3,000 USDC of settled trade.
+default of 100 USDC per point the 20-point cap lands at 2,000 USDC of settled trade.
 
 ```
 0 USDC     → 0 pts
+500        → 5 pts
 1,000      → 10 pts
-2,000      → 20 pts
-3,000+     → 30 pts  (maximum)
+2,000+     → 20 pts  (maximum)
 ```
 
 Two things bend that ladder, and they are the point of the factor rather than caveats
@@ -37,17 +37,17 @@ on it:
 
 - **Volume decays.** Each payment is weighted `0.5 ^ (age / half-life)` from the moment
   it settled on chain, not the moment its receipt was handed in. At the default 90-day
-  half-life, 3,000 USDC of trade a year ago is worth about a sixteenth of that today.
+  half-life, 2,000 USDC of trade a year ago is worth about a sixteenth of that today.
   The cap is a running rate, not a lifetime total.
 - **One counterparty can only carry so much.** `PAYMENT_MAX_PER_PAYER` limits any single
-  payer to that many points. At the default of 5, reaching 30 needs at least six
+  payer to that many points. At the default of 5, reaching 20 needs at least four
   distinct, separately funded payers. A trusted counterparty's cap is raised in
   proportion to its own score, so who pays matters as well as how much.
 
 This is the hardest factor to fake, because faking it means genuinely moving money to
 an address you do not control, repeatedly, from wallets that each had to be funded.
 
-### Success Rate (25 pts)
+### Success Rate (15 pts)
 
 Based on outcomes reported by the parties that paid for the work. An attestation must
 carry the settlement transaction of a real payment to the agent, and the attester is
@@ -65,12 +65,12 @@ The consequence is that the factor measures rate *and* volume together:
 
 | Observations | at 100% | at 80% | at 50% |
 |---|---|---|---|
-| 5 | 12 | 10 | 6 |
-| 10 | 16 | 13 | 8 |
-| 25 | 20 | 16 | 10 |
-| 100 | 23 | 19 | 11 |
+| 5 | 7 | 6 | 3 |
+| 10 | 10 | 8 | 5 |
+| 25 | 12 | 10 | 6 |
+| 100 | 14 | 11 | 7 |
 
-The full 25 is approached, never reached. These figures assume fresh evidence; decayed
+The full 15 is approached, never reached. These figures assume fresh evidence; decayed
 weights are fractional and pull every row down as the record ages.
 
 CounterAudit seals the agent's identity and score into every audited packet, and attests
@@ -78,11 +78,11 @@ the outcome of work it audits back to the oracle. Both went live on 19 September
 outcome must carry the settlement transaction that paid for the work, which the oracle
 re-verifies against the chain. See [counteraudit-integration.md](counteraudit-integration.md).
 
-### Tenure (20 pts)
+### Tenure (30 pts)
 
 Logarithmic growth curve on the span between an agent's first and most recent verified payment, multiplied by how recent that last payment is.
 
-This used to measure time since registration, and the claim here was that the logarithm prevented idle old agents dominating. It did not. It capped them, but an agent that registered two years ago and never worked still collected the full 20 points, which made this the cheapest factor in the score: register in bulk, wait a month, collect. Waiting is free.
+This used to measure time since registration, and the claim here was that the logarithm prevented idle old agents dominating. It did not. It capped them, but an agent that registered two years ago and never worked still collected the whole factor, which made it the cheapest points in the score: register in bulk, wait a month, collect. Waiting is free.
 
 Three properties follow from measuring trade instead:
 
@@ -98,36 +98,49 @@ The curve, applied to the **span between first and last verified payment** — n
 calendar days since registration:
 
 ```
-Span 1 day      → 2 pts
-Span 7 days     → 6 pts
-Span 31 days    → 10 pts
-Span 90 days    → 13 pts
-Span 1 year     → 17 pts
-Span 2 years    → 19 pts
-Span 1023 days  → 20 pts  (maximum)
+Span 1 day      → 3 pts
+Span 7 days     → 9 pts
+Span 31 days    → 15 pts
+Span 90 days    → 19 pts
+Span 1 year     → 25 pts
+Span 2 years    → 28 pts
+Span 1023 days  → 30 pts  (maximum)
 ```
 
-Formula: `min(20, floor(log₂(spanDays+1) × 2)) × recency`, where `recency` runs from 1
+Formula: `min(30, floor(log₂(spanDays+1) × 3)) × recency`, where `recency` runs from 1
 for an agent working today down to 0 for one that has long since stopped. A two-year
 span abandoned a year ago is worth about a point.
 
 The multiplier was 4 until 20 September 2026, which capped the factor at day 31. That
-made the whole 20 points reachable with six weeks of wash payments, measured in
+made the whole factor reachable with six weeks of wash payments, measured in
 `oracle/adversarial.test.js`. Fixing what the factor measures (paid activity rather than
 time since registration) was necessary and insufficient: an attacker who must pay for a
 month instead of wait for a month is spending gas and floating capital, which is a real
 cost, but it is weeks of cost for a factor that claims to represent years.
 
-The trade is a slower ramp for honest agents. Six months of trading is 14 of 20 rather
-than the full 20. That is the intended shape: a factor everyone maxes in a month
+The factor grew from 20 points to 30 on the same day, taking half the weight released by
+cutting fee and success. The amplitude tracks the cap, so the shape did not change: full
+marks still arrive at day 1023, they are simply worth more. Elapsed paid activity is one
+of only two inputs in the score that cannot be bought at any price, and it was carrying
+less weight than the volume figure an attacker can manufacture for the cost of gas.
+
+The trade is a slower ramp for honest agents. Six months of trading is 22 of 30 rather
+than the full 30. That is the intended shape: a factor everyone maxes in a month
 distinguishes nobody.
 
-### External Trust (15 pts)
+### External Trust (25 pts)
 
 Carries in reputation the agent already has under [ERC-8004](https://eips.ethereum.org/EIPS/eip-8004).
 An operator links its Sigvara agent to an ERC-8004 identity it owns (`POST /link`), and
 the oracle reads that agent's on-chain feedback from the ERC-8004 Reputation Registry,
-normalizes the rating dimensions it recognizes, and scales the mean to 15 points.
+normalizes the rating dimensions it recognizes, and scales the mean to 25 points.
+
+This factor grew from 15 points to 25 on 20 September 2026, taking the other half of the
+weight released by cutting fee and success. It is the only factor in the score that an
+attacker cannot manufacture from wallets it controls, because the standing lives in a
+registry this protocol does not operate. It is not, however, unbuyable: an attacker
+willing to build genuine ERC-8004 reputation can carry it here, and the measurements in
+the whitepaper's section 5.4 say what that costs.
 
 This is 0 unless the link is configured and the linked agent has feedback. Feedback
 CounterAudit wrote is deliberately excluded from the normalizer, because CounterAudit

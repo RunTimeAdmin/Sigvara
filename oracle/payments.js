@@ -291,7 +291,7 @@ function byPayer(events, halfLifeMs, now = Date.now()) {
  * grant each other nothing, which is the property that matters: a web of trust that
  * could be bootstrapped from nothing would be worse than no web at all.
  *
- * `payerScores` carries HARD standing, 0..15, not the total score. A ring that farmed
+ * `payerScores` carries HARD standing, 0..25, not the total score. A ring that farmed
  * itself to 100 has no external standing and so raises nothing, at any depth.
  */
 function trustMultiplier(payer, payerScores, trustWeight) {
@@ -331,7 +331,12 @@ function propagationScore(events, payerScores, max = 5) {
 /// and counted as a fully trusted voucher. It now carries hard standing only, which is
 /// ERC-8004 reputation capped by the matured total (see chain.getAgentScore), so trust
 /// that was manufactured cannot be passed on.
-const MAX_HARD_SCORE = 15;
+///
+/// This tracks MAX_EXTERNAL_SCORE, because hard standing IS the external factor: it is
+/// what getAgentScore reads. The two moved together from 15 to 25 in the reweight. If
+/// they ever drift apart, a fully-trusted counterparty stops counting as fully trusted
+/// and the whole web of trust quietly weakens by the ratio between them.
+const MAX_HARD_SCORE = 25;
 
 /// Scale for the fractional trust multiplier: a float cannot survive BigInt arithmetic,
 /// so it is scaled up, applied, and divided back.
@@ -425,7 +430,7 @@ function distinctPayers(events, halfLifeMs, now = Date.now()) {
  * The old proxy was attestation count divided by ten, which meant the factor
  * documented as on-chain fee volume was really a count of HTTP requests.
  */
-function feeScoreFromVolume(volume, feeUnit, max = 30) {
+function feeScoreFromVolume(volume, feeUnit, max = 20) {
   if (feeUnit <= 0n) return 0;
   const points = BigInt(volume) / BigInt(feeUnit);
   return points > BigInt(max) ? max : Number(points);

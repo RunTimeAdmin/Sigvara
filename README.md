@@ -189,10 +189,10 @@ Scores are computed off-chain by the oracle network and written to `SigvaraReput
 
 | Factor | Max | Source | Formula | Status |
 |---|---|---|---|---|
-| Fee Activity | 30 | Settled payment volume to the agent, verified on chain | `min(30, decayedVolume / PAYMENT_FEE_UNIT)`, capped per payer | live |
-| Success Rate | 25 | Outcome reported by whoever paid (e.g. CounterAudit) | `floor(successful / (total + 5) × 25)`, on decayed weights | live |
-| Tenure | 20 | Span of verified paid activity, faded by how long since the last of it | `min(20, floor(log₂(spanDays+1) × 4)) × recency` | live |
-| External Trust | 15 | Normalized ERC-8004 feedback (linked agents) | mean of recognized tags × 15 | live |
+| Fee Activity | 20 | Settled payment volume to the agent, verified on chain | `min(20, decayedVolume / PAYMENT_FEE_UNIT)`, capped per payer | live |
+| Success Rate | 15 | Outcome reported by whoever paid (e.g. CounterAudit) | `floor(successful / (total + 5) × 15)`, on decayed weights | live |
+| Tenure | 30 | Span of verified paid activity, faded by how long since the last of it | `min(30, floor(log₂(spanDays+1) × 3)) × recency` | live |
+| External Trust | 25 | Normalized ERC-8004 feedback (linked agents) | mean of recognized tags × 25 | live |
 | Community | 5 | Flags from watchdog feeds (e.g. HoodScan), age-weighted | `max(0, 5 − flags × 2)`, flags decay on a 30-day half-life | live |
 | Propagation | 5 | Standing of the counterparties that paid the agent | 1 pt per fully-trusted counterparty, pro-rated by its score | live |
 | **Total** | **100** | | | |

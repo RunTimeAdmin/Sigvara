@@ -166,10 +166,10 @@ score.
 
 | Factor | Max | What it measures |
 |---|---|---|
-| Fee | 30 | Value actually settled through the agent, age-weighted. Falls back to an attestation-count proxy only when payment verification is off. |
-| Success | 25 | Ratio of successful to total outcomes, smoothed by a Bayesian prior so three lucky jobs do not outrank thirty solid ones. |
-| Age | 20 | Span between first and last paid activity, multiplied by recency. Not calendar age. An agent that traded for two years and stopped keeps very little. |
-| External | 15 | ERC-8004 feedback, for agents that have linked an 8004 identity they demonstrably own. |
+| Fee | 20 | Value actually settled through the agent, age-weighted. Falls back to an attestation-count proxy only when payment verification is off. |
+| Success | 15 | Ratio of successful to total outcomes, smoothed by a Bayesian prior so three lucky jobs do not outrank thirty solid ones. |
+| Age | 30 | Span between first and last paid activity, multiplied by recency. Not calendar age. An agent that traded for two years and stopped keeps very little. |
+| External | 25 | ERC-8004 feedback, for agents that have linked an 8004 identity they demonstrably own. |
 | Community | 5 | `max(0, 5 - 2 x flags)`, where flags decay on a half-life rather than lasting forever. |
 | Propagation | 5 | Breadth of counterparties that are themselves trusted. One point per fully-scored payer, pro-rated by that payer's score, each counting once however much it pays. |
 
@@ -342,42 +342,64 @@ a ring active over roughly six weeks:
 
 | Sybil wallets | Fee | Success | Tenure | Community | **Total** |
 |---|---|---|---|---|---|
-| 1 | 5 | 12 | 10 | 5 | **32** |
-| 3 | 15 | 18 | 10 | 5 | **48** |
-| 6 | 30 | 21 | 10 | 5 | **66** |
-| 20 | 30 | 23 | 10 | 5 | **68** |
+| 1 | 5 | 7 | 16 | 5 | **33** |
+| 3 | 15 | 11 | 16 | 5 | **47** |
+| 6 | 20 | 12 | 16 | 5 | **53** |
+| 20 | 20 | 14 | 16 | 5 | **55** |
 
-Six wallets is the threshold because `maxPerPayer` caps any single counterparty at 5
-points of the 30-point fee factor. Beyond six, more wallets buy almost nothing. If the
-sybils are themselves scored agents this changes nothing: the web-of-trust weighting
-reads their **hard** standing, meaning ERC-8004 reputation capped by the matured total,
-so a counterparty that farmed its own score to 100 is worth exactly what an anonymous
-wallet is worth. Reaching 72 requires counterparties with genuine outside standing,
-which is the one input an attacker cannot manufacture.
+Four wallets now saturate the fee factor, because `maxPerPayer` caps any single
+counterparty at 5 points and the factor is worth 20. Beyond that, more wallets buy
+almost nothing. If the sybils are themselves scored agents this changes nothing: the
+web-of-trust weighting reads their **hard** standing, meaning ERC-8004 reputation capped
+by the matured total, so a counterparty that farmed its own score to 100 is worth exactly
+what an anonymous wallet is worth. Reaching 59 requires counterparties with genuine
+outside standing, which is the one input an attacker cannot manufacture.
 
 **What holds.** The per-payer cap binds, and splitting one wallet's volume across
 hundreds of dust payments does not defeat it. A ring of zero-scored agents grants its
 members nothing, so the web of trust cannot bootstrap from nothing. The Bayesian prior
 stops a handful of perfect outcomes outranking a sustained record. An abandoned farm
-decays from 66 to 13 over 400 days, so a bought score does not sit. A credentialed
+decays from 53 to 10 over 400 days, so a bought score does not sit. A credentialed
 flagger can take exactly 5 points, not the score.
 
-**What does not.** Five of the six factors are farmable by a single party with enough
-wallets. Only `externalScore` resists structurally, because it requires standing in
-ERC-8004, a system the attacker does not control. That puts the practical ceiling for a
-self-contained farm near 70 and the honest ceiling near 91.
+**What does not.** Four of the six factors are farmable by a single party with enough
+wallets, and tenure is farmable by one with enough patience. Only `externalScore`
+resists structurally, because it requires standing in ERC-8004, a system the attacker
+does not control. That puts the practical ceiling for a self-contained farm near 55 and
+the honest ceiling near 89.
 
-**This measurement changed the protocol.** Tenure previously reached its 20-point cap at
+An attacker willing to buy outside standing is a different matter, and the weights do
+not stop one. A ring that acquires a full ERC-8004 identity reaches the high seventies
+under every weighting that was measured, including the two rejected ones. Weighting
+bounds cheap attacks. Only a slashing path that actually executes bounds expensive ones,
+and Sigvara's has been rehearsed against a fork but never run on the live chain. Until
+it has, treat the numbers above as the cost of a *cheap* forgery, not of any forgery.
+
+**This measurement changed the protocol, twice.** Tenure previously reached its cap at
 day 31, which handed the entire factor to six weeks of wash payments and made the same
 ring score **76**. The curve now reaches its cap at roughly 2.8 years, matching what the
-factor was always documented to represent. That single change cost the attacker 10
-points and cost an honest agent trading for six months 6 points, which is the trade.
+factor was always documented to represent. That took the ring to 66.
+
+The weights then followed. Fee and success were 30 and 25, so 55 of the 100 points rested
+on the two inputs a ring manufactures for the price of gas. They are now 20 and 15, and
+the 20 points released went to tenure (20 to 30) and external trust (15 to 25), the two
+factors that cannot be bought with wallets. That took the ring from 66 to **55** and an
+honest agent with outside standing from 91 to 89, which is the trade: nine points off the
+forgery for two off the genuine article.
+
+A bond-coverage factor was designed, implemented and measured as the alternative, and
+rejected. It scored the agent on how much stake stood behind its volume, which reads well
+until you notice that a bond is only a cost if it is slashed. Against a funded attacker it
+inverted the ranking outright: the ring bought the factor and finished two points **above**
+the best honest agent. The implementation is in the history at `17fe5cf`, reverted in
+`6524e3a`, kept because the measurement is worth more than the code.
 
 **What this means for consumers.** `meetsThreshold(didHash, 50)` distinguishes nothing:
 a six-wallet ring clears it in weeks. Thresholds only begin carrying information above
-roughly 70, and they do so mainly because the remaining points require an outside
-identity. Anyone gating a real decision on a Sigvara score should read that sentence
-before choosing a number.
+roughly 60, and they do so mainly because the remaining points require an outside
+identity and years of continuous paid activity. Note what that does not say: a score of
+80 is not proof of honesty, only proof that forging it was expensive. Anyone gating a
+real decision on a Sigvara score should read this paragraph before choosing a number.
 
 The tables above are printed by the test suite on every run, so they stay current rather
 than becoming a claim in a document that quietly stops being true.

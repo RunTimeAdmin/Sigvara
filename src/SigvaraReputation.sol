@@ -28,10 +28,11 @@ interface IOperatorSet {
  * to on-chain consumers (e.g., agent-to-agent trust checks).
  *
  * Score factors and weights (total: 100):
- *   feeScore        — max 30 — on-chain fee/transaction volume
- *   successScore    — max 25 — attestation-confirmed task completions
- *   ageScore        — max 20 — logarithmic age: min(20, floor(log2(days+1) * 4))
- *   externalScore   — max 15 — SAID Protocol / Gitcoin Passport cross-platform score
+ *   feeScore        — max 20 — on-chain fee/transaction volume
+ *   successScore    — max 15 — attestation-confirmed task completions
+ *   ageScore        — max 30 — span of verified paid activity, faded by how long since
+ *                              the last of it: min(30, floor(log2(spanDays+1) * 3)) × recency
+ *   externalScore   — max 25 — normalized ERC-8004 cross-protocol feedback
  *   communityScore  — max  5 — flag-free community standing
  *   propagationScore — max 5 — inherited trust from high-reputation vouchers
  *
@@ -95,12 +96,29 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
 
     // -------------------------------------------------------------------------
     // Score caps (sum to 100)
+    //
+    // Fee and success were 30 and 25, together 55 of the 100 points. Both are measures
+    // of activity, and activity is the one thing a wash ring can manufacture: when an
+    // attacker pays its own agent from its own wallets the money comes back, so the
+    // volume costs gas and float rather than value. Measured in oracle/adversarial.test.js,
+    // a six-wallet ring reached 66/100 with no outside identity and no real trading
+    // history, and 51 of those points came from these two factors.
+    //
+    // The 20 points released move to the two factors that resist structurally. Tenure
+    // cannot be bought at any price, only waited out, and the span is measured from
+    // first verified payment so idle time banks nothing. External trust requires
+    // standing in a registry this protocol does not control and cannot mint.
+    //
+    // This is a repricing, not a fix. A funded attacker who also acquires an ERC-8004
+    // identity still reaches the high seventies under any weighting tried. See
+    // docs/whitepaper.md 5.4: the weights bound cheap attacks, and only a slashing
+    // path that actually executes bounds expensive ones.
     // -------------------------------------------------------------------------
 
-    uint8 public constant MAX_FEE_SCORE = 30;
-    uint8 public constant MAX_SUCCESS_SCORE = 25;
-    uint8 public constant MAX_AGE_SCORE = 20;
-    uint8 public constant MAX_EXTERNAL_SCORE = 15;
+    uint8 public constant MAX_FEE_SCORE = 20;
+    uint8 public constant MAX_SUCCESS_SCORE = 15;
+    uint8 public constant MAX_AGE_SCORE = 30;
+    uint8 public constant MAX_EXTERNAL_SCORE = 25;
     uint8 public constant MAX_COMMUNITY_SCORE = 5;
     uint8 public constant MAX_PROPAGATION_SCORE = 5;
 
@@ -109,10 +127,10 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
     // -------------------------------------------------------------------------
 
     struct ReputationData {
-        uint8 feeScore;          // max 30
-        uint8 successScore;      // max 25
-        uint8 ageScore;          // max 20
-        uint8 externalScore;     // max 15
+        uint8 feeScore;          // max 20
+        uint8 successScore;      // max 15
+        uint8 ageScore;          // max 30
+        uint8 externalScore;     // max 25
         uint8 communityScore;    // max  5
         uint8 propagationScore;  // max  5
         uint256 lastUpdated;     // block.timestamp of last finalized write

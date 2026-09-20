@@ -200,13 +200,13 @@ test('feeScoreFromVolume: one point per unit of volume', () => {
   assert.equal(feeScoreFromVolume(5_000_000n, 1_000_000n), 5);
 });
 
-test('feeScoreFromVolume: caps at 30 so the contract can never reject the score', () => {
-  assert.equal(feeScoreFromVolume(10_000_000_000n, 1_000_000n), 30);
+test('feeScoreFromVolume: caps at 20 so the contract can never reject the score', () => {
+  assert.equal(feeScoreFromVolume(10_000_000_000n, 1_000_000n), 20);
 });
 
 test('feeScoreFromVolume: handles volume beyond Number.MAX_SAFE_INTEGER', () => {
   // 18-decimal token: 5000 whole units, well past 2^53 in base units.
-  assert.equal(feeScoreFromVolume(5000n * 10n ** 18n, 10n ** 18n), 30);
+  assert.equal(feeScoreFromVolume(5000n * 10n ** 18n, 10n ** 18n), 20);
   assert.equal(feeScoreFromVolume(7n * 10n ** 18n, 10n ** 18n), 7);
 });
 
@@ -388,10 +388,11 @@ test('trustMultiplier: an unknown wallet is weighted exactly as before', () => {
 });
 
 test('trustMultiplier: scales with HARD standing, not the total score', () => {
-  // payerScores carries hard standing, 0..15 (ERC-8004 capped by the matured total),
+  // payerScores carries hard standing, 0..25 (ERC-8004 capped by the matured total),
   // because weighting by the total let a farmed score launder into someone else's cap.
-  assert.equal(trustMultiplier('0xa', { '0xa': 15 }, 1), 2);
-  assert.equal(trustMultiplier('0xa', { '0xa': 7.5 }, 1), 1.5);
+  // The range tracks MAX_EXTERNAL_SCORE, which the reweight moved from 15 to 25.
+  assert.equal(trustMultiplier('0xa', { '0xa': 25 }, 1), 2);
+  assert.equal(trustMultiplier('0xa', { '0xa': 12.5 }, 1), 1.5);
   assert.equal(trustMultiplier('0xa', { '0xa': 999 }, 1), 2, 'a bad score cannot inflate it');
   assert.equal(trustMultiplier('0xa', { '0xa': -5 }, 1), 1);
 });
@@ -421,7 +422,7 @@ test('propagationScore: one point per fully trusted counterparty', () => {
 
 test('propagationScore: pro-rated, so half-trusted counterparties count half', () => {
   const ev = ['0xa', '0xb', '0xc', '0xd'].map(p => tev(p, 1n));
-  const scores = { '0xa': 7.5, '0xb': 7.5, '0xc': 7.5, '0xd': 7.5 };
+  const scores = { '0xa': 12.5, '0xb': 12.5, '0xc': 12.5, '0xd': 12.5 };
   assert.equal(propagationScore(ev, scores), 2);
 });
 
@@ -429,7 +430,7 @@ test('propagationScore: farmed counterparties are inherited as nothing', () => {
   // Hard standing 0 means the voucher has no ERC-8004 history, however high its total.
   const ev = ['0xa', '0xb', '0xc', '0xd', '0xe'].map(p => tev(p, 1n));
   assert.equal(propagationScore(ev, { '0xa': 0, '0xb': 0, '0xc': 0, '0xd': 0, '0xe': 0 }), 0);
-  assert.equal(propagationScore(ev, { '0xa': 15, '0xb': 15, '0xc': 15, '0xd': 15, '0xe': 15 }), 5);
+  assert.equal(propagationScore(ev, { '0xa': 25, '0xb': 25, '0xc': 25, '0xd': 25, '0xe': 25 }), 5);
 });
 
 test('propagationScore: capped at 5 however many vouch', () => {

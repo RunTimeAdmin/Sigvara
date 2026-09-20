@@ -28,13 +28,13 @@ test('externalScore: a zero rating = 0', () => {
 });
 
 test('externalScore: normalizes different scales onto 0..1 before averaging', () => {
-  // quality 80/100 = 0.8, win-rate 0.6, e2e-test 4/5 = 0.8 -> mean 0.733 -> 11
+  // quality 80/100 = 0.8, win-rate 0.6, e2e-test 4/5 = 0.8 -> mean 0.733 -> 18
   const rows = [
     { value: 80, tag: 'quality' },
     { value: 0.6, tag: 'win-rate' },
     { value: 4, tag: 'e2e-test' },
   ];
-  assert.equal(computeExternalScore(rows), 11);
+  assert.equal(computeExternalScore(rows), 18);
 });
 
 test('externalScore: excludes unrecognized tags from the mean', () => {
@@ -47,10 +47,10 @@ test('externalScore: excludes unrecognized tags from the mean', () => {
 });
 
 test('externalScore: negative rating clamps to 0 contribution', () => {
-  // reliability -20 -> clamp01(-0.2)=0, quality 100 -> 1 ; mean 0.5 -> 8 (rounded)
+  // reliability -20 -> clamp01(-0.2)=0, quality 100 -> 1 ; mean 0.5 -> 13 (rounded)
   const rows = [
     { value: -20, tag: 'reliability' },
     { value: 100, tag: 'quality' },
   ];
-  assert.equal(computeExternalScore(rows), 8);
+  assert.equal(computeExternalScore(rows), 13);
 });

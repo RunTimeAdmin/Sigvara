@@ -66,15 +66,12 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
     bytes32 DID;
     uint256 constant CHALLENGE_WINDOW = 1 hours;
 
-    SigvaraReputation.ReputationData maxScore = SigvaraReputation.ReputationData({
-        feeScore: 30,
-        successScore: 25,
-        ageScore: 20,
-        externalScore: 15,
-        communityScore: 5,
-        propagationScore: 5,
-        lastUpdated: 0
-    });
+    // Read from the contract rather than written out, so a reweight of the caps does
+    // not silently turn this from "the maximum score" into "some score". The factor
+    // weights have moved once already: fee and success were 30 and 25 against tenure's
+    // 20 and external's 15, which put 55 of the 100 points on the two inputs a wash
+    // ring can manufacture. Filled in setUp because rep does not exist yet here.
+    SigvaraReputation.ReputationData maxScore;
 
     function setUp() public {
         (agentAddr, agentPk) = makeAddrAndKey("agent");
@@ -96,6 +93,22 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
         rep = SigvaraReputation(address(new ERC1967Proxy(address(impl), init)));
         vm.prank(admin);
         rep.initializeV3(address(identity));
+
+        maxScore = SigvaraReputation.ReputationData({
+            feeScore: rep.MAX_FEE_SCORE(),
+            successScore: rep.MAX_SUCCESS_SCORE(),
+            ageScore: rep.MAX_AGE_SCORE(),
+            externalScore: rep.MAX_EXTERNAL_SCORE(),
+            communityScore: rep.MAX_COMMUNITY_SCORE(),
+            propagationScore: rep.MAX_PROPAGATION_SCORE(),
+            lastUpdated: 0
+        });
+        assertEq(
+            uint256(maxScore.feeScore) + maxScore.successScore + maxScore.ageScore
+                + maxScore.externalScore + maxScore.communityScore + maxScore.propagationScore,
+            100,
+            "score caps must sum to 100"
+        );
     }
 
     // Propose then warp past the challenge window and finalize — the common path
@@ -117,7 +130,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
 
         SigvaraReputation.PendingScore memory pending = rep.getPendingScore(DID);
         assertTrue(pending.exists);
-        assertEq(pending.data.feeScore, 30);
+        assertEq(pending.data.feeScore, rep.MAX_FEE_SCORE());
         assertEq(pending.proposedAt, block.timestamp);
 
         // Not live yet — still zero until finalized.
@@ -153,9 +166,10 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
 
     function test_proposeReputation_reverts_feeScoreOverMax() public {
         SigvaraReputation.ReputationData memory bad = maxScore;
-        bad.feeScore = 31;
+        uint8 max = rep.MAX_FEE_SCORE();
+        bad.feeScore = max + 1;
         vm.expectRevert(
-            abi.encodeWithSelector(SigvaraReputation.ScoreOutOfRange.selector, "feeScore", 31, 30)
+            abi.encodeWithSelector(SigvaraReputation.ScoreOutOfRange.selector, "feeScore", max + 1, max)
         );
         vm.prank(oracle);
         rep.proposeReputation(DID, bad, bytes32(0));
@@ -163,9 +177,10 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
 
     function test_proposeReputation_reverts_successScoreOverMax() public {
         SigvaraReputation.ReputationData memory bad = maxScore;
-        bad.successScore = 26;
+        uint8 max = rep.MAX_SUCCESS_SCORE();
+        bad.successScore = max + 1;
         vm.expectRevert(
-            abi.encodeWithSelector(SigvaraReputation.ScoreOutOfRange.selector, "successScore", 26, 25)
+            abi.encodeWithSelector(SigvaraReputation.ScoreOutOfRange.selector, "successScore", max + 1, max)
         );
         vm.prank(oracle);
         rep.proposeReputation(DID, bad, bytes32(0));
@@ -173,9 +188,10 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
 
     function test_proposeReputation_reverts_ageScoreOverMax() public {
         SigvaraReputation.ReputationData memory bad = maxScore;
-        bad.ageScore = 21;
+        uint8 max = rep.MAX_AGE_SCORE();
+        bad.ageScore = max + 1;
         vm.expectRevert(
-            abi.encodeWithSelector(SigvaraReputation.ScoreOutOfRange.selector, "ageScore", 21, 20)
+            abi.encodeWithSelector(SigvaraReputation.ScoreOutOfRange.selector, "ageScore", max + 1, max)
         );
         vm.prank(oracle);
         rep.proposeReputation(DID, bad, bytes32(0));
@@ -183,9 +199,10 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
 
     function test_proposeReputation_reverts_externalScoreOverMax() public {
         SigvaraReputation.ReputationData memory bad = maxScore;
-        bad.externalScore = 16;
+        uint8 max = rep.MAX_EXTERNAL_SCORE();
+        bad.externalScore = max + 1;
         vm.expectRevert(
-            abi.encodeWithSelector(SigvaraReputation.ScoreOutOfRange.selector, "externalScore", 16, 15)
+            abi.encodeWithSelector(SigvaraReputation.ScoreOutOfRange.selector, "externalScore", max + 1, max)
         );
         vm.prank(oracle);
         rep.proposeReputation(DID, bad, bytes32(0));
@@ -193,9 +210,10 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
 
     function test_proposeReputation_reverts_communityScoreOverMax() public {
         SigvaraReputation.ReputationData memory bad = maxScore;
-        bad.communityScore = 6;
+        uint8 max = rep.MAX_COMMUNITY_SCORE();
+        bad.communityScore = max + 1;
         vm.expectRevert(
-            abi.encodeWithSelector(SigvaraReputation.ScoreOutOfRange.selector, "communityScore", 6, 5)
+            abi.encodeWithSelector(SigvaraReputation.ScoreOutOfRange.selector, "communityScore", max + 1, max)
         );
         vm.prank(oracle);
         rep.proposeReputation(DID, bad, bytes32(0));
@@ -203,9 +221,10 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
 
     function test_proposeReputation_reverts_propagationScoreOverMax() public {
         SigvaraReputation.ReputationData memory bad = maxScore;
-        bad.propagationScore = 6;
+        uint8 max = rep.MAX_PROPAGATION_SCORE();
+        bad.propagationScore = max + 1;
         vm.expectRevert(
-            abi.encodeWithSelector(SigvaraReputation.ScoreOutOfRange.selector, "propagationScore", 6, 5)
+            abi.encodeWithSelector(SigvaraReputation.ScoreOutOfRange.selector, "propagationScore", max + 1, max)
         );
         vm.prank(oracle);
         rep.proposeReputation(DID, bad, bytes32(0));
@@ -219,10 +238,10 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
         _proposeAndFinalize(DID, maxScore);
 
         SigvaraReputation.ReputationData memory stored = rep.getReputation(DID);
-        assertEq(stored.feeScore, 30);
-        assertEq(stored.successScore, 25);
-        assertEq(stored.ageScore, 20);
-        assertEq(stored.externalScore, 15);
+        assertEq(stored.feeScore, rep.MAX_FEE_SCORE());
+        assertEq(stored.successScore, rep.MAX_SUCCESS_SCORE());
+        assertEq(stored.ageScore, rep.MAX_AGE_SCORE());
+        assertEq(stored.externalScore, rep.MAX_EXTERNAL_SCORE());
         assertEq(stored.communityScore, 5);
         assertEq(stored.propagationScore, 5);
 
@@ -355,12 +374,12 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
         uint8 community,
         uint8 propagation
     ) public {
-        fee         = uint8(bound(fee, 0, 30));
-        success     = uint8(bound(success, 0, 25));
-        age         = uint8(bound(age, 0, 20));
-        ext         = uint8(bound(ext, 0, 15));
-        community   = uint8(bound(community, 0, 5));
-        propagation = uint8(bound(propagation, 0, 5));
+        fee         = uint8(bound(fee, 0, rep.MAX_FEE_SCORE()));
+        success     = uint8(bound(success, 0, rep.MAX_SUCCESS_SCORE()));
+        age         = uint8(bound(age, 0, rep.MAX_AGE_SCORE()));
+        ext         = uint8(bound(ext, 0, rep.MAX_EXTERNAL_SCORE()));
+        community   = uint8(bound(community, 0, rep.MAX_COMMUNITY_SCORE()));
+        propagation = uint8(bound(propagation, 0, rep.MAX_PROPAGATION_SCORE()));
 
         SigvaraReputation.ReputationData memory data = SigvaraReputation.ReputationData({
             feeScore: fee,
@@ -463,12 +482,12 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
         // slot in declaration order.
         bytes32 repSlot = keccak256(abi.encode(DID, uint256(0)));
         uint256 packed = uint256(vm.load(address(rep), repSlot));
-        uint256 expected = 30
-            | (uint256(25) << 8)
-            | (uint256(20) << 16)
-            | (uint256(15) << 24)
-            | (uint256(5) << 32)
-            | (uint256(5) << 40);
+        uint256 expected = uint256(maxScore.feeScore)
+            | (uint256(maxScore.successScore) << 8)
+            | (uint256(maxScore.ageScore) << 16)
+            | (uint256(maxScore.externalScore) << 24)
+            | (uint256(maxScore.communityScore) << 32)
+            | (uint256(maxScore.propagationScore) << 40);
         assertEq(packed, expected);
     }
 
