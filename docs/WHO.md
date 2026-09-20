@@ -3,7 +3,7 @@
 Sigvara is built by **David Cooper** (CCIE #14019).
 
 - GitHub: [RunTimeAdmin](https://github.com/RunTimeAdmin)
-- Sites: [protocol14019.com](https://protocol14019.com), [runtimeadmin.com](https://runtimeadmin.com)
+- Site: [runtimeadmin.com](https://runtimeadmin.com)
 - X: [@defiauditccie](https://x.com/defiauditccie)
 - Contact: david@runtimeadmin.com
 
