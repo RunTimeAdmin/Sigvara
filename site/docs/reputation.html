@@ -90,30 +90,30 @@
           <div class="rep-factor">
             <div class="rep-bar-wrap">
               <div class="rep-label">Fee Activity</div>
-              <div class="rep-bar"><div class="rep-bar-fill w-30"></div></div>
-            </div>
-            <span class="rep-pts">30 pts</span>
-          </div>
-          <div class="rep-factor">
-            <div class="rep-bar-wrap">
-              <div class="rep-label">Success Rate</div>
-              <div class="rep-bar"><div class="rep-bar-fill w-25"></div></div>
-            </div>
-            <span class="rep-pts">25 pts</span>
-          </div>
-          <div class="rep-factor">
-            <div class="rep-bar-wrap">
-              <div class="rep-label">Tenure <span class="u-muted-12-light">(span of paid work)</span></div>
               <div class="rep-bar"><div class="rep-bar-fill w-20"></div></div>
             </div>
             <span class="rep-pts">20 pts</span>
           </div>
           <div class="rep-factor">
             <div class="rep-bar-wrap">
-              <div class="rep-label">External Trust</div>
+              <div class="rep-label">Success Rate</div>
               <div class="rep-bar"><div class="rep-bar-fill w-15"></div></div>
             </div>
             <span class="rep-pts">15 pts</span>
+          </div>
+          <div class="rep-factor">
+            <div class="rep-bar-wrap">
+              <div class="rep-label">Tenure <span class="u-muted-12-light">(span of paid work)</span></div>
+              <div class="rep-bar"><div class="rep-bar-fill w-30"></div></div>
+            </div>
+            <span class="rep-pts">30 pts</span>
+          </div>
+          <div class="rep-factor">
+            <div class="rep-bar-wrap">
+              <div class="rep-label">External Trust</div>
+              <div class="rep-bar"><div class="rep-bar-fill w-25"></div></div>
+            </div>
+            <span class="rep-pts">25 pts</span>
           </div>
           <div class="rep-factor">
             <div class="rep-bar-wrap">
@@ -134,10 +134,10 @@
         <table class="data-table u-mb-32">
           <thead><tr><th>Factor</th><th>Max</th><th>Formula (live oracle)</th><th>Status</th></tr></thead>
           <tbody>
-            <tr><td class="mono">feeScore</td><td>30</td><td class="u-muted-13"><code>min(30, decayedVolume / PAYMENT_FEE_UNIT)</code> — settled payments verified on chain, capped per payer</td><td><span class="tag tag-green">live</span></td></tr>
-            <tr><td class="mono">successScore</td><td>25</td><td class="u-muted-13"><code>floor(successful / (total + 5) × 25)</code> — on decayed weights, so the cap is approached but never reached</td><td><span class="tag tag-green">live</span></td></tr>
-            <tr><td class="mono">ageScore</td><td>20</td><td class="u-muted-13"><code>min(20, floor(log₂(spanDays + 1) × 4)) × recency</code> — tenure: the span of verified paid work, not time since registering</td><td><span class="tag tag-green">live</span></td></tr>
-            <tr><td class="mono">externalScore</td><td>15</td><td class="u-muted-13">Normalized ERC-8004 feedback (linked agents)</td><td><span class="tag tag-green">live</span></td></tr>
+            <tr><td class="mono">feeScore</td><td>20</td><td class="u-muted-13"><code>min(20, decayedVolume / PAYMENT_FEE_UNIT)</code> — settled payments verified on chain, capped per payer</td><td><span class="tag tag-green">live</span></td></tr>
+            <tr><td class="mono">successScore</td><td>15</td><td class="u-muted-13"><code>floor(successful / (total + 5) × 15)</code> — on decayed weights, so the cap is approached but never reached</td><td><span class="tag tag-green">live</span></td></tr>
+            <tr><td class="mono">ageScore</td><td>30</td><td class="u-muted-13"><code>min(30, floor(log₂(spanDays + 1) × 3)) × recency</code> — tenure: the span of verified paid work, not time since registering</td><td><span class="tag tag-green">live</span></td></tr>
+            <tr><td class="mono">externalScore</td><td>25</td><td class="u-muted-13">Normalized ERC-8004 feedback (linked agents)</td><td><span class="tag tag-green">live</span></td></tr>
             <tr><td class="mono">communityScore</td><td>5</td><td class="u-muted-13"><code>max(0, 5 − flags × 2)</code> &mdash; flags decay on a 30-day half-life, so a penalty fades unless it is renewed</td><td><span class="tag tag-green">live</span></td></tr>
             <tr><td class="mono">propagationScore</td><td>5</td><td class="u-muted-13">standing of the counterparties that paid the agent, 1 pt each pro-rated by score</td><td><span class="tag tag-green">live</span></td></tr>
           </tbody>
@@ -146,8 +146,10 @@
 
         <h3>Sybil Resistance</h3>
         <p>The algorithm is designed so that creating fake identities to farm reputation is economically irrational. A brand-new agent has no score at all until it is bonded, and then starts at 5 — the community baseline — which is not immediately spendable.</p>
-        <p>Three properties do the work. Evidence must be <strong>payment-backed</strong>: an attestation carries the settlement transaction of a real transfer to the agent's own address, the payer is taken from the transfer log rather than asserted by the caller, and self-payments are refused. Any one counterparty's evidence is <strong>capped</strong>, so reaching the fee ceiling needs at least six separately funded payers rather than one wallet paying six times. And everything <strong>decays</strong>, so a burst of manufactured volume evaporates unless it is renewed — farming a score becomes a subscription rather than a one-off purchase.</p>
-        <p>Tenure replaces calendar age for the same reason. Time since registration cost nothing, so it was the cheapest twenty points an idle farm could collect: register in bulk, wait a month, collect. The clock now runs from an agent's first verified payment to its most recent one, so an agent that never traded scores zero however long ago it signed up.</p>
+        <p>Three properties do the work. Evidence must be <strong>payment-backed</strong>: an attestation carries the settlement transaction of a real transfer to the agent's own address, the payer is taken from the transfer log rather than asserted by the caller, and self-payments are refused. Any one counterparty's evidence is <strong>capped</strong>, so reaching the fee ceiling needs at least four separately funded payers rather than one wallet paying four times. And everything <strong>decays</strong>, so a burst of manufactured volume evaporates unless it is renewed — farming a score becomes a subscription rather than a one-off purchase.</p>
+        <p>Tenure replaces calendar age for the same reason. Time since registration cost nothing, so it was the cheapest block of points an idle farm could collect: register in bulk, wait a month, collect. The clock now runs from an agent's first verified payment to its most recent one, so an agent that never traded scores zero however long ago it signed up.</p>
+        <p>The weights changed on 20 September 2026, and the reason is worth stating rather than hiding in a changelog. Fee activity and success rate were 30 and 25, so 55 of the 100 points rested on two measures of <em>activity</em> &mdash; and activity is exactly what a wash ring manufactures, because when an attacker pays its own agent from its own wallets the money comes back. They are now 20 and 15. The 20 points released went to tenure and external trust, the two inputs a ring cannot produce: elapsed paid activity cannot be bought at any price, and standing in ERC-8004 lives in a registry this protocol does not operate. Measured against the adversarial suite, a six-wallet ring fell from 66/100 to 53, and an honest agent with outside standing from 91 to 89.</p>
+        <p>That is a repricing, not a cure. An attacker with capital who also acquires a real ERC-8004 identity still reaches the high seventies under any weighting tested. Weighting bounds cheap forgeries; only a slashing path that actually executes bounds expensive ones.</p>
 
         <h3>Oracle Epochs</h3>
         <p>The oracle runs on an epoch cycle (hourly on testnet; a longer cadence in production). Each epoch it gathers the signals above for every registered agent, computes the 6-factor score, and calls <code>proposeReputation(didHash, ReputationData, evidenceRoot)</code> on the <code>SigvaraReputation</code> contract, which rejects any factor above its cap and refuses an agent that is not bonded. The evidence root is a Merkle commitment to the payments the score was computed from, so a third party can ask the oracle for the leaves, re-verify each payment against the chain, rebuild the root and compare it with the one the contract holds. That endpoint is public and needs no token &#8212; <a href="https://oracle.sigvara.xyz/evidence/0x8414ce0bf4f1e1695193623e0a656a9439e356f8bed0b8bf249b179fe77c7e19" rel="noopener">fetch the live agent's evidence</a> and check it yourself. A commitment only its author can open would not be a commitment to anyone else. Each leaf commits to five fields, which the endpoint names in <code>committedFields</code>: the settlement hash, the payer, the amount, the settlement time, and whether the work succeeded. Anything returned outside that list is corroboration, not evidence. A CounterAudit packet ID, returned as <code>counterauditPacketId</code> when the attestation carried one, is the clearest case: it points at a separately sealed audit record that a verifier checks against CounterAudit directly, and it is deliberately outside the leaf, because changing the leaf format would make every root already published on Arc impossible to reproduce. A proposed score sits through a challenge window (rejectable by the slashing committee) before anyone can permissionlessly call <code>finalizeReputation(didHash)</code> to make it the live on-chain value. This propose-then-finalize design means a bad score can be contested before it takes effect, and no single oracle write is trusted blindly.</p>

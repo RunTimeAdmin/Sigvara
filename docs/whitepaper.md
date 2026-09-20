@@ -516,11 +516,20 @@ Ordered by what unblocks what, not by difficulty.
 
 1. **A second bonded operator in checker mode.** The only item that reduces the
    concentration in 5.4. Runbook written, contracts ready.
-2. **A public slash.** One executed slash, with a written account. Until that exists the
-   consequence side of the protocol is theory. The procedure is written
-   ([slash-drill.md](slash-drill.md)) and rehearsed against a fork of the live deployment
-   (`test/SlashDrillFork.t.sol`, 6 cases). What remains is running it, which takes seven
-   days because `challengePeriod` is seven days.
+2. **A public slash.** *In progress.* Filed on Arc testnet on 20 September 2026 against a
+   throwaway agent registered for the purpose, and now sitting in its seven-day challenge
+   window; it settles on 27 September. Filing suspended the agent and froze its bond
+   without moving anything, and early execution was refused with `ChallengePeriodActive`
+   carrying the deadline snapshotted at filing. The running account is
+   [slash-drill-log.md](slash-drill-log.md); the procedure is
+   [slash-drill.md](slash-drill.md); the rehearsal is `test/SlashDrillFork.t.sol` (6 cases
+   against a fork of the live deployment).
+
+   The log states its own limits and they are worth repeating here: the target scored 0,
+   so this cannot demonstrate reputation being destroyed; reporter, operator and victim
+   are all addresses one party controls, so it demonstrates a mechanism and not a
+   governance decision. Until it settles, the consequence side of the protocol is still
+   theory. After it settles, it is a demonstration, not a proof.
 3. ~~**A divergence watcher.**~~ Built. Polls a checker's `/divergence`, re-verifies
    each disagreement against the live slot, and alerts the committee while rejection is
    still possible, escalating as the window closes. Treats a silent checker as an alert
