@@ -111,9 +111,23 @@ function communityScore(unresolvedFlags) {
  * @param {{ registeredAt: number, attestations: { successful: number, total: number }, flags: number, externalScore?: number, measuredFeeScore?: number }} opts
  * @returns {{ feeScore, successScore, ageScore, externalScore, communityScore, propagationScore, total }}
  */
+/**
+ * `now` is the clock every time-dependent factor is measured against, in milliseconds.
+ *
+ * It exists because two operators scoring the same agent from the same evidence must
+ * produce the same number, and `Date.now()` does not let them. Host clocks drift, so
+ * tenure and decay come out fractionally different on each machine. Measured across the
+ * primary and the checker on the day the second operator went live, that showed up as a
+ * recency of 0.982146 against 0.982148: too small to move an integer factor, and large
+ * enough to mean the two were never actually computing the same function.
+ *
+ * Callers on the epoch path pass the chain's own clock, so agreement between operators
+ * stops depending on their hosts being in sync with each other. It defaults to
+ * `Date.now()` for callers with no chain to read, such as the unit tests.
+ */
 function computeScore({
   registeredAt, attestations, flags, externalScore = 0, measuredFeeScore = null,
-  successPrior = SUCCESS_PRIOR, activity = null, propagation = 0,
+  successPrior = SUCCESS_PRIOR, activity = null, propagation = 0, now = Date.now(),
 }) {
   const { successful = 0, total = 0 } = attestations;
 
@@ -121,7 +135,7 @@ function computeScore({
   // attestation-count proxy. null means payment verification is off.
   const fs = measuredFeeScore === null ? feeScore(total) : Math.max(0, Math.min(20, measuredFeeScore));
   const ss = successScore(successful, total, successPrior);
-  const as = ageScore(registeredAt, activity);
+  const as = ageScore(registeredAt, activity, now);
   // externalScore comes from ERC-8004 cross-protocol feedback (see external.js),
   // 0 when unlinked or unconfigured. Clamp to the contract's cap so a bad input
   // can never make proposeReputation revert. The cap is 25: it was 15, and it took

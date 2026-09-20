@@ -20,8 +20,7 @@ const {
   distinctPayers,
   trustMultiplier,
   propagationScore,
-  TRANSFER_TOPIC,
-} = require('./payments');
+  TRANSFER_TOPIC, activityWindow } = require('./payments');
 
 const ASSET = '0x3600000000000000000000000000000000000000';
 const AGENT = '0xCc52Cd92963f8A86d04dB29a4810d1e01D193910';
@@ -455,4 +454,45 @@ test('propagationScore: breadth not size, one counterparty counts once', () => {
 test('propagationScore: no scores available means no inherited trust', () => {
   assert.equal(propagationScore([tev('0xa', 1n)], null), 0);
   assert.equal(propagationScore([], {}), 0);
+});
+
+// ---- the clock is an input, not an ambient fact ----------------------------
+//
+// Every decay weight and the recency that fades tenure are measured against `now`. When
+// that was Date.now(), two operators scoring the same evidence produced fractionally
+// different numbers because their hosts disagreed about the time: recency 0.982146 on the
+// primary against 0.982148 on the checker, on the day the second operator went live. Too
+// small to move an integer factor, large enough that the two were not computing the same
+// function, and hidden by the divergence tolerance rather than fixed by it.
+
+test('activityWindow: recency moves with `now`, so two epochs minutes apart disagree', () => {
+  // The measured reason the checker rescores at the proposal's timestamp instead of its
+  // own. How much drift is visible depends on how far decay has already run, so no fixed
+  // "N seconds is invisible" claim holds. What does hold is that two epochs minutes apart
+  // produce different recency from identical evidence, and two operators on independent
+  // hourly schedules are minutes or hours apart, never simultaneous.
+  const settledAt = 1_789_000_000_000 - 30 * 86_400_000;
+  const ev = [{ txHash: '0x1', ts: settledAt, amount: '1000000', payer: '0xa', success: true }];
+  const halfLife = 90 * 86_400_000;
+  const base = 1_789_000_000_000;
+
+  assert.notEqual(
+    activityWindow(ev, halfLife, base).recency,
+    activityWindow(ev, halfLife, base + 300_000).recency,
+    'five minutes apart must produce different recency',
+  );
+
+  // Handed one clock, any two callers agree exactly. That is the whole property.
+  assert.deepEqual(activityWindow(ev, halfLife, base), activityWindow(ev, halfLife, base));
+});
+
+test('decayedVolume: the same events and clock give a bit-for-bit identical weight', () => {
+  const now = 1_789_000_000_000;
+  const ev = [
+    { txHash: '0x1', ts: now - 10 * 86_400_000, amount: '5000000', payer: '0xa', success: true },
+    { txHash: '0x2', ts: now - 40 * 86_400_000, amount: '3000000', payer: '0xb', success: true },
+  ];
+  const halfLife = 90 * 86_400_000;
+  assert.equal(decayedVolume(ev, halfLife, now), decayedVolume(ev, halfLife, now));
+  assert.notEqual(decayedVolume(ev, halfLife, now), decayedVolume(ev, halfLife, now + 3_600_000));
 });

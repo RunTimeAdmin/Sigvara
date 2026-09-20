@@ -135,7 +135,15 @@ const {
 // for feeScore and the raw attestation tally for successScore, and both are weighted
 // by age. Nulls keep computeScore on the old path. Used by the epoch and by /score so
 // the number served matches the number proposed.
-function measuredFactorsFor(didHash, now = Date.now(), payerScores = null) {
+// `now` is required, not defaulted. Both callers pass the chain's clock in
+// milliseconds, and a default of Date.now() would let a future third caller silently
+// reintroduce host-clock drift into a score — the exact failure this parameter exists to
+// remove, and one that shows up as an unexplainable divergence between operators rather
+// than as an error.
+function measuredFactorsFor(didHash, now, payerScores = null) {
+  if (!Number.isFinite(now)) {
+    throw new TypeError('measuredFactorsFor: now (ms, from the chain clock) is required');
+  }
   if (!payments.required(paymentCfg)) {
     return { measuredFeeScore: null, measuredAttestations: null, activity: null, propagation: 0 };
   }
@@ -404,7 +412,17 @@ async function runEpochInner() {
         const externalScore = (external.configured() && linkedId !== undefined)
           ? await external.externalScoreFor(linkedId, operator)
           : 0;
-        const measured  = measuredFactorsFor(didHash, Date.now(), await payerScoresFor(didHash));
+        // The chain's clock, not this host's. chainNow is a block timestamp in seconds;
+        // every scoring function below measures in milliseconds, and getting that
+        // conversion wrong would date every payment to 1970 and decay the lot to zero.
+        //
+        // Using it is what makes two operators computable against each other. Wall clocks
+        // drift, so the same evidence produced fractionally different tenure and decay on
+        // each machine: 0.982146 against 0.982148 on the day the checker went live. Small
+        // enough to move no integer factor, large enough that the two were not computing
+        // the same function. A divergence tolerance hid it rather than fixing it.
+        const scoringNowMs = chainNow * 1000;
+        const measured  = measuredFactorsFor(didHash, scoringNowMs, await payerScoresFor(didHash));
         const scores    = computeScore({
           registeredAt,
           attestations: measured.measuredAttestations ?? att,
@@ -413,6 +431,7 @@ async function runEpochInner() {
           measuredFeeScore: measured.measuredFeeScore,
           activity: measured.activity,
           propagation: measured.propagation,
+          now: scoringNowMs,
         });
 
         // Checker mode: compare rather than compete. This oracle holds ORACLE_ROLE and a
@@ -430,15 +449,52 @@ async function runEpochInner() {
           // because the overwrite path never reaches recordDivergence. The checker would
           // be destroying exactly the evidence it exists to produce.
           //
-          // This narrows the race to one round trip; it does not close it.
-          // proposeReputation has no compare-and-swap, so a proposal landing between this
-          // read and the tx below is still overwritten. Closing it properly needs a
-          // proposeIfEmpty on the contract. Said plainly in oracle/README.md.
+          // This narrows the race to one round trip. The rest is closed by the contract:
+          // the propose below uses proposeIfEmpty, which reverts rather than replacing a
+          // proposal that lands in the remaining gap.
           const freshPending = await chain.getPendingScore(didHash);
-          const decision = decideCheckerAction(freshPending, scores, challengeWindow, chainNow, cfg.divergenceTolerance);
+
+          // Score the proposal against ITS OWN clock, not this epoch's.
+          //
+          // `scores` above was computed at chainNow. The proposal being audited was made
+          // minutes or hours earlier, and every decay weight and the recency that fades
+          // tenure are measured against the time of measurement. Comparing the two means
+          // comparing scores computed at different moments, which differ even when both
+          // operators are perfectly honest and hold identical evidence. That difference is
+          // real: at 20 seconds apart it moves recency by 2e-6, and it grows with the gap.
+          //
+          // Using the chain's clock does not fix this on its own, because two operators
+          // run on independent schedules and therefore read different blocks. The fix is
+          // to ask the right question: not "what do I compute now" but "what should the
+          // primary have computed when it proposed this". Re-measuring at proposedAt
+          // answers that, so a divergence means the evidence disagreed rather than the
+          // epochs being minutes apart.
+          //
+          // Cheap: measuredFactorsFor and computeScore are pure functions over payment
+          // events already in memory. No extra chain reads.
+          let auditScores = scores;
+          if (freshPending.exists && freshPending.proposedAt > 0) {
+            const atProposalMs = freshPending.proposedAt * 1000;
+            const m = measuredFactorsFor(didHash, atProposalMs, await payerScoresFor(didHash));
+            auditScores = computeScore({
+              registeredAt,
+              attestations: m.measuredAttestations ?? att,
+              flags: flagWeight,
+              externalScore,
+              measuredFeeScore: m.measuredFeeScore,
+              activity: m.activity,
+              propagation: m.propagation,
+              now: atProposalMs,
+            });
+          }
+
+          // auditScores for every comparison; `scores` stays as-is for the propose path
+          // below, because covering a silent primary means proposing a CURRENT score, not
+          // a reconstruction of some past moment.
+          const decision = decideCheckerAction(freshPending, auditScores, challengeWindow, chainNow, cfg.divergenceTolerance);
 
           if (decision === 'diverged') {
-            const d = scoreDivergence(freshPending.data, scores);
+            const d = scoreDivergence(freshPending.data, auditScores);
             recordDivergence(didHash, d, freshPending.proposedAt);
             const open = chainNow < freshPending.proposedAt + challengeWindow;
             const detail = Object.entries(d.factors)
@@ -484,13 +540,13 @@ async function runEpochInner() {
               const still = await chain.getPendingScore(didHash);
               if (still.exists) { metrics.inc('finalizeErrors'); throw finalizeErr; }
               const live = await chain.getTotalScore(didHash);
-              if (live > 0 && live === scores.total) {
+              if (live > 0 && live === auditScores.total) {
                 console.log(`[oracle]   ${didHash.slice(0, 10)}… already finalized by another party`);
                 metrics.inc('finalizeSuccesses');
               } else {
                 console.warn(
                   `[oracle]   ${didHash.slice(0, 10)}… pending proposal vanished without becoming live ` +
-                  `(live=${live}, ours=${scores.total}) — most likely a committee rejection`,
+                  `(live=${live}, ours=${auditScores.total}) — most likely a committee rejection`,
                 );
                 metrics.inc('proposalsRejected');
               }
@@ -1002,9 +1058,15 @@ const server = http.createServer(async (req, res) => {
       const externalScore = (external.configured() && linkedId !== undefined)
         ? await external.externalScoreFor(linkedId, operator)
         : 0;
-      // Same inputs as the epoch, including counterparty standing, or this endpoint
-      // would serve a number the oracle never proposes.
-      const measured  = measuredFactorsFor(didHash, Date.now(), await payerScoresFor(didHash));
+      // Same inputs as the epoch, including counterparty standing AND the chain clock,
+      // or this endpoint would serve a number the oracle never proposes. Two operators'
+      // /score are compared against each other by hand when a divergence is investigated,
+      // so serving a wall-clock number here would reintroduce exactly the difference the
+      // epoch path removes, in the place people look to explain it.
+      //
+      // One extra chain read per request, on an endpoint that already makes several.
+      const scoringNowMs = (await chain.getLatestBlockTimestamp()) * 1000;
+      const measured  = measuredFactorsFor(didHash, scoringNowMs, await payerScoresFor(didHash));
       const scores    = computeScore({
         registeredAt,
         attestations: measured.measuredAttestations ?? att,
@@ -1013,6 +1075,7 @@ const server = http.createServer(async (req, res) => {
         measuredFeeScore: measured.measuredFeeScore,
         activity: measured.activity,
         propagation: measured.propagation,
+        now: scoringNowMs,
       });
       return json(res, 200, {
         didHash,

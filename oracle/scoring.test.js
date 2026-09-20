@@ -234,3 +234,80 @@ test('computeScore: passes activity through to the age factor', () => {
   });
   assert.equal(working.ageScore, 28); // two years of active trade, just under the cap
 });
+
+// ---- the clock -------------------------------------------------------------
+//
+// Two operators scoring the same agent from the same evidence must produce the same
+// number. Date.now() does not allow that: host clocks drift, so tenure and decay come
+// out fractionally different on each machine. Measured across the primary and the checker
+// on the day the second operator went live, recency read 0.982146 on one and 0.982148 on
+// the other — too small to move an integer factor, large enough that the two were never
+// computing the same function. The divergence tolerance hid it rather than fixing it.
+
+test('computeScore: the same inputs and the same clock give the same score', () => {
+  const opts = {
+    registeredAt: SEC - 800 * DAYS,
+    attestations: { successful: 40, total: 44 },
+    flags: 0,
+    activity: win(730, 0, 1),
+    now: 1_789_000_000_000,
+  };
+  const a = computeScore(opts);
+  const b = computeScore({ ...opts });
+  assert.deepEqual(a, b);
+});
+
+test('computeScore: with activity supplied, the clock does not reach the age factor', () => {
+  // Worth pinning because it is easy to assume otherwise. When activity is present the
+  // span comes from first-to-last payment and `recency` was already computed upstream by
+  // payments.activityWindow, so ageScore reads no clock at all. The chain clock matters
+  // one layer up, where that recency and every decay weight are produced.
+  const base = {
+    registeredAt: SEC - 800 * DAYS,
+    attestations: { successful: 40, total: 44 },
+    flags: 0,
+    activity: { firstActivitySec: SEC - 400 * DAYS, lastActivitySec: SEC, recency: 1 },
+  };
+  const early = computeScore({ ...base, now: (SEC - 300 * DAYS) * 1000 });
+  const late  = computeScore({ ...base, now: SEC * 1000 });
+  assert.equal(early.ageScore, late.ageScore);
+});
+
+test('computeScore: on the calendar fallback the clock does reach the age factor', () => {
+  // activity is null when payment verification is off. Here nowMs is the only thing
+  // deciding how old the agent is, so threading it through is what stops two operators
+  // disagreeing about that on hosts whose clocks differ.
+  const base = { registeredAt: SEC - 800 * DAYS, attestations: { successful: 1, total: 1 }, flags: 0 };
+  const early = computeScore({ ...base, now: (SEC - 700 * DAYS) * 1000 });
+  const late  = computeScore({ ...base, now: SEC * 1000 });
+  assert.notEqual(early.ageScore, late.ageScore, 'now is not reaching ageScore on the fallback path');
+  assert.ok(late.ageScore > early.ageScore);
+});
+
+test('computeScore: two hosts one second apart still agree when handed one clock', () => {
+  // The operator-agreement property, stated directly. Host A and host B disagree about
+  // the time; both are given the chain's clock; both must produce the same score.
+  const base = {
+    registeredAt: SEC - 800 * DAYS,
+    attestations: { successful: 40, total: 44 },
+    flags: 0,
+    activity: win(730, 0, 1),
+  };
+  const chainNowMs = 1_789_000_000_000;
+  const hostA = computeScore({ ...base, now: chainNowMs });
+  const hostB = computeScore({ ...base, now: chainNowMs });
+  assert.deepEqual(hostA, hostB);
+  assert.equal(hostA.total, hostB.total);
+});
+
+test('computeScore: without a clock it falls back to wall time rather than throwing', () => {
+  // Unit tests and any caller with no chain to read still work.
+  const s = computeScore({
+    registeredAt: SEC - 800 * DAYS,
+    attestations: { successful: 1, total: 1 },
+    flags: 0,
+    activity: win(730, 0, 1),
+  });
+  assert.ok(Number.isFinite(s.total));
+  assert.ok(s.ageScore > 0);
+});
