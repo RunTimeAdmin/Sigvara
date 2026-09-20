@@ -304,7 +304,17 @@ function prunePaymentEvents(halfLifeMs, minWeight = 0.001, now = Date.now()) {
  * proposedAt is kept so a reader can tell whether the disputed proposal is still inside
  * its challenge window, which is the difference between a live alert and a post-mortem.
  */
-function recordDivergence(didHash, divergence, proposedAt, now = Date.now()) {
+/**
+ * `evidence` is what makes a record diagnosable by someone who was not there.
+ *
+ * Factor deltas alone say the two operators disagree. They do not say why, and the most
+ * common why is not arithmetic: it is that one operator holds payment evidence the other
+ * was never sent, because attestations arrive per-operator over HTTP. Recording each
+ * side's evidence root and the checker's own event count turns "they disagree" into
+ * "they were scoring different evidence, go and diff it", which a stranger can act on
+ * using public endpoints alone.
+ */
+function recordDivergence(didHash, divergence, proposedAt, now = Date.now(), evidence = null) {
   const list = divergences.get(didHash) || [];
   list.push({
     at: now,
@@ -312,6 +322,7 @@ function recordDivergence(didHash, divergence, proposedAt, now = Date.now()) {
     pendingTotal: divergence.pendingTotal,
     ownTotal: divergence.ownTotal,
     factors: divergence.factors,
+    ...(evidence ? { evidence } : {}),
   });
   divergences.set(didHash, list.slice(-MAX_DIVERGENCES_PER_AGENT));
   return true;

@@ -22,6 +22,8 @@ const paymentCfg = payments.readConfig();
 
 // ---- Config ----------------------------------------------------------------
 
+const trimTrailingSlash = (u) => String(u).endsWith('/') ? String(u).replace(/\/+$/, '') : String(u);
+
 const cfg = {
   rpcUrl:            process.env.RPC_URL            || '',
   privateKey:        process.env.ORACLE_PRIVATE_KEY || '',
@@ -51,6 +53,9 @@ const cfg = {
   // See decideCheckerAction in epoch-policy.js for why those two prohibitions matter.
   checkerMode:        process.env.ORACLE_MODE === 'checker',
   divergenceTolerance: Number(process.env.DIVERGENCE_TOLERANCE || DEFAULT_DIVERGENCE_TOLERANCE),
+  // Named in divergence records so a reader is told where the other side's evidence
+  // lives, rather than having to already know the deployment's endpoint layout.
+  primaryEvidenceUrl: trimTrailingSlash(process.env.PRIMARY_EVIDENCE_URL || 'https://oracle.sigvara.xyz'),
 };
 
 if (!cfg.rpcUrl || !cfg.privateKey || !cfg.identityAddress || !cfg.reputationAddress) {
@@ -495,7 +500,21 @@ async function runEpochInner() {
 
           if (decision === 'diverged') {
             const d = scoreDivergence(freshPending.data, auditScores);
-            recordDivergence(didHash, d, freshPending.proposedAt);
+            // Publish what each side was scoring, not just that the numbers differ.
+            // ownEvidenceRoot is over this operator's payment events; proposedEvidenceRoot
+            // is the one the primary committed to on chain. Different roots mean different
+            // evidence, which is diagnosable; identical roots with different scores would
+            // mean an arithmetic disagreement, which is a much more serious finding.
+            const ownEvents = getPaymentEvents(didHash);
+            recordDivergence(didHash, d, freshPending.proposedAt, Date.now(), {
+              ownEvidenceRoot: payments.required(paymentCfg) ? merkle.rootFor(ownEvents) : null,
+              proposedEvidenceRoot: freshPending.evidenceRoot ?? null,
+              ownPaymentEvents: ownEvents.length,
+              ownDistinctPayers: measured.distinctPayers ?? null,
+              // Where to go next. Named in the payload so the diagnosis does not depend on
+              // knowing the protocol's endpoint layout.
+              compareWith: `${cfg.primaryEvidenceUrl}/evidence/${didHash}`,
+            });
             const open = chainNow < freshPending.proposedAt + challengeWindow;
             const detail = Object.entries(d.factors)
               .map(([f, v]) => `${f} pending=${v.pending} ours=${v.own}`).join(', ');

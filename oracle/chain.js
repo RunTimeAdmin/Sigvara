@@ -25,7 +25,10 @@ const REPUTATION_ABI = [
   // checker that loses the race needs to tell that apart from a real failure.
   'error ScoreAlreadyPending(bytes32 didHash, uint256 proposedAt)',
   'function finalizeReputation(bytes32 didHash)',
-  'function getPendingScore(bytes32 didHash) view returns (tuple(tuple(uint8 feeScore, uint8 successScore, uint8 ageScore, uint8 externalScore, uint8 communityScore, uint8 propagationScore, uint256 lastUpdated) data, uint256 proposedAt, bool exists))',
+  // evidenceRoot is decoded now, not dropped. A divergence without it says two operators
+  // disagree; with it, a stranger can see they were scoring different evidence and go and
+  // diff the two evidence sets themselves.
+  'function getPendingScore(bytes32 didHash) view returns (tuple(tuple(uint8 feeScore, uint8 successScore, uint8 ageScore, uint8 externalScore, uint8 communityScore, uint8 propagationScore, uint256 lastUpdated) data, uint256 proposedAt, bool exists, bytes32 evidenceRoot))',
   'function challengeWindow() view returns (uint256)',
 ];
 // Note: lastUpdated in the tuple above is required by the contract's function selector
@@ -422,7 +425,12 @@ async function getPendingScore(didHash) {
     }
     data[f] = v;
   }
-  return { exists: pending.exists, proposedAt: Number(pending.proposedAt), data };
+  return {
+    exists: pending.exists,
+    proposedAt: Number(pending.proposedAt),
+    data,
+    evidenceRoot: pending.evidenceRoot ?? null,
+  };
 }
 
 // The live, finalized score. Used by checker mode to tell a proposal that was finalized
