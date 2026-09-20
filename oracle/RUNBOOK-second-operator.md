@@ -9,9 +9,7 @@ Read step 8 before you start step 3.
 
 ## Addresses and parameters
 
-Arc testnet, chain ID `5042002`. Read off chain on 19 Sep 2026, except `bondAmount`,
-which is the value after the raise in step 0 and is not on chain until that
-transaction lands.
+Arc testnet, chain ID `5042002`. All read off chain on 20 September 2026.
 
 | | |
 |---|---|
@@ -51,7 +49,9 @@ cast call 0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171 "bondAmount()(uint256)" --r
 
 ## 0. Raise the operator bond (once, admin)
 
-Skip if `bondAmount()` already reads 25,000 SVR.
+**Already done on Arc testnet**, 20 September 2026: the floor is 25,000 and the primary
+is bonded at exactly that. Kept here because the sequence is the part worth reusing, and
+because mainnet will need it again.
 
 The bond was 1,000 SVR, which on this testnet bonded nothing: `SVRToken.faucet()` mints
 up to 10,000 per address per day to anyone, so the bond was a tenth of one free daily

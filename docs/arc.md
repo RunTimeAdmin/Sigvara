@@ -530,7 +530,7 @@ them are in [token.md](token.md#mainnet-parameters):
 
 | Parameter | Testnet | Mainnet | Share of supply |
 |---|---|---|---|
-| `bondAmount` | 1,000 SVR today, 25,000 pending | 2,500,000 SVR | 0.25% |
+| `bondAmount` | 25,000 SVR | 2,500,000 SVR | 0.25% |
 | `minimumStake` | 1,000 SVR | 10,000 SVR | 0.001% |
 | `epochFee` | 0 | 0 at launch | n/a |
 

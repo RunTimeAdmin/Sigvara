@@ -378,14 +378,13 @@ Providing liquidity earns nothing. The reward is for bonded, slashable service.
 
 | Parameter | Testnet (on chain today) | Mainnet | Share of supply |
 |---|---|---|---|
-| `bondAmount` | 1,000 SVR, raise to 25,000 pending | 2,500,000 SVR | 0.25% |
+| `bondAmount` | 25,000 SVR | 2,500,000 SVR | 0.25% |
 | `minimumStake` | 1,000 SVR | 10,000 SVR | 0.001% |
 | `epochFee` | 0 (registry not deployed) | 0 at launch | n/a |
 
-The testnet bond is being raised to 25,000 because the faucet mints 10,000 per address
-per day, which made a 1,000 bond a tenth of one free claim. That is an admin transaction
-that has not yet been sent, so the table reports what the chain returns rather than what
-is intended. Section 10 shows how to check.
+The testnet bond was raised from 1,000 to 25,000 on 20 September 2026. The faucet mints
+10,000 per address per day, so a 1,000 bond was a tenth of one free claim and bonded
+nothing. Section 10 shows how to check every figure here against the chain.
 
 Both are denominated in SVR rather than pegged to a currency. A bond fixed in SVR tracks
 the payoff from attacking the protocol, because both follow the same value. Governance
