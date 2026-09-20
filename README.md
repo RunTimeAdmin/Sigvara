@@ -20,6 +20,7 @@ If you're looking for MCP server support or React trust-badge components, those 
 
 | Guide | Audience |
 |---|---|
+| [White paper](docs/whitepaper.md) | Everyone — the single document: design, trust model, known weaknesses, token, and commands to check every claim against the chain |
 | [Ecosystem Overview](docs/ecosystem.md) | Everyone — start here to understand the full picture |
 | [Quickstart](docs/quickstart.md) | Developers — register your first agent in 10 minutes |
 | [Arc](docs/arc.md) | Developers — deploy / test on Arc (5042002 / 5042), USDC gas |
