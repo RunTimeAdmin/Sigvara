@@ -452,3 +452,85 @@ test('getPendingScore: a factor that does not decode throws instead of reading a
     /propagationScore did not decode to a number/,
   );
 });
+
+// ---- readWithBackoff -------------------------------------------------------
+//
+// The failure this exists for: a log-scan burst exhausts a free-tier RPC's request
+// budget, the per-agent reads that follow inherit the throttling, and every agent fails
+// with CALL_EXCEPTION. The epoch then logs "0 proposed, 0 finalized, 0 diverged" and
+// exits zero, which is indistinguishable from agreement. Observed on QuickNode,
+// 20 Sep 2026, on the first checker bring-up.
+
+const callException = (data = null) =>
+  Object.assign(new Error('missing revert data (action="call", data=null)'), {
+    code: 'CALL_EXCEPTION', data,
+  });
+
+test('readWithBackoff: returns the value when the call works first time', async () => {
+  let calls = 0;
+  const out = await chain.readWithBackoff('x', async () => { calls++; return 42; });
+  assert.equal(out, 42);
+  assert.equal(calls, 1, 'a working call must not be retried');
+});
+
+test('readWithBackoff: retries a CALL_EXCEPTION that carries no revert data', async () => {
+  // A view over plain storage cannot revert for a well-formed didHash, so no-data is
+  // the node declining to execute, not the contract rejecting the input.
+  let calls = 0;
+  const out = await chain.readWithBackoff('x', async () => {
+    if (++calls < 3) throw callException(null);
+    return 'recovered';
+  });
+  assert.equal(out, 'recovered');
+  assert.equal(calls, 3);
+});
+
+test('readWithBackoff: rethrows a genuine revert immediately', async () => {
+  // err.data carrying a payload is the contract talking. Retrying it would turn one
+  // clear failure into four slow ones.
+  let calls = 0;
+  await assert.rejects(
+    () => chain.readWithBackoff('x', async () => { calls++; throw callException('0x08c379a0'); }),
+    /missing revert data/,
+  );
+  assert.equal(calls, 1, 'a real revert must not be retried');
+});
+
+test('readWithBackoff: retries rate limiting', async () => {
+  let calls = 0;
+  const out = await chain.readWithBackoff('x', async () => {
+    if (++calls < 2) throw new Error('429 too many requests');
+    return 'ok';
+  });
+  assert.equal(out, 'ok');
+  assert.equal(calls, 2);
+});
+
+test('readWithBackoff: retries transport failures by ethers error code', async () => {
+  for (const code of ['SERVER_ERROR', 'NETWORK_ERROR', 'TIMEOUT']) {
+    let calls = 0;
+    const out = await chain.readWithBackoff('x', async () => {
+      if (++calls < 2) throw Object.assign(new Error('boom'), { code });
+      return code;
+    });
+    assert.equal(out, code, `${code} should be retried`);
+  }
+});
+
+test('readWithBackoff: does not retry an error that is nobody\'s fault but ours', async () => {
+  let calls = 0;
+  await assert.rejects(
+    () => chain.readWithBackoff('x', async () => { calls++; throw new TypeError('bad argument'); }),
+    TypeError,
+  );
+  assert.equal(calls, 1);
+});
+
+test('readWithBackoff: gives up after the attempt cap rather than looping forever', async () => {
+  let calls = 0;
+  await assert.rejects(
+    () => chain.readWithBackoff('x', async () => { calls++; throw callException(null); }, 3),
+    /missing revert data/,
+  );
+  assert.equal(calls, 3, 'should stop at the cap, not retry indefinitely');
+});

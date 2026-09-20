@@ -96,6 +96,48 @@ async function queryWithBackoff(filter, start, end, attempts = 4) {
   }
 }
 
+/**
+ * A contract read, retried on the failures that are the node's fault rather than the
+ * contract's.
+ *
+ * queryWithBackoff above does this for the log scan and nothing did it for the reads,
+ * and the gap cost a real epoch. A scan burst exhausted a free-tier RPC's request
+ * budget, the per-agent reads that followed inherited the throttling with no retry, and
+ * every agent failed with CALL_EXCEPTION. The epoch then reported "0 proposed, 0
+ * finalized, 0 diverged" and exited cleanly, which reads exactly like agreement. A
+ * checker that silently audits nothing is worse than one that is visibly down.
+ *
+ * Retrying CALL_EXCEPTION needs justifying, because that is normally how a revert
+ * arrives. The distinction is `err.data`: a genuine revert carries its payload there and
+ * is rethrown on the first attempt. `data: null` means the node declined to execute at
+ * all. Every call wrapped here is a view over plain storage that cannot revert for a
+ * well-formed didHash, so no-data is a transport failure wearing a contract error's
+ * clothes.
+ *
+ * Deliberately not applied to writes. proposeScore and finalizeScore race other parties
+ * for one slot, and retrying a submission that may already be in the mempool is how you
+ * pay twice for one epoch.
+ */
+async function readWithBackoff(label, fn, attempts = 4) {
+  let delay = 500;
+  for (let i = 0; ; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const msg = String((err && err.message) || err);
+      const code = err && err.code;
+      const transient =
+        /rate limit|429|too many requests|timeout|etimedout|econnreset|socket hang up/i.test(msg) ||
+        code === 'SERVER_ERROR' || code === 'NETWORK_ERROR' || code === 'TIMEOUT' ||
+        (code === 'CALL_EXCEPTION' && (err.data === null || err.data === undefined));
+      if (!transient || i >= attempts - 1) throw err;
+      console.log(`[oracle] ${label} failed (${code || 'error'}), retrying in ${delay}ms`);
+      await sleep(delay);
+      delay *= 2;
+    }
+  }
+}
+
 /// Scan progress, for the caller to persist. Without this a restart rescans the whole
 /// chain from FROM_BLOCK, which grows without bound and is what tripped the public
 /// RPC's rate limit after a day of blocks had accumulated.
@@ -148,7 +190,7 @@ function pruneAgent(didHash) {
 }
 
 async function getAgentInfo(didHash) {
-  const id = await identityContract.getIdentity(didHash);
+  const id = await readWithBackoff('getIdentity', () => identityContract.getIdentity(didHash));
   return {
     operator: id.operator,
     // The address payments must be made to for an attestation to count. It is
@@ -330,7 +372,7 @@ async function finalizeScore(didHash) {
 
 // Returns { exists, proposedAt } — proposedAt is 0 when no proposal is pending.
 async function getPendingScore(didHash) {
-  const pending = await reputationContract.getPendingScore(didHash);
+  const pending = await readWithBackoff('getPendingScore', () => reputationContract.getPendingScore(didHash));
   // The factors come back too, for checker mode to compare against its own arithmetic.
   // The primary path reads only exists/proposedAt and is unaffected. Decoding is
   // positional over a fixed-size struct, so the fields land even though the ABI above
@@ -360,11 +402,11 @@ async function getPendingScore(didHash) {
 // by someone else from one the slashing committee rejected: both leave pendingScores
 // empty, and only one of them means the number went live.
 async function getTotalScore(didHash) {
-  return Number(await reputationContract.getTotalScore(didHash));
+  return Number(await readWithBackoff('getTotalScore', () => reputationContract.getTotalScore(didHash)));
 }
 
 async function getChallengeWindow() {
-  const seconds = await reputationContract.challengeWindow();
+  const seconds = await readWithBackoff('challengeWindow', () => reputationContract.challengeWindow());
   return Number(seconds);
 }
 
@@ -406,6 +448,7 @@ async function chargeEpoch(didHash) {
 }
 
 module.exports = {
+  readWithBackoff,
   init,
   reset,
   verifyDidHashDerivation,
