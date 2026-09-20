@@ -332,9 +332,19 @@ both, and it is wrong on both.
 
 That record does not go away when the next epoch agrees. `/divergence` is an append-only
 log bounded per agent and pruned by age, not a current-state flag, because a committee
-reviewing a disagreement needs its history. So a cold-start false positive sits in the
-record for as long as the retention window, where a reader can mistake it for evidence
-against the primary.
+reviewing a disagreement needs its history. A checker cannot retract an opinion it has
+since revised.
+
+**With a watcher running, that record pages someone.** The watcher classifies a
+divergence by re-reading the disputed slot: same proposal and window still open means
+`actionable`, and it alerts with a `rejectReputation` instruction and a countdown. It has
+no way to know the checker changed its mind, because the checker does not say so. The
+alert clears when the proposal turns over and the record classifies as `superseded`,
+which bounds the damage to one proposal's lifetime, but until then it is a false alarm
+against the primary complete with remediation steps. This happened on the first bring-up:
+the watcher's opening alert was about the checker's own empty state.
+
+A false alert nobody can clear is how real ones get ignored. Seed first.
 
 Re-post the settlement transactions of every payment the primary has counted. The checker
 re-verifies each against the chain and re-reads the settlement time from the block, so
