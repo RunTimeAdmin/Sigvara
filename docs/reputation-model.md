@@ -354,12 +354,25 @@ first, and the design deliberately aims at the third rather than at consensus:
 1. **Shared inputs.** Payment evidence is derivable from chain logs and should be
    scanned rather than submitted. What is genuinely off-chain is the success flag, the
    payer's opinion, and only that needs a shared channel.
-2. **Deterministic computation.** Half done. Each epoch is now anchored to a block
-   timestamp rather than the host's wall clock, and a checker re-measures a pending
-   proposal at that proposal's own `proposedAt` before comparing, so a disagreement means
-   the evidence differed rather than the two epochs running minutes apart. What remains
-   is the arithmetic: decay is computed in floats, so two implementations could still
-   round differently from identical inputs. Integers would close that.
+2. **Deterministic computation.** Half done, and the other half is currently paid for
+   with a tolerance rather than fixed.
+
+   Each epoch is anchored to a block timestamp rather than the host's wall clock, and a
+   checker re-measures a pending proposal at that proposal's own `proposedAt` before
+   comparing, so a disagreement means the evidence differed rather than the two epochs
+   running minutes apart.
+
+   The arithmetic is still floats. `0.5 ^ (age / halfLife)` on two runtimes can land
+   either side of an integer boundary from identical inputs, so two honest operators can
+   differ by a point. `DIVERGENCE_TOLERANCE`, default 3, absorbs that.
+
+   **State the cost plainly: the same tolerance absorbs real disagreements up to 3
+   points.** A primary understating a score by two points is invisible to the checker.
+   That is an accepted trade today because float drift would otherwise make the checker
+   cry wolf on every agent, and a checker nobody believes is worse than a loose one. It
+   is not the end state. Fixed-point decay would let the tolerance go to zero, at which
+   point any disagreement at all is a finding — and that, not the tolerance, is what makes
+   a second operator load-bearing rather than advisory.
 3. **The ability to disagree.** With bonds, a challenge window and the evidence root
    already in place, the cheaper design is one proposer per epoch and every other
    bonded operator recomputing from the committed evidence and challenging a mismatch.

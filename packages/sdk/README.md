@@ -22,6 +22,11 @@ Runtime dependencies are `ethers` v6 and `tweetnacl`. Node 18 or newer.
 > different verifier and be accepted as the agent. Pass the same audience to
 > `verifySignature` as its fifth argument; omitting it still compiles and still accepts
 > the relayable older proofs. Full detail in [CHANGELOG.md](CHANGELOG.md).
+>
+> **This does not make you replay-proof.** The audience stops a response being reused at
+> a *different* verifier. Reuse at *yours* is stopped by remembering the nonce, and the
+> SDK cannot do that for you — see
+> [Two things the SDK cannot do for you](#two-things-the-sdk-cannot-do-for-you).
 
 ## What it does
 
