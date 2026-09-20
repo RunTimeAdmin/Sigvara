@@ -422,9 +422,12 @@ Stated because they are true, not because they are solved.
    operators to agree, and the checker cannot reject anything itself. It makes a
    disagreement legible; a human committee must act on it inside six hours. Making
    agreement a protocol guarantee needs N-of-M on `pendingScores` and a UUPS upgrade.
-3. **The checker can rarely overwrite.** It re-reads the pending slot immediately before
-   writing, which narrows the race to one round trip but does not close it.
-   `proposeReputation` has no compare-and-swap. A `proposeIfEmpty` variant would close it.
+3. ~~**The checker can rarely overwrite.**~~ Closed in code, pending deployment.
+   `proposeIfEmpty` gives `pendingScores` compare-and-swap semantics: it reverts with
+   `ScoreAlreadyPending` rather than replacing a proposal that landed between the
+   checker's read and its transaction. The checker uses it; the primary keeps the
+   replacing entry point, because overwriting its own stale proposal with a fresher one
+   is intended. Needs a UUPS upgrade to take effect on Arc.
 4. **No slash has been executed in public.** The mechanism is tested; it has not been
    exercised against a real agent where anyone could watch.
 5. **No external audit.** A precondition for mainnet.
@@ -516,8 +519,8 @@ before reaching the service.
 charged. The app disables every fee control rather than pointing at an address with no
 code.
 
-**Test coverage**, all passing: 252 contract tests across 13 Foundry suites including
-fuzz and invariant tests (2 skipped), 303 oracle tests, plus the SDK suite. CI runs Foundry, the oracle and
+**Test coverage**, all passing: 258 contract tests across 13 Foundry suites including
+fuzz and invariant tests (2 skipped), 314 oracle tests, plus the SDK suite. CI runs Foundry, the oracle and
 SDK suites, and Slither static analysis on every push, plus a documentation check that
 fails when the site states something the contracts do not.
 
@@ -567,7 +570,11 @@ Ordered by what unblocks what, not by difficulty.
    **Its alerts currently go to a container log.** `WEBHOOK_URL` is unset, so the
    component that exists for 3am cannot reach anyone at 3am. That is the next thing to
    fix, and it is worth more than any remaining item on this list.
-4. **`proposeIfEmpty`.** Closes the checker's remaining overwrite race properly.
+4. **`proposeIfEmpty`.** *Written and tested, not deployed.* Closes the checker's
+   overwrite race by making the contract check and write in the same breath, which is the
+   only place that gap can be closed: there is no atomicity between a view call and the
+   transaction after it. Six contract tests, including that a live proposal's
+   `challengeWindow` is not restarted by a losing writer. Ships on the next UUPS upgrade.
 5. **A reward distributor.** Replaces `rewardPool` as a plain address with a contract
    paying operators for epochs served.
 6. **External audit**, then Arc mainnet with a committee multisig.
