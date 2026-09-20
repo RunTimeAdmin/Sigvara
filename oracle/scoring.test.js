@@ -2,7 +2,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { computeScore, feeScore, successScore, ageScore, ageCurve, communityScore } = require('./scoring');
+const { computeScore, feeScore, successScore, ageScore, ageCurve, communityScore, bondScore } = require('./scoring');
 
 // ---- feeScore --------------------------------------------------------------
 
@@ -231,4 +231,61 @@ test('computeScore: passes activity through to the age factor', () => {
     activity: win(730, 0, 1),
   });
   assert.equal(working.ageScore, 19); // two years of active trade, just under the cap
+});
+
+// ---- bondScore -------------------------------------------------------------
+
+test('bondScore: no bond scores nothing however much volume', () => {
+  assert.equal(bondScore(0, 100), 0);
+  assert.equal(bondScore(-1, 100), 0);
+});
+
+test('bondScore: a bond with no volume behind it scores nothing', () => {
+  // The hole the confidence term exists to close. Coverage is a ratio, so with zero
+  // volume it is infinite, and a bare curve would pay the full 20 for posting the
+  // minimum bond and then doing no work at all.
+  assert.equal(bondScore(1, 0), 0);
+  assert.equal(bondScore(1000, 0), 0);
+});
+
+test('bondScore: below the confidence threshold the factor is scaled down', () => {
+  // 2.5x coverage maxes the curve, but on 2 units of volume there is little to back.
+  assert.equal(bondScore(5, 2), 4);
+  // The same coverage on enough volume to mean something pays in full.
+  assert.equal(bondScore(25, 10), 20);
+});
+
+test('bondScore: more bond against the same volume always scores at least as much', () => {
+  let prev = -1;
+  for (const stake of [1, 2, 5, 10, 20, 50, 100, 1000]) {
+    const s = bondScore(stake, 30);
+    assert.ok(s >= prev, `bond ${stake} scored ${s} against ${prev}`);
+    prev = s;
+  }
+  assert.equal(prev, 20);
+});
+
+test('bondScore: more volume against the same bond scores less', () => {
+  // The property that makes this resist a ring: manufacturing volume dilutes coverage,
+  // so the wash payments that buy the fee factor cost points here.
+  assert.ok(bondScore(1, 100) < bondScore(1, 10));
+  assert.equal(bondScore(1, 100), 0);
+});
+
+test('bondScore: scale invariant, so size is not what is being measured', () => {
+  // 20x bond on 10k of volume and 200x on 100k are the same claim about backing.
+  assert.equal(bondScore(20, 100), bondScore(200, 1000));
+  assert.equal(bondScore(5, 10), bondScore(500, 1000));
+});
+
+test('bondScore: the cap is reachable but over-bonding past it buys nothing', () => {
+  assert.equal(bondScore(100, 10), 20);
+  assert.equal(bondScore(10000, 10), 20);
+});
+
+test('bondScore: the max is a parameter, and the curve rescales with it', () => {
+  // Kept adjustable because the cap is an on-chain constant: if the contract's
+  // MAX_BOND_SCORE changes, the shape should follow rather than clip.
+  assert.equal(bondScore(25, 10, 10), 10);
+  assert.ok(bondScore(3, 10, 10) < bondScore(3, 10, 20));
 });
