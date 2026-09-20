@@ -44,12 +44,38 @@ export function base58Decode(str: string): Uint8Array {
   return out;
 }
 
+/**
+ * Hex to bytes, refusing anything that is not hex.
+ *
+ * The length check was the only validation, so a non-hex character produced a key rather
+ * than an error: `parseInt` returns NaN, and assigning NaN into a Uint8Array writes 0.
+ * One mistyped character in a 64-character seed therefore yielded a *different valid
+ * keypair*, silently. The agent registers one public key, signs challenges with another,
+ * and every authentication fails with nothing anywhere saying why.
+ *
+ * Measured: '9'x64 and 'g' + '9'x63 both returned successfully and produced different
+ * Ed25519 public keys.
+ *
+ * The error names the offending character and its position, because "contains non-hex
+ * characters" is not much help when you are staring at 64 of them.
+ */
 export function hexToBytes(hex: string): Uint8Array {
   const h = hex.startsWith('0x') ? hex.slice(2) : hex;
   if (h.length % 2 !== 0) throw new Error('Hex string must have even length');
+
+  const bad = h.search(/[^0-9a-fA-F]/);
+  if (bad !== -1) {
+    // Offset reported against the caller's string, including any 0x, so the position
+    // lines up with what they are actually looking at.
+    const at = bad + (hex.startsWith('0x') ? 2 : 0);
+    throw new Error(
+      `Hex string contains a non-hex character '${h[bad]}' at index ${at}`,
+    );
+  }
+
   const bytes = new Uint8Array(h.length / 2);
   for (let i = 0; i < bytes.length; i++) {
-    bytes[i] = parseInt(h.slice(i * 2, i * 2 + 2), 16);
+    bytes[i] = Number.parseInt(h.slice(i * 2, i * 2 + 2), 16);
   }
   return bytes;
 }

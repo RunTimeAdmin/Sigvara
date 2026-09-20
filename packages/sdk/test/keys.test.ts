@@ -49,6 +49,24 @@ describe('hex encoding', () => {
   it('throws on odd-length hex', () => {
     expect(() => hexToBytes('abc')).toThrow();
   });
+
+  // base58Decode has always rejected bad characters; hex never did. parseInt returns NaN
+  // for a non-hex pair and Uint8Array writes NaN as 0, so the bad byte was silently
+  // zeroed and a wrong-but-valid result came back.
+  it('throws on a non-hex character rather than zeroing the byte', () => {
+    expect(() => hexToBytes('zz')).toThrow(/non-hex character/);
+    expect(() => hexToBytes('0xg1')).toThrow(/non-hex character/);
+    expect(() => hexToBytes('ab  cd')).toThrow(/non-hex character/);
+  });
+
+  it('names the offending character and its position in the caller\'s string', () => {
+    // "contains non-hex characters" is not much help against 64 of them.
+    expect(() => hexToBytes('0xabcXef')).toThrow("'X' at index 5");
+  });
+
+  it('accepts mixed case', () => {
+    expect(hexToBytes('AbCdEf')).toEqual(new Uint8Array([0xab, 0xcd, 0xef]));
+  });
 });
 
 describe('seedToKeyPair', () => {
@@ -100,5 +118,29 @@ describe('pubKey encoding', () => {
     expect(decoded[0]).toBe(0xed);
     expect(decoded[1]).toBe(0x01);
     expect(decoded.slice(2)).toEqual(kp.publicKey);
+  });
+});
+
+describe('hex validation reaches the callers that matter', () => {
+  // The reason the hexToBytes fix is not cosmetic. A seed is 64 characters typed or
+  // pasted by a human, and one wrong character used to produce a DIFFERENT valid
+  // keypair with no error: the agent registers one public key, signs challenges with
+  // another, and every authentication fails with nothing saying why.
+  it('refuses a mistyped seed instead of deriving a different key', () => {
+    const good = '9'.repeat(64);
+    const typo = 'g' + '9'.repeat(63);
+
+    const kp = seedToKeyPair(good);
+    expect(() => seedToKeyPair(typo)).toThrow(/non-hex character/);
+
+    // Guard against a "fix" that merely zeroes the byte: the two seeds must never
+    // both succeed, because they do not produce the same key.
+    const zeroed = '0'.repeat(2) + '9'.repeat(62);
+    expect(seedToKeyPair(zeroed).publicKey).not.toEqual(kp.publicKey);
+  });
+
+  it('refuses a malformed bytes32 public key', () => {
+    // Chain reads are well-formed, so this is defence in depth rather than a live bug.
+    expect(() => bytes32ToPubKey('0x' + 'q'.repeat(64))).toThrow(/non-hex character/);
   });
 });
