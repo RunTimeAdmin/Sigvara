@@ -438,8 +438,11 @@ Ordered by what unblocks what, not by difficulty.
 
 1. **A second bonded operator in checker mode.** The only item that reduces the
    concentration in 5.3. Runbook written, contracts ready.
-2. **A public slash.** One executed slash, or a scheduled drill, with a written account.
-   Until that exists the consequence side of the protocol is theory.
+2. **A public slash.** One executed slash, with a written account. Until that exists the
+   consequence side of the protocol is theory. The procedure is written
+   ([slash-drill.md](slash-drill.md)) and rehearsed against a fork of the live deployment
+   (`test/SlashDrillFork.t.sol`, 6 cases). What remains is running it, which takes seven
+   days because `challengePeriod` is seven days.
 3. ~~**A divergence watcher.**~~ Built. Polls a checker's `/divergence`, re-verifies
    each disagreement against the live slot, and alerts the committee while rejection is
    still possible, escalating as the window closes. Treats a silent checker as an alert
