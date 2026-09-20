@@ -1,0 +1,55 @@
+# A second bonded oracle operator in checker mode, shaped for a bare VPS.
+#
+# Use THIS file when the box has no repository checkout, which is how the Sigvara
+# oracles are actually deployed. Use docker-compose.checker.yml instead when you have
+# a checkout and want to build from local source.
+#
+# The difference matters and has caused real mistakes: docker-compose.checker.yml has
+# a `build: context: ./oracle` and implies a working tree on the host. This file has
+# no build stage. It pulls `main` from GitHub inside the container on every start, the
+# same way the primary does, so deploying a code change is `docker compose restart`
+# and nothing else. There is nothing on the host to `git pull` and nothing to rebuild.
+#
+#   scp this file and .env to /docker/sigvara-checker/ on the checker box
+#   cd /docker/sigvara-checker && docker compose up -d
+#
+# `up -d` on first run, and after any .env change. A plain `restart` re-runs the clone
+# and so picks up new code, but does NOT re-read env_file.
+#
+# Prerequisites, all of them, in oracle/RUNBOOK-second-operator.md: the wallet needs
+# its own 25,000 SVR bond, admission to the operator set, and ORACLE_ROLE. A checker
+# that is not an admitted operator starts and logs a warning rather than failing, so
+# confirm step 4 landed rather than assuming a clean start means a working one.
+services:
+  checker:
+    image: node:20-alpine
+    container_name: sigvara-checker
+    restart: unless-stopped
+    working_dir: /app
+    env_file:
+      - .env
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        apk add --no-cache git >/dev/null
+        rm -rf /src && git clone --depth 1 --branch main https://github.com/RunTimeAdmin/Sigvara.git /src
+        cp /src/oracle/*.js /src/oracle/package.json /app/
+        rm -f /app/*.test.js
+        npm install --omit=dev --no-audit --no-fund
+        exec node index.js
+    ports:
+      # 3031 on the host to match the verification commands in the runbook, and so that
+      # a checker and a primary can coexist on one box during a migration without the
+      # second silently failing to bind.
+      - "127.0.0.1:3031:3030"
+    volumes:
+      # Its OWN state. Sharing the primary's would mean sharing the payment observations
+      # the score is computed from, which is most of what is being checked.
+      - checker_state:/data
+      - checker_app:/app
+
+volumes:
+  checker_state:
+  checker_app:

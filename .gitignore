@@ -21,6 +21,7 @@ oracle/.state/
 .env
 .env.*
 !.env.example
+!.env.checker.example
 
 # IDE
 .vscode/

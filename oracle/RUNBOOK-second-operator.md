@@ -20,7 +20,7 @@ Arc testnet, chain ID `5042002`. All read off chain on 20 September 2026.
 | `bondAmount()` | 25,000 SVR (`25000e18`) |
 | `unbondingPeriod()` | 604800 s (7 days) |
 | `challengeWindow()` | 21600 s (6 hours) |
-| `activeCount()` before this runbook | 1 |
+| `activeCount()` before this runbook | 1 (still 1 as of 20 Sep 2026; the primary `0x6352B8FF…` is bonded at exactly 25,000 and Active) |
 | `ORACLE_ROLE` | `0x68e79a7bf1e0bc45d0a330c573bc367f9cf464fd326078812f301165fbda4ef1` |
 | `DEFAULT_ADMIN_ROLE` | `0x00…00` |
 
@@ -37,8 +37,8 @@ cast call 0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171 "bondAmount()(uint256)" --r
 - **A different RPC provider.** Arc testnet has four, and they are independent:
   `rpc.testnet.arc.io` (Circle), `rpc.blockdaemon.testnet.arc.io`,
   `rpc.drpc.testnet.arc.io`, `rpc.quicknode.testnet.arc.io`. The primary uses Circle, so
-  the checker should not. Verified 19 Sep 2026: all four are live and agree on
-  `getTotalScore`.
+  the checker should not. Re-verified 20 Sep 2026: all four live, all four returning the
+  same `getTotalScore`, block heights within single digits of each other.
 - **25,000 SVR**, plus USDC for gas. USDC is the native gas token on Arc. The figure
   sits above the faucet's daily reach on purpose: `SVRToken.faucet()` mints at most
   10,000 per address per day, so the previous 1,000 was a tenth of one free claim and
@@ -182,8 +182,14 @@ does nothing, and the failure is invisible until the primary is already down.
 
 ## 6. Configure
 
-Copy `.env.example` to `.env.checker` on the checker box. Four settings are not
-negotiable, and the process refuses to start if the first two are wrong:
+Start from [`.env.checker.example`](./.env.checker.example), not from `.env.example` and
+never from the primary's `.env`. It carries every value already filled in except the key,
+including the scoring inputs, which must match the primary **exactly**: a different
+half-life or fee unit guarantees divergence on every agent and tells you nothing about
+whether the primary is honest.
+
+Four settings are not negotiable, and the process refuses to start if the first two are
+wrong:
 
 ```dotenv
 ORACLE_MODE=checker
@@ -216,12 +222,29 @@ Do not copy the primary's `.env`. It carries the primary's key and its fee regis
 
 ## 7. Deploy
 
+**There are two compose files and they are not interchangeable.** Picking the wrong one
+is the most likely way to waste an afternoon here.
+
+`docker-compose.checker.vps.yml` is the one you almost certainly want. It has no build
+stage; it clones `main` from GitHub inside the container on every start, the same way the
+primary is deployed. Nothing on the host to check out, nothing to `git pull`, nothing to
+rebuild. Copy it and your `.env` to `/docker/sigvara-checker/` on the checker box:
+
 ```bash
-docker compose -f docker-compose.checker.yml up -d --build
-docker compose -f docker-compose.checker.yml logs --tail=30 checker
+cd /docker/sigvara-checker && docker compose up -d
+docker compose logs --tail=30 checker
 ```
 
-`up -d`, not `restart`: `restart` does not re-read `env_file`.
+`docker-compose.checker.yml` builds from `./oracle` and needs a repository checkout on the
+host. Use it only if you actually have one.
+
+`up -d` on first run and after any `.env` change. A plain `restart` re-runs the clone and
+so does pick up new code, but it does **not** re-read `env_file`.
+
+Because both oracles clone `main`, they run the same scoring code by construction. That
+matters more than it sounds: the factor weights changed on 20 September 2026, and a
+checker left on older code would disagree with the primary about every single agent while
+reporting it as a divergence in the primary.
 
 Expect in the log:
 
