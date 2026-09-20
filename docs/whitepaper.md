@@ -326,7 +326,59 @@ the thing it claims to replace.
 - **That the oracle is bonded.** `isActiveOperator` is a public view.
 - **That an agent is collateralised.** `getStake` and `hasMinimumStake` are public views.
 
-### 5.3 Known weaknesses
+### 5.3 What a fake score costs
+
+Every claim above is about what the protocol does when used as intended. This one is
+about what it does against someone buying a number, which is a different question and
+has a measured answer.
+
+The defences assume payers are a cost. In a wash ring they are not: an attacker paying
+its own agent from its own wallets is floating capital, not spending it. The money comes
+back. What it spends is gas and patience.
+
+`oracle/adversarial.test.js` feeds attacker-crafted payment sets through the real
+scoring pipeline, assembled exactly as the oracle assembles it each epoch. Measured, for
+a ring active over roughly six weeks:
+
+| Sybil wallets | Fee | Success | Tenure | Community | **Total** |
+|---|---|---|---|---|---|
+| 1 | 5 | 12 | 10 | 5 | **32** |
+| 3 | 15 | 18 | 10 | 5 | **48** |
+| 6 | 30 | 21 | 10 | 5 | **66** |
+| 20 | 30 | 23 | 10 | 5 | **68** |
+
+Six wallets is the threshold because `maxPerPayer` caps any single counterparty at 5
+points of the 30-point fee factor. Beyond six, more wallets buy almost nothing. If the
+sybils are themselves scored agents, the web-of-trust weighting lifts this to **72**.
+
+**What holds.** The per-payer cap binds, and splitting one wallet's volume across
+hundreds of dust payments does not defeat it. A ring of zero-scored agents grants its
+members nothing, so the web of trust cannot bootstrap from nothing. The Bayesian prior
+stops a handful of perfect outcomes outranking a sustained record. An abandoned farm
+decays from 66 to 13 over 400 days, so a bought score does not sit. A credentialed
+flagger can take exactly 5 points, not the score.
+
+**What does not.** Five of the six factors are farmable by a single party with enough
+wallets. Only `externalScore` resists structurally, because it requires standing in
+ERC-8004, a system the attacker does not control. That puts the practical ceiling for a
+self-contained farm near 70 and the honest ceiling near 91.
+
+**This measurement changed the protocol.** Tenure previously reached its 20-point cap at
+day 31, which handed the entire factor to six weeks of wash payments and made the same
+ring score **76**. The curve now reaches its cap at roughly 2.8 years, matching what the
+factor was always documented to represent. That single change cost the attacker 10
+points and cost an honest agent trading for six months 6 points, which is the trade.
+
+**What this means for consumers.** `meetsThreshold(didHash, 50)` distinguishes nothing:
+a six-wallet ring clears it in weeks. Thresholds only begin carrying information above
+roughly 70, and they do so mainly because the remaining points require an outside
+identity. Anyone gating a real decision on a Sigvara score should read that sentence
+before choosing a number.
+
+The tables above are printed by the test suite on every run, so they stay current rather
+than becoming a claim in a document that quietly stops being true.
+
+### 5.4 Known weaknesses
 
 Stated because they are true, not because they are solved.
 
@@ -437,7 +489,7 @@ fails when the site states something the contracts do not.
 Ordered by what unblocks what, not by difficulty.
 
 1. **A second bonded operator in checker mode.** The only item that reduces the
-   concentration in 5.3. Runbook written, contracts ready.
+   concentration in 5.4. Runbook written, contracts ready.
 2. **A public slash.** One executed slash, with a written account. Until that exists the
    consequence side of the protocol is theory. The procedure is written
    ([slash-drill.md](slash-drill.md)) and rehearsed against a fork of the live deployment

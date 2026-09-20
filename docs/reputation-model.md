@@ -98,17 +98,29 @@ The curve, applied to the **span between first and last verified payment** — n
 calendar days since registration:
 
 ```
-Span 0 days   → 0 pts
-Span 1 day    → 4 pts
-Span 3 days   → 8 pts
-Span 7 days   → 12 pts
-Span 15 days  → 16 pts
-Span 31 days  → 20 pts  (maximum)
+Span 1 day      → 2 pts
+Span 7 days     → 6 pts
+Span 31 days    → 10 pts
+Span 90 days    → 13 pts
+Span 1 year     → 17 pts
+Span 2 years    → 19 pts
+Span 1023 days  → 20 pts  (maximum)
 ```
 
-Formula: `min(20, floor(log₂(spanDays+1) × 4)) × recency`, where `recency` runs from 1
+Formula: `min(20, floor(log₂(spanDays+1) × 2)) × recency`, where `recency` runs from 1
 for an agent working today down to 0 for one that has long since stopped. A two-year
 span abandoned a year ago is worth about a point.
+
+The multiplier was 4 until 20 September 2026, which capped the factor at day 31. That
+made the whole 20 points reachable with six weeks of wash payments, measured in
+`oracle/adversarial.test.js`. Fixing what the factor measures (paid activity rather than
+time since registration) was necessary and insufficient: an attacker who must pay for a
+month instead of wait for a month is spending gas and floating capital, which is a real
+cost, but it is weeks of cost for a factor that claims to represent years.
+
+The trade is a slower ramp for honest agents. Six months of trading is 14 of 20 rather
+than the full 20. That is the intended shape: a factor everyone maxes in a month
+distinguishes nobody.
 
 ### External Trust (15 pts)
 

@@ -35,10 +35,26 @@ function successScore(successful, total, prior = SUCCESS_PRIOR) {
   return Math.floor((successful / (total + prior)) * 25);
 }
 
-// Logarithmic curve, reaching the cap of 20 around day 31: log2(32) * 4 = 20.
+// Logarithmic curve over the span of paid activity, reaching the cap of 20 around day
+// 1023: log2(1024) * 2 = 20.
+//
+// The multiplier was 4, which capped at day 31. That contradicted the paragraph below,
+// which says two years of sustained paid operation is the part an attacker cannot
+// shortcut: six weeks of wash payments collected the whole factor. Measured in
+// adversarial.test.js, a six-wallet ring reached 76/100, and 20 of those points were
+// this one.
+//
+// Fixing WHAT is measured (activity, not registration) was necessary and not
+// sufficient. An attacker who has to pay for a month instead of wait for a month is
+// paying gas and floating capital, which is a real cost, but it is weeks of cost for a
+// factor that claims to represent years. The multiplier now matches the claim.
+//
+// The trade is a slower ramp for honest agents: six months of trading is 14 of 20
+// rather than the full 20. That is the intended shape. A factor that everyone maxes in
+// a month distinguishes nobody.
 function ageCurve(days) {
   if (!(days > 0)) return 0;
-  return Math.min(20, Math.floor(Math.log2(days + 1) * 4));
+  return Math.min(20, Math.floor(Math.log2(days + 1) * 2));
 }
 
 /**

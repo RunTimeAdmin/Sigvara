@@ -72,14 +72,14 @@ test('ageScore: day 1 > 0', () => {
   assert.ok(ageScore(registeredAt) > 0);
 });
 
-test('ageScore: day 31 reaches max of 20', () => {
+test('ageScore: a month of activity is a fraction of the factor, not all of it', () => {
   const registeredAt = Math.floor(Date.now() / 1000) - 31 * 86400;
-  assert.equal(ageScore(registeredAt), 20);
+  assert.equal(ageScore(registeredAt), 10);
 });
 
-test('ageScore: capped at 20 for very old agents', () => {
-  const registeredAt = Math.floor(Date.now() / 1000) - 365 * 86400;
-  assert.equal(ageScore(registeredAt), 20);
+test('ageScore: capped at 20, but only for genuinely old agents', () => {
+  assert.equal(ageScore(Math.floor(Date.now() / 1000) - 365 * 86400), 17);
+  assert.equal(ageScore(Math.floor(Date.now() / 1000) - 3650 * 86400), 20);
 });
 
 // ---- communityScore --------------------------------------------------------
@@ -122,7 +122,7 @@ test('computeScore: total never exceeds 100', () => {
   const s = computeScore({ registeredAt, attestations: { successful: 300, total: 300 }, flags: 0 });
   assert.ok(s.total <= 100);
   assert.equal(s.successScore, 24);
-  assert.equal(s.total, 79);
+  assert.equal(s.total, 76); // age 17 at one year, not 20
 });
 
 test('computeScore: externalScore is included in the total', () => {
@@ -141,12 +141,12 @@ test('computeScore: externalScore clamped to the 0-15 cap', () => {
 });
 
 test('computeScore: with external, a realistic ceiling is 94', () => {
-  // 30 fee + 24 success + 20 age + 15 external + 5 community, propagation a stub.
+  // 30 fee + 24 success + 17 age + 15 external + 5 community, propagation a stub.
   // Success lands at 24 rather than 25: the prior means a finite record never
-  // quite reaches the cap.
+  // quite reaches the cap. Age is 17 at one year: the cap needs years, not a month.
   const registeredAt = Math.floor(Date.now() / 1000) - 365 * 86400;
   const s = computeScore({ registeredAt, attestations: { successful: 300, total: 300 }, flags: 0, externalScore: 15 });
-  assert.equal(s.total, 94);
+  assert.equal(s.total, 91);
   assert.ok(s.total <= 100);
 });
 
@@ -178,34 +178,42 @@ test('ageScore: waiting a month then paying once unlocks nothing', () => {
   assert.equal(ageScore(SEC - 31 * DAYS, win(0, 0, 1)), 0);
 });
 
-test('ageScore: a month of sustained trade reaches the cap', () => {
-  assert.equal(ageScore(SEC - 40 * DAYS, win(31, 0, 1)), 20);
+test('ageScore: a month of sustained trade is half the factor, not the cap', () => {
+  // The change measured in adversarial.test.js: this used to return 20, which handed
+  // the whole factor to six weeks of wash payments.
+  assert.equal(ageScore(SEC - 40 * DAYS, win(31, 0, 1)), 10);
+  assert.equal(ageScore(SEC - 1100 * DAYS, win(1023, 0, 1)), 20);
 });
 
 test('ageScore: tenure decays once the agent stops', () => {
   const active = ageScore(SEC - 800 * DAYS, win(730, 0, 1));
   const stale = ageScore(SEC - 800 * DAYS, win(730, 365, 0.06));
-  assert.equal(active, 20);
+  assert.equal(active, 19);
   assert.ok(stale <= 2, `abandoned tenure should nearly vanish, got ${stale}`);
   assert.ok(stale < active);
 });
 
 test('ageScore: recency is clamped, so a bad weight cannot inflate the factor', () => {
-  assert.equal(ageScore(SEC - 800 * DAYS, win(730, 0, 5)), 20);
+  assert.equal(ageScore(SEC - 800 * DAYS, win(730, 0, 5)), 19);
   assert.equal(ageScore(SEC - 800 * DAYS, win(730, 0, -1)), 0);
 });
 
 test('ageScore: with no activity data it falls back to the calendar', () => {
   // Payment verification off: existing deployments keep the old behaviour.
-  assert.equal(ageScore(SEC - 31 * DAYS, null), 20);
-  assert.equal(ageScore(SEC - 31 * DAYS), 20);
+  assert.equal(ageScore(SEC - 31 * DAYS, null), 10);
+  assert.equal(ageScore(SEC - 31 * DAYS), 10);
 });
 
-test('ageCurve: shape is unchanged, only what is fed into it', () => {
+test('ageCurve: full marks take years, not a month', () => {
+  // Was log2(days+1)*4, capping at day 31, which handed the whole factor to six weeks
+  // of wash payments (adversarial.test.js measured it). The curve now matches the
+  // claim in scoring.js that this represents sustained operation over years.
   assert.equal(ageCurve(0), 0);
-  assert.equal(ageCurve(1), 4);
-  assert.equal(ageCurve(7), 12);
-  assert.equal(ageCurve(31), 20);
+  assert.equal(ageCurve(1), 2);
+  assert.equal(ageCurve(7), 6);
+  assert.equal(ageCurve(31), 10);
+  assert.equal(ageCurve(365), 17);
+  assert.equal(ageCurve(1023), 20);
   assert.equal(ageCurve(3650), 20);
   assert.equal(ageCurve(-5), 0);
 });
@@ -222,5 +230,5 @@ test('computeScore: passes activity through to the age factor', () => {
     registeredAt: SEC - 730 * DAYS, attestations: { successful: 0, total: 0 }, flags: 0,
     activity: win(730, 0, 1),
   });
-  assert.equal(working.ageScore, 20);
+  assert.equal(working.ageScore, 19); // two years of active trade, just under the cap
 });
