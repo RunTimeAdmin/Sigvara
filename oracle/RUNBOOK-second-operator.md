@@ -379,26 +379,92 @@ nothing is not reaching the finalize branch at all.
 
 ## 9. When a divergence fires
 
-Whatever you conclude, write it down in [`docs/divergence-log.md`](../docs/divergence-log.md),
-including the cases where the checker was the broken one. A checker that reports
-disagreements and never publishes outcomes is worse than no checker: a reader finds an
-unexplained accusation against the primary and nothing else. A log containing only
-vindicated findings is a marketing document.
-
 A divergence is not proof the primary is wrong. It is a disagreement between two
-independent recomputations, and the checker can be the broken one.
+independent recomputations, and the checker can be the broken one. Every entry in
+[`docs/divergence-log.md`](../docs/divergence-log.md) so far was the checker's own cold
+start or a known reweight skew, not misconduct.
 
-1. Read it: `curl -s http://127.0.0.1:3031/divergence/<didHash>`. `factors` says which
-   factor moved, which usually says why.
-2. Check whether the disputed proposal is still live: compare `proposedAt` against
-   `block.timestamp + challengeWindow`. Past it, the score is already final and the
-   committee's reject power has expired.
-3. Compare the two oracles' inputs before blaming either. A `feeScore` or `successScore`
-   gap is usually one of them having observed a payment the other has not; fetch
-   `/evidence/<didHash>` from **both** and diff the payment lists.
-4. Only if the disagreement survives that is it a committee matter:
-   `rejectReputation(didHash)` from the `SLASHING_COMMITTEE_ROLE` wallet, inside the
-   window.
+Whatever you conclude, write it down there, including the cases where the checker was
+the broken one. A checker that reports disagreements and never publishes outcomes is
+worse than no checker: a reader finds an unexplained accusation against the primary and
+nothing else. A log containing only vindicated findings is a marketing document.
+
+### Triage
+
+Set these first; every command below uses them.
+
+```bash
+DID=0x…                      # didHash from the divergence record
+RPC=https://rpc.testnet.arc.io
+REP=0x6603C96275e85F724Cdf74666b399365e4cA29ed
+```
+
+**1. Read the record.** `factors` names the factor that moved, which usually names the
+cause.
+
+```bash
+curl -s https://checker.sigvara.xyz/divergence/$DID
+```
+
+A delta on `feeScore` or `successScore` means the two oracles saw different payments.
+A delta on `ageScore` alone, with the checker *higher*, usually means the checker has no
+payment events at all and fell back to the calendar curve: that is a cold start, not a
+finding. See the 20:31 entry of 2026-09-20 in the log.
+
+**2. Is the disputed proposal still live?** Past the window there is nothing to reject and
+the score is already final.
+
+```bash
+cast call $REP "getPendingScore(bytes32)" $DID --rpc-url $RPC
+cast call $REP "challengeWindow()(uint256)" --rpc-url $RPC
+cast block latest --field timestamp --rpc-url $RPC
+```
+
+`PendingScore` nests `ReputationData`, which is seven fields (six scores plus
+`lastUpdated`), so in the returndata `proposedAt` is word index 7, the eighth 32-byte
+word, and `exists` is word 8. Counting the scores and stopping at six lands on
+`lastUpdated`, which on a live proposal often holds the same value, so that mistake does
+not announce itself.
+
+The proposal is live while `proposedAt + challengeWindow > block.timestamp`. If the
+pending slot is empty, or holds a *different* `proposedAt` than the record, the disputed
+proposal has already turned over: the record is `superseded`, still visible, no longer
+actionable.
+
+**3. Diff the inputs before blaming either side.** This is the step that decides it.
+
+```bash
+curl -s https://oracle.sigvara.xyz/evidence/$DID  | jq -r '.evidence[].txHash' | sort > /tmp/primary.txt
+curl -s https://checker.sigvara.xyz/evidence/$DID | jq -r '.evidence[].txHash' | sort > /tmp/checker.txt
+diff /tmp/primary.txt /tmp/checker.txt
+```
+
+Attestations arrive over HTTP, not from the chain, so one operator can hold a settlement
+the other has never been told about. **A payment the checker is missing is not evidence
+against the primary.** Verify each disputed hash against the chain yourself rather than
+taking either operator's word:
+
+```bash
+cast tx <txHash> --rpc-url $RPC
+```
+
+If the transfer is real and matches the attested payer, amount and time, the primary
+counted a genuine payment the checker never received. That is an attestation fan-out gap:
+an operational finding about your own delivery, not misconduct. Seed the checker with the
+missing settlements (step 7a) and the next epoch agrees.
+
+The case that is *not* benign is the reverse: a hash in the primary's evidence that does
+not exist on chain, or does not match the amount and payer it was attested with. That is
+the one the committee exists for.
+
+**4. Only if the disagreement survives step 3** is it a committee matter.
+
+```bash
+cast send $REP "rejectReputation(bytes32)" $DID \
+  --rpc-url $RPC --private-key $COMMITTEE_KEY
+```
+
+From the `SLASHING_COMMITTEE_ROLE` wallet, inside the window.
 
 Nothing here is automatic. The contract does not require the two oracles to agree, and
 the checker cannot reject anything itself; it can only make the disagreement legible.
@@ -438,8 +504,8 @@ miss.
 
 ### Reaching the checker from another host
 
-The checker publishes to `127.0.0.1:3031`. Something has to expose `/health` and
-`/divergence`, and nothing else.
+The checker publishes to `127.0.0.1:3031`. Something has to expose `/health`,
+`/divergence` and `/evidence/`, and nothing else.
 
 Use whatever already terminates 80/443 on that box. On the first deployment that was a
 system nginx serving five unrelated sites, and a second server fighting it for the port
@@ -462,16 +528,25 @@ land.
 Then prove the surface is what you think it is, rather than assuming:
 
 ```bash
-for P in /health /divergence; do
-  printf "%-14s %s\n" "$P" "$(curl -s -o /dev/null -w '%{http_code}' https://checker.<domain>$P)"
+DID=<a didHash this checker has scored>
+
+for P in /health /divergence /divergence/$DID /evidence/$DID; do
+  printf "%-22s %s\n" "$P" "$(curl -s -o /dev/null -w '%{http_code}' https://checker.<domain>$P)"
 done
-for P in /attest /epoch /flag /link /metrics /score/0x00 /evidence/0x00 /; do
-  printf "%-20s %s\n" "$P" "$(curl -s -o /dev/null -w '%{http_code}' https://checker.<domain>$P)"
+printf "%-22s %s\n" "/evidence/0x00" \
+  "$(curl -s -o /dev/null -w '%{http_code}' https://checker.<domain>/evidence/0x00)"
+for P in /attest /epoch /flag /link /metrics /score/0x00 /; do
+  printf "%-22s %s\n" "$P" "$(curl -s -o /dev/null -w '%{http_code}' https://checker.<domain>$P)"
 done
 ```
 
-The first loop must be `200`, the second all `404`. A write path answering anything else
+The first loop must be `200`, the last all `404`. A write path answering anything else
 means the config matched more broadly than intended.
+
+`/evidence/0x00` must be **400**, and the distinction matters. A malformed didHash is
+rejected by the service, so 400 proves the request reached it. 404 there means nginx
+answered instead and the `/evidence/` location is missing or misspelled. Asserting 404
+would pass in both cases and test nothing, which is how a check quietly stops checking.
 
 ### Deploying it
 

@@ -31,14 +31,27 @@ server {
         return 404;
     }
 
-    # Exactly what the watcher polls.
+    # What the watcher polls, plus what triage needs.
     #   /health      liveness, and how the watcher tells "up and found nothing"
     #                from "gone"
     #   /divergence  the collection, and /divergence/<didHash> for one agent
+    #   /evidence/   the payments behind this checker's own number
     #
     # Everything else 404s before it reaches the service. The checker's write endpoints
     # (/attest, /flag, /link, /epoch) are token-gated, but a path nobody can reach needs
     # no token, and the token is one leaked env file from being the only thing in the way.
+    #
+    # /evidence was deliberately absent at first, on the principle that two paths are
+    # easier to verify than three. That turned out to break triage: a divergence names
+    # the factor that moved, and deciding whose fault it is means diffing the two
+    # oracles' payment lists. With /evidence closed, the primary's list was public and
+    # the checker's was not, so the step that settles the question needed a shell on
+    # this host and the checker's disagreement had to be taken on trust. That is the
+    # opposite of what a second operator is for.
+    #
+    # It carries nothing secret. Every field (tx hash, payer, amount, settledAt, Merkle
+    # leaf and proof) is either on chain already or published by the primary at the same
+    # path. Read-only GET, no token, no state change.
     location = /health {
         proxy_pass http://127.0.0.1:3031;
         include /etc/nginx/proxy_params;
@@ -54,6 +67,13 @@ server {
         include /etc/nginx/proxy_params;
     }
 
+    # Prefix, not exact: the didHash is part of the path. There is no bare /evidence
+    # collection endpoint, so nothing to add here beyond the prefix.
+    location ^~ /evidence/ {
+        proxy_pass http://127.0.0.1:3031;
+        include /etc/nginx/proxy_params;
+    }
+
     add_header X-Content-Type-Options nosniff always;
     add_header X-Frame-Options DENY always;
     add_header Referrer-Policy no-referrer always;
@@ -65,3 +85,6 @@ server {
 # can recompute a score. Publishing whether two independent operators agree on it is the
 # same argument one step further, and it carries nothing secret. Every field in it comes
 # from on-chain state plus payments the evidence endpoint already exposes.
+#
+# The same argument is why /evidence/ sits beside it. A disagreement you can see but
+# cannot check is an accusation, not a verification.
