@@ -103,6 +103,86 @@ self-payment out of the accused's stake. A second throwaway is fine.
 `bondAmount`, so it qualifies by equality. It is not the target here, but be aware that any
 slash against it would drop it below the floor and stop it proposing at the next epoch.
 
+## The cast of addresses
+
+Decided 20 September 2026. All three keys are held by the operator running the drill,
+which is a property of a self-administered drill and must be disclosed in the write-up.
+
+| Role | Address | Why |
+|---|---|---|
+| Reporter / committee | `0x045D6C1d8404297F13596061388f6598fA94a5b7` | Already holds `SLASHING_COMMITTEE_ROLE` on staking and reputation. ~20 USDC gas. |
+| Operator / victim | `0x18CBcE50390f5f6ebe4E20Fc17833F25c8D94811` | The deployer. Holds 5,000 SVR to bond the target, and `DEFAULT_ADMIN_ROLE` as a fallback if the committee key is ever lost. |
+| Target agent | created in step 0 | A throwaway. Not the demo agent. |
+
+`initiateSlash` reverts with `VictimIsReporter` if the two match, hence the split above.
+
+Naming the operator as victim means 25% of the bond returns to the address that posted
+it, and the reporter's 25% is also recoverable, so the drill's real cost is the 50%
+burned: **500 SVR**. That is a convenience of the drill, not a property of the protocol.
+In a real slash the victim is the harmed counterparty and none of it comes back.
+
+## Step 0: create the target
+
+Skipping this and using the demo agent is the one unrecoverable mistake available here.
+`Slashed` is terminal.
+
+```bash
+# A fresh agent key. Record both halves; the address is public, the key signs once.
+cast wallet new
+```
+
+The agent signs a digest binding itself to its operator. Build it from the contract
+rather than reconstructing it locally, so there is nothing to get wrong:
+
+```bash
+AGENT=<address from cast wallet new>
+OPERATOR=0x18CBcE50390f5f6ebe4E20Fc17833F25c8D94811
+PUBKEY=0x0000000000000000000000000000000000000000000000000000000000000001  # any nonzero bytes32
+IDENTITY=0x7e3aFC532eE5d922ab3cc3FFb510c7C8151477Dd
+
+DIGEST=$(cast call $IDENTITY "registrationDigest(address,address,bytes32)(bytes32)" \
+  $AGENT $OPERATOR $PUBKEY --rpc-url arc_testnet)
+
+SIG=$(cast wallet sign --data $DIGEST --private-key <AGENT_KEY>)
+```
+
+Check the signature with a free read before spending gas on it. This returns `true` or
+the registration will revert:
+
+```bash
+cast call $IDENTITY "verifyRegistration(address,address,bytes32,bytes)(bool)" \
+  $AGENT $OPERATOR $PUBKEY $SIG --rpc-url arc_testnet
+```
+
+Then register and bond. The operator is `msg.sender`, so these are sent from the
+operator key, and `depositStake` pulls SVR from it:
+
+```bash
+STAKING=0xA69d62B2a6774D21A2c15d5d83b27277eD31d35B
+SVR=0x41De2D6D55318e197a00E8f5B496eA2790e23E6c
+
+cast send $IDENTITY "registerAgent(address,bytes32,bytes)" $AGENT $PUBKEY $SIG \
+  --rpc-url arc_testnet --private-key <OPERATOR_KEY>
+
+# didHash is derived on chain and reproducible from the agent address alone.
+DID=$(cast call $IDENTITY "computeDidHash(address)(bytes32)" $AGENT --rpc-url arc_testnet)
+
+cast send $SVR "approve(address,uint256)" $STAKING 1000000000000000000000 \
+  --rpc-url arc_testnet --private-key <OPERATOR_KEY>
+cast send $STAKING "depositStake(bytes32,uint256)" $DID 1000000000000000000000 \
+  --rpc-url arc_testnet --private-key <OPERATOR_KEY>
+```
+
+Bond exactly `minimumStake` (1,000 SVR), since half of whatever it holds is burned.
+Confirm the target is real and distinct before filing anything against it:
+
+```bash
+cast call $STAKING "getStake(bytes32)(uint256)" $DID --rpc-url arc_testnet     # 1000e18
+cast call $IDENTITY "identities(bytes32)" $DID --rpc-url arc_testnet           # status 0 = Active
+test "$DID" != "0x8414ce0bf4f1e1695193623e0a656a9439e356f8bed0b8bf249b179fe77c7e19" \
+  && echo "OK: not the demo agent" || echo "STOP: this is the demo agent"
+```
+
 ## The sequence
 
 ### Day 0: file
@@ -142,6 +222,11 @@ is never hostage to committee silence.
 
 Whether you exercise the dispute branch is a choice. Doing it demonstrates more of the
 mechanism; skipping it keeps the drill to seven days instead of potentially twenty-one.
+
+**Decided for this run: skipped.** The straight path proves the claim that matters, that
+a bond is actually taken, in the minimum elapsed time. The dispute branch stays covered by
+`test/SlashDrillFork.t.sol`, which exercises freeze, uphold and reject against a fork of
+the live deployment. Say in the write-up that it was rehearsed rather than performed.
 
 Executing early fails, which is the guard that makes the window mean anything:
 
