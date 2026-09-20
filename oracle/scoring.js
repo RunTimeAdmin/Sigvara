@@ -107,56 +107,6 @@ function communityScore(unresolvedFlags) {
   return Math.max(0, Math.floor(5 - unresolvedFlags * 2));
 }
 
-// Full marks for bond coverage need roughly 2.3 units of bond per unit of volume:
-// log2(1 + 4*2.27) * 6 = 20. The curve is steep at the bottom, so the first multiples of
-// the minimum bond are worth the most, and flat at the top, so an agent that over-bonds
-// ten times over gains nothing extra for it.
-const MAX_BOND_SCORE = 20;
-
-// Volume, in feeUnits, at which coverage is believed in full. Below this the factor is
-// scaled down. See the confidence paragraph in bondScore.
-const BOND_CONFIDENCE_UNITS = 10;
-
-/**
- * Bond coverage: how much of the agent's own money stands behind the volume it claims.
- *
- * Every other factor measures activity, and activity is what a wash ring manufactures.
- * In a ring the payments return to the attacker, so volume costs gas and float rather
- * than money. A bond does not come back if the agent is slashed, which makes it the one
- * input that is expensive whether or not the behaviour behind it is genuine.
- *
- * Both sides are expressed in protocol units so that no price oracle is needed. The bond
- * is denominated in SVR and the volume in USDC, and any literal ratio between them would
- * need a live exchange rate, which is a dependency and an attack surface. Instead:
- *
- *     stakeUnits  = stake  / minimumStake      "how many minimum bonds"
- *     volumeUnits = volume / feeUnit           "how many fee points of trade"
- *     coverage    = stakeUnits / volumeUnits
- *
- * Both are dimensionless, so the result is scale invariant: an agent with 20x the bond
- * and 10k of volume scores the same as one with 200x and 100k. That is the intended
- * reading. The question is not how large an agent is, it is whether its exposure is
- * backed.
- *
- * The confidence term is what stops this being the cheapest factor in the score instead
- * of the most expensive one. Coverage is a ratio, so it runs to infinity as volume runs
- * to zero: post the minimum bond, do no work at all, and a bare curve would hand over
- * the whole 20 points. An agent with no exposure has nothing to back, so the honest
- * answer there is not full marks, it is no evidence. Confidence rises linearly to 1 at
- * BOND_CONFIDENCE_UNITS of volume, so the factor has to be earned by trading AND by
- * bonding, and neither alone will do.
- *
- * @param {number} stakeUnits   stake divided by minimumStake
- * @param {number} volumeUnits  decayed diversified volume divided by feeUnit
- */
-function bondScore(stakeUnits, volumeUnits, max = MAX_BOND_SCORE) {
-  if (!(stakeUnits > 0) || !(volumeUnits > 0)) return 0;
-  const coverage = stakeUnits / volumeUnits;
-  const curve = Math.log2(1 + 4 * coverage) * (max * 0.3);
-  const confidence = Math.min(1, volumeUnits / BOND_CONFIDENCE_UNITS);
-  return Math.max(0, Math.min(max, Math.floor(curve * confidence)));
-}
-
 /**
  * @param {{ registeredAt: number, attestations: { successful: number, total: number }, flags: number, externalScore?: number, measuredFeeScore?: number }} opts
  * @returns {{ feeScore, successScore, ageScore, externalScore, communityScore, propagationScore, total }}
@@ -186,7 +136,4 @@ function computeScore({
   return { feeScore: fs, successScore: ss, ageScore: as, externalScore: es, communityScore: cs, propagationScore: ps, total: fs + ss + as + es + cs + ps };
 }
 
-module.exports = {
-  computeScore, feeScore, successScore, ageScore, ageCurve, communityScore, bondScore,
-  SUCCESS_PRIOR, MAX_BOND_SCORE, BOND_CONFIDENCE_UNITS,
-};
+module.exports = { computeScore, feeScore, successScore, ageScore, ageCurve, communityScore, SUCCESS_PRIOR };
