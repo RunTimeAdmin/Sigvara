@@ -50,6 +50,33 @@ services:
       - checker_state:/data
       - checker_app:/app
 
+  # Public read-only surface, so the watcher can reach /divergence from a third host.
+  # Only /health and /divergence are proxied; every write path 404s before it reaches the
+  # service. See oracle/Caddyfile.checker.example for why that is not redundant with the
+  # write endpoints already being token-gated.
+  #
+  # Ports 80 and 443 only. The checker's own 3031 publish stays on loopback for local
+  # admin work such as seeding /attest.
+  caddy:
+    image: caddy:2-alpine
+    container_name: sigvara-caddy
+    restart: unless-stopped
+    depends_on:
+      - checker
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
 volumes:
   checker_state:
   checker_app:
+  # Holds the Let's Encrypt certificates. Keep the compose project name stable
+  # (`sigvara-checker`) or a rename creates an empty volume and Caddy re-requests every
+  # certificate, risking rate limits while the host is down.
+  caddy_data:
+  caddy_config:
