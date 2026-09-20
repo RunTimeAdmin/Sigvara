@@ -161,3 +161,80 @@ test('triage: nothing recorded is not an error', () => {
   const res2 = triage({ divergences: undefined, pendingByDid: {}, challengeWindowSec: WINDOW, nowSec: 1, seen: new Set() });
   assert.deepEqual(res2.alerts, []);
 });
+
+// ---- webhookPayload --------------------------------------------------------
+//
+// The watcher posted one generic shape to every destination, which Discord, Slack and
+// Telegram all reject. "Set WEBHOOK_URL" therefore delivered nothing to the three places
+// anyone would point it, and said so only in a log — on the component whose whole job is
+// reaching someone who is not reading logs.
+
+const { webhookPayload } = require('./watcher-policy');
+
+const ALERT = {
+  level: 'alert',
+  title: 'checker disputes a score, 2h 32m left to reject it',
+  lines: ['0xabc proposed total 12, checker computes 9', 'rejectReputation(0xabc) from the committee wallet.'],
+  at: '2026-09-20T21:00:00.000Z',
+  checker: 'https://checker.sigvara.xyz',
+};
+
+test('webhookPayload: Discord gets content', () => {
+  const p = webhookPayload('https://discord.com/api/webhooks/123/abc', ALERT);
+  assert.ok(typeof p.content === 'string');
+  assert.match(p.content, /ALERT: checker disputes a score/);
+  assert.match(p.content, /rejectReputation/);
+  assert.equal(p.text, undefined);
+});
+
+test('webhookPayload: Slack gets text', () => {
+  const p = webhookPayload('https://hooks.slack.com/services/T/B/X', ALERT);
+  assert.ok(typeof p.text === 'string');
+  assert.match(p.text, /ALERT/);
+  assert.equal(p.content, undefined);
+});
+
+test('webhookPayload: Telegram gets chat_id and text', () => {
+  const p = webhookPayload('https://api.telegram.org/bot123:ABC/sendMessage', ALERT, '-100999');
+  assert.equal(p.chat_id, '-100999');
+  assert.match(p.text, /ALERT/);
+  assert.equal(p.disable_web_page_preview, true);
+});
+
+test('webhookPayload: every shape carries which checker it came from', () => {
+  // Several watchers reporting into one channel are indistinguishable otherwise.
+  for (const url of [
+    'https://discord.com/api/webhooks/1/2',
+    'https://hooks.slack.com/services/T/B/X',
+    'https://api.telegram.org/bot1:A/sendMessage',
+  ]) {
+    const p = webhookPayload(url, ALERT, 'x');
+    const body = p.content || p.text;
+    assert.match(body, /checker: https:\/\/checker\.sigvara\.xyz/, url);
+  }
+});
+
+test('webhookPayload: an unrecognised destination keeps the original payload', () => {
+  // Backwards compatibility: a custom receiver already parsing the old shape must not
+  // break because this function was added.
+  const p = webhookPayload('https://alerts.example.com/hook', ALERT);
+  assert.equal(p.level, 'alert');
+  assert.deepEqual(p.lines, ALERT.lines);
+  assert.equal(p.checker, ALERT.checker);
+  assert.equal(p.content, undefined);
+});
+
+test('webhookPayload: a malformed URL does not throw', () => {
+  // A bad WEBHOOK_URL should degrade to the generic shape, not crash the alert path.
+  const p = webhookPayload('not a url', ALERT);
+  assert.equal(p.level, 'alert');
+});
+
+test('webhookPayload: truncates to each service limit rather than being rejected', () => {
+  const huge = { ...ALERT, lines: Array.from({ length: 500 }, (_, i) => `line ${i} ${'x'.repeat(40)}`) };
+  assert.ok(webhookPayload('https://discord.com/api/webhooks/1/2', huge).content.length <= 2000);
+  assert.ok(webhookPayload('https://hooks.slack.com/services/T/B/X', huge).text.length <= 3000);
+  assert.ok(webhookPayload('https://api.telegram.org/bot1:A/sendMessage', huge, 'x').text.length <= 4096);
+  // A truncated alert still says go and look; a rejected one says nothing.
+  assert.match(webhookPayload('https://discord.com/api/webhooks/1/2', huge).content, /ALERT/);
+});

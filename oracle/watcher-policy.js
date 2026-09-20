@@ -112,3 +112,50 @@ function triage({ divergences, pendingByDid, challengeWindowSec, nowSec, seen })
 }
 
 module.exports = { classifyDivergence, alertKey, checkerStatus, triage };
+
+/**
+ * Shape an alert for whatever is on the other end of WEBHOOK_URL.
+ *
+ * The watcher used to POST {level, title, lines, at, checker} to every destination,
+ * which is a sensible shape that almost nothing accepts. Discord wants `content`, Slack
+ * wants `text`, Telegram wants `chat_id` and `text` on a bot URL. So "just set
+ * WEBHOOK_URL" quietly delivered nothing to the three places anyone would actually point
+ * it, and the failure was a 400 in a log nobody reads — on the component whose entire
+ * job is reaching someone when nobody is reading logs.
+ *
+ * Detection is by hostname rather than a WEBHOOK_FORMAT setting, because the URL already
+ * says which service it is and a second setting is a second thing to get wrong.
+ * Anything unrecognised keeps the original payload, so an existing custom receiver is
+ * unaffected.
+ *
+ * @param {string} url        the webhook URL, used only to identify the service
+ * @param {{level,title,lines,at,checker}} alert
+ * @param {string} [chatId]   Telegram only; ignored elsewhere
+ */
+function webhookPayload(url, alert, chatId = '') {
+  const text = [
+    `[sigvara-watcher] ${String(alert.level).toUpperCase()}: ${alert.title}`,
+    ...(alert.lines || []).map(l => `  ${l}`),
+    `  checker: ${alert.checker}`,
+  ].join('\n');
+
+  let host = '';
+  try { host = new URL(url).hostname.toLowerCase(); } catch { return { ...alert }; }
+
+  // Telegram rejects the whole message over 4096; Discord over 2000. Truncating beats a
+  // 400, because a truncated alert still tells you to go and look.
+  const clip = (s, n) => (s.length <= n ? s : `${s.slice(0, n - 3)}...`);
+
+  if (host === 'api.telegram.org') {
+    return { chat_id: chatId, text: clip(text, 4096), disable_web_page_preview: true };
+  }
+  if (host === 'discord.com' || host === 'discordapp.com' || host.endsWith('.discord.com')) {
+    return { content: clip(text, 2000) };
+  }
+  if (host === 'hooks.slack.com') {
+    return { text: clip(text, 3000) };
+  }
+  return { ...alert };
+}
+
+module.exports.webhookPayload = webhookPayload;

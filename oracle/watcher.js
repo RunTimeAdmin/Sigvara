@@ -29,7 +29,7 @@
  */
 
 const { ethers } = require('ethers');
-const { checkerStatus, triage, alertKey } = require('./watcher-policy');
+const { checkerStatus, triage, alertKey, webhookPayload } = require('./watcher-policy');
 
 const cfg = {
   checkerUrl: (process.env.CHECKER_URL || '').replace(/\/+$/, ''),
@@ -43,6 +43,8 @@ const cfg = {
   // says "look"; this one says "you are about to lose the ability to act".
   finalWarningSeconds: Number(process.env.FINAL_WARNING_MINUTES || 60) * 60,
   webhookUrl: process.env.WEBHOOK_URL || '',
+  // Telegram only. Every other destination identifies its target in the URL itself.
+  webhookChatId: process.env.WEBHOOK_CHAT_ID || '',
 };
 
 if (!cfg.checkerUrl || !cfg.rpcUrl || !cfg.reputationAddress) {
@@ -80,12 +82,24 @@ async function notify(level, title, lines) {
   (level === 'ok' ? console.log : console.error)(text);
   if (!cfg.webhookUrl) return;
   try {
-    await fetch(cfg.webhookUrl, {
+    const payload = webhookPayload(
+      cfg.webhookUrl,
+      { level, title, lines, at: stamp, checker: cfg.checkerUrl },
+      cfg.webhookChatId,
+    );
+    const res = await fetch(cfg.webhookUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ level, title, lines, at: stamp, checker: cfg.checkerUrl }),
+      body: JSON.stringify(payload),
       signal: AbortSignal.timeout(20_000),
     });
+    // fetch only rejects on transport failure, so without this a 400 from a malformed
+    // payload or a revoked webhook counts as delivered. That is the exact failure this
+    // component cannot afford: believing it raised an alarm that nobody heard.
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      console.error(`[watcher] webhook rejected the alert: ${res.status} ${detail.slice(0, 200)}`);
+    }
   } catch (err) {
     // A webhook that is down must not stop the loop, and must not be silent either.
     console.error(`[watcher] webhook delivery failed: ${err.message}`);
