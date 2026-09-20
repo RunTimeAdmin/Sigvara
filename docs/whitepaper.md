@@ -422,12 +422,13 @@ Stated because they are true, not because they are solved.
    operators to agree, and the checker cannot reject anything itself. It makes a
    disagreement legible; a human committee must act on it inside six hours. Making
    agreement a protocol guarantee needs N-of-M on `pendingScores` and a UUPS upgrade.
-3. ~~**The checker can rarely overwrite.**~~ Closed in code, pending deployment.
-   `proposeIfEmpty` gives `pendingScores` compare-and-swap semantics: it reverts with
-   `ScoreAlreadyPending` rather than replacing a proposal that landed between the
-   checker's read and its transaction. The checker uses it; the primary keeps the
-   replacing entry point, because overwriting its own stale proposal with a fresher one
-   is intended. Needs a UUPS upgrade to take effect on Arc.
+3. ~~**The checker can rarely overwrite.**~~ Closed, and deployed to Arc testnet on
+   20 September 2026. `proposeIfEmpty` gives `pendingScores` compare-and-swap semantics:
+   it reverts with `ScoreAlreadyPending(didHash, proposedAt)` rather than replacing a
+   proposal that landed between the checker's read and its transaction, and it names the
+   proposal that won so the loser needs no second call. The checker uses it; the primary
+   keeps the replacing entry point, because overwriting its own stale proposal with a
+   fresher one is intended rather than a race.
 4. **No slash has been executed in public.** The mechanism is tested; it has not been
    exercised against a real agent where anyone could watch.
 5. **No external audit.** A precondition for mainnet.
@@ -570,11 +571,12 @@ Ordered by what unblocks what, not by difficulty.
    **Its alerts currently go to a container log.** `WEBHOOK_URL` is unset, so the
    component that exists for 3am cannot reach anyone at 3am. That is the next thing to
    fix, and it is worth more than any remaining item on this list.
-4. **`proposeIfEmpty`.** *Written and tested, not deployed.* Closes the checker's
-   overwrite race by making the contract check and write in the same breath, which is the
-   only place that gap can be closed: there is no atomicity between a view call and the
-   transaction after it. Six contract tests, including that a live proposal's
-   `challengeWindow` is not restarted by a losing writer. Ships on the next UUPS upgrade.
+4. ~~**`proposeIfEmpty`.**~~ Deployed 20 September 2026. Closes the checker's overwrite
+   race by making the contract check and write in the same breath, which is the only place
+   that gap can be closed: there is no atomicity between a view call and the transaction
+   after it. Six contract tests, including that a losing writer does not restart a live
+   proposal's challenge window. Verified against the live chain by simulating the call
+   from the checker's address onto an occupied slot and decoding the revert.
 5. **A reward distributor.** Replaces `rewardPool` as a plain address with a contract
    paying operators for epochs served.
 6. **External audit**, then Arc mainnet with a committee multisig.
