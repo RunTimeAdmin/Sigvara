@@ -534,3 +534,35 @@ test('readWithBackoff: gives up after the attempt cap rather than looping foreve
   );
   assert.equal(calls, 3, 'should stop at the cap, not retry indefinitely');
 });
+
+// ---- isSlotTaken -----------------------------------------------------------
+//
+// A checker proposes only to cover a silent primary. If the primary comes back and wins
+// the race, proposeIfEmpty reverts with ScoreAlreadyPending — which is the system working,
+// not a failure. Counting it as a propose error would make a healthy handover look like
+// an incident and bury real errors in the same metric.
+
+test('isSlotTaken: recognises the decoded custom error', () => {
+  assert.equal(chain.isSlotTaken({ errorName: 'ScoreAlreadyPending' }), true);
+});
+
+test('isSlotTaken: recognises it under ethers v6 revert shape', () => {
+  assert.equal(chain.isSlotTaken({ revert: { name: 'ScoreAlreadyPending', args: [] } }), true);
+});
+
+test('isSlotTaken: falls back to the message when the node did not decode it', () => {
+  // Some nodes return the revert without enough ABI context for ethers to name it.
+  assert.equal(chain.isSlotTaken(new Error('execution reverted: ScoreAlreadyPending(0x..., 123)')), true);
+  assert.equal(chain.isSlotTaken({ shortMessage: 'execution reverted (ScoreAlreadyPending)' }), true);
+});
+
+test('isSlotTaken: a real failure is not mistaken for a lost race', () => {
+  // The dangerous direction. Swallowing these would make the checker silently stop
+  // proposing while reporting nothing wrong.
+  assert.equal(chain.isSlotTaken(new Error('insufficient funds for gas')), false);
+  assert.equal(chain.isSlotTaken({ errorName: 'ScoreOutOfRange' }), false);
+  assert.equal(chain.isSlotTaken({ revert: { name: 'OracleNotBonded' } }), false);
+  assert.equal(chain.isSlotTaken(new Error('AgentNotScorable')), false);
+  assert.equal(chain.isSlotTaken(null), false);
+  assert.equal(chain.isSlotTaken(undefined), false);
+});

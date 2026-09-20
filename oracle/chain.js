@@ -20,6 +20,10 @@ const REPUTATION_ABI = [
   'function getTotalScore(bytes32 didHash) view returns (uint8)',
   'function getReputation(bytes32 didHash) view returns (tuple(uint8 feeScore, uint8 successScore, uint8 ageScore, uint8 externalScore, uint8 communityScore, uint8 propagationScore, uint256 lastUpdated))',
   'function proposeReputation(bytes32 didHash, tuple(uint8 feeScore, uint8 successScore, uint8 ageScore, uint8 externalScore, uint8 communityScore, uint8 propagationScore, uint256 lastUpdated) data, bytes32 evidenceRoot)',
+  'function proposeIfEmpty(bytes32 didHash, tuple(uint8 feeScore, uint8 successScore, uint8 ageScore, uint8 externalScore, uint8 communityScore, uint8 propagationScore, uint256 lastUpdated) data, bytes32 evidenceRoot)',
+  // Declared so ethers decodes the revert into a named error instead of raw bytes. A
+  // checker that loses the race needs to tell that apart from a real failure.
+  'error ScoreAlreadyPending(bytes32 didHash, uint256 proposedAt)',
   'function finalizeReputation(bytes32 didHash)',
   'function getPendingScore(bytes32 didHash) view returns (tuple(tuple(uint8 feeScore, uint8 successScore, uint8 ageScore, uint8 externalScore, uint8 communityScore, uint8 propagationScore, uint256 lastUpdated) data, uint256 proposedAt, bool exists))',
   'function challengeWindow() view returns (uint256)',
@@ -350,8 +354,21 @@ async function isBonded(didHash) {
   }
 }
 
-async function proposeScore(didHash, scores, evidenceRoot = ethers.ZeroHash) {
-  const tx = await reputationContract.proposeReputation(didHash, {
+/**
+ * Propose a score.
+ *
+ * `ifEmpty` picks the compare-and-swap entry point, which reverts rather than replacing
+ * a proposal that landed between the caller's check and this transaction. Checker mode
+ * passes it; the primary does not, because replacing its own stale proposal with a
+ * fresher one is the intended behaviour.
+ *
+ * Returns null when the slot was taken. That is a normal outcome for a checker covering
+ * a gap, not a failure: it means the primary came back. Distinguishing it from a real
+ * error is why ScoreAlreadyPending is in the ABI above.
+ */
+async function proposeScore(didHash, scores, evidenceRoot = ethers.ZeroHash, ifEmpty = false) {
+  const method = ifEmpty ? 'proposeIfEmpty' : 'proposeReputation';
+  const tx = await reputationContract[method](didHash, {
     feeScore:         scores.feeScore,
     successScore:     scores.successScore,
     ageScore:         scores.ageScore,
@@ -362,6 +379,16 @@ async function proposeScore(didHash, scores, evidenceRoot = ethers.ZeroHash) {
   }, evidenceRoot);
   await tx.wait(1);
   return tx.hash;
+}
+
+/// True when this error is the pending slot having been taken by someone else, rather
+/// than anything being wrong. Matched on the decoded error name first, with a string
+/// fallback for nodes that return the revert without enough ABI context to decode it.
+function isSlotTaken(err) {
+  if (!err) return false;
+  if (err.errorName === 'ScoreAlreadyPending') return true;
+  if (err.revert && err.revert.name === 'ScoreAlreadyPending') return true;
+  return /ScoreAlreadyPending/.test(String(err.shortMessage || err.message || ''));
 }
 
 async function finalizeScore(didHash) {
@@ -449,6 +476,7 @@ async function chargeEpoch(didHash) {
 
 module.exports = {
   readWithBackoff,
+  isSlotTaken,
   init,
   reset,
   verifyDidHashDerivation,

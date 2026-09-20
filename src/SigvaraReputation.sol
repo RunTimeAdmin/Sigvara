@@ -211,6 +211,9 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
 
     error ScoreOutOfRange(string factor, uint8 value, uint8 max);
     error NoScorePending(bytes32 didHash);
+    /// proposeIfEmpty found the slot occupied. Carries proposedAt so the loser of the
+    /// race can tell whose proposal beat it without a second call.
+    error ScoreAlreadyPending(bytes32 didHash, uint256 proposedAt);
     error ChallengeWindowActive(bytes32 didHash, uint256 finalizableAt);
     error ChallengeWindowExpired(bytes32 didHash, uint256 expiredAt);
     error IdentityRegistryNotSet();
@@ -310,11 +313,52 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
      * @dev    Validates each factor against its cap before accepting. Replaces any
      *         still-pending proposal for the same agent and restarts the window —
      *         the newer proposal reflects fresher on-chain state.
+     *
+     *         That replacement is correct for the primary and dangerous for anyone
+     *         else. See proposeIfEmpty.
      */
     function proposeReputation(bytes32 didHash, ReputationData calldata data, bytes32 evidenceRoot)
         external
         onlyRole(ORACLE_ROLE)
     {
+        _propose(didHash, data, evidenceRoot);
+    }
+
+    /**
+     * @notice Propose only if no proposal is pending. Reverts instead of replacing one.
+     * @dev    Compare-and-swap for `pendingScores`, for operators whose job is to cover
+     *         a gap rather than to win an argument.
+     *
+     *         A checking operator proposes only when the primary has gone quiet, and it
+     *         decides that by reading the slot and finding it empty. Between that read
+     *         and its transaction landing, the primary can propose. `proposeReputation`
+     *         would then overwrite a live proposal, restart its six-hour challenge window,
+     *         and record no divergence, because the overwrite path never reaches the
+     *         comparison. The checker would be destroying the evidence it exists to
+     *         produce, and buying the proposal it replaced another six hours out of the
+     *         committee's reach.
+     *
+     *         Re-reading immediately before writing narrows that window to one round trip.
+     *         It cannot close it: there is no atomicity between a view call and the
+     *         transaction that follows. Only the contract can check and write in the same
+     *         breath, which is what this does.
+     *
+     *         The primary keeps using `proposeReputation`, because replacing its own
+     *         stale proposal with a fresher one is the intended behaviour.
+     */
+    function proposeIfEmpty(bytes32 didHash, ReputationData calldata data, bytes32 evidenceRoot)
+        external
+        onlyRole(ORACLE_ROLE)
+    {
+        PendingScore storage existing = pendingScores[didHash];
+        if (existing.exists) revert ScoreAlreadyPending(didHash, existing.proposedAt);
+        _propose(didHash, data, evidenceRoot);
+    }
+
+    /// Shared body. Kept private and identical so the two entry points cannot drift:
+    /// a cap enforced on one path and not the other would be a hole shaped exactly like
+    /// the caller that forgot.
+    function _propose(bytes32 didHash, ReputationData calldata data, bytes32 evidenceRoot) private {
         _requireScorable(didHash);
         _requireBondedOracle();
 

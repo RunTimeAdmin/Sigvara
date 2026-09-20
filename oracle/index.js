@@ -531,12 +531,31 @@ async function runEpochInner() {
         const evidenceRoot = payments.required(paymentCfg)
           ? merkle.rootFor(getPaymentEvents(didHash))
           : undefined;
-        const txHash    = await chain.proposeScore(didHash, scores, evidenceRoot);
+        // Checker mode uses the compare-and-swap entry point. It decided to propose by
+        // reading the slot and finding it empty, and the primary can land a proposal in
+        // the gap between that read and this transaction. proposeReputation would replace
+        // it, restart its six-hour window, and record no divergence, so the checker would
+        // be destroying the evidence it exists to produce. proposeIfEmpty makes the
+        // contract check and write in the same breath, which is the only place that gap
+        // can actually be closed.
+        //
+        // The primary keeps the replacing entry point: overwriting its own stale proposal
+        // with a fresher one is the intended behaviour, not a race.
+        const txHash    = await chain.proposeScore(didHash, scores, evidenceRoot, cfg.checkerMode);
         metrics.inc('proposeSuccesses');
 
         console.log(`[oracle]   ${didHash.slice(0, 10)}… proposed score=${scores.total}/100 tx=${txHash.slice(0, 10)}…`);
         proposed++;
       } catch (err) {
+        // Losing the race is the system working, not an error. The checker went to cover
+        // a silent primary and the primary came back first, which is the outcome anyone
+        // would want. Counting it as a failure would make a healthy handover look like
+        // an incident, and would bury real propose errors in the same number.
+        if (chain.isSlotTaken(err)) {
+          console.log(`[oracle]   ${didHash.slice(0, 10)}… primary proposed first, standing down`);
+          metrics.inc('proposeSlotTaken');
+          continue;
+        }
         console.error(`[oracle]   ${didHash.slice(0, 10)}… error: ${err.message}`);
         metrics.inc('proposeErrors');
       }

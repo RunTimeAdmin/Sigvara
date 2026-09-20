@@ -231,6 +231,95 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
     }
 
     // -------------------------------------------------------------------------
+    // proposeIfEmpty — compare-and-swap for the pending slot
+    // -------------------------------------------------------------------------
+    //
+    // A checking operator proposes only when the primary has gone quiet, deciding that by
+    // reading the slot and finding it empty. Between that read and its transaction
+    // landing, the primary can propose. proposeReputation would replace it, restart the
+    // six-hour window, and record no divergence — the checker destroying the evidence it
+    // exists to produce. These pin the fix.
+
+    function test_proposeIfEmpty_writesIntoAnEmptySlot() public {
+        vm.prank(oracle);
+        rep.proposeIfEmpty(DID, maxScore, bytes32(0));
+
+        SigvaraReputation.PendingScore memory pending = rep.getPendingScore(DID);
+        assertTrue(pending.exists, "nothing was written");
+        assertEq(pending.proposedAt, block.timestamp);
+        assertEq(pending.data.feeScore, rep.MAX_FEE_SCORE());
+    }
+
+    function test_proposeIfEmpty_revertsRatherThanReplacingALiveProposal() public {
+        // The primary gets there first.
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, bytes32(uint256(0xAAAA)));
+        uint256 primaryProposedAt = block.timestamp;
+
+        // Time passes inside the challenge window, then the checker's tx lands.
+        vm.warp(block.timestamp + 1 hours);
+
+        SigvaraReputation.ReputationData memory lower = maxScore;
+        lower.feeScore = 1;
+
+        vm.expectRevert(
+            abi.encodeWithSelector(SigvaraReputation.ScoreAlreadyPending.selector, DID, primaryProposedAt)
+        );
+        vm.prank(oracle);
+        rep.proposeIfEmpty(DID, lower, bytes32(uint256(0xBBBB)));
+
+        // The primary's proposal is untouched, and crucially its window did not restart.
+        SigvaraReputation.PendingScore memory pending = rep.getPendingScore(DID);
+        assertEq(pending.proposedAt, primaryProposedAt, "challenge window was restarted");
+        assertEq(pending.data.feeScore, rep.MAX_FEE_SCORE(), "live proposal was overwritten");
+        assertEq(pending.evidenceRoot, bytes32(uint256(0xAAAA)), "evidence root was replaced");
+    }
+
+    function test_proposeIfEmpty_worksAgainOnceTheSlotIsFinalized() public {
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
+        vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
+        rep.finalizeReputation(DID);
+
+        // Finalizing empties the pending slot, so cover is possible again.
+        vm.prank(oracle);
+        rep.proposeIfEmpty(DID, maxScore, bytes32(0));
+        assertTrue(rep.getPendingScore(DID).exists);
+    }
+
+    function test_proposeIfEmpty_worksAgainAfterACommitteeRejection() public {
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
+        vm.prank(committee);
+        rep.rejectReputation(DID);
+
+        vm.prank(oracle);
+        rep.proposeIfEmpty(DID, maxScore, bytes32(0));
+        assertTrue(rep.getPendingScore(DID).exists, "a rejected slot must be coverable");
+    }
+
+    function test_proposeIfEmpty_enforcesTheSameCapsAsProposeReputation() public {
+        // The two entry points share a private body precisely so they cannot drift. A cap
+        // enforced on one path and not the other is a hole shaped like the caller that
+        // forgot to check.
+        SigvaraReputation.ReputationData memory bad = maxScore;
+        uint8 max = rep.MAX_FEE_SCORE();
+        bad.feeScore = max + 1;
+
+        vm.expectRevert(
+            abi.encodeWithSelector(SigvaraReputation.ScoreOutOfRange.selector, "feeScore", max + 1, max)
+        );
+        vm.prank(oracle);
+        rep.proposeIfEmpty(DID, bad, bytes32(0));
+    }
+
+    function test_proposeIfEmpty_reverts_notOracle() public {
+        vm.expectRevert();
+        vm.prank(makeAddr("stranger"));
+        rep.proposeIfEmpty(DID, maxScore, bytes32(0));
+    }
+
+    // -------------------------------------------------------------------------
     // finalizeReputation
     // -------------------------------------------------------------------------
 
