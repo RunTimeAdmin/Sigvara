@@ -230,6 +230,8 @@ FEE_REGISTRY_ADDRESS=           # MUST be empty
 RPC_URL=https://rpc.blockdaemon.testnet.arc.io   # NOT the primary's provider
 ORACLE_PRIVATE_KEY=<CHECKER_KEY>
 ORACLE_STATE_PATH=/data/oracle-state.json        # its own volume, not the primary's
+HOST=0.0.0.0                                     # required for the port mapping to work
+ORACLE_ADMIN_TOKEN=<openssl rand -hex 32>        # required BECAUSE host is not loopback
 IDENTITY_ADDRESS=0x7e3aFC532eE5d922ab3cc3FFb510c7C8151477Dd
 REPUTATION_ADDRESS=0x6603C96275e85F724Cdf74666b399365e4cA29ed
 ```
