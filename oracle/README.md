@@ -383,8 +383,12 @@ Setup, step by step with the exact transactions, is in
 1. A separate wallet, on separate hardware, with a **different RPC endpoint**. A checker
    sharing a host and a chain view with what it checks mostly proves the code is
    deterministic.
-2. `depositBond()` on `SigvaraOracleBond` for at least `bondAmount` (1000 SVR on Arc
-   testnet), then admission by `DEFAULT_ADMIN_ROLE` via `admit()`.
+2. `depositBond()` on `SigvaraOracleBond` for at least `bondAmount` (25,000 SVR on
+   Arc testnet), then admission by `DEFAULT_ADMIN_ROLE` via `admit()`. The testnet
+   figure is set above the faucet's reach on purpose: `SVRToken.faucet()` mints up to
+   10,000 per address per day, so a bond of 1,000 was a tenth of one free daily claim
+   and deterred nothing. 25,000 is two and a half days of claims: a nuisance for a
+   casual sybil, trivial for anyone actually standing up an operator.
 3. `ORACLE_ROLE` on `SigvaraReputation`, granted by `DEFAULT_ADMIN_ROLE`.
 4. Its own `ORACLE_STATE_PATH`. Sharing a state file would mean sharing the payment
    observations the score is computed from, which is most of what is being checked.

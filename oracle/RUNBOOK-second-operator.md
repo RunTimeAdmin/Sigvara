@@ -9,7 +9,9 @@ Read step 8 before you start step 3.
 
 ## Addresses and parameters
 
-Arc testnet, chain ID `5042002`. All read off chain on 19 Sep 2026.
+Arc testnet, chain ID `5042002`. Read off chain on 19 Sep 2026, except `bondAmount`,
+which is the value after the raise in step 0 and is not on chain until that
+transaction lands.
 
 | | |
 |---|---|
@@ -17,7 +19,7 @@ Arc testnet, chain ID `5042002`. All read off chain on 19 Sep 2026.
 | `SigvaraOracleBond` | `0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171` |
 | `SigvaraIdentity` | `0x7e3aFC532eE5d922ab3cc3FFb510c7C8151477Dd` |
 | SVR token | `0x41De2D6D55318e197a00E8f5B496eA2790e23E6c` |
-| `bondAmount()` | 1000 SVR (`1000e18`) |
+| `bondAmount()` | 25,000 SVR (`25000e18`) |
 | `unbondingPeriod()` | 604800 s (7 days) |
 | `challengeWindow()` | 21600 s (6 hours) |
 | `activeCount()` before this runbook | 1 |
@@ -39,10 +41,57 @@ cast call 0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171 "bondAmount()(uint256)" --r
   `rpc.drpc.testnet.arc.io`, `rpc.quicknode.testnet.arc.io`. The primary uses Circle, so
   the checker should not. Verified 19 Sep 2026: all four are live and agree on
   `getTotalScore`.
-- **1000 SVR**, plus USDC for gas. USDC is the native gas token on Arc.
+- **25,000 SVR**, plus USDC for gas. USDC is the native gas token on Arc. The figure
+  sits above the faucet's daily reach on purpose: `SVRToken.faucet()` mints at most
+  10,000 per address per day, so the previous 1,000 was a tenth of one free claim and
+  bonded nothing. Two and a half days of claims, or one call from a funded wallet.
 - **Access to the `DEFAULT_ADMIN_ROLE` wallet**, for steps 4 and 5. If that is a
   multisig, those two steps are proposals, not transactions, and this runbook stalls
   until they are executed.
+
+## 0. Raise the operator bond (once, admin)
+
+Skip if `bondAmount()` already reads 25,000 SVR.
+
+The bond was 1,000 SVR, which on this testnet bonded nothing: `SVRToken.faucet()` mints
+up to 10,000 per address per day to anyone, so the bond was a tenth of one free daily
+claim and an operator could sybil the set for free. 25,000 puts it two and a half days
+of claims out of reach.
+
+**Order matters, and getting it wrong stops scoring.** `isActiveOperator` is evaluated
+live:
+
+```solidity
+return op.status == Status.Active && op.bond >= bondAmount;
+```
+
+There is no grandfathering. The moment `bondAmount` exceeds the *primary's* posted bond,
+`_requireBondedOracle` rejects it and every `proposeReputation` reverts with
+`OracleNotBonded`. The oracle keeps running and logging hourly failures while no score
+is proposed, which is a quiet way to break the protocol.
+
+So: read the primary's bond, top it up if needed, and only then raise the floor.
+
+```bash
+# 1. what the primary has posted
+cast call 0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171   "operators(address)(uint256,uint8,uint256)" <PRIMARY_ORACLE_ADDRESS>   --rpc-url https://rpc.testnet.arc.io
+
+# 2. if the first number is below 25000e18, top it up FROM THE PRIMARY'S WALLET first
+cast send 0x41De2D6D55318e197a00E8f5B496eA2790e23E6c   "approve(address,uint256)" 0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171 25000000000000000000000   --rpc-url https://rpc.testnet.arc.io --private-key <PRIMARY_ORACLE_KEY>
+cast send 0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171   "depositBond(uint256)" <TOP_UP_AMOUNT_WEI>   --rpc-url https://rpc.testnet.arc.io --private-key <PRIMARY_ORACLE_KEY>
+
+# 3. only now raise the floor, from the admin wallet
+cast send 0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171   "setBondAmount(uint256)" 25000000000000000000000   --rpc-url https://rpc.testnet.arc.io --private-key <ADMIN_KEY>
+
+# 4. confirm the primary survived the raise
+cast call 0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171 "isActiveOperator(address)(bool)"   <PRIMARY_ORACLE_ADDRESS> --rpc-url https://rpc.testnet.arc.io   # must be true
+```
+
+If step 4 returns `false`, the primary is below the new floor and is no longer scoring.
+Top it up; the floor does not need to be lowered again.
+
+Mainnet is a separate decision. 25,000 of a 1,000,000,000 supply is 0.0025%, chosen here
+against a faucet rather than against what corrupting a score is worth.
 
 ## 1. Generate the checker wallet
 
@@ -76,11 +125,11 @@ checker wallet:
 
 ```bash
 cast send 0x41De2D6D55318e197a00E8f5B496eA2790e23E6c \
-  "approve(address,uint256)" 0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171 1000000000000000000000 \
+  "approve(address,uint256)" 0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171 25000000000000000000000 \
   --rpc-url <CHECKER_RPC> --private-key <CHECKER_KEY>
 
 cast send 0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171 \
-  "depositBond(uint256)" 1000000000000000000000 \
+  "depositBond(uint256)" 25000000000000000000000 \
   --rpc-url <CHECKER_RPC> --private-key <CHECKER_KEY>
 ```
 
@@ -230,7 +279,7 @@ cast send 0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171 "withdrawBond()" \
 ```
 
 Stopping the container is enough to stop it writing. Unbonding is only needed to get the
-1000 SVR back, and the bond stays slashable for the whole cooldown.
+25,000 SVR back, and the bond stays slashable for the whole cooldown.
 
 Governance can also force this with `removeOperator(address)` from
 `DEFAULT_ADMIN_ROLE`, and should revoke `ORACLE_ROLE` at the same time. Revoking the
