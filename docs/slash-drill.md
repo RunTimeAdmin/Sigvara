@@ -143,7 +143,11 @@ IDENTITY=0x7e3aFC532eE5d922ab3cc3FFb510c7C8151477Dd
 DIGEST=$(cast call $IDENTITY "registrationDigest(address,address,bytes32)(bytes32)" \
   $AGENT $OPERATOR $PUBKEY --rpc-url arc_testnet)
 
-SIG=$(cast wallet sign --data $DIGEST --private-key <AGENT_KEY>)
+# Bare form: a 0x message is hex-decoded, then prefixed with the Ethereum Signed
+# Message header, which is exactly the toEthSignedMessageHash the contract applies.
+# NOT --data (that means EIP-712 JSON typed data) and NOT --no-hash (that skips the
+# prefix). Both were checked against verifyRegistration; only the bare form returns true.
+SIG=$(cast wallet sign $DIGEST --private-key <AGENT_KEY>)
 ```
 
 Check the signature with a free read before spending gas on it. This returns `true` or
