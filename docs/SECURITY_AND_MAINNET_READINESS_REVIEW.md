@@ -37,10 +37,15 @@
 >   `activeCount` is 2, but two independent recomputations agreeing is not two independent
 >   parties agreeing. Only the primary writes scores; the checker makes a disagreement
 >   legible and a committee must still act on it.
-> - Scoring reads the wall clock rather than the chain clock. Measured on the first day
->   the two ran together, this moved `recency` between them (0.982146 against 0.982148)
->   without changing any integer factor. It is bounded by the divergence tolerance rather
->   than eliminated, and it means the operators are not bit-for-bit deterministic.
+> - ~~Scoring reads the wall clock rather than the chain clock.~~ Closed 20 September.
+>   The epoch scores against the block timestamp, and the checker rescores a pending
+>   proposal at its own `proposedAt` before comparing. The second half is the one that
+>   mattered: two operators run on independent schedules, so sharing a clock source does
+>   not make them simultaneous. Asking "what should the primary have computed when it
+>   proposed this" does, and a divergence now means the evidence disagreed rather than the
+>   epochs being minutes apart. The 0.982146/0.982148 difference cited here as evidence of
+>   drift was the latency between two endpoint fetches roughly twenty seconds apart, not
+>   host clocks.
 > - Every privileged role on testnet is a single EOA, including the slashing committee.
 >   Admin and upgrade rights are not on a timelock or Safe.
 > - No slash has been run end to end on a live network.
