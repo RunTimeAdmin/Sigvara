@@ -23,9 +23,12 @@ import "../src/SigvaraReputation.sol";
  *   forge test --match-contract SlashDrillFork -vv
  *
  * The one thing it cannot rehearse is who signs. SLASHING_COMMITTEE_ROLE on Arc is held
- * by an address set at deployment, and none of the wallets in this repository hold it.
- * Here the role is granted on the fork from DEFAULT_ADMIN_ROLE. Before the live drill,
- * find that address and confirm you hold its key.
+ * by COMMITTEE below, recovered from the RoleGranted log at deployment (see
+ * docs/slash-drill.md). This fork pranks that address rather than granting the role to a
+ * fresh one, so the rehearsal exercises the account that will actually sign. What it
+ * still cannot tell you is whether anyone holds that key. Confirm custody before the
+ * live drill: a proposal filed with no way to resolve it leaves an agent suspended and
+ * its bond frozen until cancelSlash, which needs the same key.
  */
 contract SlashDrillForkTest is Test {
     // Live Arc testnet, from deployments/5042002.json
@@ -35,14 +38,19 @@ contract SlashDrillForkTest is Test {
     IERC20            constant SVR      = IERC20(0x41De2D6D55318e197a00E8f5B496eA2790e23E6c);
 
     address constant ADMIN = 0x18CBcE50390f5f6ebe4E20Fc17833F25c8D94811; // DEFAULT_ADMIN_ROLE
+
+    /// The live SLASHING_COMMITTEE_ROLE holder on Arc, on both staking and reputation.
+    /// Set at deploy from COMMITTEE_ADDRESS; the role is not enumerable, so this was read
+    /// back from the RoleGranted event in the deployment block rather than guessed.
+    address constant COMMITTEE = 0x045D6C1d8404297F13596061388f6598fA94a5b7;
+
     address constant BURN  = address(0xdead);
 
     // The live bonded agent. Targeting the real one is the point: it has a real stake,
     // a real status and a real score, so the assertions below are about production state.
     bytes32 constant DID = 0x8414ce0bf4f1e1695193623e0a656a9439e356f8bed0b8bf249b179fe77c7e19;
 
-    address committee = makeAddr("committee");
-    address victim    = makeAddr("victim");
+    address victim = makeAddr("victim");
 
     uint256 stakeBefore;
     uint256 challengePeriod;
@@ -50,14 +58,18 @@ contract SlashDrillForkTest is Test {
     function setUp() public {
         vm.createSelectFork(vm.rpcUrl("arc_testnet"));
 
-        // The committee address on Arc is not one this repo holds a key for, so the role
-        // is granted here. On the live drill this step does not exist: you sign with the
-        // wallet that already has it.
-        // Read the role BEFORE pranking: vm.prank applies to the next call only, and a
-        // view call in the same statement consumes it.
-        bytes32 role = STAKING.SLASHING_COMMITTEE_ROLE();
-        vm.prank(ADMIN);
-        STAKING.grantRole(role, committee);
+        // No role is granted here. COMMITTEE already holds it on the live chain, so the
+        // tests below prank the real signer and this assertion is the rehearsal's first
+        // finding: if the role ever moves, this fails rather than the drill failing at
+        // day seven with a bond already frozen.
+        assertTrue(
+            STAKING.hasRole(STAKING.SLASHING_COMMITTEE_ROLE(), COMMITTEE),
+            "COMMITTEE no longer holds SLASHING_COMMITTEE_ROLE on staking"
+        );
+        assertTrue(
+            REP.hasRole(REP.SLASHING_COMMITTEE_ROLE(), COMMITTEE),
+            "COMMITTEE no longer holds SLASHING_COMMITTEE_ROLE on reputation"
+        );
 
         stakeBefore = STAKING.getStake(DID);
         challengePeriod = STAKING.challengePeriod();
@@ -75,12 +87,12 @@ contract SlashDrillForkTest is Test {
         emit log_named_uint("score before        ", REP.getTotalScore(DID));
 
         // 2. Committee files. The agent is suspended immediately, before any window runs.
-        vm.prank(committee);
+        vm.prank(COMMITTEE);
         STAKING.initiateSlash(DID, victim, bytes("drill: rehearsal, not a real finding"));
 
         SigvaraStaking.SlashProposal memory p = STAKING.getSlashProposal(DID);
         assertEq(uint8(p.state), uint8(SigvaraStaking.SlashState.Pending), "not Pending after initiate");
-        assertEq(p.reporter, committee);
+        assertEq(p.reporter, COMMITTEE);
         assertEq(p.victim, victim);
         assertEq(p.challengeDeadline, block.timestamp + challengePeriod, "deadline not snapshotted");
 
@@ -119,7 +131,7 @@ contract SlashDrillForkTest is Test {
 
         assertEq(SVR.balanceOf(BURN) - burnBefore, burned, "burn share wrong");
         assertEq(STAKING.claimable(victim), toVictim, "victim share wrong");
-        assertEq(STAKING.claimable(committee), toReporter, "reporter share wrong");
+        assertEq(STAKING.claimable(COMMITTEE), toReporter, "reporter share wrong");
         assertEq(burned + toVictim + toReporter, stakeBefore, "split does not conserve the stake");
 
         // 7. Proceeds are credited, not pushed. They have to be claimable.
@@ -142,7 +154,7 @@ contract SlashDrillForkTest is Test {
 
     /// Disputing freezes the bond. It does not release it, and it does not un-suspend.
     function test_drill_disputeFreezesRatherThanCancels() public {
-        vm.prank(committee);
+        vm.prank(COMMITTEE);
         STAKING.initiateSlash(DID, victim, bytes("drill"));
 
         address operator = _operatorOf(DID);
@@ -162,12 +174,12 @@ contract SlashDrillForkTest is Test {
 
     /// Committee upholds the dispute: it settles exactly as an unchallenged slash would.
     function test_drill_disputeUpheld() public {
-        vm.prank(committee);
+        vm.prank(COMMITTEE);
         STAKING.initiateSlash(DID, victim, bytes("drill"));
         vm.prank(_operatorOf(DID));
         STAKING.disputeSlash(DID);
 
-        vm.prank(committee);
+        vm.prank(COMMITTEE);
         STAKING.resolveDispute(DID, true);
 
         assertEq(STAKING.getStake(DID), 0, "stake not taken when dispute upheld");
@@ -176,12 +188,12 @@ contract SlashDrillForkTest is Test {
 
     /// Committee rejects its own proposal: the agent gets its stake and standing back.
     function test_drill_disputeRejectedRestoresTheAgent() public {
-        vm.prank(committee);
+        vm.prank(COMMITTEE);
         STAKING.initiateSlash(DID, victim, bytes("drill"));
         vm.prank(_operatorOf(DID));
         STAKING.disputeSlash(DID);
 
-        vm.prank(committee);
+        vm.prank(COMMITTEE);
         STAKING.resolveDispute(DID, false);
 
         assertEq(STAKING.getStake(DID), stakeBefore, "stake not returned");
@@ -209,7 +221,7 @@ contract SlashDrillForkTest is Test {
         // Active stake is down to the floor; the rest is queued and looks like it is leaving.
         assertEq(STAKING.getStake(DID), minStake, "active stake should sit at the minimum");
 
-        vm.prank(committee);
+        vm.prank(COMMITTEE);
         STAKING.initiateSlash(DID, victim, bytes("drill"));
 
         SigvaraStaking.SlashProposal memory p = STAKING.getSlashProposal(DID);
@@ -226,9 +238,9 @@ contract SlashDrillForkTest is Test {
 
     /// The committee cannot pay itself both halves with one signature.
     function test_drill_reporterCannotBeVictim() public {
-        vm.prank(committee);
-        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.VictimIsReporter.selector, committee));
-        STAKING.initiateSlash(DID, committee, bytes("drill"));
+        vm.prank(COMMITTEE);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.VictimIsReporter.selector, COMMITTEE));
+        STAKING.initiateSlash(DID, COMMITTEE, bytes("drill"));
     }
 
     function _operatorOf(bytes32 didHash) internal view returns (address op) {

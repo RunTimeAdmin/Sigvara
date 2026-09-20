@@ -31,19 +31,47 @@ the live sequence is no longer the rehearsed one.
 
 ## Before you start
 
-**Find the committee.** `SLASHING_COMMITTEE_ROLE` on Arc is held by an address set at
-deployment. None of the wallets in this repository hold it, and the role is not
-enumerable, so it cannot be read back off the contract:
+**The committee is `0x045D6C1d8404297F13596061388f6598fA94a5b7`.**
+
+This was an open question in the first draft of this runbook, which said the role "cannot
+be read back off the contract" because `AccessControl` is not enumerable. That is true of
+the getters and false of the chain. `grantRole` emits `RoleGranted(role, account, sender)`
+with all three fields indexed, so the holder is recoverable from the deployment block:
 
 ```bash
-cast call <staking> "hasRole(bytes32,address)(bool)" \
-  0x74b3625417784541f0f8acc9c70588d83c485ef84428e2b477246b26443edd28 <CANDIDATE> \
+# 1. find the block the staking proxy was deployed in (bisect on code presence)
+cast code 0xA69d62B2a6774D21A2c15d5d83b27277eD31d35B --block <N> --rpc-url arc_testnet
+
+# 2. read the grant out of that block. topic1 is SLASHING_COMMITTEE_ROLE,
+#    topic2 is the account it was granted to.
+cast logs --from-block 62662190 --to-block 62672190 \
+  --address 0xA69d62B2a6774D21A2c15d5d83b27277eD31d35B \
+  $(cast keccak "RoleGranted(bytes32,address,address)") \
+  0x74b3625417784541f0f8acc9c70588d83c485ef84428e2b477246b26443edd28 \
   --rpc-url arc_testnet
 ```
 
-Check the `COMMITTEE_ADDRESS` used at deploy. Confirm you hold that key **before** step 1,
-because a proposal filed with no way to resolve it leaves an agent suspended and its bond
-frozen until someone calls `cancelSlash`, which needs the same key.
+Granted at block 62662196 by the deployer, in tx
+`0xdf723e26fc6764806c378688a29c1fef91a074135efe55df78731b5ccef01a86`. Confirmed still
+held on **both** staking and reputation. The account has roughly 20 USDC of native gas and
+a nonce of 1, so it has signed exactly once: enough to pay for the drill, and a strong hint
+that it has barely been used.
+
+Verify before relying on any of that, since a role can be revoked:
+
+```bash
+cast call 0xA69d62B2a6774D21A2c15d5d83b27277eD31d35B "hasRole(bytes32,address)(bool)" \
+  0x74b3625417784541f0f8acc9c70588d83c485ef84428e2b477246b26443edd28 \
+  0x045D6C1d8404297F13596061388f6598fA94a5b7 --rpc-url arc_testnet
+```
+
+`test/SlashDrillFork.t.sol` now pranks this address rather than granting the role to a
+fresh one, and asserts the role in `setUp`, so the rehearsal fails loudly if it ever moves.
+
+**Knowing the address is not the same as holding the key, and that is the actual blocker.**
+Confirm custody **before** step 1. A proposal filed with no way to resolve it leaves an
+agent suspended and its bond frozen until someone calls `cancelSlash`, which needs the
+same key.
 
 **Do not target the demo agent.** `0x8414ce0b…` is the agent the site, the on-ramp and the
 whitepaper all point at, with a live score of 12 and a public evidence root. Slashing it
@@ -51,9 +79,21 @@ zeroes that score permanently. `Slashed` is terminal: the agent cannot be topped
 or restored. The fork test targets it because a fork is disposable; the live drill must
 not.
 
-**Register a throwaway instead.** Use the on-ramp at [sigvara.xyz/testnet](https://sigvara.xyz/testnet):
-faucet gas, faucet SVR, register, bond. Bond it at `minimumStake` exactly, since half of
-whatever it holds is burned.
+**Register a throwaway instead.** This is not optional and it is not a detail: as of
+20 September 2026 the live deployment has had exactly **one** `AgentRegistered` event in
+its entire history, and it is the demo agent. There is no second agent to drill against.
+Counted by scanning the full block range:
+
+```bash
+cast logs --from-block <deploy> --to-block latest \
+  --address 0x7e3aFC532eE5d922ab3cc3FFb510c7C8151477Dd \
+  $(cast keccak "AgentRegistered(bytes32,address,address,bytes32)") --rpc-url arc_testnet
+```
+
+Use the on-ramp at [sigvara.xyz/testnet](https://sigvara.xyz/testnet): faucet gas, faucet
+SVR, register, bond. Bond it at `minimumStake` exactly (1,000 SVR), since half of whatever
+it holds is burned. Registering the target is step 0 of the drill and it costs a real
+1,000 SVR that does not come back.
 
 **Pick a victim address that is not the reporter.** `initiateSlash` reverts with
 `VictimIsReporter` if they match, because one committee signature would otherwise be a 50%
