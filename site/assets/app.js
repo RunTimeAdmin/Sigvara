@@ -454,6 +454,20 @@ async function pendingNote(raw) {
 async function registerAgentFlow() {
   try {
     if (!wallet || !account) { logLine('<span class="pill-err">Connect a wallet first.</span>'); return; }
+    // Check eligibility BEFORE generating anything. Registration needs a signature from
+    // the agent address itself, so the browser can only do this for the wallet it is
+    // connected to. This check used to sit after the keypair was generated AND written to
+    // the user's disk, so looking up someone else's address left them holding a file
+    // containing a private key for a registration that could never happen.
+    if (currentAgent.toLowerCase() !== account.toLowerCase()) {
+      logLine('<span class="pill-err">Registration needs a signature from the agent address, '
+        + 'so this button can only register the wallet you are connected with. '
+        + 'Connect the wallet for ' + esc(currentAgent) + ', or use the SDK flow in the '
+        + '<a href="docs/quickstart">Quickstart</a> to register an agent whose key you hold '
+        + 'separately from the operator wallet.</span>');
+      return;
+    }
+
     logLine("generating Ed25519 identity keypair in your browser…");
     let kp;
     try {
@@ -478,16 +492,6 @@ async function registerAgentFlow() {
     a.download = `sigvara-agent-key-${currentAgent.slice(0, 10)}.txt`;
     a.click();
     logLine(`key file downloaded — keep it safe. pubkey 0x${pubHex.slice(0, 16)}…`);
-    // Registration requires a signature from the agent address itself, so the browser
-    // can only do this for the wallet it is connected to. Anything else needs the SDK,
-    // where the agent's key can be supplied separately.
-    if (currentAgent.toLowerCase() !== account.toLowerCase()) {
-      logLine('<span class="pill-err">Registration needs a signature from the agent address. '
-        + 'Connect the wallet for ' + esc(currentAgent) + ', or use the SDK flow in the '
-        + '<a href="docs/quickstart">Quickstart</a> to sign with its key separately.</span>');
-      return;
-    }
-
     logLine("signing proof of control for this address…");
     const digest = await rpcRead(
       IDENTITY,

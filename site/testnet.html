@@ -90,6 +90,7 @@
           <div class="step-body">
             <p>Registration binds an agent address to an Ed25519 key you hold. The contract derives the DID from the chain ID and the address, so anyone can recompute it without asking us for anything. You sign a digest with the agent key to prove control, which is what stops one operator from registering someone else's address.</p>
             <p>The app generates the key in your browser and never transmits it. The DID that comes out is the identifier every other step keys on.</p>
+            <p><strong>The app can only register the wallet you connect with.</strong> The proof of control is a signature from the agent address, so a browser holding one wallet can sign for that address and no other. That is usually what you want when the agent and its operator are the same party. If you want the agent's key to be separate from the operator wallet &mdash; a fresh key for the agent, your existing wallet as operator &mdash; use the CLI or SDK flow, where the agent's signature can be produced independently.</p>
             <div class="controls">
               <a class="button button-primary" href="app">Register in the app</a>
               <a class="button" href="docs/quickstart">Do it from the CLI</a>
