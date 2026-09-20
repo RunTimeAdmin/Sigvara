@@ -434,10 +434,48 @@ actionable.
 **3. Diff the inputs before blaming either side.** This is the step that decides it.
 
 ```bash
-curl -s https://oracle.sigvara.xyz/evidence/$DID  | jq -r '.evidence[].txHash' | sort > /tmp/primary.txt
-curl -s https://checker.sigvara.xyz/evidence/$DID | jq -r '.evidence[].txHash' | sort > /tmp/checker.txt
-diff /tmp/primary.txt /tmp/checker.txt
+curl -sf https://oracle.sigvara.xyz/evidence/$DID  | jq -r '.evidence[].txHash' | sort > /tmp/primary.txt
+curl -sf https://checker.sigvara.xyz/evidence/$DID | jq -r '.evidence[].txHash' | sort > /tmp/checker.txt
+
+# Both non-empty, or the comparison below is meaningless.
+wc -l /tmp/primary.txt /tmp/checker.txt
+[ -s /tmp/primary.txt ] && [ -s /tmp/checker.txt ] && diff /tmp/primary.txt /tmp/checker.txt
 ```
+
+Check the counts before reading the diff. Two empty files differ in nothing, so a missing
+`jq`, a typo in the didHash or a failed request produces silence that reads exactly like
+"the two oracles agree". That is the wrong way for this step to fail, because agreement
+is the conclusion that ends the investigation. `curl -sf` and the `-s` guards make a
+broken fetch look broken.
+
+Comparing `evidenceRoot` is the faster first pass, and tells you something the txHash
+list does not:
+
+```bash
+for U in https://oracle.sigvara.xyz https://checker.sigvara.xyz; do
+  curl -sf $U/evidence/$DID | jq -r '"\(.count)\t\(.evidenceRoot)"'
+done
+```
+
+Different roots with different counts is the expected shape of a fan-out gap. To tell
+that from a rewrite, ask whether the checker's whole tree survives inside the primary's:
+
+```bash
+CR=$(curl -sf https://checker.sigvara.xyz/evidence/$DID | jq -r .evidenceRoot)
+curl -sf https://oracle.sigvara.xyz/evidence/$DID \
+  | jq --arg r "$CR" '[.evidence[] | select(.proof | index($r))] | length'
+```
+
+Non-zero means the checker's root is an internal node of the primary's tree: the primary's
+evidence is the checker's plus additions, with the old leaves committed unchanged. That is
+the signature of an operator that fell behind, and it is arithmetic rather than either
+operator's word. A primary that had dropped or altered an earlier payment could not
+produce a tree containing the old subtree root.
+
+Worked example, the 2026-09-20 23:51 entry: primary 8 leaves under `0xd4a95f…`, checker 2
+under `0xb07cdf…`, and `0xb07cdf…` appears in the proofs of 2 of the primary's 8 leaves.
+Recomputing `keccak(sorted(leaf1, leaf2))` from the checker's own two leaves reproduces it
+exactly.
 
 Attestations arrive over HTTP, not from the chain, so one operator can hold a settlement
 the other has never been told about. **A payment the checker is missing is not evidence
