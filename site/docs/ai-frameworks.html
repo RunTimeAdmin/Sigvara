@@ -5,7 +5,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AI Framework Integration — Sigvara</title>
   <meta name="description" content="Integrate Sigvara identity with LangChain, AutoGen, CrewAI, and other AI agent frameworks." />
+  <link rel="canonical" href="https://sigvara.xyz/docs/ai-frameworks" />
+  <meta property="og:title" content="AI Framework Integration — Sigvara" />
+  <meta property="og:description" content="Integrate Sigvara identity with LangChain, AutoGen, CrewAI, and other AI agent frameworks." />
+  <meta property="og:url" content="https://sigvara.xyz/docs/ai-frameworks" />
+  <meta property="og:image" content="https://sigvara.xyz/assets/sigvara-card.png" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:image" content="https://sigvara.xyz/assets/sigvara-card.png" />
+  <meta property="og:type" content="website" />
   <link rel="icon" type="image/svg+xml" href="../assets/sigvara-avatar.svg" />
+  <link rel="icon" type="image/png" sizes="512x512" href="../assets/sigvara-card.png" />
+  <link rel="apple-touch-icon" href="../assets/sigvara-card.png" />
   <link rel="stylesheet" href="../assets/style.css?v=e5a6705" />
   <link rel="stylesheet" href="../assets/ai-frameworks.css?v=e5a6705" />
 
@@ -16,12 +26,12 @@
   <div class="nav-inner">
     <a href="../" class="logo" aria-label="Sigvara home"><svg class="brand-mark" viewBox="0 0 64 64" role="img" aria-label="Sigvara mark"><defs><linearGradient id="brand-gradient" x1="8" y1="8" x2="56" y2="56" gradientUnits="userSpaceOnUse"><stop stop-color="#c5b7ff"/><stop offset=".55" stop-color="#9475ff"/><stop offset="1" stop-color="#6fe5ea"/></linearGradient></defs><rect x="1" y="1" width="62" height="62" rx="19" fill="#15172b" stroke="rgba(197,183,255,.25)"/><path d="M46.5 20.5c-4.5-5-12.5-6.8-19.2-4.1-6.5 2.7-8.5 9.4-3.4 13.2 2.3 1.7 5.1 2.1 8.7 2.7 5.8.9 8 2.6 7.1 6.2-1.1 4.6-7.4 7-12.9 5.8-3.4-.8-6-2.4-8.2-5.3" fill="none" stroke="url(#brand-gradient)" stroke-width="5.2" stroke-linecap="round"/><circle cx="47" cy="20" r="3.1" fill="#6fe5ea"/><circle cx="18.5" cy="39" r="3.1" fill="#c5b7ff"/></svg><span class="wordmark">sig<span class="accent">vara</span></span></a>
     <ul class="nav-links">
-      <li><a href="quickstart.html">Quickstart</a></li>
-      <li><a href="reputation.html">Reputation</a></li>
-      <li><a href="counteraudit.html">CounterAudit</a></li>
-      <li><a href="ai-frameworks.html" class="active">AI Frameworks</a></li>
-      <li class="nav-keep"><a href="https://github.com/RunTimeAdmin/sigvara" target="_blank" rel="noopener">GitHub</a></li>
-      <li class="nav-keep"><a href="quickstart.html" class="nav-cta">Get Started</a></li>
+      <li><a href="quickstart">Quickstart</a></li>
+      <li><a href="reputation">Reputation</a></li>
+      <li><a href="counteraudit">CounterAudit</a></li>
+      <li><a href="ai-frameworks" class="active">AI Frameworks</a></li>
+      <li class="nav-keep"><a href="https://github.com/RunTimeAdmin/Sigvara" target="_blank" rel="noopener">GitHub</a></li>
+      <li class="nav-keep"><a href="quickstart" class="nav-cta">Get Started</a></li>
     </ul>
   </div>
 </nav>
@@ -33,27 +43,27 @@
       <aside class="docs-sidebar">
         <div class="sidebar-section">
           <div class="sidebar-label">Getting Started</div>
-          <ul class="sidebar-links"><li><a href="quickstart.html">Quickstart</a></li></ul>
+          <ul class="sidebar-links"><li><a href="quickstart">Quickstart</a></li></ul>
         </div>
         <div class="sidebar-section">
           <div class="sidebar-label">Protocol</div>
           <ul class="sidebar-links">
-            <li><a href="reputation.html">Reputation Model</a></li>
+            <li><a href="reputation">Reputation Model</a></li>
             <li><a href="../#docs">Network &amp; Contracts</a></li>
-            <li><a href="lineage.html">Lineage</a></li>
+            <li><a href="lineage">Lineage</a></li>
           </ul>
         </div>
         <div class="sidebar-section">
           <div class="sidebar-label">Integrations</div>
           <ul class="sidebar-links">
-            <li><a href="counteraudit.html">CounterAudit</a></li>
-            <li><a href="ai-frameworks.html" class="active">AI Frameworks</a></li>
+            <li><a href="counteraudit">CounterAudit</a></li>
+            <li><a href="ai-frameworks" class="active">AI Frameworks</a></li>
           </ul>
         </div>
         <div class="sidebar-section">
           <div class="sidebar-label">Resources</div>
           <ul class="sidebar-links">
-            <li><a href="https://github.com/RunTimeAdmin/sigvara" target="_blank" rel="noopener">GitHub →</a></li>
+            <li><a href="https://github.com/RunTimeAdmin/Sigvara" target="_blank" rel="noopener">GitHub →</a></li>
           </ul>
         </div>
       </aside>
@@ -63,7 +73,7 @@
         <h2>AI Framework Integration</h2>
         <p>The pattern is the same in every framework: generate a Sigvara DID at agent startup, then include it in every CounterAudit ingest call. The DID travels with the agent's actions, creating a cryptographically-linked audit trail tied to an on-chain identity.</p>
 
-        <div class="callout"><strong>Prerequisite:</strong> Your agent must be registered on Sigvara. Follow the <a href="quickstart.html">Quickstart</a> first, then set <code>AGENT_DID</code> in your environment.</div>
+        <div class="callout"><strong>Prerequisite:</strong> Your agent must be registered on Sigvara. Follow the <a href="quickstart">Quickstart</a> first, then set <code>AGENT_DID</code> in your environment.</div>
 
         <h3>Framework Examples</h3>
 
@@ -202,10 +212,10 @@ class AuditedTool(BaseTool):
       <a class="u-mono-13" href="../">sigvara.xyz</a> &nbsp;·&nbsp; MIT License
     </div>
     <div class="footer-links">
-      <a href="quickstart.html">Quickstart</a>
-      <a href="reputation.html">Reputation</a>
-      <a href="counteraudit.html">CounterAudit</a>
-      <a href="https://github.com/RunTimeAdmin/sigvara" target="_blank" rel="noopener">GitHub</a>
+      <a href="quickstart">Quickstart</a>
+      <a href="reputation">Reputation</a>
+      <a href="counteraudit">CounterAudit</a>
+      <a href="https://github.com/RunTimeAdmin/Sigvara" target="_blank" rel="noopener">GitHub</a>
     </div>
   </div>
 </footer>

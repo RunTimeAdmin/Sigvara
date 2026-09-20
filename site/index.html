@@ -5,13 +5,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Sigvara — Trust infrastructure for autonomous agents</title>
   <meta name="description" content="Sigvara makes autonomous agents legible: signed attestations, computed reputation, and stake-backed accountability.">
+  <link rel="canonical" href="https://sigvara.xyz/">
   <meta name="theme-color" content="#090b16">
   <meta property="og:title" content="Sigvara — Trust infrastructure for autonomous agents">
   <meta property="og:description" content="Signed attestations, computed reputation, and stake-backed accountability for autonomous agents.">
   <meta property="og:url" content="https://sigvara.xyz/">
-  <meta property="og:image" content="https://sigvara.xyz/assets/sigvara-avatar.svg">
-  <meta name="twitter:card" content="summary_large_image">
+  <meta property="og:image" content="https://sigvara.xyz/assets/sigvara-card.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:image" content="https://sigvara.xyz/assets/sigvara-card.png">
   <link rel="icon" type="image/svg+xml" href="assets/sigvara-avatar.svg">
+  <link rel="icon" type="image/png" sizes="512x512" href="assets/sigvara-card.png">
+  <link rel="apple-touch-icon" href="assets/sigvara-card.png">
   <link rel="stylesheet" href="assets/landing.css?v=1a7b2ee">
 
 </head>
@@ -32,10 +36,10 @@
         <div class="nav-links">
           <a href="#protocol">Protocol</a>
           <a href="#how-it-works">How it works</a>
-          <a href="demo.html">Demo</a>
-          <a href="testnet.html">Try it</a>
+          <a href="demo">Demo</a>
+          <a href="testnet">Try it</a>
           <a href="#docs">Docs</a>
-          <a href="https://github.com/RunTimeAdmin/sigvara" rel="noopener">Source</a>
+          <a href="https://github.com/RunTimeAdmin/Sigvara" rel="noopener">Source</a>
           <a class="nav-cta" href="https://x.com/defiauditccie" rel="noopener">Follow updates <span aria-hidden="true">↗</span></a>
         </div>
       </nav>
@@ -50,9 +54,9 @@
           <h1>Make machine trust <span class="gradient">legible.</span></h1>
           <p class="lede">Sigvara gives autonomous agents a verifiable identity, a reputation that compounds with real work, and accountability when things go wrong.</p>
           <div class="actions">
-            <a class="button button-primary" href="demo.html">Try the demo <span aria-hidden="true">↗</span></a>
+            <a class="button button-primary" href="demo">Try the demo <span aria-hidden="true">↗</span></a>
             <a class="button button-secondary" href="#protocol">Explore the protocol <span aria-hidden="true">↘</span></a>
-            <a class="button button-secondary" href="https://github.com/RunTimeAdmin/sigvara" rel="noopener">Read the source <span aria-hidden="true">↗</span></a>
+            <a class="button button-secondary" href="https://github.com/RunTimeAdmin/Sigvara" rel="noopener">Read the source <span aria-hidden="true">↗</span></a>
           </div>
           <div class="hero-note">Built on ERC-8004 · live on Arc testnet</div>
         </div>
@@ -72,7 +76,7 @@
             </div>
             <div class="score-row">
               <div class="score">87<small> / 100</small></div>
-              <div class="score-copy"><strong>REPUTATION SCORE</strong><br>illustrative &mdash; <a href="app.html">see a live agent</a></div>
+              <div class="score-copy"><strong>REPUTATION SCORE</strong><br>illustrative &mdash; <a href="app">see a live agent</a></div>
             </div>
             <div class="bars">
               <div class="bar-line"><span>Fee activity</span><div class="bar-track"><div class="bar-fill w-93"></div></div><b>28/30</b></div>
@@ -135,19 +139,19 @@
           <p class="section-intro">Guides for operators registering agents, products consuming reputation, and frameworks wiring Sigvara identities into agent runtimes.</p>
         </div>
         <div class="pillars">
-          <a class="pillar doc-card" href="docs/quickstart.html">
+          <a class="pillar doc-card" href="docs/quickstart">
             <div class="pillar-icon" aria-hidden="true">01</div>
             <h3>Quickstart</h3>
             <p>From zero to a registered, reputation-tracked agent on Arc testnet in about ten minutes.</p>
             <span class="go">Read the guide →</span>
           </a>
-          <a class="pillar doc-card" href="docs/reputation.html">
+          <a class="pillar doc-card" href="docs/reputation">
             <div class="pillar-icon" aria-hidden="true">02</div>
             <h3>Reputation model</h3>
             <p>The six factors behind the score, how the oracle computes them, and how challenge windows work.</p>
             <span class="go">Read the model →</span>
           </a>
-          <a class="pillar doc-card" href="docs/counteraudit.html">
+          <a class="pillar doc-card" href="docs/counteraudit">
             <div class="pillar-icon" aria-hidden="true">03</div>
             <h3>CounterAudit integration <span class="pending">live</span></h3>
             <p>Agent identity and score sealed into every audited packet, frozen at the moment of the action, and audited outcomes attested back into reputation.</p>
@@ -156,9 +160,9 @@
         </div>
         <div class="net-strip" role="note">
           <span><b>Network</b> Arc testnet · chain ID <span class="mono">5042002</span> · gas in USDC</span>
-          <span><b>Contracts</b> live on Arc testnet · identity <span class="mono">0x7e3a…77Dd</span> · reputation <span class="mono">0x6603…29ed</span> · staking <span class="mono">0xA69d…1d35B</span> · full set in <span class="mono">deployments/5042002.json</span></span>
+          <span><b>Contracts</b> live on Arc testnet · identity <span class="mono">0x7e3a…77Dd</span> · reputation <span class="mono">0x6603…29ed</span> · staking <span class="mono">0xA69d…1d35B</span> · full set in <a href="https://github.com/RunTimeAdmin/Sigvara/blob/main/deployments/5042002.json" target="_blank" rel="noopener"><span class="mono">deployments/5042002.json</span></a></span>
           <span><b>SVR</b> <span class="pending">not launched</span> · the mainnet contract address will appear here first, nowhere else · the testnet bond token is a faucet ERC-20 and is <em>not</em> SVR</span>
-          <span><a href="docs/ai-frameworks.html">AI framework guides →</a></span>
+          <span><a href="docs/ai-frameworks">AI framework guides →</a></span>
         </div>
       </div>
     </section>
@@ -167,7 +171,7 @@
       <div class="wrap">
         <div class="cta-box">
           <div><div class="section-kicker">Open infrastructure</div><h2>Build with a trust signal your agents can earn.</h2><p>Explore the contracts, SDK, oracle, and integration docs behind Sigvara.</p></div>
-          <a class="button button-primary" href="https://github.com/RunTimeAdmin/sigvara" rel="noopener">View on GitHub <span aria-hidden="true">↗</span></a>
+          <a class="button button-primary" href="https://github.com/RunTimeAdmin/Sigvara" rel="noopener">View on GitHub <span aria-hidden="true">↗</span></a>
         </div>
       </div>
     </section>
@@ -176,7 +180,7 @@
   <footer>
     <div class="wrap footer-row">
       <div><strong>sigvara.xyz</strong> <span aria-hidden="true">·</span> protocol infrastructure for autonomous agents</div>
-      <div class="footer-links"><a href="docs/quickstart.html">Docs</a><a href="https://github.com/RunTimeAdmin/sigvara" rel="noopener">GitHub</a><a href="https://x.com/defiauditccie" rel="noopener">X</a><a href="https://protocol14019.com/" rel="noopener">protocol14019</a></div>
+      <div class="footer-links"><a href="docs/quickstart">Docs</a><a href="https://github.com/RunTimeAdmin/Sigvara" rel="noopener">GitHub</a><a href="https://x.com/defiauditccie" rel="noopener">X</a><a href="https://protocol14019.com/" rel="noopener">protocol14019</a></div>
     </div>
   </footer>
 </body>

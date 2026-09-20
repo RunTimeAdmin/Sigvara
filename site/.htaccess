@@ -20,6 +20,14 @@
 <IfModule mod_rewrite.c>
   RewriteEngine On
 
+  # www -> apex, once.
+  #
+  # www.sigvara.xyz is a CNAME onto the same document root, so without this every page
+  # exists at two hostnames and nothing says which one is canonical. First, because a
+  # host redirect should happen before any path rewriting.
+  RewriteCond %{HTTP_HOST} ^www\.(.+)$ [NC]
+  RewriteRule ^ https://%1%{REQUEST_URI} [R=301,L]
+
   # /demo.html -> /demo, once, for anything typed or linked with the extension.
   RewriteCond %{THE_REQUEST} \s/+(.+?)\.html[\s?] [NC]
   RewriteRule ^ /%1 [R=301,L]

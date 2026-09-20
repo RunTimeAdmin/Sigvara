@@ -5,7 +5,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Try Sigvara on Arc testnet</title>
   <meta name="description" content="Five steps to run an agent on Sigvara's Arc testnet deployment: get gas, claim bond tokens, register an identity, post the bond, earn a score. Paste an address to see which steps it has already cleared.">
+  <link rel="canonical" href="https://sigvara.xyz/testnet">
+  <meta property="og:title" content="Try Sigvara on Arc testnet">
+  <meta property="og:description" content="Five steps to run an agent on Sigvara's Arc testnet deployment: get gas, claim bond tokens, register an identity, post the bond, earn a score. Paste an address to see which steps it has already cleared.">
+  <meta property="og:url" content="https://sigvara.xyz/testnet">
+  <meta property="og:image" content="https://sigvara.xyz/assets/sigvara-card.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:image" content="https://sigvara.xyz/assets/sigvara-card.png">
+  <meta property="og:type" content="website">
   <link rel="icon" type="image/svg+xml" href="assets/sigvara-avatar.svg">
+  <link rel="icon" type="image/png" sizes="512x512" href="assets/sigvara-card.png">
+  <link rel="apple-touch-icon" href="assets/sigvara-card.png">
   <link rel="stylesheet" href="assets/demo-page.css?v=testnet1">
 </head>
 <body>
@@ -23,11 +33,11 @@
         </a>
         <div class="nav-links">
           <a href="./#protocol">Protocol</a>
-          <a href="demo.html">Demo</a>
-          <a href="testnet.html" aria-current="page">Try it</a>
-          <a href="docs/quickstart.html">Docs</a>
-          <a href="https://github.com/RunTimeAdmin/sigvara" rel="noopener">Source</a>
-          <a class="nav-cta" href="app.html">Testnet app <span aria-hidden="true">&#8599;</span></a>
+          <a href="demo">Demo</a>
+          <a href="testnet" aria-current="page">Try it</a>
+          <a href="docs/quickstart">Docs</a>
+          <a href="https://github.com/RunTimeAdmin/Sigvara" rel="noopener">Source</a>
+          <a class="nav-cta" href="app">Testnet app <span aria-hidden="true">&#8599;</span></a>
         </div>
       </nav>
     </div>
@@ -68,7 +78,7 @@
             <p>The bond is posted in SVR, a plain ERC-20 deployed for the testnet with an open faucet: 10,000 tokens per address per day, no gate. Call <span class="mono">faucet(amount)</span> on the token, or use the button in the testnet app, which does the same call.</p>
             <p>This token has no value and is not the mainnet SVR. If a mainnet token is ever issued, its address will be published here first.</p>
             <div class="controls">
-              <a class="button" href="app.html">Open the app <span aria-hidden="true">&#8599;</span></a>
+              <a class="button" href="app">Open the app <span aria-hidden="true">&#8599;</span></a>
               <a class="button" href="https://explorer.testnet.arc.io/address/0x41De2D6D55318e197a00E8f5B496eA2790e23E6c" rel="noopener">SVR contract</a>
             </div>
             <div class="result step-live" aria-live="polite"></div>
@@ -81,8 +91,8 @@
             <p>Registration binds an agent address to an Ed25519 key you hold. The contract derives the DID from the chain ID and the address, so anyone can recompute it without asking us for anything. You sign a digest with the agent key to prove control, which is what stops one operator from registering someone else's address.</p>
             <p>The app generates the key in your browser and never transmits it. The DID that comes out is the identifier every other step keys on.</p>
             <div class="controls">
-              <a class="button button-primary" href="app.html">Register in the app</a>
-              <a class="button" href="docs/quickstart.html">Do it from the CLI</a>
+              <a class="button button-primary" href="app">Register in the app</a>
+              <a class="button" href="docs/quickstart">Do it from the CLI</a>
             </div>
             <div class="result step-live" aria-live="polite"></div>
           </div>
@@ -94,8 +104,8 @@
             <p>Approve the staking contract, then deposit. Below <span class="mono">minimumStake</span> the agent sits in <b>PendingBond</b>: registered and visible on chain, but not an agent anyone should rely on and not eligible to be scored. At or above it, the agent goes Active.</p>
             <p>The bond is what makes a score cost something. Slashing takes from it, so an agent with nothing at stake has nothing to lose by lying.</p>
             <div class="controls">
-              <a class="button button-primary" href="app.html">Bond in the app</a>
-              <a class="button" href="docs/reputation.html">How scoring works</a>
+              <a class="button button-primary" href="app">Bond in the app</a>
+              <a class="button" href="docs/reputation">How scoring works</a>
             </div>
             <div class="result step-live" aria-live="polite"></div>
           </div>
@@ -107,11 +117,11 @@
             <p>Each epoch, the oracle proposes a score from payment-verified activity and publishes a Merkle root of the evidence behind it. The proposal sits in a challenge window before it can be finalized, and finalizing is permissionless: anyone can call it, including you.</p>
             <p>You do not have to take the score on trust. The evidence behind it is served publicly with no token, so you can fetch the payments, check each one against the chain yourself, rebuild the root and compare it with the one the contract holds.</p>
             <p><b>Anyone can attest, no token needed.</b> Pay an agent at least 1 SVR, then POST the settlement hash to <span class="mono">oracle.sigvara.xyz/attest</span>. The oracle reads the payer off the transfer log rather than taking your word for it, refuses self-payments, and caps how far any one counterparty can move a score. The payment is the credential, so there is nothing to sign up for.</p>
-            <p>Reporting a <em>failure</em> is not open, and that is deliberate. A negative attestation lowers a score directly, but paying someone only proves money moved, never that the work went badly. Leaving it open would let anyone downgrade any agent for the price of a faucet call. Failures come from <a href="docs/counteraudit.html">CounterAudit</a>, which audits the work and attests the outcome back to the oracle, carrying the settlement transaction that paid for it.</p>
+            <p>Reporting a <em>failure</em> is not open, and that is deliberate. A negative attestation lowers a score directly, but paying someone only proves money moved, never that the work went badly. Leaving it open would let anyone downgrade any agent for the price of a faucet call. Failures come from <a href="docs/counteraudit">CounterAudit</a>, which audits the work and attests the outcome back to the oracle, carrying the settlement transaction that paid for it.</p>
             <div class="controls">
               <a class="button" href="https://github.com/RunTimeAdmin/Sigvara/blob/main/docs/payment-backed-attestations.md" rel="noopener">How to attest <span aria-hidden="true">&#8599;</span></a>
               <a class="button" href="https://oracle.sigvara.xyz/evidence/0x8414ce0bf4f1e1695193623e0a656a9439e356f8bed0b8bf249b179fe77c7e19" rel="noopener">See live evidence <span aria-hidden="true">&#8599;</span></a>
-              <a class="button" href="docs/reputation.html">The six factors</a>
+              <a class="button" href="docs/reputation">The six factors</a>
             </div>
             <div class="result step-live" aria-live="polite"></div>
           </div>
@@ -163,7 +173,7 @@
   <footer>
     <div class="wrap footer-row">
       <div><strong>sigvara.xyz</strong> <span aria-hidden="true">&#183;</span> protocol infrastructure for autonomous agents</div>
-      <div class="footer-links"><a href="docs/quickstart.html">Docs</a><a href="https://github.com/RunTimeAdmin/sigvara" rel="noopener">GitHub</a><a href="https://x.com/defiauditccie" rel="noopener">X</a><a href="https://protocol14019.com/" rel="noopener">protocol14019</a></div>
+      <div class="footer-links"><a href="docs/quickstart">Docs</a><a href="https://github.com/RunTimeAdmin/Sigvara" rel="noopener">GitHub</a><a href="https://x.com/defiauditccie" rel="noopener">X</a><a href="https://protocol14019.com/" rel="noopener">protocol14019</a></div>
     </div>
   </footer>
 

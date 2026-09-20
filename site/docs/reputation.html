@@ -5,7 +5,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Reputation Model — Sigvara</title>
   <meta name="description" content="How the Sigvara 6-factor reputation algorithm works, oracle epochs, and Sybil resistance." />
+  <link rel="canonical" href="https://sigvara.xyz/docs/reputation" />
+  <meta property="og:title" content="Reputation Model — Sigvara" />
+  <meta property="og:description" content="How the Sigvara 6-factor reputation algorithm works, oracle epochs, and Sybil resistance." />
+  <meta property="og:url" content="https://sigvara.xyz/docs/reputation" />
+  <meta property="og:image" content="https://sigvara.xyz/assets/sigvara-card.png" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:image" content="https://sigvara.xyz/assets/sigvara-card.png" />
+  <meta property="og:type" content="website" />
   <link rel="icon" type="image/svg+xml" href="../assets/sigvara-avatar.svg" />
+  <link rel="icon" type="image/png" sizes="512x512" href="../assets/sigvara-card.png" />
+  <link rel="apple-touch-icon" href="../assets/sigvara-card.png" />
   <link rel="stylesheet" href="../assets/style.css?v=e5a6705" />
 </head>
 <body>
@@ -14,12 +24,12 @@
   <div class="nav-inner">
     <a href="../" class="logo" aria-label="Sigvara home"><svg class="brand-mark" viewBox="0 0 64 64" role="img" aria-label="Sigvara mark"><defs><linearGradient id="brand-gradient" x1="8" y1="8" x2="56" y2="56" gradientUnits="userSpaceOnUse"><stop stop-color="#c5b7ff"/><stop offset=".55" stop-color="#9475ff"/><stop offset="1" stop-color="#6fe5ea"/></linearGradient></defs><rect x="1" y="1" width="62" height="62" rx="19" fill="#15172b" stroke="rgba(197,183,255,.25)"/><path d="M46.5 20.5c-4.5-5-12.5-6.8-19.2-4.1-6.5 2.7-8.5 9.4-3.4 13.2 2.3 1.7 5.1 2.1 8.7 2.7 5.8.9 8 2.6 7.1 6.2-1.1 4.6-7.4 7-12.9 5.8-3.4-.8-6-2.4-8.2-5.3" fill="none" stroke="url(#brand-gradient)" stroke-width="5.2" stroke-linecap="round"/><circle cx="47" cy="20" r="3.1" fill="#6fe5ea"/><circle cx="18.5" cy="39" r="3.1" fill="#c5b7ff"/></svg><span class="wordmark">sig<span class="accent">vara</span></span></a>
     <ul class="nav-links">
-      <li><a href="quickstart.html">Quickstart</a></li>
-      <li><a href="reputation.html" class="active">Reputation</a></li>
-      <li><a href="counteraudit.html">CounterAudit</a></li>
-      <li><a href="ai-frameworks.html">AI Frameworks</a></li>
-      <li class="nav-keep"><a href="https://github.com/RunTimeAdmin/sigvara" target="_blank" rel="noopener">GitHub</a></li>
-      <li class="nav-keep"><a href="quickstart.html" class="nav-cta">Get Started</a></li>
+      <li><a href="quickstart">Quickstart</a></li>
+      <li><a href="reputation" class="active">Reputation</a></li>
+      <li><a href="counteraudit">CounterAudit</a></li>
+      <li><a href="ai-frameworks">AI Frameworks</a></li>
+      <li class="nav-keep"><a href="https://github.com/RunTimeAdmin/Sigvara" target="_blank" rel="noopener">GitHub</a></li>
+      <li class="nav-keep"><a href="quickstart" class="nav-cta">Get Started</a></li>
     </ul>
   </div>
 </nav>
@@ -32,28 +42,28 @@
         <div class="sidebar-section">
           <div class="sidebar-label">Getting Started</div>
           <ul class="sidebar-links">
-            <li><a href="quickstart.html">Quickstart</a></li>
+            <li><a href="quickstart">Quickstart</a></li>
           </ul>
         </div>
         <div class="sidebar-section">
           <div class="sidebar-label">Protocol</div>
           <ul class="sidebar-links">
-            <li><a href="reputation.html" class="active">Reputation Model</a></li>
+            <li><a href="reputation" class="active">Reputation Model</a></li>
             <li><a href="../#docs">Network &amp; Contracts</a></li>
-            <li><a href="lineage.html">Lineage</a></li>
+            <li><a href="lineage">Lineage</a></li>
           </ul>
         </div>
         <div class="sidebar-section">
           <div class="sidebar-label">Integrations</div>
           <ul class="sidebar-links">
-            <li><a href="counteraudit.html">CounterAudit</a></li>
-            <li><a href="ai-frameworks.html">AI Frameworks</a></li>
+            <li><a href="counteraudit">CounterAudit</a></li>
+            <li><a href="ai-frameworks">AI Frameworks</a></li>
           </ul>
         </div>
         <div class="sidebar-section">
           <div class="sidebar-label">Resources</div>
           <ul class="sidebar-links">
-            <li><a href="https://github.com/RunTimeAdmin/sigvara" target="_blank" rel="noopener">GitHub →</a></li>
+            <li><a href="https://github.com/RunTimeAdmin/Sigvara" target="_blank" rel="noopener">GitHub →</a></li>
           </ul>
         </div>
       </aside>
@@ -66,7 +76,7 @@
         <h3>Where each signal comes from</h3>
         <p>This is the part that matters: a factor only moves when something real happens.</p>
         <ul class="u-lh-19">
-          <li><strong>Fee Activity &amp; Success Rate</strong> come from <em>payments</em>. An attestation must carry the settlement transaction of a real transfer to the agent's own address; the oracle reads it off the chain and takes the payer from the transfer log rather than from whatever the caller claimed. <a href="counteraudit.html">CounterAudit</a> seals the agent's identity and score into every audited packet and attests the outcome of work it audits back to the oracle, both live since 19 September. An outcome must carry the settlement transaction that paid for the work, which the oracle re-verifies against the chain. Volume drives Fee Activity, the reported outcome drives Success Rate, and both decay from the moment each payment settled. Self-payments are refused, and any one counterparty's evidence is capped — reaching the fee ceiling takes at least six separately funded payers.</li>
+          <li><strong>Fee Activity &amp; Success Rate</strong> come from <em>payments</em>. An attestation must carry the settlement transaction of a real transfer to the agent's own address; the oracle reads it off the chain and takes the payer from the transfer log rather than from whatever the caller claimed. <a href="counteraudit">CounterAudit</a> seals the agent's identity and score into every audited packet and attests the outcome of work it audits back to the oracle, both live since 19 September. An outcome must carry the settlement transaction that paid for the work, which the oracle re-verifies against the chain. Volume drives Fee Activity, the reported outcome drives Success Rate, and both decay from the moment each payment settled. Self-payments are refused, and any one counterparty's evidence is capped — reaching the fee ceiling takes at least six separately funded payers.</li>
           <li><strong>Tenure</strong> is the span between an agent's first and most recent verified payment, faded by how long ago that last one was. Deliberately not time since registration: waiting costs nothing, so calendar age was the cheapest twenty points an idle farm could collect. An agent that has never been paid at arm's length scores 0 here however long ago it signed up.</li>
           <li><strong>Community Verification</strong> comes from <em>flags</em> — watchdog services (e.g. rug-scanners on the same chain) report misbehaving agents to the oracle. Flags subtract from this factor, and they decay on a 30-day half-life like every other signal: a penalty has to be renewed to keep costing, so a watchdog that misfires once does not mark an agent permanently. An operator can also clear a flag outright.</li>
           <li><strong>External Trust</strong> is <span class="tag tag-green">live via ERC-8004</span>. An agent that links its Sigvara identity to an <a href="https://eips.ethereum.org/EIPS/eip-8004" target="_blank" rel="noopener">ERC-8004</a> agent it owns gets an external-trust score computed from that agent's on-chain feedback — the oracle normalizes the recognized rating dimensions and excludes ones it can't interpret. Unlinked agents score 0 here.</li>
@@ -131,7 +141,7 @@
             <tr><td class="mono">propagationScore</td><td>5</td><td class="u-muted-13">standing of the counterparties that paid the agent, 1 pt each pro-rated by score</td><td><span class="tag tag-green">live</span></td></tr>
           </tbody>
         </table>
-        <p class="u-muted-13">All six factors are live. Only a <strong>bonded</strong> agent is scored at all: a newly registered agent is <code>PendingBond</code> until a deposit carries it over the minimum stake, and an unbonded agent cannot be slashed, so scoring one would mean scoring something unaccountable. Evidence decays on a half-life from the moment each payment settled, and a score is earned before it is spendable — <code>getTotalScore()</code> returns the matured value that threshold checks read, while <code>getEarnedScore()</code> returns the raw figure. externalScore is 0 unless the agent links an ERC-8004 identity it owns. You can see any agent's live per-factor breakdown on the <a href="../app.html">App page</a>.</p>
+        <p class="u-muted-13">All six factors are live. Only a <strong>bonded</strong> agent is scored at all: a newly registered agent is <code>PendingBond</code> until a deposit carries it over the minimum stake, and an unbonded agent cannot be slashed, so scoring one would mean scoring something unaccountable. Evidence decays on a half-life from the moment each payment settled, and a score is earned before it is spendable — <code>getTotalScore()</code> returns the matured value that threshold checks read, while <code>getEarnedScore()</code> returns the raw figure. externalScore is 0 unless the agent links an ERC-8004 identity it owns. You can see any agent's live per-factor breakdown on the <a href="../app">App page</a>.</p>
 
         <h3>Sybil Resistance</h3>
         <p>The algorithm is designed so that creating fake identities to farm reputation is economically irrational. A brand-new agent has no score at all until it is bonded, and then starts at 5 — the community baseline — which is not immediately spendable.</p>
@@ -195,10 +205,10 @@ console.log(rep.ageScore);       <span class="cm">// 0–20</span>
       <a class="u-mono-13" href="../">sigvara.xyz</a> &nbsp;·&nbsp; MIT License
     </div>
     <div class="footer-links">
-      <a href="quickstart.html">Quickstart</a>
-      <a href="reputation.html">Reputation</a>
-      <a href="counteraudit.html">CounterAudit</a>
-      <a href="https://github.com/RunTimeAdmin/sigvara" target="_blank" rel="noopener">GitHub</a>
+      <a href="quickstart">Quickstart</a>
+      <a href="reputation">Reputation</a>
+      <a href="counteraudit">CounterAudit</a>
+      <a href="https://github.com/RunTimeAdmin/Sigvara" target="_blank" rel="noopener">GitHub</a>
     </div>
   </div>
 </footer>

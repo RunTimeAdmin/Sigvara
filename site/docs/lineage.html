@@ -5,7 +5,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Lineage — Sigvara</title>
   <meta name="description" content="The Robinhood Chain testnet run Sigvara came from: contract addresses, a month of hourly oracle epochs, what was exercised, why the name changed, and what changed on the way to Arc." />
+  <link rel="canonical" href="https://sigvara.xyz/docs/lineage" />
+  <meta property="og:title" content="Lineage — Sigvara" />
+  <meta property="og:description" content="The Robinhood Chain testnet run Sigvara came from: contract addresses, a month of hourly oracle epochs, what was exercised, why the name changed, and what changed on the way to Arc." />
+  <meta property="og:url" content="https://sigvara.xyz/docs/lineage" />
+  <meta property="og:image" content="https://sigvara.xyz/assets/sigvara-card.png" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:image" content="https://sigvara.xyz/assets/sigvara-card.png" />
+  <meta property="og:type" content="website" />
   <link rel="icon" type="image/svg+xml" href="../assets/sigvara-avatar.svg" />
+  <link rel="icon" type="image/png" sizes="512x512" href="../assets/sigvara-card.png" />
+  <link rel="apple-touch-icon" href="../assets/sigvara-card.png" />
   <link rel="stylesheet" href="../assets/style.css?v=e5a6705" />
 </head>
 <body>
@@ -14,12 +24,12 @@
   <div class="nav-inner">
     <a href="../" class="logo" aria-label="Sigvara home"><svg class="brand-mark" viewBox="0 0 64 64" role="img" aria-label="Sigvara mark"><defs><linearGradient id="brand-gradient" x1="8" y1="8" x2="56" y2="56" gradientUnits="userSpaceOnUse"><stop stop-color="#c5b7ff"/><stop offset=".55" stop-color="#9475ff"/><stop offset="1" stop-color="#6fe5ea"/></linearGradient></defs><rect x="1" y="1" width="62" height="62" rx="19" fill="#15172b" stroke="rgba(197,183,255,.25)"/><path d="M46.5 20.5c-4.5-5-12.5-6.8-19.2-4.1-6.5 2.7-8.5 9.4-3.4 13.2 2.3 1.7 5.1 2.1 8.7 2.7 5.8.9 8 2.6 7.1 6.2-1.1 4.6-7.4 7-12.9 5.8-3.4-.8-6-2.4-8.2-5.3" fill="none" stroke="url(#brand-gradient)" stroke-width="5.2" stroke-linecap="round"/><circle cx="47" cy="20" r="3.1" fill="#6fe5ea"/><circle cx="18.5" cy="39" r="3.1" fill="#c5b7ff"/></svg><span class="wordmark">sig<span class="accent">vara</span></span></a>
     <ul class="nav-links">
-      <li><a href="quickstart.html">Quickstart</a></li>
-      <li><a href="reputation.html">Reputation</a></li>
-      <li><a href="counteraudit.html">CounterAudit</a></li>
-      <li><a href="ai-frameworks.html">AI Frameworks</a></li>
-      <li class="nav-keep"><a href="https://github.com/RunTimeAdmin/sigvara" target="_blank" rel="noopener">GitHub</a></li>
-      <li class="nav-keep"><a href="quickstart.html" class="nav-cta">Get Started</a></li>
+      <li><a href="quickstart">Quickstart</a></li>
+      <li><a href="reputation">Reputation</a></li>
+      <li><a href="counteraudit">CounterAudit</a></li>
+      <li><a href="ai-frameworks">AI Frameworks</a></li>
+      <li class="nav-keep"><a href="https://github.com/RunTimeAdmin/Sigvara" target="_blank" rel="noopener">GitHub</a></li>
+      <li class="nav-keep"><a href="quickstart" class="nav-cta">Get Started</a></li>
     </ul>
   </div>
 </nav>
@@ -32,28 +42,28 @@
         <div class="sidebar-section">
           <div class="sidebar-label">Getting Started</div>
           <ul class="sidebar-links">
-            <li><a href="quickstart.html">Quickstart</a></li>
+            <li><a href="quickstart">Quickstart</a></li>
           </ul>
         </div>
         <div class="sidebar-section">
           <div class="sidebar-label">Protocol</div>
           <ul class="sidebar-links">
-            <li><a href="reputation.html">Reputation Model</a></li>
+            <li><a href="reputation">Reputation Model</a></li>
             <li><a href="../#docs">Network &amp; Contracts</a></li>
-            <li><a href="lineage.html" class="active">Lineage</a></li>
+            <li><a href="lineage" class="active">Lineage</a></li>
           </ul>
         </div>
         <div class="sidebar-section">
           <div class="sidebar-label">Integrations</div>
           <ul class="sidebar-links">
-            <li><a href="counteraudit.html">CounterAudit</a></li>
-            <li><a href="ai-frameworks.html">AI Frameworks</a></li>
+            <li><a href="counteraudit">CounterAudit</a></li>
+            <li><a href="ai-frameworks">AI Frameworks</a></li>
           </ul>
         </div>
         <div class="sidebar-section">
           <div class="sidebar-label">Source</div>
           <ul class="sidebar-links">
-            <li><a href="https://github.com/RunTimeAdmin/sigvara" target="_blank" rel="noopener">GitHub →</a></li>
+            <li><a href="https://github.com/RunTimeAdmin/Sigvara" target="_blank" rel="noopener">GitHub →</a></li>
           </ul>
         </div>
       </aside>
@@ -61,7 +71,7 @@
       <main class="docs-content">
         <div class="section-label">Protocol</div>
         <h2>Lineage</h2>
-        <p>Sigvara did not start on Arc. The same protocol, identity, reputation, staking, epoch fees, oracle and SDK, ran as a public testnet on Robinhood Chain for a month under its earlier name, Countersig Network. This page records that run so anyone can check it. Every value below was read from the chain and its explorer on 17 September 2026; the earlier repository is <a href="https://github.com/RunTimeAdmin/countersig-network" target="_blank" rel="noopener">RunTimeAdmin/countersig-network</a>.</p>
+        <p>Sigvara did not start on Arc. The same protocol, identity, reputation, staking, epoch fees, oracle and SDK, ran as a public testnet on Robinhood Chain for a month under its earlier name, Countersig Network. This page records that run so anyone can check it. Every value below was read from the chain and its explorer on 17 September 2026. Every address and transaction below is on a public explorer, so none of it rests on this site being truthful.</p>
 
         <h3>Deployment</h3>
         <table class="data-table">
@@ -83,16 +93,16 @@
         <h3>What ran</h3>
         <ul>
           <li><strong>Reputation oracle, hourly epochs.</strong> The oracle wallet called <code>proposeReputation</code> and <code>finalizeReputation</code> every hour. The reputation contract shows 2,470 transactions between deployment and the last epoch on 14 August 2026, 18:19 UTC: roughly 1,200 scoring epochs over 30 days.</li>
-          <li><strong>Registered agents.</strong> Three agents registered through the identity registry, at blocks <code>90339181</code>, <code>90758493</code> and <code>90820089</code>. Their scores were rewritten every epoch; the last finalized values on chain are 24 and 63 out of 100, consistent with the <a href="reputation.html">six-factor model's</a> ramp-up curve for agents a few weeks old with mixed activity.</li>
-          <li><strong>Attestation and flag feeds.</strong> <a href="counteraudit.html">CounterAudit</a> consumed scores and fed work-outcome attestations back; a rug-risk scanner reported red-verdict deployers as community flags. These were the live inputs behind the success and community factors.</li>
+          <li><strong>Registered agents.</strong> Three agents registered through the identity registry, at blocks <code>90339181</code>, <code>90758493</code> and <code>90820089</code>. Their scores were rewritten every epoch; the last finalized values on chain are 24 and 63 out of 100, consistent with the <a href="reputation">six-factor model's</a> ramp-up curve for agents a few weeks old with mixed activity.</li>
+          <li><strong>Attestation and flag feeds.</strong> <a href="counteraudit">CounterAudit</a> consumed scores and fed work-outcome attestations back; a rug-risk scanner reported red-verdict deployers as community flags. These were the live inputs behind the success and community factors.</li>
           <li><strong>SDK.</strong> The protocol SDK was published to npm and used for the live integration tests against this deployment.</li>
-          <li><strong>Not exercised.</strong> No bonds were deposited on testnet (the staking proxy has only its deployment transaction) and no slash was filed. The slashing path is covered by the contract test suite and by the <a href="../demo.html">interactive demo</a>, not by this run.</li>
+          <li><strong>Not exercised.</strong> No bonds were deposited on testnet (the staking proxy has only its deployment transaction) and no slash was filed. The slashing path is covered by the contract test suite and by the <a href="../demo">interactive demo</a>, not by this run.</li>
         </ul>
 
         <h3>Why the name changed</h3>
         <p>In late June 2026, while the protocol was still on Sepolia, an unrelated party copied the Countersig profile and brand images, scraped from the public repository, and launched a token under the Countersig name on a memecoin launchpad. Nothing trading under that name came from this team. The project had no token and had said so. An anti-impersonation notice went up on 1 July 2026, and on 15 July the direction was fixed as oracle-first with any token deferred. The Robinhood Chain testnet run continued under the Countersig name through August.</p>
         <p>On 17 September 2026 the protocol was renamed Sigvara, with a new domain and new brand assets, so that the name people verify against is one that has never been attached to a token. The code, deployments and history on this page are the continuity.</p>
-        <div class="callout">The rule going forward: any token, contract address or launch attributed to Sigvara is genuine only if it is published first on sigvara.xyz and in the <a href="https://github.com/RunTimeAdmin/sigvara" target="_blank" rel="noopener">RunTimeAdmin/sigvara</a> repository. Anything else is not ours.</div>
+        <div class="callout">The rule going forward: any token, contract address or launch attributed to Sigvara is genuine only if it is published first on sigvara.xyz and in the <a href="https://github.com/RunTimeAdmin/Sigvara" target="_blank" rel="noopener">RunTimeAdmin/sigvara</a> repository. Anything else is not ours.</div>
 
         <h3>What changed on the way to Arc</h3>
         <ul>
@@ -120,10 +130,10 @@
       <a class="u-mono-13" href="../">sigvara.xyz</a> &nbsp;·&nbsp; MIT License
     </div>
     <div class="footer-links">
-      <a href="quickstart.html">Quickstart</a>
-      <a href="reputation.html">Reputation</a>
-      <a href="counteraudit.html">CounterAudit</a>
-      <a href="https://github.com/RunTimeAdmin/sigvara" target="_blank" rel="noopener">GitHub</a>
+      <a href="quickstart">Quickstart</a>
+      <a href="reputation">Reputation</a>
+      <a href="counteraudit">CounterAudit</a>
+      <a href="https://github.com/RunTimeAdmin/Sigvara" target="_blank" rel="noopener">GitHub</a>
     </div>
   </div>
 </footer>
