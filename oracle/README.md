@@ -377,7 +377,8 @@ What this does and does not buy:
   as the primary breaks shared infrastructure and shared chain-view failure modes, which
   is worth having, but two operators under one owner are still one owner.
 
-Setup:
+Setup, step by step with the exact transactions, is in
+[RUNBOOK-second-operator.md](./RUNBOOK-second-operator.md). In outline:
 
 1. A separate wallet, on separate hardware, with a **different RPC endpoint**. A checker
    sharing a host and a chain view with what it checks mostly proves the code is
