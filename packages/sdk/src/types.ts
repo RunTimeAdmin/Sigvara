@@ -40,12 +40,17 @@ export interface Challenge {
   nonce: string;
   timestamp: number;
   expiresAt: number;
+  /** Who the challenge was issued by. Undefined only for legacy v1 challenges. */
+  audience?: string;
 }
 
 export interface ParsedChallenge {
   did: string;
   nonce: string;
   timestamp: number;
+  /** Undefined for a v1 payload, which did not carry one. */
+  audience?: string;
+  version: 1 | 2;
 }
 
 export interface VerifierConfig {

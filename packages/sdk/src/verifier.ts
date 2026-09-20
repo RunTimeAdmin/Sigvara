@@ -112,7 +112,8 @@ export class SigvaraVerifier {
     did: string,
     challengePayload: string,
     signatureBase58: string,
-    maxAgeSeconds = 300
+    maxAgeSeconds = 300,
+    expectedAudience?: string
   ): Promise<boolean> {
     // The payload must name this DID as the prover, otherwise a signature made for a
     // different challenge/DID could be presented against this one.
@@ -123,6 +124,20 @@ export class SigvaraVerifier {
       return false;
     }
     if (parsed.did !== did) return false;
+
+    // The payload must also name THIS verifier as the audience.
+    //
+    // Without it, a verifier holding a valid (payload, signature) pair can present that
+    // same pair to another verifier and be accepted as the agent, because nothing in the
+    // signed bytes says who the agent was talking to. Every verifier an agent
+    // authenticates to could impersonate it everywhere else, for the life of the
+    // challenge. v1 payloads carry no audience and cannot be checked, which is why they
+    // are refused as soon as a caller states what it expects.
+    if (expectedAudience !== undefined) {
+      if (parsed.version !== 2) return false;
+      if (parsed.audience !== expectedAudience) return false;
+    }
+
     if (isChallengeExpired(challengePayload, maxAgeSeconds)) return false;
 
     const identity = await this.getIdentity(did);

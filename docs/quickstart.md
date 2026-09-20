@@ -149,14 +149,19 @@ const myAgent = new SigvaraAgent({
   chainId: 5042002,
 });
 
-// Peer agent (the verifier) issues a challenge
+// Peer agent (the verifier) issues a challenge. It names myAgent as the prover and
+// peerAgent as the audience, so the response proves "I am talking to you" and cannot be
+// relayed on to a third agent.
 const challenge = peerAgent.issueChallenge(myAgent.did);
 
 // Sign the challenge payload with your Ed25519 key
 const signature = myAgent.signChallenge(challenge.payload);
 
-// Peer verifies: resolves pubkey from chain, checks signature + reputation
-const valid = await verifier.verifySignature(myAgent.did, challenge.payload, signature);
+// Peer verifies: resolves pubkey from chain, checks signature + reputation.
+// Passing the expected audience is what makes a relayed response fail.
+const valid = await verifier.verifySignature(
+  myAgent.did, challenge.payload, signature, 300, peerAgent.did,
+);
 const trusted = await verifier.meetsThreshold(myAgent.did, 60);
 
 console.log('Signature valid:', valid);

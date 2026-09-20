@@ -24,7 +24,7 @@ describe('verifySignature pre-chain guards', () => {
   });
 
   it('rejects a challenge whose prover DID does not match', async () => {
-    const c = generateChallenge(DID_A);
+    const c = generateChallenge(DID_A, 'https://verifier.example');
     expect(await verifier.verifySignature(DID_B, c.payload, SIG)).toBe(false);
   });
 

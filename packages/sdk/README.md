@@ -51,15 +51,34 @@ await depositStake(operator, agent.didHash, 1000n * 10n ** 18n, addresses.stakin
 
 // Counterparty side: challenge the agent, verify the signature, read status and score
 const verifier = new SigvaraVerifier({ rpcUrl: RPC, addresses, chainId: CHAIN_ID });
-const challenge = generateChallenge(agent.did);          // "SIGVARA-VERIFY:<did>:<nonce>:<timestamp>"
+// The second argument is the audience: who is asking. Pass a stable identifier you
+// control, normally your own origin. It is signed, so the agent's response proves it was
+// talking to *you* and cannot be relayed onward by anyone who receives it.
+const challenge = generateChallenge(agent.did, 'https://your-service.example');
 const signature = agent.signChallenge(challenge.payload); // done by the agent, returned to the counterparty
-const ok = await verifier.verifySignature(agent.did, challenge.payload, signature);
+
+// Pass the same audience back when verifying. Without it the check still runs, but an
+// unbound v1 payload would be accepted, which is the relayable case.
+const ok = await verifier.verifySignature(
+  agent.did, challenge.payload, signature, 300, 'https://your-service.example',
+);
 const trusted = ok && (await verifier.isActive(agent.did)) && (await verifier.meetsThreshold(agent.did, 40));
 ```
 
 Signature validity, status and score are separate reads; combine them into your
 own routing decision. Full protocol documentation, the reputation model and the
 contract addresses live in the repository.
+
+### Two things the SDK cannot do for you
+
+**Remember the nonce.** Every challenge carries a fresh one, and `verifySignature` has no
+memory, so a captured response replays against you until the challenge expires. Store the
+nonces you issue, reject one you have seen, and drop them once past the TTL. The library
+cannot do this for you because it does not own your storage.
+
+**Give each verifier its own audience.** It is what stops a response you received being
+presented to somebody else as proof the agent was talking to them. Use one stable value
+per service, not per request.
 
 ## Links
 

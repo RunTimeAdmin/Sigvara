@@ -65,10 +65,13 @@ export class SigvaraAgent {
     return pubKeyToBytes32(this.keyPair.publicKey);
   }
 
-  // Generate a challenge to send to a peer agent. The challenge payload includes the
-  // peer's DID — signing it proves the peer holds the corresponding private key.
+  // Generate a challenge to send to a peer agent. The payload names the peer as the
+  // prover, so signing it proves the peer holds the corresponding private key, and names
+  // THIS agent as the audience, so the peer's response cannot be relayed onward and used
+  // to impersonate it to a third party. Without that second binding, every agent a peer
+  // authenticates to can turn round and impersonate it everywhere else.
   issueChallenge(peerDid: string, ttlSeconds?: number): Challenge {
-    return generateChallenge(peerDid, ttlSeconds ?? this._challengeTtl);
+    return generateChallenge(peerDid, this.did, ttlSeconds ?? this._challengeTtl);
   }
 
   // Sign a challenge payload received from a peer. Returns a base58-encoded signature.
