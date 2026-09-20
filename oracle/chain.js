@@ -11,6 +11,8 @@ const IDENTITY_ABI = [
 
 const STAKE_VIEW_ABI = ['function hasMinimumStake(bytes32 didHash) view returns (bool)'];
 
+const { SCORE_FACTORS } = require('./epoch-policy');
+
 const OPERATOR_SET_ABI = ['function isActiveOperator(address) view returns (bool)'];
 
 const REPUTATION_ABI = [
@@ -311,7 +313,36 @@ async function finalizeScore(didHash) {
 // Returns { exists, proposedAt } — proposedAt is 0 when no proposal is pending.
 async function getPendingScore(didHash) {
   const pending = await reputationContract.getPendingScore(didHash);
-  return { exists: pending.exists, proposedAt: Number(pending.proposedAt) };
+  // The factors come back too, for checker mode to compare against its own arithmetic.
+  // The primary path reads only exists/proposedAt and is unaffected. Decoding is
+  // positional over a fixed-size struct, so the fields land even though the ABI above
+  // does not carry the trailing evidenceRoot.
+  //
+  // A field that does not decode to a finite number throws rather than returning a
+  // half-populated object. SigvaraReputation is UUPS-upgradeable and inserting a field
+  // into ReputationData would shift everything after it, so this is the difference
+  // between a checker that stops and says why, and one that silently starts agreeing
+  // with scores it can no longer read.
+  const data = {};
+  for (const f of SCORE_FACTORS) {
+    const v = Number(pending.data?.[f]);
+    // Only meaningful when something is pending. An empty slot decodes to a zeroed
+    // struct that nothing compares against: decideCheckerAction returns 'propose' on
+    // !exists without reading a single factor.
+    if (!Number.isFinite(v)) {
+      if (!pending.exists) continue;
+      throw new Error(`getPendingScore: ${f} did not decode to a number (got ${pending.data?.[f]}); the ReputationData ABI may no longer match the contract`);
+    }
+    data[f] = v;
+  }
+  return { exists: pending.exists, proposedAt: Number(pending.proposedAt), data };
+}
+
+// The live, finalized score. Used by checker mode to tell a proposal that was finalized
+// by someone else from one the slashing committee rejected: both leave pendingScores
+// empty, and only one of them means the number went live.
+async function getTotalScore(didHash) {
+  return Number(await reputationContract.getTotalScore(didHash));
 }
 
 async function getChallengeWindow() {
@@ -373,6 +404,7 @@ module.exports = {
   proposeScore,
   finalizeScore,
   getPendingScore,
+  getTotalScore,
   getChallengeWindow,
   getLatestBlockTimestamp,
   pruneAgent,

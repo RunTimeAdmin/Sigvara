@@ -1,0 +1,31 @@
+# A SECOND bonded oracle operator, running in checker mode.
+#
+# Deploy this on different hardware from the primary, with a different RPC provider
+# in its .env (Arc testnet has four: Circle, Blockdaemon, dRPC, QuickNode). A checker
+# sharing a host and a chain view with what it checks mostly proves the code is
+# deterministic. See "Running a second operator" in oracle/README.md.
+#
+#   docker compose -f docker-compose.checker.yml up -d --build
+#
+# Its .env must set ORACLE_MODE=checker and its own ORACLE_PRIVATE_KEY. The wallet
+# needs its own bond on SigvaraOracleBond and its own ORACLE_ROLE; it is a distinct
+# operator, not a copy of the primary.
+services:
+  checker:
+    build:
+      context: ./oracle
+      dockerfile: Dockerfile
+    container_name: sigvara-checker
+    restart: unless-stopped
+    env_file: ./oracle/.env.checker
+    ports:
+      # A different host port from the primary's 3030, so both can run on one box
+      # during a migration without the second silently failing to bind.
+      - "127.0.0.1:3031:3030"
+    volumes:
+      # Its OWN state. Sharing the primary's volume would mean sharing the payment
+      # observations the score is computed from, which is most of what is being checked.
+      - checker_state:/data
+
+volumes:
+  checker_state:

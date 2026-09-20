@@ -299,6 +299,106 @@ submitted, which is what an independent chain watcher would be for.
 
 Manually trigger an epoch run. Use for testing; production runs on the configured interval.
 
+### `GET /divergence` and `GET /divergence/:didHash` (checker mode only)
+
+Where a checking operator's arithmetic disagreed with the score pending on chain.
+Returns 404 on a primary, because an empty list there would read as "checked, found
+nothing" rather than "this oracle does not check".
+
+```json
+{
+  "mode": "checker",
+  "tolerance": 3,
+  "agents": {
+    "0x8414ce0b…": [
+      { "at": 1789852600000, "proposedAt": 1789852503,
+        "pendingTotal": 12, "ownTotal": 31,
+        "factors": { "successScore": { "pending": 7, "own": 26, "delta": 19 } } }
+    ]
+  }
+}
+```
+
+`proposedAt` is the disputed proposal's timestamp, so a reader can work out whether it
+is still inside its challenge window. That is the difference between something the
+slashing committee can still reject and a post-mortem.
+
+Unauthenticated, like `/score` and `/evidence`. The point of a second operator is that
+its disagreements are visible to someone other than its own operator.
+
+## Running a second operator
+
+The contract has no notion of two oracles agreeing. `pendingScores` holds **one** slot
+per agent; a second `proposeReputation` overwrites the first and restarts its challenge
+window; `finalizeReputation` asks only that the window elapsed unchallenged. There is no
+quorum, no median, no vote. Two operators both proposing would not produce agreement,
+they would produce a race whose loser is silently discarded.
+
+So the second operator runs with `ORACLE_MODE=checker` and never competes for the slot:
+
+| pending proposal | checker does |
+|---|---|
+| none | proposes — covers for a silent primary |
+| agrees, window open | nothing |
+| agrees, window elapsed | finalizes |
+| **disagrees** | **records a divergence and touches nothing** |
+
+The last row is the one that matters. Overwriting a disputed proposal would restart the
+challenge window and buy it another six hours beyond the reach of
+`SLASHING_COMMITTEE_ROLE`, the only role that can reject it. A checker that overwrote
+what it disputes would be protecting exactly what it was run to catch. Finalising a
+disputed score is the same mistake in the other direction: it would launder a number
+this oracle questions into the live value.
+
+**The empty-slot rule is narrowed, not guaranteed.** The checker re-reads
+`getPendingScore` immediately before it writes, so the gap is one RPC round trip rather
+than a whole epoch. It is not zero: `proposeReputation` has no compare-and-swap, so a
+proposal landing inside that gap is still overwritten. Closing it needs a
+`proposeIfEmpty` variant on the contract that reverts if the slot changed. Until then a
+checker can, rarely, overwrite a proposal it never saw.
+
+The comparison fails **closed**. Every threshold test is `>`, and `>` against `NaN` is
+false, so anything that cannot be compared — an unparseable tolerance, a factor that did
+not decode — is treated as a divergence rather than as agreement. A checker that cannot
+read a score must not bless it. `DIVERGENCE_TOLERANCE` is validated at startup for the
+same reason: `Number('3 points')` is `NaN`, and an unvalidated tolerance would not make
+the checker noisy, it would make it agree with everything, silently.
+
+What this does and does not buy:
+
+- **Does**: an independent recomputation of every score, and an alert the slashing
+  committee can act on inside the challenge window. The committee has always held the
+  reject power and has never had anything telling it when to use it.
+- **Does**: failover. If the primary stops, the checker finds an empty slot and proposes.
+- **Does not**: make agreement a protocol guarantee. Nothing in the contract requires the
+  two to agree; a committee still has to act on the alert. Enforcing N-of-M agreement
+  would need a storage change to `pendingScores` and a UUPS upgrade.
+- **Does not**: fix ownership concentration on its own. A checker run by the same party
+  as the primary breaks shared infrastructure and shared chain-view failure modes, which
+  is worth having, but two operators under one owner are still one owner.
+
+Setup:
+
+1. A separate wallet, on separate hardware, with a **different RPC endpoint**. A checker
+   sharing a host and a chain view with what it checks mostly proves the code is
+   deterministic.
+2. `depositBond()` on `SigvaraOracleBond` for at least `bondAmount` (1000 SVR on Arc
+   testnet), then admission by `DEFAULT_ADMIN_ROLE` via `admit()`.
+3. `ORACLE_ROLE` on `SigvaraReputation`, granted by `DEFAULT_ADMIN_ROLE`.
+4. Its own `ORACLE_STATE_PATH`. Sharing a state file would mean sharing the payment
+   observations the score is computed from, which is most of what is being checked.
+5. **`FEE_REGISTRY_ADDRESS` unset.** `SigvaraEpochFees.chargeEpoch` has no per-epoch
+   idempotency, so a checker that ran the primary's fee path would debit the agent a
+   second time for one scoring epoch. Startup refuses `ORACLE_MODE=checker` together
+   with a fee registry. A checker's failover proposals are unbilled.
+6. **`EPOCH_HOURS` below half the challenge window** (so under 3 on Arc testnet, where
+   the window is 6h). A proposal is only auditable while it sits in `pendingScores`; a
+   checker on a longer cadence misses proposals entirely and its empty `/divergence`
+   would read as "checked, found nothing". The startup warns, and the endpoint reports
+   `seesProposals` so a reader can tell the two apart.
+
+Exit is not instant: `initiateUnbond()` starts a 7-day cooldown before `withdrawBond()`.
+
 ## Environment Variables
 
 ### Required

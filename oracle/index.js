@@ -6,7 +6,10 @@ const http = require('http');
 const chain = require('./chain');
 const external = require('./external');
 const { computeScore } = require('./scoring');
-const { decideAction, epochIntervalError } = require('./epoch-policy');
+const {
+  decideAction, decideCheckerAction, scoreDivergence,
+  epochIntervalError, divergenceToleranceError, DEFAULT_DIVERGENCE_TOLERANCE,
+} = require('./epoch-policy');
 const { json, readBody, readCredentials, identifyCaller, mayAttestUnauthenticated, parseScorePath, rateLimited, clientKey, adminTokenPolicyError } = require('./http-helpers');
 const payments = require('./payments');
 const merkle = require('./merkle');
@@ -42,6 +45,12 @@ const cfg = {
   externalRpc:        process.env.EXTERNAL_RPC || '',
   externalIdentity:   process.env.EXTERNAL_IDENTITY_ADDRESS || '',
   externalReputation: process.env.EXTERNAL_REPUTATION_ADDRESS || '',
+  // Checker mode: a second bonded operator that audits the primary's proposals rather
+  // than racing them. It scores every agent independently and compares; it proposes only
+  // when nothing is pending, and never finalizes or overwrites a score it disputes.
+  // See decideCheckerAction in epoch-policy.js for why those two prohibitions matter.
+  checkerMode:        process.env.ORACLE_MODE === 'checker',
+  divergenceTolerance: Number(process.env.DIVERGENCE_TOLERANCE || DEFAULT_DIVERGENCE_TOLERANCE),
 };
 
 if (!cfg.rpcUrl || !cfg.privateKey || !cfg.identityAddress || !cfg.reputationAddress) {
@@ -57,8 +66,38 @@ if (epochErr) {
   process.exit(1);
 }
 
+// Same reasoning as the interval, and the same failure shape. An unparseable tolerance
+// does not make the checker noisy, it makes it agree with everything: every comparison
+// against NaN is false. Refuse to start rather than run a check that cannot fail.
+if (cfg.checkerMode) {
+  const tolErr = divergenceToleranceError(cfg.divergenceTolerance);
+  if (tolErr) {
+    console.error(`[oracle] ${tolErr}`);
+    process.exit(1);
+  }
+  // A checker that proposes as failover would otherwise run the primary's fee path and
+  // debit the agent a second time for one scoring epoch: chargeEpoch has no per-epoch
+  // idempotency, so two operators charging is two charges. A checker does not bill.
+  if (cfg.feeRegistryAddress) {
+    console.error(
+      '[oracle] ORACLE_MODE=checker with FEE_REGISTRY_ADDRESS set. A checker must not ' +
+      'charge epoch fees — chargeEpoch is not idempotent, so the agent would pay twice ' +
+      'for one epoch. Unset FEE_REGISTRY_ADDRESS on the checker.',
+    );
+    process.exit(1);
+  }
+}
+
 chain.init(cfg);
 external.init(cfg);
+
+// Most recent divergences returned by the collection route. Bounded so an anonymous
+// caller cannot make the oracle serialise its whole history on every request.
+const DIVERGENCE_PAGE = 100;
+
+// The challenge window as of the last epoch, so /divergence can say whether this
+// checker's cadence is short enough to actually see proposals before they expire.
+let lastChallengeWindow = null;
 
 // ---- Persistent state ------------------------------------------------------
 // attestations/flags drive score factors that accumulate and cannot be
@@ -84,6 +123,11 @@ const {
   pruneExpiredCooldowns,
   isStatePathWritable,
   getStatePath,
+  recordDivergence,
+  getDivergences,
+  allDivergences,
+  pruneDivergences,
+  forgetAgent,
   ATTEST_COOLDOWN_MS,
 } = require('./store');
 
@@ -207,8 +251,20 @@ async function runEpochInner() {
   console.log(`[oracle] ${agents.length} agent(s) found`);
   let proposed = 0;
   let finalized = 0;
+  let diverged = 0;
 
   const challengeWindow = await chain.getChallengeWindow();
+  lastChallengeWindow = challengeWindow;
+  // A proposal is only auditable while it sits in pendingScores. A checker whose epoch
+  // is not comfortably shorter than that window simply misses proposals, and an empty
+  // /divergence would then read as "checked, found nothing" rather than "did not look".
+  if (cfg.checkerMode && cfg.epochMs >= (challengeWindow * 1000) / 2) {
+    console.warn(
+      `[oracle] WARNING: checker epoch is ${cfg.epochMs / 3_600_000}h against a ` +
+      `${challengeWindow / 3600}h challenge window. Proposals will expire unseen. ` +
+      'Set EPOCH_HOURS below half the challenge window.',
+    );
+  }
   // Use the chain's clock for window math, not the local one — the contract
   // compares against block.timestamp. Fetched once per epoch; going slightly
   // stale during a long epoch only errs toward 'skip', never toward a
@@ -247,6 +303,7 @@ async function runEpochInner() {
     // Slashed agents are terminal — their score was zeroed by SigvaraStaking.
     if (info.status === chain.STATUS_SLASHED) {
       chain.pruneAgent(info.didHash);
+      forgetAgent(info.didHash);
       continue;
     }
     // Uncovered agents fall out of the active scoring run (tokenomics §4).
@@ -305,7 +362,10 @@ async function runEpochInner() {
           continue;
         }
 
-        const action = decideAction(pending, challengeWindow, chainNow);
+        // Checker mode decides after scoring instead, because it needs its own number to
+        // compare against the pending one. The primary keeps the cheap skip: there is no
+        // point computing a score it has already decided not to propose.
+        const action = cfg.checkerMode ? null : decideAction(pending, challengeWindow, chainNow);
 
         if (action === 'skip') {
           console.log(`[oracle]   ${didHash.slice(0, 10)}… score still pending, waiting out challenge window`);
@@ -355,6 +415,92 @@ async function runEpochInner() {
           propagation: measured.propagation,
         });
 
+        // Checker mode: compare rather than compete. This oracle holds ORACLE_ROLE and a
+        // bond like any other, so it *could* overwrite the primary's proposal — and must
+        // not. Overwriting restarts the six-hour challenge window, which would hand a bad
+        // proposal another window out of the slashing committee's reach. So the only
+        // writes a checker makes are proposing into an empty slot and finalizing a score
+        // it agrees with.
+        if (cfg.checkerMode) {
+          // Re-read rather than trusting the batch. `pending` was fetched for every agent
+          // before phase 2 began, and phase 2 is sequential with a tx wait per write, so
+          // by the time this agent is reached the snapshot can be minutes old. Deciding
+          // on it would mean proposing into a slot that is no longer empty — overwriting
+          // a live proposal, restarting its challenge window, and recording no divergence,
+          // because the overwrite path never reaches recordDivergence. The checker would
+          // be destroying exactly the evidence it exists to produce.
+          //
+          // This narrows the race to one round trip; it does not close it.
+          // proposeReputation has no compare-and-swap, so a proposal landing between this
+          // read and the tx below is still overwritten. Closing it properly needs a
+          // proposeIfEmpty on the contract. Said plainly in oracle/README.md.
+          const freshPending = await chain.getPendingScore(didHash);
+          const decision = decideCheckerAction(freshPending, scores, challengeWindow, chainNow, cfg.divergenceTolerance);
+
+          if (decision === 'diverged') {
+            const d = scoreDivergence(freshPending.data, scores);
+            recordDivergence(didHash, d, freshPending.proposedAt);
+            const open = chainNow < freshPending.proposedAt + challengeWindow;
+            const detail = Object.entries(d.factors)
+              .map(([f, v]) => `${f} pending=${v.pending} ours=${v.own}`).join(', ');
+            console.error(
+              `[oracle]   ${didHash.slice(0, 10)}… DIVERGENCE pending=${d.pendingTotal} ours=${d.ownTotal} ` +
+              `(${detail})${open ? ' — challenge window OPEN, committee can still reject' : ' — window closed'}`,
+            );
+            metrics.inc('checkerDivergences');
+            diverged++;
+            continue;
+          }
+
+          if (decision === 'skip') {
+            metrics.inc('checkerAgreed');
+            continue;
+          }
+
+          if (decision === 'finalize') {
+            // Agreed, and the window is up. Finalizing is permissionless and this oracle
+            // has checked the number itself, which is the only condition under which a
+            // checker should be the one to make it live.
+            //
+            // The proposal was re-read a few lines above, so this is the one that was
+            // checked. A replacement landing in the gap that remains is caught by the
+            // contract rather than by this code: any replacement sets proposedAt to its
+            // own block, so the window is open again and finalize reverts with
+            // ChallengeWindowActive. That backstop depends on challengeWindow being
+            // non-trivial — setChallengeWindow has no lower bound — so it is a second
+            // line of defence behind the re-read, not the first.
+            metrics.inc('finalizeAttempts');
+            try {
+              const finalizeTx = await chain.finalizeScore(didHash);
+              console.log(`[oracle]   ${didHash.slice(0, 10)}… agreed, finalized tx=${finalizeTx.slice(0, 10)}…`);
+              finalized++;
+              metrics.inc('finalizeSuccesses');
+            } catch (finalizeErr) {
+              // An empty slot after a failed finalize has two very different causes, and
+              // counting both as success hides the one that matters most: the slashing
+              // committee rejecting a proposal deletes it too. That is the committee
+              // acting on this checker's alert, the entire point of running one, and it
+              // must not be indistinguishable from a routine finalize in the metrics.
+              const still = await chain.getPendingScore(didHash);
+              if (still.exists) { metrics.inc('finalizeErrors'); throw finalizeErr; }
+              const live = await chain.getTotalScore(didHash);
+              if (live > 0 && live === scores.total) {
+                console.log(`[oracle]   ${didHash.slice(0, 10)}… already finalized by another party`);
+                metrics.inc('finalizeSuccesses');
+              } else {
+                console.warn(
+                  `[oracle]   ${didHash.slice(0, 10)}… pending proposal vanished without becoming live ` +
+                  `(live=${live}, ours=${scores.total}) — most likely a committee rejection`,
+                );
+                metrics.inc('proposalsRejected');
+              }
+            }
+            continue;
+          }
+          // 'propose' falls through: nothing is pending, so the primary is silent and
+          // this operator covers for it. That is the failover half of running a second.
+        }
+
         // Charge before proposing, not after. The coverage read above and the
         // charge are separated by at least the propose transaction, and an
         // operator can withdraw in that gap: they would be scored for free, and
@@ -363,7 +509,11 @@ async function runEpochInner() {
         // nothing to us. The trade-off is that an agent charged for an epoch whose
         // proposal then fails has paid for a run it did not get; that is logged
         // and counted, and is the lesser of the two errors.
-        if (gatingActive) {
+        // Never in checker mode. chargeEpoch has no per-epoch idempotency, so a second
+        // operator running this path would debit the agent a second time for one scoring
+        // epoch. Startup already refuses checker + FEE_REGISTRY_ADDRESS; this is the
+        // second lock on a path that moves real value.
+        if (gatingActive && !cfg.checkerMode) {
           try {
             await chain.chargeEpoch(didHash);
             metrics.inc('feeCharges');
@@ -403,10 +553,20 @@ async function runEpochInner() {
   // Same reason, same place: a flag too old to move an integer score is dead weight
   // in the state file.
   pruneFlags();
+  // And the same again for divergences, which are capped per agent but not in the number
+  // of agents, and are re-serialised on every persist().
+  if (cfg.checkerMode) {
+    const droppedDivergences = pruneDivergences();
+    if (droppedDivergences > 0) console.log(`[oracle] pruned ${droppedDivergences} expired divergence record(s)`);
+  }
   if (pruned > 0) console.log(`[oracle] pruned ${pruned} fully decayed payment event(s)`);
   persistState();
 
-  console.log(`[oracle] epoch done — ${proposed} proposed, ${finalized} finalized in ${Date.now() - start}ms`);
+  console.log(
+    `[oracle] epoch done — ${proposed} proposed, ${finalized} finalized` +
+    (cfg.checkerMode ? `, ${diverged} diverged` : '') +
+    ` in ${Date.now() - start}ms`,
+  );
   metrics.inc('epochsSucceeded');
   metrics.set('lastSuccessfulEpochMs', Date.now());
   metrics.set('activeAgents', proposed);
@@ -605,6 +765,60 @@ const server = http.createServer(async (req, res) => {
       metrics.inc('attestRejectedOther');
       return json(res, 400, { error: err.message });
     }
+  }
+
+  // GET /divergence and /divergence/:didHash — where this oracle disagreed with the
+  // score pending on chain.
+  //
+  // Only a checker ever writes these. Public for the same reason /evidence is: the
+  // point of running a second operator is that its disagreements are visible to
+  // someone other than its own operator. An alert only its author can read is not a
+  // check on anything.
+  if (readMethod === 'GET' && (pathname === '/divergence' || pathname.startsWith('/divergence/'))) {
+    if (rateLimited(clientKey(req))) {
+      metrics.inc('rateLimitHits');
+      return json(res, 429, { error: 'Rate limited' });
+    }
+    if (!cfg.checkerMode) {
+      // A primary has nothing to say here, and an empty list would read as "checked,
+      // no disagreements" rather than "this oracle does not check".
+      return json(res, 404, { error: 'not_a_checker', message: 'This oracle does not run in checker mode.' });
+    }
+    if (pathname === '/divergence') {
+      // Capped. Serialising every agent's full history on an unauthenticated route is
+      // CPU and bandwidth an anonymous caller gets to spend 60 times a minute, on the
+      // same event loop that serves /attest and runs the epoch timer. Newest first,
+      // because a committee acts on what is still inside its challenge window.
+      const flat = [];
+      for (const [didHash, list] of Object.entries(allDivergences())) {
+        for (const e of list) flat.push({ didHash, ...e });
+      }
+      flat.sort((a, b) => b.at - a.at);
+      const recent = flat.slice(0, DIVERGENCE_PAGE);
+      return json(res, 200, {
+        mode: 'checker',
+        tolerance: cfg.divergenceTolerance,
+        // So an empty list cannot be read as "checked, found nothing" when the real
+        // answer is "this checker's epoch is too long to see proposals before they
+        // expire". Silence and not looking are different claims.
+        epochHours: cfg.epochMs / 3_600_000,
+        challengeWindowHours: lastChallengeWindow === null ? null : lastChallengeWindow / 3600,
+        seesProposals: lastChallengeWindow === null ? null : cfg.epochMs < (lastChallengeWindow * 1000) / 2,
+        total: flat.length,
+        truncated: flat.length > recent.length,
+        divergences: recent,
+      });
+    }
+    const didHash = pathname.slice('/divergence/'.length);
+    if (!/^0x[0-9a-fA-F]{64}$/.test(didHash)) {
+      return json(res, 400, { error: 'didHash must be a 32-byte hex string' });
+    }
+    return json(res, 200, {
+      mode: 'checker',
+      tolerance: cfg.divergenceTolerance,
+      didHash,
+      divergences: getDivergences(didHash),
+    });
   }
 
   // GET /evidence/:didHash — the payments behind an agent's score, with proofs.
@@ -845,6 +1059,16 @@ server.listen(cfg.port, cfg.host, () => {
   // what a public RPC will serve in one burst.
   if (chain.restoreScanState(loadScanState())) {
     console.log(`[oracle] resuming log scan from block ${loadScanState().lastScannedBlock + 1}`);
+  }
+
+  // Which half of a two-operator setup this process is. Said at boot because the two
+  // modes differ in what they will write to the chain, and running the wrong one is
+  // otherwise invisible until the epoch after something has already gone out.
+  if (cfg.checkerMode) {
+    console.log(
+      `[oracle] CHECKER mode — audits pending proposals, tolerance ${cfg.divergenceTolerance} points. ` +
+      'Proposes only into an empty slot; never overwrites or finalizes a disputed score.',
+    );
   }
 
   // Check once whether didHash can be derived locally instead of fetched. Doing it here

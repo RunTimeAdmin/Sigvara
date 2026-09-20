@@ -57,6 +57,17 @@ const attestCooldowns = new Map();
 const paymentEvents = new Map();
 // Settlement tx hashes already credited, so a receipt cannot be presented twice.
 const usedPaymentTxs = new Set();
+// didHash -> recent occasions this oracle disagreed with a pending proposal, newest
+// last. Only checker mode writes here. Persisted because a divergence is evidence for
+// the slashing committee, and evidence that evaporates on restart is not evidence.
+const divergences = new Map();
+// Bounded so a permanently disagreeing pair of oracles cannot grow the state file
+// without limit. The newest are the ones worth keeping: a committee acts inside the
+// current challenge window, not on last month's.
+const MAX_DIVERGENCES_PER_AGENT = 50;
+// Long enough to cover any challenge window a committee could still act within, short
+// enough that a permanently disagreeing pair does not accumulate for ever.
+const DIVERGENCE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 // Where the AgentRegistered log scan got to, and what it found. Persisted so a
 // restart resumes instead of replaying the chain from FROM_BLOCK, which grows with
 // every block and eventually trips a public RPC's rate limit.
@@ -173,6 +184,11 @@ function load() {
     for (const [k, v] of Object.entries(parsed.attestCooldowns || {})) attestCooldowns.set(k, v);
     for (const [k, v] of Object.entries(parsed.paymentEvents || {})) paymentEvents.set(k, v);
     for (const h of parsed.usedPaymentTxs || []) usedPaymentTxs.add(h);
+    for (const [k, v] of Object.entries(parsed.divergences || {})) {
+      // Re-applied on load, not just on write: a file that grew under an older build
+      // would otherwise never shrink back inside the cap.
+      if (Array.isArray(v)) divergences.set(k, v.slice(-MAX_DIVERGENCES_PER_AGENT));
+    }
     scanState = parsed.scanState || null;
     console.log(`[oracle] state loaded from ${STATE_PATH}: ${attestations.size} attestations, ${flags.size} flags, ${links.size} links, ${attestCooldowns.size} cooldowns`);
   } catch (err) {
@@ -195,6 +211,7 @@ function persist() {
       attestCooldowns: Object.fromEntries(attestCooldowns),
       paymentEvents: Object.fromEntries(paymentEvents),
       usedPaymentTxs: [...usedPaymentTxs],
+      divergences: Object.fromEntries(divergences),
       scanState,
       savedAt: new Date().toISOString(),
     }));
@@ -279,6 +296,51 @@ function prunePaymentEvents(halfLifeMs, minWeight = 0.001, now = Date.now()) {
   return dropped;
 }
 
+/**
+ * Record that this oracle's score differed from the one pending on chain.
+ *
+ * Checker mode only. The entry carries both totals and the per-factor deltas, because
+ * "the score is wrong" is not actionable and "successScore says 25, we compute 7" is.
+ * proposedAt is kept so a reader can tell whether the disputed proposal is still inside
+ * its challenge window, which is the difference between a live alert and a post-mortem.
+ */
+function recordDivergence(didHash, divergence, proposedAt, now = Date.now()) {
+  const list = divergences.get(didHash) || [];
+  list.push({
+    at: now,
+    proposedAt,
+    pendingTotal: divergence.pendingTotal,
+    ownTotal: divergence.ownTotal,
+    factors: divergence.factors,
+  });
+  divergences.set(didHash, list.slice(-MAX_DIVERGENCES_PER_AGENT));
+  return true;
+}
+
+function getDivergences(didHash) { return divergences.get(didHash) || []; }
+
+/**
+ * Drop divergences older than `maxAgeMs`, and any agent left with none.
+ *
+ * Bounded per agent already; this bounds the number of agents. A committee acts inside
+ * a six-hour challenge window, so a divergence from last quarter is not evidence it can
+ * still use, and the whole map is re-serialised on every persist().
+ */
+function pruneDivergences(maxAgeMs = DIVERGENCE_MAX_AGE_MS, now = Date.now()) {
+  let dropped = 0;
+  for (const [didHash, list] of divergences) {
+    const kept = list.filter(e => now - (e.at ?? 0) <= maxAgeMs);
+    dropped += list.length - kept.length;
+    if (kept.length === 0) divergences.delete(didHash);
+    else if (kept.length !== list.length) divergences.set(didHash, kept);
+  }
+  return dropped;
+}
+
+function forgetAgent(didHash) { return divergences.delete(didHash); }
+
+function allDivergences() { return Object.fromEntries(divergences); }
+
 function getScanState() { return scanState; }
 function setScanState(state) { scanState = state; }
 
@@ -312,6 +374,14 @@ module.exports = {
   paymentEvents,
   usedPaymentTxs,
   creditPayment,
+  divergences,
+  recordDivergence,
+  getDivergences,
+  allDivergences,
+  pruneDivergences,
+  forgetAgent,
+  MAX_DIVERGENCES_PER_AGENT,
+  DIVERGENCE_MAX_AGE_MS,
   getScanState,
   setScanState,
   getPaymentEvents,

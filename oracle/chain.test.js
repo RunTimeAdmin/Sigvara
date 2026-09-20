@@ -198,7 +198,12 @@ test('getPendingScore: converts proposedAt to a number and preserves exists', as
     provider: makeFakeProvider(120),
     identityContract: makeFakeIdentityContract(),
     reputationContract: makeFakeReputationContract({
-      pending: { '0xaaa': { exists: true, proposedAt: 1_700_000_000n, data: {} } },
+      // Shaped like the contract's ReputationData, not an empty object: checker mode
+      // compares these, and a fake that omits them would test a shape that cannot occur.
+      pending: { '0xaaa': { exists: true, proposedAt: 1_700_000_000n, data: {
+        feeScore: 0n, successScore: 7n, ageScore: 0n,
+        externalScore: 0n, communityScore: 5n, propagationScore: 0n,
+      } } },
     }),
   });
 
@@ -409,4 +414,41 @@ test('an unreachable registry also leaves it reading the chain', async () => {
     reputationContract: makeFakeReputationContract(),
   });
   assert.equal(await chain.verifyDidHashDerivation(), false);
+});
+
+test('getPendingScore: returns the factors for checker mode to compare', async () => {
+  chain.init(CFG, {
+    provider: makeFakeProvider(120),
+    identityContract: makeFakeIdentityContract(),
+    reputationContract: makeFakeReputationContract({
+      pending: { '0xaaa': { exists: true, proposedAt: 1_700_000_000n, data: {
+        feeScore: 3n, successScore: 7n, ageScore: 2n,
+        externalScore: 1n, communityScore: 5n, propagationScore: 4n,
+      } } },
+    }),
+  });
+  const pending = await chain.getPendingScore('0xaaa');
+  assert.deepEqual(pending.data, {
+    feeScore: 3, successScore: 7, ageScore: 2,
+    externalScore: 1, communityScore: 5, propagationScore: 4,
+  });
+});
+
+test('getPendingScore: a factor that does not decode throws instead of reading as zero', async () => {
+  // SigvaraReputation is upgradeable; inserting a field into ReputationData would shift
+  // everything after it. A checker that treated an undecodable factor as 0 would quietly
+  // start agreeing with scores it can no longer read, which is the worst failure it has.
+  chain.init(CFG, {
+    provider: makeFakeProvider(120),
+    identityContract: makeFakeIdentityContract(),
+    reputationContract: makeFakeReputationContract({
+      pending: { '0xaaa': { exists: true, proposedAt: 1_700_000_000n, data: {
+        feeScore: 3n, successScore: 7n, ageScore: 2n, externalScore: 1n, communityScore: 5n,
+      } } },
+    }),
+  });
+  await assert.rejects(
+    () => chain.getPendingScore('0xaaa'),
+    /propagationScore did not decode to a number/,
+  );
 });

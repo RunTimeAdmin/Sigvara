@@ -18,6 +18,11 @@ const {
   prunePaymentEvents,
   paymentVolume,
   ATTEST_COOLDOWN_MS,
+  divergences,
+  recordDivergence,
+  getDivergences,
+  allDivergences,
+  MAX_DIVERGENCES_PER_AGENT,
 } = require('./store');
 const { communityScore } = require('./scoring');
 
@@ -345,4 +350,67 @@ test('resolveFlags: clears the newest first', () => {
   resolveFlags(DID_D, 1);
   assert.deepEqual(flags.get(DID_D), [old], 'the older flag survives');
   flags.delete(DID_D);
+});
+
+// --- checker divergences ----------------------------------------------------------
+
+const DID_DIV = '0x' + 'd1'.repeat(32);
+const someDivergence = (ownTotal = 25) => ({
+  total: Math.abs(ownTotal - 12), maxFactor: Math.abs(ownTotal - 12),
+  pendingTotal: 12, ownTotal,
+  factors: { successScore: { pending: 7, own: ownTotal - 5, delta: ownTotal - 12 } },
+});
+
+test('recordDivergence: keeps both totals and the per-factor detail', () => {
+  divergences.clear();
+  recordDivergence(DID_DIV, someDivergence(), 1_700_000_000, 1_700_000_500);
+  const [entry] = getDivergences(DID_DIV);
+  assert.equal(entry.pendingTotal, 12);
+  assert.equal(entry.ownTotal, 25);
+  assert.equal(entry.proposedAt, 1_700_000_000);
+  assert.equal(entry.at, 1_700_000_500);
+  assert.equal(entry.factors.successScore.pending, 7);
+});
+
+test('recordDivergence: keeps proposedAt, so a reader can tell live from historical', () => {
+  // Without it there is no way to know whether the disputed proposal is still inside
+  // its challenge window, which is the difference between something the committee can
+  // still reject and a post-mortem.
+  divergences.clear();
+  recordDivergence(DID_DIV, someDivergence(), 1_700_000_000);
+  assert.equal(getDivergences(DID_DIV)[0].proposedAt, 1_700_000_000);
+});
+
+test('recordDivergence: accumulates, newest last', () => {
+  divergences.clear();
+  recordDivergence(DID_DIV, someDivergence(20), 1, 10);
+  recordDivergence(DID_DIV, someDivergence(30), 2, 20);
+  const list = getDivergences(DID_DIV);
+  assert.equal(list.length, 2);
+  assert.equal(list[1].ownTotal, 30);
+});
+
+test('recordDivergence: bounded, and it is the newest that survive', () => {
+  // Two oracles that permanently disagree would otherwise grow the state file without
+  // limit, and it is the current window a committee acts on, not last month's.
+  divergences.clear();
+  for (let i = 0; i < MAX_DIVERGENCES_PER_AGENT + 25; i++) {
+    recordDivergence(DID_DIV, someDivergence(20 + i), i, i);
+  }
+  const list = getDivergences(DID_DIV);
+  assert.equal(list.length, MAX_DIVERGENCES_PER_AGENT);
+  assert.equal(list[list.length - 1].ownTotal, 20 + MAX_DIVERGENCES_PER_AGENT + 24);
+});
+
+test('getDivergences: an agent never disputed reads as empty, not undefined', () => {
+  divergences.clear();
+  assert.deepEqual(getDivergences('0x' + 'ee'.repeat(32)), []);
+});
+
+test('allDivergences: keyed by didHash for the whole-checker view', () => {
+  divergences.clear();
+  recordDivergence(DID_DIV, someDivergence(), 1, 1);
+  const all = allDivergences();
+  assert.deepEqual(Object.keys(all), [DID_DIV]);
+  assert.equal(all[DID_DIV].length, 1);
 });
