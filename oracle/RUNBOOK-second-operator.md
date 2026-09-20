@@ -416,3 +416,92 @@ Governance can also force this with `removeOperator(address)` from
 role alone leaves a bonded operator that cannot propose; removing the operator alone
 leaves an address holding `ORACLE_ROLE` whose proposals now revert on the bond check.
 Neither half is a clean removal on its own.
+
+## 11. The watcher
+
+A checker that records a disagreement nobody reads inside six hours has done nothing. The
+watcher closes that: it polls `/divergence`, re-reads each disputed slot on chain, and
+alerts while the committee can still reject, escalating as the window closes.
+
+**It must run on a third host**, and the reason is more specific than defence in depth.
+The watcher notifies on state changes only, never on a healthy poll, so nothing
+downstream can distinguish a quiet watcher from a dead one. Share a host with the checker
+and one failure silences both, with the silence reading as "nothing to report". An
+external dead-man's switch does not rescue it either, because there is no heartbeat to
+miss.
+
+### Reaching the checker from another host
+
+The checker publishes to `127.0.0.1:3031`. Something has to expose `/health` and
+`/divergence`, and nothing else.
+
+Use whatever already terminates 80/443 on that box. On the first deployment that was a
+system nginx serving five unrelated sites, and a second server fighting it for the port
+was not an improvement. nginx runs on the host and the checker publishes to host
+loopback, so the proxy target is simply `127.0.0.1:3031`: no Docker networking, no shared
+external network, and no reason to recreate the checker.
+
+```bash
+curl -s -o /etc/nginx/sites-available/checker.<domain> \
+  https://raw.githubusercontent.com/RunTimeAdmin/Sigvara/main/oracle/nginx-checker.conf.example
+ln -sf /etc/nginx/sites-available/checker.<domain> /etc/nginx/sites-enabled/
+nginx -t            # NOT optional: a bad config takes down every site this nginx serves
+systemctl reload nginx
+certbot --nginx -d checker.<domain>
+```
+
+Point a DNS A record at the checker's host first, or certbot's challenge has nowhere to
+land.
+
+Then prove the surface is what you think it is, rather than assuming:
+
+```bash
+for P in /health /divergence; do
+  printf "%-14s %s\n" "$P" "$(curl -s -o /dev/null -w '%{http_code}' https://checker.<domain>$P)"
+done
+for P in /attest /epoch /flag /link /metrics /score/0x00 /evidence/0x00 /; do
+  printf "%-20s %s\n" "$P" "$(curl -s -o /dev/null -w '%{http_code}' https://checker.<domain>$P)"
+done
+```
+
+The first loop must be `200`, the second all `404`. A write path answering anything else
+means the config matched more broadly than intended.
+
+### Deploying it
+
+```bash
+mkdir -p /docker/sigvara-watcher && cd /docker/sigvara-watcher
+curl -sO https://raw.githubusercontent.com/RunTimeAdmin/Sigvara/main/docker-compose.watcher.vps.yml
+curl -s -o .env https://raw.githubusercontent.com/RunTimeAdmin/Sigvara/main/oracle/.env.watcher.example
+sed -i 's|^CHECKER_URL=.*|CHECKER_URL=https://checker.<domain>|' .env
+docker compose -f docker-compose.watcher.vps.yml up -d
+docker compose -f docker-compose.watcher.vps.yml logs --tail=20
+```
+
+It holds no key, mounts no state and signs nothing, so this is the lowest-stakes
+deployment in the system. Worst case it is noisy.
+
+Expect on a healthy start:
+
+```
+[watcher] watching https://checker.<domain> every 300s, webhook off, read-only (no key)
+```
+
+### Set WEBHOOK_URL
+
+`webhook off` in that line means every alert goes to a container log on a host nobody is
+watching. The component exists for 3am and in that state it cannot reach anyone at 3am.
+Treat an unset `WEBHOOK_URL` as an incomplete deployment rather than an optional extra.
+
+### If its first alert fires immediately
+
+Check the `at` timestamp on the divergence before treating it as a finding. A checker
+brought up without seeding its state (step 7a) records a divergence caused by its own
+empty `paymentEvents`, and that record is append-only: the checker cannot retract an
+opinion it has since revised. The watcher will classify it `actionable` and alert with
+remediation steps, because from the chain's point of view the proposal really is still
+live and still rejectable.
+
+It clears itself when that proposal turns over and the record classifies as `superseded`,
+so the damage is bounded by one proposal's lifetime. Do step 7a first and it never
+happens.

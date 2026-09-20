@@ -117,6 +117,17 @@ proxied and answers 404, so the write surface is still reachable only from a she
 the box. The read paths are rate-limited per caller, not because they are sensitive but
 because `/score` costs several chain reads and `/evidence` rebuilds a Merkle tree.
 
+The checking operator that joined the set on 20 September 2026 is published the same way
+and more narrowly: `checker.sigvara.xyz` serves `/health`, `/divergence` and
+`/divergence/:didHash`, and 404s everything else including every write path. It is public
+for the same reason the evidence root is. The protocol already lets anyone recompute a
+score; letting anyone see whether two independent operators agree on it is that argument
+one step further, and the payload carries nothing that is not already derivable from
+on-chain state plus the evidence endpoint.
+
+The watcher that consumes `/divergence` publishes nothing at all. It listens on no port,
+holds no key and mounts no state.
+
 It used to run as `node index.js` on a desktop. That is worth naming rather than
 quietly fixing: a reputation oracle whose liveness depends on a laptop staying awake
 is a single point of failure that no amount of on-chain design makes up for, and it
