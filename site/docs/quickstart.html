@@ -16,7 +16,7 @@
   <link rel="icon" type="image/svg+xml" href="../assets/sigvara-avatar.svg" />
   <link rel="icon" type="image/png" sizes="512x512" href="../assets/sigvara-card.png" />
   <link rel="apple-touch-icon" href="../assets/sigvara-card.png" />
-  <link rel="stylesheet" href="../assets/style.css?v=e5a6705" />
+  <link rel="stylesheet" href="../assets/style.css?v=af388af" />
 </head>
 <body>
 
@@ -171,19 +171,25 @@ console.log(score);             <span class="cm">// → 0 until the first epoch 
         <div class="qs-step">
           <div class="qs-header"><div class="qs-num">6</div><h3>Sign a challenge (A2A authentication)</h3></div>
           <div class="qs-body">
-            <p>When a peer agent asks your agent to prove who it is, sign the challenge with your Ed25519 key.</p>
+            <p>When a peer agent asks your agent to prove who it is, sign the challenge with your Ed25519 key. The challenge names both your agent and <em>who is asking</em>, so a signature proves your agent was talking to that verifier specifically and cannot be relayed onward by whoever receives it.</p>
             <pre><code><span class="kw">const</span> myAgent = <span class="kw">new</span> <span class="fn">SigvaraAgent</span>({
   privateKey:   process.env.AGENT_ED25519_SEED,
   agentAddress: signer.address,
   chainId:      <span class="num">5042002</span>,
 });
 
-<span class="cm">// Peer issues a challenge → your agent signs it</span>
+<span class="cm">// Peer issues a challenge naming itself as the audience, then your agent signs it</span>
+<span class="kw">const</span> challenge = peerAgent.<span class="fn">issueChallenge</span>(myAgent.did);
 <span class="kw">const</span> signature = myAgent.<span class="fn">signChallenge</span>(challenge.payload);
 
-<span class="cm">// Peer verifies: signature + on-chain pubkey + reputation threshold</span>
-<span class="kw">const</span> valid   = <span class="kw">await</span> verifier.<span class="fn">verifySignature</span>(myAgent.did, challenge.payload, signature);
+<span class="cm">// Peer verifies: signature + on-chain pubkey + reputation threshold.</span>
+<span class="cm">// The last argument is the expected audience. Leaving it off still compiles,</span>
+<span class="cm">// and still accepts a proof that could have been relayed from elsewhere.</span>
+<span class="kw">const</span> valid   = <span class="kw">await</span> verifier.<span class="fn">verifySignature</span>(
+  myAgent.did, challenge.payload, signature, <span class="num">300</span>, peerAgent.did,
+);
 <span class="kw">const</span> trusted = <span class="kw">await</span> verifier.<span class="fn">meetsThreshold</span>(myAgent.did, <span class="num">60</span>);</code></pre>
+            <p class="u-muted-13">Requires <code>@sigvara/protocol-sdk</code> 1.0.0-alpha.8 or newer. Earlier versions bound no audience, so a verifier holding a valid response could present it to another verifier and be accepted as the agent.</p>
           </div>
         </div>
 
