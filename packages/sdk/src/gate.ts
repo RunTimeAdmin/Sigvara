@@ -76,8 +76,28 @@ class MemoryNonceStore implements NonceStore {
   private readonly spent = new Map<string, number>();
   seen(nonce: string): boolean { return this.spent.has(nonce); }
   add(nonce: string, expiresAt: number): void { this.spent.set(nonce, expiresAt); }
+
+  /**
+   * Drop expired entries, doing work proportional to what expired rather than to what
+   * is live.
+   *
+   * This runs on every accepted admission, and the previous version scanned the whole
+   * map each time. At a steady rate the map holds roughly rate x TTL entries, so the
+   * cost of admitting one agent grew with how busy the gate was.
+   *
+   * A Map iterates in insertion order and every entry is stamped with the same TTL, so
+   * the head is the oldest and stopping at the first live entry is enough. Insertion
+   * order is not exactly expiry order, because `expiresAt` derives from the timestamp
+   * inside the signed payload and a caller may present an older challenge after a newer
+   * one, but any such disorder is bounded by the TTL: a straggler is skipped now and
+   * collected on a later pass once the head moves past it. Pruning is a memory
+   * optimisation, never the replay check, so best-effort here costs nothing in safety.
+   */
   prune(nowSeconds: number): void {
-    for (const [nonce, exp] of this.spent) if (exp < nowSeconds) this.spent.delete(nonce);
+    for (const [nonce, exp] of this.spent) {
+      if (exp >= nowSeconds) break;
+      this.spent.delete(nonce);
+    }
   }
   /** Atomic here for free: a single-threaded event loop cannot interleave these two. */
   consume(nonce: string, expiresAt: number): boolean {
@@ -205,12 +225,14 @@ export class SigvaraGate {
       return { ...base, ok: false, reason: 'not_active' };
     }
 
-    // rep.total is getTotalScore(): the MATURED score, which is what the contract's own
+    // getTotalScore() is the MATURED score, which is what the contract's own
     // meetsThreshold reads. Summing the raw factors gives the EARNED score instead, so a
     // score earned minutes ago would pass this gate and be refused on chain. Two layers
     // disagreeing about who is admitted is worse than either threshold being wrong.
-    const rep = await this.verifier.getReputation(did);
-    const score = rep.total;
+    //
+    // Reading the total on its own rather than via getReputation: the factor breakdown is
+    // a second contract read this decision never looks at.
+    const score = await this.verifier.getTotalScore(did);
 
     if (score < this.threshold) {
       return { ...base, ok: false, reason: 'below_threshold', score };

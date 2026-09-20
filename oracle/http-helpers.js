@@ -126,8 +126,39 @@ function parseScorePath(pathname) {
 const RATE_WINDOW_MS = 60_000;
 const RATE_MAX = 60; // requests per key per window
 const _rateBuckets = new Map();
+let _lastSweep = 0;
+
+// Drop buckets whose window has closed.
+//
+// A bucket is replaced when its own key comes back, so a key that keeps requesting stays
+// bounded on its own. A key that is seen once and never again was not: its bucket stayed
+// resident for the life of the process. On the internet-facing routes that means the map
+// held an entry for every client address ever observed, which is a slow leak an
+// unauthenticated caller controls the rate of.
+//
+// Swept at most once per window rather than on every request. Map.set on an existing key
+// keeps its original position, so insertion order is first-seen order and not reset
+// order, and there is no ordered head to stop at the way there is for gate nonces. A
+// full pass is the honest way to do it, so the fix is to do it rarely: O(N) once a
+// minute instead of never. Steady-state size becomes the keys active in the last window
+// plus at most one window of stragglers.
+function sweepRateBuckets(now) {
+  if (now - _lastSweep < RATE_WINDOW_MS) return;
+  _lastSweep = now;
+  for (const [key, bucket] of _rateBuckets) {
+    if (now >= bucket.reset) _rateBuckets.delete(key);
+  }
+}
+
+// How many buckets are resident. Observability for the sweep: without it, a swept map
+// and an unswept one answer every rateLimited() call identically, so the leak this
+// closes would be untestable and free to come back.
+function rateBucketCount() {
+  return _rateBuckets.size;
+}
 
 function rateLimited(key, now = Date.now(), max = RATE_MAX, windowMs = RATE_WINDOW_MS) {
+  sweepRateBuckets(now);
   const bucket = _rateBuckets.get(key);
   if (!bucket || now >= bucket.reset) {
     _rateBuckets.set(key, { count: 1, reset: now + windowMs });
@@ -192,4 +223,5 @@ module.exports = {
   mayAttestUnauthenticated,
   parseScorePath,
   rateLimited,
+  rateBucketCount,
 };

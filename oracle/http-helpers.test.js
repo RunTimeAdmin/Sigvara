@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
-const { readBody, readCredentials, identifyCaller, mayAttestUnauthenticated, parseScorePath, rateLimited, RATE_MAX, clientKey, adminTokenPolicyError } = require('./http-helpers');
+const { readBody, readCredentials, identifyCaller, mayAttestUnauthenticated, parseScorePath, rateLimited, RATE_MAX, RATE_WINDOW_MS, clientKey, adminTokenPolicyError, rateBucketCount } = require('./http-helpers');
 
 // Minimal fake matching the subset of http.IncomingMessage that readBody uses:
 // an EventEmitter with data/end/error events plus a destroy() method.
@@ -205,6 +205,33 @@ test('rateLimited: window reset clears the count', () => {
   for (let i = 0; i < RATE_MAX; i++) rateLimited(key, now);
   assert.equal(rateLimited(key, now), true, 'blocked at the cap');
   assert.equal(rateLimited(key, now + 60_001), false, 'allowed again after the window');
+});
+
+test('rateLimited: buckets for keys that never return are swept', () => {
+  // The leak: a bucket is replaced when its own key comes back, so a busy client stays
+  // bounded on its own. A key seen once and never again was not, and on the public
+  // routes that meant one resident entry per client address ever observed, at a rate an
+  // unauthenticated caller chooses.
+  const now = 10_000_000;
+  // The first call sweeps (nothing has swept yet in this process) and only then
+  // inserts, so the earlier tests' expired buckets are already gone and the 500 stand
+  // alone. Asserting a delta instead of the count was wrong for exactly that reason:
+  // the sweep under test removed the baseline the delta was measured from.
+  for (let i = 0; i < 500; i++) rateLimited(`one-shot-${i}`, now);
+  assert.equal(rateBucketCount(), 500, 'the one-shot keys are resident');
+
+  // A request in a later window triggers the sweep. The 500 are gone; the caller that
+  // just arrived remains.
+  rateLimited('later', now + RATE_WINDOW_MS + 1);
+  assert.equal(rateBucketCount(), 1, 'only the live bucket survives');
+});
+
+test('rateLimited: the sweep does not run more than once per window', () => {
+  // It is a full pass, so doing it on every request would trade a leak for a scan.
+  const now = 20_000_000;
+  rateLimited('sweep-a', now);
+  rateLimited('sweep-b', now + 1);
+  assert.equal(rateBucketCount(), 2, 'no sweep within the window');
 });
 
 test('rateLimited: separate keys have independent buckets', () => {

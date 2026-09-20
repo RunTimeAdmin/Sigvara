@@ -87,6 +87,19 @@ export class SigvaraVerifier {
     };
   }
 
+  /**
+   * The matured score alone, without the factor breakdown.
+   *
+   * `getReputation` reads the raw tuple and `getTotalScore` together, because callers
+   * that want the factors almost always want the total beside them. A gate wants only the
+   * total: it compares one number against a threshold and discards the rest, so the tuple
+   * read is a second contract execution and decode bought for nothing.
+   */
+  async getTotalScore(did: string): Promise<number> {
+    const didHash = await this.didHashFromDid(did);
+    return Number(await this.reputation().getTotalScore(didHash));
+  }
+
   async meetsThreshold(did: string, threshold: number): Promise<boolean> {
     const didHash = await this.didHashFromDid(did);
     return this.reputation().meetsThreshold(didHash, threshold) as Promise<boolean>;
@@ -139,6 +152,20 @@ export class SigvaraVerifier {
     }
 
     if (isChallengeExpired(challengePayload, maxAgeSeconds)) return false;
+
+    // Width check before the chain read.
+    //
+    // A protocol signature is always 64 bytes, and base58 of 64 bytes is 64 to 88
+    // characters: 88 in the general case, shorter only when leading zero bytes encode as
+    // '1', down to 64 for the all-zero degenerate. Measured across the all-zero and
+    // all-0xff vectors, every leading-zero prefix length, and 20,000 random 64-byte
+    // values; real Ed25519 signatures came out 87 or 88.
+    //
+    // Anything outside that cannot verify, so checking here costs an unauthenticated
+    // caller its identity RPC and spares base58Decode an unbounded BigInt. The decoded
+    // length is still checked downstream, and verifyChallenge keeps its own behaviour for
+    // callers using it directly.
+    if (signatureBase58.length < 64 || signatureBase58.length > 88) return false;
 
     const identity = await this.getIdentity(did);
     if (identity.registeredAt === 0n) return false;

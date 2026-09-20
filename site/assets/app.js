@@ -83,7 +83,11 @@ const esc = (v) => String(v).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&
 
 function logLine(html) {
   const el = $("log");
-  el.innerHTML += (el.innerHTML ? "\n" : "") + html;
+  // insertAdjacentHTML appends. `innerHTML +=` read the whole log back out, reparsed it
+  // together with the new line, and rebuilt the subtree, so the nth message cost work
+  // proportional to everything already logged. Reading .innerHTML for the emptiness test
+  // was a second serialization of the same thing; childNodes.length answers it directly.
+  el.insertAdjacentHTML("beforeend", (el.childNodes.length ? "\n" : "") + html);
   el.scrollTop = el.scrollHeight;
 }
 const txLink = (h) => `<a href="${EXPLORER}/tx/${h}" target="_blank" rel="noopener">${h.slice(0, 18)}…</a>`;
@@ -406,7 +410,7 @@ async function bondStake() {
     }
     logLine(`bonding ${formatUnits(amt)} ${esc(tokenSymbol)}…`);
     await sendTx(STAKING, SEL.depositStake + pad32(currentDidHash) + encUint(amt));
-    await lookup(); await refreshSvrBalance();
+    await Promise.all([lookup(), refreshSvrBalance()]);
   } catch (e) { logLine(`<span class="pill-err">${esc(e.message)}</span>`); }
 }
 
@@ -431,7 +435,7 @@ async function claimUnbond() {
     if (!currentDidHash) await lookup();
     logLine("claiming unbonded stake…");
     await sendTx(STAKING, SEL.claimWithdrawal + pad32(currentDidHash));
-    await lookup(); await refreshSvrBalance();
+    await Promise.all([lookup(), refreshSvrBalance()]);
   } catch (e) { logLine(`<span class="pill-err">${esc(e.message)}</span>`); }
 }
 
@@ -541,7 +545,7 @@ async function deposit() {
     }
     logLine(`depositing ${formatUnits(amt)} ${esc(tokenSymbol)} for agent…`);
     await sendTx(FEES, SEL.depositFor + pad32(currentDidHash) + encUint(amt));
-    await lookup(); await refreshSvrBalance();
+    await Promise.all([lookup(), refreshSvrBalance()]);
   } catch (e) { logLine(`<span class="pill-err">${esc(e.message)}</span>`); }
 }
 async function withdrawFees() {
@@ -551,7 +555,7 @@ async function withdrawFees() {
     const amt = parseUnits($("amount").value);
     logLine(`withdrawing ${formatUnits(amt)} ${esc(tokenSymbol)} (operator only)…`);
     await sendTx(FEES, SEL.withdraw + pad32(currentDidHash) + encUint(amt));
-    await lookup(); await refreshSvrBalance();
+    await Promise.all([lookup(), refreshSvrBalance()]);
   } catch (e) { logLine(`<span class="pill-err">${esc(e.message)}</span>`); }
 }
 async function faucet() {

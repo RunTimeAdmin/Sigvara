@@ -34,3 +34,30 @@ describe('verifySignature pre-chain guards', () => {
     expect(await verifier.verifySignature(DID_A, payload, SIG, 300)).toBe(false);
   });
 });
+
+describe('verifySignature signature-width guard', () => {
+  // The dummy RPC points at 127.0.0.1:0, which cannot be dialed, and the identity read
+  // is not inside verifySignature's try/catch. So "resolved false" proves the guard
+  // short-circuited before the chain, and "rejected" proves it did not. That asymmetry
+  // is what makes these boundary assertions mean something.
+  const fresh = () => generateChallenge(DID_A, 'https://verifier.example').payload;
+
+  it('rejects a signature too short to be 64 bytes, without reading the chain', async () => {
+    expect(await verifier.verifySignature(DID_A, fresh(), '1'.repeat(63))).toBe(false);
+  });
+
+  it('rejects an over-long signature, without reading the chain', async () => {
+    // The case that motivated the guard: alphabet-valid, arbitrarily long, and it used
+    // to buy an identity RPC and an unbounded BigInt decode before failing.
+    expect(await verifier.verifySignature(DID_A, fresh(), 'z'.repeat(89))).toBe(false);
+    expect(await verifier.verifySignature(DID_A, fresh(), 'z'.repeat(5000))).toBe(false);
+  });
+
+  it('lets both ends of the legal width through to the chain', async () => {
+    // 64 is the all-zero degenerate, 88 the general case. Measured across the all-zero
+    // and all-0xff vectors, every leading-zero prefix, and 20,000 random 64-byte values.
+    // These must NOT be refused by width, so they reach the unreachable RPC and throw.
+    await expect(verifier.verifySignature(DID_A, fresh(), '1'.repeat(64))).rejects.toThrow();
+    await expect(verifier.verifySignature(DID_A, fresh(), 'z'.repeat(88))).rejects.toThrow();
+  });
+});
