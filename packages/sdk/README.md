@@ -10,6 +10,19 @@ npm install @sigvara/protocol-sdk
 
 Runtime dependencies are `ethers` v6 and `tweetnacl`. Node 18 or newer.
 
+> **Upgrading from 1.0.0-alpha.7:** `generateChallenge` now takes an audience as its
+> second argument, and every existing call site needs it.
+>
+> ```diff
+> - const challenge = generateChallenge(agentDid);
+> + const challenge = generateChallenge(agentDid, 'https://your-service.example');
+> ```
+>
+> Without it, a verifier holding a valid response could present that same response to a
+> different verifier and be accepted as the agent. Pass the same audience to
+> `verifySignature` as its fifth argument; omitting it still compiles and still accepts
+> the relayable older proofs. Full detail in [CHANGELOG.md](CHANGELOG.md).
+
 ## What it does
 
 - **Agent identity.** Generate an Ed25519 keypair, derive the agent's
