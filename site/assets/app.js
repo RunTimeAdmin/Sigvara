@@ -478,14 +478,30 @@ async function registerAgentFlow() {
     }
     const pub = new Uint8Array(await crypto.subtle.exportKey("raw", kp.publicKey));
     const pubHex = [...pub].map(b => b.toString(16).padStart(2, "0")).join("");
-    const pkcs8 = new Uint8Array(await crypto.subtle.exportKey("pkcs8", kp.privateKey));
-    const pkcs8b64 = btoa(String.fromCharCode(...pkcs8));
+    // Export the private key as PKCS8, falling back to JWK.
+    //
+    // Ed25519 generateKey is supported in Chrome 137+, Firefox 129+ and Safari 17+, but
+    // MDN carries a note that exportKey handles Ed25519 for "raw" and not "pkcs8". This
+    // path was only ever exercised in Chromium, where pkcs8 works and returns 48 bytes.
+    // Rather than trust a compatibility table for browsers nobody here can run, take
+    // whichever envelope the browser will actually produce. It is the same key material,
+    // and nothing reads this file programmatically: it exists for the operator to keep.
+    let keyFormat = "PKCS8 base64";
+    let keyText;
+    try {
+      const pkcs8 = new Uint8Array(await crypto.subtle.exportKey("pkcs8", kp.privateKey));
+      keyText = btoa(String.fromCharCode(...pkcs8));
+    } catch (_) {
+      keyFormat = "JWK";
+      keyText = JSON.stringify(await crypto.subtle.exportKey("jwk", kp.privateKey));
+      logLine("this browser does not export PKCS8 for Ed25519; saving the key as JWK instead");
+    }
     const blob = new Blob([
-      `Sigvara agent identity key (Ed25519, private key as PKCS8 base64)\n` +
+      `Sigvara agent identity key (Ed25519, private key as ${keyFormat})\n` +
       `agent:      ${currentAgent}\n` +
       `did:        did:sigvara:${CHAIN_ID}:${currentAgent}\n` +
       `public key: 0x${pubHex}\n` +
-      `private key (KEEP SECRET — it signs auth challenges for this agent):\n${pkcs8b64}\n`,
+      `private key (KEEP SECRET — it signs auth challenges for this agent):\n${keyText}\n`,
     ], { type: "text/plain" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
