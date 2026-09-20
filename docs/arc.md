@@ -522,6 +522,46 @@ Not before: an external audit and a real slashing
 committee multisig in `COMMITTEE_ADDRESS`. Mechanically it is the same command
 with `--rpc-url arc_mainnet` and real USDC for gas.
 
+### Parameters at initialization
+
+The testnet figures are testnet figures. The `Deploy.s.sol` defaults exist to make the
+mechanics runnable, not because anyone costed them. Mainnet values and the policy behind
+them are in [token.md](token.md#mainnet-parameters):
+
+| Parameter | Testnet | Mainnet | Share of supply |
+|---|---|---|---|
+| `bondAmount` | 25,000 SVR | 2,500,000 SVR | 0.25% |
+| `minimumStake` | 1,000 SVR | 10,000 SVR | 0.001% |
+| `epochFee` | 0 | 0 at launch | n/a |
+
+Two things worth carrying into the deploy.
+
+**The bond is not the sybil defence.** `admit()` is `DEFAULT_ADMIN_ROLE`, so the operator
+set is joined by vote and nobody buys their way in. What the bond buys is something the
+committee can take, and `slash()` caps only at the bond itself, so the whole amount is at
+risk rather than some fraction of it.
+
+**The treasury has to be able to buy these.** Bonds are funded from buybacks off 64% of a
+1% buy-side pool fee, which is 0.64% of buy volume, so every $1 of bond needs roughly
+$156 of cumulative buy volume before the treasury can seat an operator. At 1% of supply
+per operator that is about $15.6M of volume each at a $10M FDV, which in practice means
+never running more than the operator you launched with. 0.25% keeps a five-operator set
+inside reach.
+
+### Raising a live bond
+
+`isActiveOperator` reads `bond >= bondAmount` at call time, with no grandfathering, so
+raising the floor above an incumbent's posted bond stops it proposing at its next epoch
+while the service keeps running and logging failures. Top incumbents up first, raise
+second, verify third. Full sequence in
+[oracle/RUNBOOK-second-operator.md](../oracle/RUNBOOK-second-operator.md), step 0.
+
+```bash
+cast call <oracleBond proxy> "operators(address)(uint256,uint8,uint256)" <operator> --rpc-url arc_mainnet
+cast send <oracleBond proxy> "setBondAmount(uint256)" <new floor wei> --private-key $ADMIN_KEY --rpc-url arc_mainnet
+cast call <oracleBond proxy> "isActiveOperator(address)(bool)" <operator> --rpc-url arc_mainnet   # must stay true
+```
+
 ## Checklist
 
 - [ ] `pwsh scripts/check-arc.ps1` returns `5042002`
@@ -531,3 +571,5 @@ with `--rpc-url arc_mainnet` and real USDC for gas.
 - [ ] oracle `.env` pointed at Arc, `ORACLE_ROLE` confirmed, first epoch scored
 - [ ] SDK integration tests green against Arc
 - [ ] verify whether native USDC exposes a usable `IERC20` for bonds (address, decimals)
+- [ ] mainnet `bondAmount` and `minimumStake` set per [token.md](token.md#mainnet-parameters),
+      not left at the `Deploy.s.sol` testnet defaults

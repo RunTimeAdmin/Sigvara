@@ -78,6 +78,66 @@ published roadmap and nothing else. Arc testnet keeps using the faucet
 At mainnet deploy the registries are initialized with the SVR address above,
 `minimumStake` and `epochFee` denominated in 18 decimals.
 
+## Mainnet parameters
+
+The figures the registries are initialized with at mainnet deploy. Both are settable
+afterwards by governance, and both are deliberately different numbers doing different
+jobs.
+
+| Parameter | Value | Share of supply |
+|---|---|---|
+| `SigvaraOracleBond.bondAmount` | 2,500,000 SVR | 0.25% |
+| `SigvaraStaking.minimumStake` | 10,000 SVR | 0.001% |
+| `SigvaraEpochFees.epochFee` | 0 at launch (Bootstrap stage) | n/a |
+
+The operator bond is what a corrupt oracle loses. `slash()` can take up to the whole of
+it, so the deterrent is the full number rather than a fraction. The agent stake is a
+gate on who is worth scoring, and gating onboarding is a much smaller job than deterring
+an oracle, which is why it sits two orders of magnitude lower. On Arc testnet both were
+1,000, which was coincidence rather than design.
+
+Neither figure is the protocol's defence against a hostile operator set. `admit()` is
+governance-gated, so operators join by vote and nobody buys their way in. What the bond
+buys is something the slashing committee can take, and capital committed across the
+seven-day unbonding window.
+
+### Why these are denominated in SVR, not dollars
+
+A bond fixed in SVR scales with the payoff from attacking the protocol, because both
+track the same thing. When Sigvara is worth more to corrupt, the bond costs more to post
+and more to lose. A dollar peg would sever that link and would need governance to chase
+it. The trade is that a price collapse makes the bond cheap, but it also makes corrupting
+the protocol worth less, so the two move together in both directions.
+
+### When these get revisited
+
+Governance reviews both figures when any of the following first becomes true, and at
+minimum once every two quarters regardless:
+
+- **A single attested settlement exceeds 20% of the operator bond's market value.** This
+  is the one that matters. If one settlement is worth more than the bond, a corrupt
+  oracle profits by lying about that settlement and walking away from its stake, and the
+  bond has stopped deterring the case it exists for.
+- **Active agents pass 250.** More agents is more surface for one bad score to matter.
+- **SVR's 30-day average moves more than 3x since the last review**, in either
+  direction. Secondary, since the SVR denomination already tracks this, but a large move
+  is worth a look rather than an assumption.
+
+Raising `bondAmount` takes effect immediately and without grandfathering:
+`isActiveOperator` reads `bond >= bondAmount` live, so any operator below the new floor
+stops being able to propose at its next epoch. Incumbents are topped up first and the
+floor raised second. The sequence is in
+[oracle/RUNBOOK-second-operator.md](../oracle/RUNBOOK-second-operator.md), step 0.
+
+### What these numbers are not
+
+They are a starting point, not a derivation. The payoff from corrupting a score depends
+on adoption that does not exist yet, so nobody can compute the correct bond today. 0.25%
+was chosen to be real money to a small operator while staying fundable from treasury
+buybacks, which pay for bonds out of 0.64% of buy volume and therefore need roughly $156
+of cumulative buy volume for every $1 of bond. The review triggers above exist because
+the first honest thing to say about these figures is that they will be wrong later.
+
 ## Impersonation
 
 Anyone can deploy a token called SVR or Sigvara on any launchpad. Before this
