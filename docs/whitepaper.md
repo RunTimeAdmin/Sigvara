@@ -445,8 +445,13 @@ Stated because they are true, not because they are solved.
    exercised against a real agent where anyone could watch.
 5. **No external audit.** A precondition for mainnet.
 6. **Unreported work is invisible.** Payment verification detects a fabricated or altered
-   payment. It cannot detect a real payment nobody submitted. That needs an independent
-   chain watcher.
+   payment. It cannot detect a real payment nobody submitted.
+
+   This is the same defect as evidence delivery being per-operator, seen from the agent's
+   side rather than the operator's: a payment enters a score by being reported to a
+   specific HTTP endpoint, not by having happened. [ADR 0003](adr/0003-evidence-intake.md)
+   decides the fix — operators index `Transfer` logs themselves and `/attest` becomes a
+   hint rather than the only door. Decided, not built, so this entry stays open.
 7. **Common ownership in the integration loop.** CounterAudit both consumes the score and
    writes attestations into it, and both are operated by the same party. This is
    disclosed rather than hidden, and a second independent operator is the fix.
