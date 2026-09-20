@@ -49,7 +49,12 @@
 > - Every privileged role on testnet is a single EOA, including the slashing committee.
 >   Admin and upgrade rights are not on a timelock or Safe.
 > - No slash has been run end to end on a live network.
-> - No public challenge watcher.
+> - ~~No public challenge watcher.~~ Running since 20 September 2026 on a third host,
+>   polling the checker's `/divergence`, re-reading each disputed slot on chain and
+>   alerting while rejection is still possible. It holds no key, mounts no state and
+>   signs nothing. The checker's read-only surface is public at `checker.sigvara.xyz`
+>   (`/health` and `/divergence` only; every write path 404s). Procedure in
+>   `oracle/RUNBOOK-second-operator.md` section 11.
 
 ---
 

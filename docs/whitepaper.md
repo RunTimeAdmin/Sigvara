@@ -315,8 +315,14 @@ the thing it claims to replace.
 - **The oracle operator.** The score is computed off chain. The chain stores the result
   and a commitment to the inputs, not the computation. A dishonest operator can propose a
   wrong score, and the defences are the challenge window, the committee, and the
-  evidence root being publicly checkable. Checker mode is designed and tested but not yet
-  deployed with a second operator.
+  evidence root being publicly checkable.
+
+  A second bonded operator has run in checker mode since 20 September 2026, on separate
+  hardware and a separate RPC provider, and a watcher polls it from a third host. That
+  narrows the window in which a wrong score goes unnoticed; it does not remove this
+  entry. Only the primary writes scores, the checker can record a disagreement and not
+  reject one, and both operators are run by the same party. You are trusting fewer
+  unobserved steps, not fewer people.
 - **The slashing committee.** It can reject any pending proposal and propose slashes. On
   testnet it is a single EOA. On mainnet it must be a multisig, and that is a stated
   precondition for mainnet, not an aspiration.
@@ -565,7 +571,9 @@ Ordered by what unblocks what, not by difficulty.
    governance decision. Until it settles, the consequence side of the protocol is still
    theory. After it settles, it is a demonstration, not a proof.
 3. ~~**A divergence watcher.**~~ Running since 20 September 2026, on a third host that is
-   neither the primary nor the checker. Polls `/divergence`, re-reads each disputed slot
+   neither the primary nor the checker. Every disagreement it surfaces is triaged in
+   public in [divergence-log.md](divergence-log.md), verdicts included when the checker
+   itself turned out to be wrong. Polls `/divergence`, re-reads each disputed slot
    on chain, and alerts while rejection is still possible, escalating as the window
    closes. Treats a silent checker as an alert rather than as quiet. Holds no key, mounts
    no state, signs nothing.

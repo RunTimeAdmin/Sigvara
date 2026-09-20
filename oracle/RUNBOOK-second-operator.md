@@ -379,6 +379,12 @@ nothing is not reaching the finalize branch at all.
 
 ## 9. When a divergence fires
 
+Whatever you conclude, write it down in [`docs/divergence-log.md`](../docs/divergence-log.md),
+including the cases where the checker was the broken one. A checker that reports
+disagreements and never publishes outcomes is worse than no checker: a reader finds an
+unexplained accusation against the primary and nothing else. A log containing only
+vindicated findings is a marketing document.
+
 A divergence is not proof the primary is wrong. It is a disagreement between two
 independent recomputations, and the checker can be the broken one.
 
