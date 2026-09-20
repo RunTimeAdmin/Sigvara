@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SVR Token — Sigvara</title>
+  <meta name="description" content="The canonical page for SVR: contract, distribution, treasury policy, staking-reward rules, mainnet parameters, and the only accounts and domains the project speaks from." />
+  <link rel="canonical" href="https://sigvara.xyz/docs/token" />
+  <meta property="og:title" content="SVR Token — Sigvara" />
+  <meta property="og:description" content="The canonical page for SVR: contract, distribution, treasury policy, staking-reward rules, mainnet parameters, and the only accounts and domains the project speaks from." />
+  <meta property="og:url" content="https://sigvara.xyz/docs/token" />
+  <meta property="og:image" content="https://sigvara.xyz/assets/sigvara-card.png" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:image" content="https://sigvara.xyz/assets/sigvara-card.png" />
+  <meta property="og:type" content="website" />
+  <link rel="icon" type="image/svg+xml" href="../assets/sigvara-avatar.svg" />
+  <link rel="icon" type="image/png" sizes="512x512" href="../assets/sigvara-card.png" />
+  <link rel="apple-touch-icon" href="../assets/sigvara-card.png" />
+  <link rel="stylesheet" href="../assets/style.css?v=e5a6705" />
+</head>
+<body>
+
+<nav>
+  <div class="nav-inner">
+    <a href="../" class="logo" aria-label="Sigvara home"><svg class="brand-mark" viewBox="0 0 64 64" role="img" aria-label="Sigvara mark"><defs><linearGradient id="brand-gradient" x1="8" y1="8" x2="56" y2="56" gradientUnits="userSpaceOnUse"><stop stop-color="#c5b7ff"/><stop offset=".55" stop-color="#9475ff"/><stop offset="1" stop-color="#6fe5ea"/></linearGradient></defs><rect x="1" y="1" width="62" height="62" rx="19" fill="#15172b" stroke="rgba(197,183,255,.25)"/><path d="M46.5 20.5c-4.5-5-12.5-6.8-19.2-4.1-6.5 2.7-8.5 9.4-3.4 13.2 2.3 1.7 5.1 2.1 8.7 2.7 5.8.9 8 2.6 7.1 6.2-1.1 4.6-7.4 7-12.9 5.8-3.4-.8-6-2.4-8.2-5.3" fill="none" stroke="url(#brand-gradient)" stroke-width="5.2" stroke-linecap="round"/><circle cx="47" cy="20" r="3.1" fill="#6fe5ea"/><circle cx="18.5" cy="39" r="3.1" fill="#c5b7ff"/></svg><span class="wordmark">sig<span class="accent">vara</span></span></a>
+    <ul class="nav-links">
+      <li><a href="quickstart">Quickstart</a></li>
+      <li><a href="reputation">Reputation</a></li>
+      <li><a href="counteraudit">CounterAudit</a></li>
+      <li><a href="ai-frameworks">AI Frameworks</a></li>
+      <li class="nav-keep"><a href="https://github.com/RunTimeAdmin/Sigvara" target="_blank" rel="noopener">GitHub</a></li>
+      <li class="nav-keep"><a href="quickstart" class="nav-cta">Get Started</a></li>
+    </ul>
+  </div>
+</nav>
+
+<div class="page-wrap">
+  <div class="container">
+    <div class="docs-layout">
+
+      <aside class="docs-sidebar">
+        <div class="sidebar-section">
+          <div class="sidebar-label">Getting Started</div>
+          <ul class="sidebar-links">
+            <li><a href="quickstart">Quickstart</a></li>
+          </ul>
+        </div>
+        <div class="sidebar-section">
+          <div class="sidebar-label">Protocol</div>
+          <ul class="sidebar-links">
+            <li><a href="reputation">Reputation Model</a></li>
+            <li><a href="token" class="active">SVR Token</a></li>
+            <li><a href="../#docs">Network &amp; Contracts</a></li>
+            <li><a href="lineage">Lineage</a></li>
+          </ul>
+        </div>
+        <div class="sidebar-section">
+          <div class="sidebar-label">Integrations</div>
+          <ul class="sidebar-links">
+            <li><a href="counteraudit">CounterAudit</a></li>
+            <li><a href="ai-frameworks">AI Frameworks</a></li>
+          </ul>
+        </div>
+        <div class="sidebar-section">
+          <div class="sidebar-label">Resources</div>
+          <ul class="sidebar-links">
+            <li><a href="https://github.com/RunTimeAdmin/Sigvara" target="_blank" rel="noopener">GitHub &#8594;</a></li>
+          </ul>
+        </div>
+      </aside>
+
+      <main class="docs-content">
+        <div class="section-label">Token</div>
+        <h2>SVR</h2>
+        <p class="lead">SVR is the bond and fee token of the Sigvara protocol. Operators bond it to register agents, the slashing path burns it, oracle operators post it as a performance bond, and scoring epochs are charged in it.</p>
+
+        <div class="callout">
+          <p><strong>This page is the canonical description.</strong> Anything about SVR that does not appear here and on <a href="../">sigvara.xyz</a> first is not from this project. That includes anything posted by an account using this name, and it includes contract addresses.</p>
+        </div>
+
+        <h3>Contract</h3>
+        <table class="data-table">
+          <thead><tr><th>Item</th><th>Value</th></tr></thead>
+          <tbody>
+            <tr><td>Network</td><td>Arc mainnet, chain ID <code>5042</code></td></tr>
+            <tr><td>Address</td><td><span class="tag tag-amber">published here at launch</span></td></tr>
+            <tr><td>Symbol / name</td><td><code>SVR</code> / Sigvara</td></tr>
+            <tr><td>Supply</td><td>1,000,000,000, fixed at creation</td></tr>
+            <tr><td>Decimals</td><td>18</td></tr>
+            <tr><td>Owner / mint / pause</td><td>none</td></tr>
+            <tr><td>Launch venue</td><td>Tolly on Arc (pad <code>0xcad7ee36ac193bf2eddb7b3e2736c5bdb8269c8b</code>), Uniswap V3 pool, 1% tier, USDC quote</td></tr>
+            <tr><td>Liquidity</td><td>Whole supply seeded single-sided at launch. The LP NFT is held by Tolly's ownerless, collect-only fee locker <code>0xe20e4297759597da75c8998ee76ec900600ad920</code>, which has no withdraw path in code.</td></tr>
+            <tr><td>Pool</td><td><span class="tag tag-amber">published here at launch</span></td></tr>
+          </tbody>
+        </table>
+
+        <p>The token contract is Tolly's <code>TollyToken</code>, a plain OpenZeppelin ERC-20 with public source (<a href="https://github.com/TollyLabs/v3-contracts" target="_blank" rel="noopener">TollyLabs/v3-contracts</a>). It has no owner, no mint, no pause, no blacklist and no transfer tax. Its one deviation is an anti-snipe cap of 3% of supply per wallet for the first 300 seconds after launch, after which it is a vanilla ERC-20. That is exactly what the protocol contracts need from a bond asset: <code>SigvaraStaking</code>, <code>SigvaraOracleBond</code> and <code>SigvaraEpochFees</code> take the token by address at initialization and treat it as a plain <code>IERC20</code>.</p>
+
+        <h3>Addresses</h3>
+        <table class="data-table">
+          <thead><tr><th>Role</th><th>Address</th></tr></thead>
+          <tbody>
+            <tr><td>Deployer / creator</td><td><code>0x8857A7C392d1Bb1A68647c64Ce18D9AA1Fd023b0</code></td></tr>
+            <tr><td>Treasury</td><td><code>0xeDC966e23318782c0241aBe1790bd221b8aCE867</code></td></tr>
+          </tbody>
+        </table>
+
+        <p>The SVR launch transaction and the Arc <b>mainnet</b> registry deployment will be sent from the deployer address above. A token or mainnet contract attributed to Sigvara that was not created by that address is not ours. Arc testnet is deployed from a separate address so that a testnet key never touches anything with value. The treasury address holds protocol-owned SVR and pays the costs listed under treasury policy. It holds nothing else.</p>
+
+        <h3>Distribution</h3>
+        <p>There is no team allocation, no treasury allocation, no vesting and no sale. The full supply enters the pool at launch, and the only way to hold SVR is to buy it there or earn it through the protocol.</p>
+
+        <p>The team's position is whatever it buys on the open market, starting at the opening price. Every acquisition is published here: amount, transaction, the address that holds it, and which of the four permitted purposes below it is held against. Launch-day buys are published the same day. There are no wallets holding SVR for the protocol that are not listed on this page.</p>
+
+        <p>The anti-snipe cap limits any single wallet to 3% of supply for the first 300 seconds. The team does not split buys across wallets to work around it. A position larger than that cap is accumulated afterwards, on the open market, disclosed as it is bought.</p>
+
+        <h3>Treasury policy</h3>
+        <p>The creator share of pool trading fees (64% of the 1% buy-side pool fee, paid in USDC and credited by Tolly's fee locker) is used to buy SVR on the open market. The treasury is also funded by direct open-market purchases. Both are disclosed.</p>
+
+        <p>Treasury SVR is spent only on:</p>
+        <ol>
+          <li><b>Oracle operator bonds.</b> Posting and topping up bonds under <code>SigvaraOracleBond</code>, including for operators that are not the team.</li>
+          <li><b>Operator incentives.</b> Paying admitted operators for epochs served, once a distribution mechanism exists. Today <code>distributeFees()</code> sends the non-burned fee share to a plain address and the spend is manual.</li>
+          <li><b>Slashing-committee costs.</b> The operational cost of reviewing and acting on disputes.</li>
+          <li><b>Staking rewards</b>, under the rules below, and only those.</li>
+        </ol>
+
+        <p>Buybacks run on a published schedule, not in response to price. No fee revenue is paid out to the team, and no treasury SVR is sold.</p>
+
+        <h3>Staking rewards</h3>
+        <p><span class="tag tag-amber">not live</span> Nothing here can pay out before the mainnet registries exist. The rules are written first so that inventory bought for the programme is inventory for a published programme rather than a discretionary bag.</p>
+
+        <p><b>Who can earn.</b> Only two roles, both of which have capital at risk:</p>
+        <ul>
+          <li>Agents that are <code>Active</code> in <code>SigvaraIdentity</code>, holding at least <code>minimumStake</code>, with no slash executed against them in the period.</li>
+          <li>Oracle operators admitted to <code>SigvaraOracleBond</code> and returning true from <code>isActiveOperator</code> for the whole period, with no slash executed against them.</li>
+        </ul>
+
+        <p>Holding SVR earns nothing. Providing liquidity earns nothing. The reward is for bonded, slashable service to the protocol, and an address that has posted no bond is not eligible on any basis.</p>
+
+        <p><b>Where it comes from.</b> Treasury SVR only, bought on the open market. There is no emission, no mint and no allocation, because <code>TollyToken</code> has no mint function and the supply is fixed at creation. A reward programme that cannot be funded from treasury does not run that quarter.</p>
+
+        <p><b>How much.</b> At most 5% of the treasury's SVR balance per quarter, measured at the start of the quarter. The cap is on the programme, not per recipient.</p>
+
+        <p><b>How it is decided.</b> The rate, the eligibility window and the recipient set are published before the period they apply to, not after. Rewards are not adjusted retroactively and are not discretionary within a period.</p>
+
+        <p><b>What this is not.</b> It is not a yield on holding SVR, not a staking product for the token, and not a return the team can direct to itself. Team-operated agents and team-operated oracle operators are eligible on exactly the same published terms as anyone else, and their receipts are disclosed on this page like every other treasury movement.</p>
+
+        <p class="u-muted-13">Audits and development are funded separately, through ecosystem grants and CounterAudit integration revenue, not from the token.</p>
+
+        <h3>When the utility starts</h3>
+        <p>The Sigvara registries deploy to Arc mainnet after an external audit. Until that deployment, SVR has no on-chain use in the protocol. Between launch and mainnet registries it is a token with a published roadmap and nothing else.</p>
+
+        <p>Arc testnet keeps using the faucet <code>SVRToken</code> for mechanics testing. That token carries the SVR name and symbol, anyone can mint it from an open faucet, it is worth nothing, and it is <b>not</b> this token. At mainnet deploy the registries are initialized with the SVR address above, with <code>minimumStake</code> and <code>epochFee</code> denominated in 18 decimals.</p>
+
+        <h3>Mainnet parameters</h3>
+        <table class="data-table">
+          <thead><tr><th>Parameter</th><th>Value</th><th>Share of supply</th></tr></thead>
+          <tbody>
+            <tr><td><code>SigvaraOracleBond.bondAmount</code></td><td>2,500,000 SVR</td><td>0.25%</td></tr>
+            <tr><td><code>SigvaraStaking.minimumStake</code></td><td>10,000 SVR</td><td>0.001%</td></tr>
+            <tr><td><code>SigvaraEpochFees.epochFee</code></td><td>0 at launch (Bootstrap stage)</td><td>n/a</td></tr>
+          </tbody>
+        </table>
+
+        <p>The operator bond is what a corrupt oracle loses. <code>slash()</code> can take up to the whole of it, so the deterrent is the full number rather than a fraction. The agent stake is a gate on who is worth scoring, which is a much smaller job than deterring an oracle, so it sits two orders of magnitude lower. On Arc testnet both were 1,000, which was coincidence rather than design.</p>
+
+        <p>Neither figure is the protocol's defence against a hostile operator set. <code>admit()</code> is governance-gated, so operators join by vote and nobody buys their way in. What the bond buys is something the slashing committee can take, and capital committed across the seven-day unbonding window.</p>
+
+        <p><b>Why these are denominated in SVR, not dollars.</b> A bond fixed in SVR scales with the payoff from attacking the protocol, because both track the same thing. When Sigvara is worth more to corrupt, the bond costs more to post and more to lose. A dollar peg would sever that link and would need governance to chase it. The trade is that a price collapse makes the bond cheap, but it also makes corrupting the protocol worth less, so the two move together in both directions.</p>
+
+        <p><b>When these get revisited.</b> Governance reviews both figures when any of the following first becomes true, and at minimum once every two quarters regardless:</p>
+        <ul>
+          <li><b>A single attested settlement exceeds 20% of the operator bond's market value.</b> This is the one that matters. If one settlement is worth more than the bond, a corrupt oracle profits by lying about that settlement and walking away from its stake, and the bond has stopped deterring the case it exists for.</li>
+          <li><b>Active agents pass 250.</b> More agents is more surface for one bad score to matter.</li>
+          <li><b>SVR's 30-day average moves more than 3x since the last review</b>, in either direction. Secondary, since the SVR denomination already tracks this, but a large move is worth a look rather than an assumption.</li>
+        </ul>
+
+        <p><b>What these numbers are not.</b> They are a starting point, not a derivation. The payoff from corrupting a score depends on adoption that does not exist yet, so nobody can compute the correct bond today. 0.25% was chosen to be real money to a small operator while staying fundable from treasury buybacks, which pay for bonds out of 0.64% of buy volume and therefore need roughly $156 of cumulative buy volume for every $1 of bond. The review triggers above exist because the first honest thing to say about these figures is that they will be wrong later.</p>
+
+        <h3>Impersonation</h3>
+        <p>Anyone can deploy a token called SVR or Sigvara on any launchpad. Before this page carries an address, there is no genuine SVR. After it does, only that address is genuine. The team never announces a contract address on social media first. It goes here and on sigvara.xyz, then everywhere else.</p>
+
+        <p>These are the only accounts and domains the project speaks through:</p>
+        <table class="data-table">
+          <thead><tr><th>Surface</th><th>Where</th></tr></thead>
+          <tbody>
+            <tr><td>Site</td><td><a href="../">sigvara.xyz</a></td></tr>
+            <tr><td>Source</td><td><a href="https://github.com/RunTimeAdmin/Sigvara" target="_blank" rel="noopener">github.com/RunTimeAdmin/Sigvara</a></td></tr>
+            <tr><td>X</td><td><a href="https://x.com/SigvaraProtocol" target="_blank" rel="noopener">@SigvaraProtocol</a></td></tr>
+            <tr><td>Security</td><td><code>security@sigvara.xyz</code></td></tr>
+          </tbody>
+        </table>
+
+        <p>Anything else claiming to be Sigvara is not, including accounts using the same name or avatar. An unnamed "official account" protects nobody, which is why this list exists and why it also lives in the repository, where its history is public, rather than only in a profile bio that can be edited without trace.</p>
+
+        <p class="u-muted-13"><code>countersig.network</code> is the pre-rename domain and is not a Sigvara property for verification purposes. Do not treat anything it says as canonical.</p>
+
+        <h3>Not a promise</h3>
+        <p>SVR is a utility token for bonding and fees in an early protocol with no audit yet and a single-operator oracle. Nothing on this page is investment advice or a forecast of value.</p>
+
+        <p class="u-muted-13">This page mirrors <a href="https://github.com/RunTimeAdmin/Sigvara/blob/main/docs/token.md" target="_blank" rel="noopener">docs/token.md</a> in the repository. If the two ever disagree, the repository history shows which changed and when.</p>
+      </main>
+
+    </div>
+  </div>
+</div>
+
+<footer>
+  <div class="footer-inner">
+    <div class="footer-left">
+      <a class="u-mono-13" href="../">sigvara.xyz</a> &nbsp;&#183;&nbsp; MIT License
+    </div>
+    <div class="footer-links">
+      <a href="quickstart">Quickstart</a>
+      <a href="reputation">Reputation</a>
+      <a href="token">SVR Token</a>
+      <a href="https://github.com/RunTimeAdmin/Sigvara" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
