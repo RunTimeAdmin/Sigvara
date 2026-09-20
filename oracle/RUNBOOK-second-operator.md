@@ -44,11 +44,42 @@ cast call 0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171 "bondAmount()(uint256)" --r
 
 - **Separate hardware from the primary.** A checker on the same box shares its failure
   modes with the thing it is checking.
-- **A different RPC provider.** Arc testnet has four, and they are independent:
-  `rpc.testnet.arc.io` (Circle), `rpc.blockdaemon.testnet.arc.io`,
-  `rpc.drpc.testnet.arc.io`, `rpc.quicknode.testnet.arc.io`. The primary uses Circle, so
-  the checker should not. Re-verified 20 Sep 2026: all four live, all four returning the
-  same `getTotalScore`, block heights within single digits of each other.
+- **A different RPC provider, but only one of them actually works.** Arc testnet has
+  four endpoints and they are *not* interchangeable. Measured 20 Sep 2026:
+
+  | Provider | Historical `eth_getTransactionReceipt` | `eth_getLogs` max range | Usable |
+  |---|---|---|---|
+  | `rpc.testnet.arc.io` (Circle) | yes | 9,999 | yes, but it is the primary's |
+  | `rpc.quicknode.testnet.arc.io` | yes | 9,999 | **yes** |
+  | `rpc.blockdaemon.testnet.arc.io` | **returns null** | 9,999 | no |
+  | `rpc.drpc.testnet.arc.io` | yes | **~100** | no |
+
+  **Blockdaemon serves blocks and logs but has a truncated transaction index.** Old
+  transactions resolve to `null` by hash and by receipt while their blocks resolve fine.
+  Payment verification fetches the settlement transaction to read its transfer log, so a
+  checker on Blockdaemon finds every agent and verifies no payment, then diverges on
+  every agent for a reason that has nothing to do with the primary.
+
+  **dRPC's free plan rejects `eth_getLogs` ranges of 1,000 blocks** while its error text
+  says the limit is 10,000. 100 blocks is accepted. Scanning from `FROM_BLOCK` would take
+  thousands of requests.
+
+  So: **QuickNode**. It is the only endpoint that both serves historical receipts and
+  accepts useful log ranges without being the one the primary already uses.
+
+  The check that matters is not "do they agree on `getTotalScore`". That is an
+  `eth_call` at head and all four pass it, which is exactly how Blockdaemon got
+  recommended here in the first place. Test the two calls payment verification actually
+  depends on:
+
+  ```bash
+  # a settlement transaction old enough to be outside any recency window
+  curl -s -X POST $RPC -H 'content-type: application/json' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"eth_getTransactionReceipt","params":["<OLD_TX>"]}'
+  # and a log range the size the scanner will actually request
+  curl -s -X POST $RPC -H 'content-type: application/json' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"eth_getLogs","params":[{"fromBlock":"0x...","toBlock":"0x...","address":"<IDENTITY>"}]}'
+  ```
 - **25,000 SVR**, plus USDC for gas. USDC is the native gas token on Arc. The figure
   sits above the faucet's daily reach on purpose: `SVRToken.faucet()` mints at most
   10,000 per address per day, so the previous 1,000 was a tenth of one free claim and
@@ -287,6 +318,39 @@ Expect in the log:
 ```
 
 If it says `WARNING: this wallet is not an admitted operator`, step 4 did not land.
+
+## 7a. Seed the state BEFORE the first epoch
+
+Do this immediately after step 7, before the checker's first epoch completes. The
+ordering is the whole point of this step.
+
+A fresh checker has no `paymentEvents`, and that is the one part of state a rescan cannot
+rebuild: attestations arrive over HTTP, not from the chain. So its first epoch computes
+`successScore` 0 for every agent, and `ageScore` from the calendar fallback rather than
+from an activity window it does not have. It records a divergence against the primary for
+both, and it is wrong on both.
+
+That record does not go away when the next epoch agrees. `/divergence` is an append-only
+log bounded per agent and pruned by age, not a current-state flag, because a committee
+reviewing a disagreement needs its history. So a cold-start false positive sits in the
+record for as long as the retention window, where a reader can mistake it for evidence
+against the primary.
+
+Re-post the settlement transactions of every payment the primary has counted. The checker
+re-verifies each against the chain and re-reads the settlement time from the block, so
+decay and tenure come out identical rather than approximated:
+
+```bash
+TOKEN=$(grep '^ORACLE_ADMIN_TOKEN=' .env | cut -d= -f2)
+curl -s -X POST http://127.0.0.1:3031/attest \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
+  -d '{"didHash":"<DID>","success":true,"payment":{"txHash":"<SETTLEMENT_TX>"}}'
+unset TOKEN
+```
+
+A `{"error":"transaction not found or not yet mined"}` here means the RPC cannot see
+historical transactions, not that the transaction is missing. Re-read the provider table
+above.
 
 ## 8. Verify
 
