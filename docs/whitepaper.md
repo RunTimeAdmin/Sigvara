@@ -245,7 +245,13 @@ overwrite restarts the challenge window and pushes the score further out of the
 committee's reach.
 
 So a second operator runs as a **checker**. It recomputes every score independently, from
-its own view of the chain, and:
+its own view of the chain, **measured at the audited proposal's own timestamp** rather
+than at the checker's epoch. That last part is not a detail: decay and the recency that
+fades tenure are measured against a moment, and two operators on independent schedules
+never share one. Comparing a score computed now against a proposal made an hour ago
+produces a difference from honest operators holding identical evidence. Asking instead
+what the primary should have computed when it proposed answers the question actually
+being audited. Then:
 
 | Pending proposal | Checker does |
 |---|---|

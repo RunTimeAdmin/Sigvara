@@ -354,10 +354,12 @@ first, and the design deliberately aims at the third rather than at consensus:
 1. **Shared inputs.** Payment evidence is derivable from chain logs and should be
    scanned rather than submitted. What is genuinely off-chain is the success flag, the
    payer's opinion, and only that needs a shared channel.
-2. **Deterministic computation.** Scoring currently reads the wall clock, so two
-   operators computing seconds apart can round to different integers. Each epoch needs
-   to be anchored to a block timestamp, and the decay arithmetic kept in integers
-   rather than floats.
+2. **Deterministic computation.** Half done. Each epoch is now anchored to a block
+   timestamp rather than the host's wall clock, and a checker re-measures a pending
+   proposal at that proposal's own `proposedAt` before comparing, so a disagreement means
+   the evidence differed rather than the two epochs running minutes apart. What remains
+   is the arithmetic: decay is computed in floats, so two implementations could still
+   round differently from identical inputs. Integers would close that.
 3. **The ability to disagree.** With bonds, a challenge window and the evidence root
    already in place, the cheaper design is one proposer per epoch and every other
    bonded operator recomputing from the committed evidence and challenging a mismatch.
