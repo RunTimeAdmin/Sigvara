@@ -51,18 +51,72 @@ There is no team allocation, no treasury allocation, no vesting and no sale.
 The full supply enters the pool at launch and the only way to hold SVR is to
 buy it there or earn it through the protocol.
 
-The team's position is whatever the launch-day buy takes at the opening price.
-That amount, the address that holds it and what it is for (the first oracle
-operator bond and operator incentives) are published here on launch day.
+The team's position is whatever it buys on the open market, starting at the
+opening price. Every acquisition is published here: amount, transaction, the
+address that holds it, and which of the four permitted purposes below it is
+held against. Launch-day buys are published the same day. There are no wallets
+holding SVR for the protocol that are not listed on this page.
+
+The anti-snipe cap limits any single wallet to 3% of supply for the first 300
+seconds. The team does not split buys across wallets to work around it. A
+position larger than that cap is accumulated afterwards, on the open market,
+disclosed as it is bought.
 
 ## Treasury policy
 
 The creator share of pool trading fees (64% of the 1% buy-side pool fee, paid
 in USDC and credited by Tolly's fee locker) is
-used to buy SVR on the open market. Purchased SVR goes to the protocol
-treasury address above and is spent only on oracle bonds, operator
-incentives and slashing-committee costs. Buybacks run on a published schedule,
-not in response to price. No fee revenue is paid out to the team.
+used to buy SVR on the open market. The treasury is also funded by direct
+open-market purchases. Both are disclosed.
+
+Treasury SVR is spent only on:
+
+1. **Oracle operator bonds** — posting and topping up bonds under
+   `SigvaraOracleBond`, including for operators that are not the team.
+2. **Operator incentives** — paying admitted operators for epochs served, once
+   a distribution mechanism exists. Today `distributeFees()` sends the
+   non-burned fee share to a plain address and the spend is manual.
+3. **Slashing-committee costs** — the operational cost of reviewing and acting
+   on disputes.
+4. **Staking rewards**, under the rules in the next section, and only those.
+
+Buybacks run on a published schedule, not in response to price. No fee revenue
+is paid out to the team, and no treasury SVR is sold.
+
+## Staking rewards
+
+Not live. Nothing below can pay out before the mainnet registries exist, and
+the rules are written here first so that inventory bought for the programme is
+inventory for a published programme rather than a discretionary bag.
+
+**Who can earn.** Only two roles, both of which have capital at risk:
+
+- Agents that are `Active` in `SigvaraIdentity`, holding at least
+  `minimumStake`, with no slash executed against them in the period.
+- Oracle operators admitted to `SigvaraOracleBond` and returning true from
+  `isActiveOperator` for the whole period, with no slash executed against them.
+
+Holding SVR earns nothing. Providing liquidity earns nothing. The reward is for
+bonded, slashable service to the protocol, and an address that has posted no
+bond is not eligible on any basis.
+
+**Where it comes from.** Treasury SVR only, bought on the open market. There is
+no emission, no mint and no allocation, because `TollyToken` has no mint
+function and the supply is fixed at creation. A reward programme that cannot be
+funded from treasury does not run that quarter.
+
+**How much.** At most 5% of the treasury's SVR balance per quarter, measured at
+the start of the quarter. The cap is on the programme, not per recipient.
+
+**How it is decided.** The rate, the eligibility window and the recipient set
+are published before the period they apply to, not after. Rewards are not
+adjusted retroactively and are not discretionary within a period.
+
+**What this is not.** It is not a yield on holding SVR, not a staking product
+for the token, and not a return the team can direct to itself. Team-operated
+agents and team-operated oracle operators are eligible on exactly the same
+published terms as anyone else, and their receipts are disclosed on this page
+like every other treasury movement.
 
 Audits and development are funded separately, through ecosystem grants and
 CounterAudit integration revenue, not from the token.
