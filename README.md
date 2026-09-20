@@ -8,6 +8,8 @@ As AI agents become independent economic actors, they need a trust score that me
 >
 > **Where this stands.** Sigvara is a computed-reputation and staked-slashing layer for autonomous agents on top of ERC-8004: the standard covers identity and raw feedback; Sigvara computes a normalized score and puts slashable bond behind it. Contracts, oracle and SDK are built and tested (Foundry unit, fuzz and invariant tests, Slither in CI). The same protocol ran for about a month on Robinhood Chain testnet with a live hourly oracle under its prior name (see [docs/lineage.md](docs/lineage.md)). It is now **deployed and running on Arc testnet** (chain ID `5042002`) with a live oracle, payment-verified attestations and a bonded oracle operator — addresses under [Deployed contracts](#deployed-contracts-arc-testnet) and details in [docs/arc.md](docs/arc.md). The oracle is still a single operator, and there is no external audit. This is early protocol work with real engineering and a documented testnet lineage, not a mainnet product claim. The two-way [CounterAudit](https://counteraudit.io) integration is **live**: sealed audit packets carry the agent's Arc identity and score frozen at the moment of the action, and audited outcomes are attested back to the oracle.
 
+**Who builds this:** [docs/WHO.md](docs/WHO.md) — builder background, related projects, and contact.
+
 ### This repo vs. the Countersig hosted platform
 
 This repository (`sigvara`) is the **decentralized protocol**: computed reputation and staked slashing on top of ERC-8004 identity, with no central authority. Trust here is enforced by cryptography and cryptoeconomics — nothing to sign up for, nothing to trust us on.
