@@ -13,6 +13,66 @@ Live endpoint: [`checker.sigvara.xyz/divergence`](https://checker.sigvara.xyz/di
 
 ---
 
+## 2026-09-20 · demo agent `0x8414ce0b…` · evidence skew, predicted in advance
+
+**Status: prediction recorded 22:45Z, before the event. Outcome below once it happens.**
+
+This entry is written before the divergence occurs, on purpose. A triage log whose
+verdicts are all written after the fact proves only that the author can construct an
+explanation. Committing the expectation first makes it falsifiable.
+
+### What was done
+
+Six independent payer wallets each paid the demo agent 500 SVR, and each settlement was
+attested **to the primary oracle only**. The primary's live recomputation moved:
+
+```
+before   fee 0   success 4   tenure 0   community 5            total  9
+after    fee 20  success 9   tenure 4   community 5            total 38
+         distinctPayers 2 -> 8, activity window 3s -> ~2.4 days
+```
+
+### The prediction
+
+At the primary's next epoch (~23:44Z) it should propose roughly **38**. The checker should
+disagree, loudly, and be **wrong to the extent that it disagrees** — because it has not
+been told about the six settlements.
+
+Attestations arrive over HTTP, not from the chain. The transfers are on chain and the
+checker scans the chain, but it scans for `AgentRegistered`, not for payments: a payment
+enters the score only when someone attests it, carrying the settlement hash the oracle then
+re-verifies. Six attestations went to the primary and none to the checker, so the checker
+holds its two seeded payments and nothing else.
+
+Expected, therefore:
+
+| | primary | checker | why |
+|---|---|---|---|
+| fee | 20 | 0 | checker sees 23 SVR of volume, not 3,023 |
+| success | 9 | ~4 | two attestations against nine |
+| tenure | 4 | 0 | its window is still the original 3-second span |
+| community | 5 | 5 | neither is flagged |
+| **total** | **~38** | **~9** | a gap of roughly 29, far past the 3-point tolerance |
+
+The watcher should then alert Discord with a `rejectReputation` instruction against a
+primary that has done nothing wrong.
+
+### What this is a test of
+
+Not whether the checker detects disagreement — that is settled. Whether the *triage path*
+works when the disagreement is large, real, and not the checker's cold start: whether the
+cause is diagnosable from published data alone, and whether the outcome gets written down
+rather than quietly seeded away.
+
+**If the numbers come back materially different from the table above, the prediction was
+wrong and that goes in this file too.**
+
+### Outcome
+
+*Pending. Expected ~23:44Z.*
+
+---
+
 ## 2026-09-20 · demo agent `0x8414ce0b…` · pending 12, checker 10
 
 **Verdict: not a scoring bug. Two separate causes, both understood, neither the
