@@ -69,6 +69,11 @@ contract SigvaraIdentity is Initializable, AccessControlUpgradeable, UUPSUpgrade
     mapping(bytes32 => AgentIdentity) public identities;
 
     /// Secondary index: operator => list of didHashes they control
+    // A mapping has no initial value to assign; it is populated at runtime by
+    // _pushToOperatorIndex. Slither does not trace the write because that helper is
+    // private. Suppressed on this declaration only, so the detector stays live for
+    // every other storage variable.
+    // slither-disable-next-line uninitialized-state
     mapping(address => bytes32[]) public operatorAgents;
 
     // Appended after the original layout. New storage must always be declared
