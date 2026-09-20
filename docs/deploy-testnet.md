@@ -158,3 +158,50 @@ Once `deployments/5042002.json` exists, these stop being placeholders:
 - `site/app.html` — the four `0x0000…` constants at the top of `assets/app.js`
 - `docs/quickstart.md` and `site/docs/quickstart.html` — the `0x…` samples
 - SDK integration tests — export `SIGVARA_*` and run `npx vitest run test/integration.test.ts`
+
+## 8. Deploying the site
+
+The site is static and lives on Hostinger under `sigvara.xyz`, username `u373211336`,
+document root `/home/u373211336/domains/sigvara.xyz/public_html`. `site/*` maps onto that
+root one-to-one. There is no CI for it, so committing a change to `site/` does nothing
+until it is uploaded, and this has been forgotten more than once.
+
+Upload individual files over TUS rather than using the static-archive deploy: the archive
+replaces the entire document root, which would drop anything not in it.
+
+**Three steps, and skipping any one of them leaves the old page live:**
+
+1. **Bump the cache-busting version on every changed asset.** Pages reference assets as
+   `assets/app.js?v=<short git hash>`, and those hashes are maintained by hand. If the
+   asset changes but the query string does not, browsers and the CDN keep serving the
+   cached copy forever. The asset on disk is then correct and the live page is still wrong,
+   which is the confusing half of this failure.
+
+   ```bash
+   H=$(git rev-parse --short HEAD)
+   # then update assets/<name>.js?v=... in every page that references the changed asset,
+   # and upload those pages too
+   grep -rln "app\.js?v=\|demo\.js?v=" site/*.html site/docs/*.html
+   ```
+
+2. **Upload.** Generate credentials with the hosting API's upload-URL endpoint, then for
+   each file `POST` to create (expect 201) and `PATCH` the bytes (expect 204).
+
+3. **Clear the cache.** Not optional. This edge has been observed serving a copy six days
+   old against a one-hour `max-age`. An upload can return 201/204 with the live URL still
+   serving the previous file.
+
+Then verify against the live URL with a cache-busting query string, rather than assuming:
+
+```bash
+curl -s "https://sigvara.xyz/assets/app.js?cb=$RANDOM" | grep -A2 'const FACTORS'
+```
+
+Checking the raw asset is necessary but not sufficient, because it bypasses the versioned
+URL the page actually requests. Load the page itself and confirm the `<script src>` carries
+the new hash.
+
+**`assets/app.js` decodes the reputation struct positionally**, by word index into the
+returned tuple, and carries each factor's maximum in its `FACTORS` table. Any change to
+`ReputationData`'s field order, or to the `MAX_*_SCORE` constants, has to land here in the
+same deploy or the app renders wrong numbers against the right contract.
