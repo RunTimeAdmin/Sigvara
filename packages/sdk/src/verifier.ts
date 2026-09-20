@@ -144,7 +144,15 @@ export class SigvaraVerifier {
     if (identity.registeredAt === 0n) return false;
     if (identity.ed25519PubKey === ethers.ZeroHash) return false;
     const pubKey = bytes32ToPubKey(identity.ed25519PubKey);
-    return verifyChallenge(challengePayload, signatureBase58, pubKey);
+    try {
+      return verifyChallenge(challengePayload, signatureBase58, pubKey);
+    } catch {
+      // base58Decode throws on an invalid alphabet character. A client sending a
+      // malformed signature has failed to prove anything, which is a false, not an
+      // exception: letting it escape turns a refusal into a 500 and lets any caller
+      // crash a gate by sending punctuation.
+      return false;
+    }
   }
 
   async buildDidDocument(did: string): Promise<DidDocument> {

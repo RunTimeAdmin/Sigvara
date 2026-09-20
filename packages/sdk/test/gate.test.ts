@@ -16,21 +16,25 @@ const AUDIENCE = 'https://tools.example';
  * the order it asks questions in and the reason it gives when it refuses; the contract
  * reads are SigvaraVerifier's job and are tested there.
  */
-function gateWith(opts: { active?: boolean; score?: number; proved?: boolean } = {}) {
+function gateWith(
+  opts: { active?: boolean; score?: number; rawSum?: number; proved?: boolean; store?: any } = {},
+) {
   const gate = new SigvaraGate({
     rpcUrl: 'http://unused', addresses: ADDRESSES, chainId: 5042002,
-    threshold: 40, audience: AUDIENCE,
+    threshold: 40, audience: AUDIENCE, ...(opts.store ? { nonceStore: opts.store } : {}),
   });
   const v = (gate as any).verifier;
   v.verifySignature = vi.fn(async () => opts.proved ?? true);
   v.isActive = vi.fn(async () => opts.active ?? true);
-  v.getReputation = vi.fn(async () => {
-    const s = opts.score ?? 50;
-    return {
-      feeScore: s, successScore: 0, ageScore: 0,
-      externalScore: 0, communityScore: 0, propagationScore: 0, lastUpdated: 0n,
-    };
-  });
+  v.getReputation = vi.fn(async () => ({
+    // `total` is getTotalScore(), the matured value the contract's meetsThreshold reads.
+    // The raw factors can legitimately sum higher while a score is still maturing, so the
+    // fixture lets the two differ and the gate must follow total.
+    feeScore: opts.rawSum ?? opts.score ?? 50,
+    successScore: 0, ageScore: 0, externalScore: 0, communityScore: 0, propagationScore: 0,
+    lastUpdated: 0n,
+    total: opts.score ?? 50,
+  }));
   return gate;
 }
 
@@ -147,5 +151,86 @@ describe('SigvaraGate', () => {
     await gate.admit(DID, c, 'sig');
     expect(spent.has(c.nonce)).toBe(true);
     expect((await gate.admit(DID, c, 'sig')).reason).toBe('replayed');
+  });
+});
+
+describe('SigvaraGate — what the wrapper cannot be trusted for', () => {
+  it('spends the nonce from the SIGNED payload, not the caller-supplied wrapper', async () => {
+    // The bug this closes. verifySignature covers challenge.payload and nothing else, so
+    // replaying a captured payload with a freshly invented wrapper nonce used to look up a
+    // nonce that had never been spent. Replay protection was bypassable by editing a field.
+    const gate = gateWith({ score: 50 });
+    const c = gate.challenge(DID);
+    const sig = signChallenge(c.payload, kp.secretKey);
+
+    expect((await gate.admit(DID, c, sig)).ok).toBe(true);
+
+    const forged = { ...c, nonce: 'a'.repeat(32), expiresAt: c.expiresAt + 99999 };
+    const replay = await gate.admit(DID, forged, sig);
+    expect(replay.ok).toBe(false);
+    expect(replay.reason).toBe('replayed');
+  });
+
+  it('takes expiry from the signed timestamp, not a wrapper field', async () => {
+    // A caller setting expiresAt far into the future must not extend its own challenge.
+    const gate = gateWith({ score: 50 });
+    const c = gate.challenge(DID);
+    const sig = signChallenge(c.payload, kp.secretKey);
+    await gate.admit(DID, c, sig);
+
+    const store = (gate as any).nonces;
+    const signedNonce = c.payload.match(/nonce: (\w+)/)![1];
+    expect(store.seen(signedNonce)).toBe(true);
+  });
+
+  it('refuses a payload that does not parse, without throwing', async () => {
+    const gate = gateWith({ score: 50 });
+    const r = await gate.admit(DID, { payload: 'garbage', nonce: 'x', timestamp: 0, expiresAt: 0 } as any, 'sig');
+    expect(r.reason).toBe('bad_proof');
+  });
+});
+
+describe('SigvaraGate — matured score, not raw factors', () => {
+  it('follows getTotalScore even when the raw factors sum higher', async () => {
+    // A score earned minutes ago has raw factors the contract has not released yet.
+    // Admitting on the raw sum would let the gate pass agents that meetsThreshold refuses,
+    // so two layers would disagree about who is allowed in.
+    const gate = gateWith({ score: 30, rawSum: 90 });
+    const c = gate.challenge(DID);
+    const r = await gate.admit(DID, c, signChallenge(c.payload, kp.secretKey));
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('below_threshold');
+    expect(r.score).toBe(30);
+  });
+});
+
+describe('SigvaraGate — concurrency', () => {
+  it('admits once when the same nonce arrives twice at the same moment', async () => {
+    // seen() then add() is two awaits. Without a guard both callers observe the nonce
+    // unspent before either writes, and both are admitted.
+    const gate = gateWith({ score: 50 });
+    const c = gate.challenge(DID);
+    const sig = signChallenge(c.payload, kp.secretKey);
+
+    const [a, b] = await Promise.all([gate.admit(DID, c, sig), gate.admit(DID, c, sig)]);
+    expect([a.ok, b.ok].filter(Boolean)).toHaveLength(1);
+    expect([a.reason, b.reason]).toContain('replayed');
+  });
+
+  it('prefers an atomic consume() when the store provides one', async () => {
+    // What a Redis-backed store would implement. Only the creating call gets true.
+    const rows = new Map<string, number>();
+    const store = {
+      seen: () => { throw new Error('consume() should be preferred'); },
+      add:  () => { throw new Error('consume() should be preferred'); },
+      prune: () => {},
+      consume: (n: string, e: number) => (rows.has(n) ? false : (rows.set(n, e), true)),
+    };
+    const gate = gateWith({ score: 50, store });
+    const c = gate.challenge(DID);
+    const sig = signChallenge(c.payload, kp.secretKey);
+
+    expect((await gate.admit(DID, c, sig)).ok).toBe(true);
+    expect((await gate.admit(DID, c, sig)).reason).toBe('replayed');
   });
 });
