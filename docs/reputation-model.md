@@ -329,9 +329,16 @@ interval (`EPOCH_HOURS`, default 24). Each epoch it scans `AgentRegistered` even
 checkpointing so a rate-limited scan resumes instead of restarting), recomputes every
 factor, and proposes a score plus a Merkle root over the evidence it used.
 
-It is a single operator today. When `SigvaraReputation.operatorBond` is set — it is on
-Arc testnet — that operator must also be admitted and bonded in `SigvaraOracleBond`, so
-a bad score costs its proposer something. Finalizing stays permissionless.
+Two bonded operators run today, and only one of them writes. When
+`SigvaraReputation.operatorBond` is set — it is on Arc testnet — a proposer must also be
+admitted and bonded in `SigvaraOracleBond`, so a bad score costs its proposer something.
+Finalizing stays permissionless.
+
+The second runs in checker mode: it recomputes each pending score independently and
+records disagreement rather than competing for the slot, because two operators writing to
+one `pendingScores` entry would produce a race and not agreement. Nothing on chain
+requires them to agree, so a human committee acts on a divergence inside the challenge
+window. See [architecture.md](architecture.md) for the topology.
 
 State (attestations, flags, links, payment events, spent settlement hashes, scan
 progress) is a JSON file written atomically, not an in-memory map, so it survives

@@ -7,7 +7,7 @@
 
 ---
 
-> ## Status since this review — 2026-09-19
+> ## Status since this review — 2026-09-20
 >
 > The body below is left as written on 17 September and is **not** a current statement
 > of readiness. What has changed since:
@@ -32,9 +32,15 @@
 > **Still open, and still mainnet blockers.**
 > - No external security audit.
 > - Mainnet bond asset undecided; SVR has not launched.
-> - The oracle is a single operator. It is bonded, but bonded is not decentralized, and
->   scoring still reads the wall clock rather than the chain clock, so two operators would
->   not agree even on identical inputs.
+> - Both oracle operators are run by the same party. A second bonded operator has run in
+>   checker mode since 20 September on separate hardware and a separate RPC provider, and
+>   `activeCount` is 2, but two independent recomputations agreeing is not two independent
+>   parties agreeing. Only the primary writes scores; the checker makes a disagreement
+>   legible and a committee must still act on it.
+> - Scoring reads the wall clock rather than the chain clock. Measured on the first day
+>   the two ran together, this moved `recency` between them (0.982146 against 0.982148)
+>   without changing any integer factor. It is bounded by the divergence tolerance rather
+>   than eliminated, and it means the operators are not bit-for-bit deterministic.
 > - Every privileged role on testnet is a single EOA, including the slashing committee.
 >   Admin and upgrade rights are not on a timelock or Safe.
 > - No slash has been run end to end on a live network.
