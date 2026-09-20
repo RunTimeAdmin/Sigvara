@@ -213,8 +213,8 @@ name or avatar. An unnamed "official account" protects nobody, which is why this
 list exists and why it lives in the repository, where its history is public,
 rather than only in a profile bio that can be edited without trace.
 
-`countersig.network` is the pre-rename domain and is not a Sigvara property for
-verification purposes. Do not treat anything it says as canonical.
+`countersig.network` is the pre-rename domain. It now redirects here and serves nothing
+of its own. Anything still presenting that hostname as a live Sigvara site is not us.
 
 ## Not a promise
 
