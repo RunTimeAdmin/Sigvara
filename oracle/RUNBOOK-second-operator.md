@@ -95,10 +95,31 @@ against a faucet rather than against what corrupting a score is worth.
 
 ## 1. Generate the checker wallet
 
-On the checker box, not on a laptop and not through anything that logs:
+**The box needs a signing tool first.** A bare VPS has no foundry, and this is not a
+one-off need: steps 3 and 10 sign `approve`, `depositBond` and `initiateUnbond` with the
+checker's own key, so whatever runs the operator has to be able to sign for its bond for
+as long as it holds one.
+
+```bash
+curl -L https://foundry.paradigm.xyz | bash && ~/.foundry/bin/foundryup
+```
+
+Then, on the checker box rather than on a laptop:
 
 ```bash
 cast wallet new
+```
+
+Generating elsewhere and pasting the key in works and is faster, but be clear about what
+it costs: the key then exists in two places and in a second shell history. The difference
+is thinner than it sounds either way, because the key has to end up in `.env` on that box
+regardless; generating there makes it one copy instead of two.
+
+If you would rather not install a toolchain, the `node:20-alpine` image the oracle already
+uses can generate the pair without one. It does not solve the signing problem in step 3:
+
+```bash
+docker run --rm node:20-alpine sh -c   "npm i -q ethers@6 >/dev/null 2>&1 && node -e \"const w=require('ethers').Wallet.createRandom();console.log(w.address);console.log(w.privateKey)\""
 ```
 
 This key is a distinct operator. It must not be the primary's key: two processes signing
