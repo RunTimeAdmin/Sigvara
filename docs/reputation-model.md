@@ -272,7 +272,7 @@ Once bonded, the first epoch gives it:
 spendable: `getTotalScore` matures toward the earned figure at a fixed rate per day.
 
 Climbing from there is deliberately slow, and each factor is slow for its own reason.
-Fee Activity needs volume from at least six separately funded payers to reach its cap.
+Fee Activity needs volume from at least four separately funded payers to reach its cap.
 Success Rate approaches 25 only as observations accumulate against the `+5` prior.
 Tenure needs a span of paid work that cannot be manufactured in one transaction, since
 the clock starts at the first payment rather than at registration. None of the three

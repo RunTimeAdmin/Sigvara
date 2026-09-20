@@ -546,7 +546,7 @@ Ordered by what unblocks what, not by difficulty.
 
 **ERC-8004** defines identity and reputation registries for agents. Sigvara consumes it
 rather than competing: an agent that links an 8004 identity it demonstrably owns earns up
-to 15 of its 100 points from 8004 feedback. The remaining 85 come from facts Sigvara
+to 25 of its 100 points from 8004 feedback. The remaining 75 come from facts Sigvara
 verifies itself.
 
 **Bonding and escrow protocols** secure a specific transaction with collateral posted for
