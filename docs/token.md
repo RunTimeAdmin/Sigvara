@@ -199,6 +199,23 @@ page carries an address, there is no genuine SVR. After it does, only that
 address is genuine. The team never announces a contract address on social media
 first; it goes here and on sigvara.xyz, then everywhere else.
 
+These are the only accounts and domains the project speaks through:
+
+| | |
+|---|---|
+| Site | `sigvara.xyz` |
+| Source | `github.com/RunTimeAdmin/Sigvara` |
+| X | `@SigvaraProtocol` |
+| Security | `security@sigvara.xyz` |
+
+Anything else claiming to be Sigvara is not, including accounts using the same
+name or avatar. An unnamed "official account" protects nobody, which is why this
+list exists and why it lives in the repository, where its history is public,
+rather than only in a profile bio that can be edited without trace.
+
+`countersig.network` is the pre-rename domain and is not a Sigvara property for
+verification purposes. Do not treat anything it says as canonical.
+
 ## Not a promise
 
 SVR is a utility token for bonding and fees in an early protocol with no audit
