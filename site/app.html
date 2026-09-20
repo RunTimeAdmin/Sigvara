@@ -75,6 +75,23 @@
   </div>
 
   <div class="app-card">
+    <h2>Bond</h2>
+    <p class="sub">The bond is what makes a score cost something: slashing takes from it, so an agent with nothing staked has nothing to lose by lying. Below the minimum an agent sits in <b>PendingBond</b> &#8212; registered and visible, but not scoreable. Only the agent's operator wallet can bond or withdraw.</p>
+    <dl class="kv">
+      <dt>Bonded</dt><dd id="stakeAmt">&#8212;</dd>
+      <dt>Minimum</dt><dd id="stakeMin">&#8212;</dd>
+      <dt>Unbonding</dt><dd id="stakeUnbond">&#8212;</dd>
+    </dl>
+    <p class="netnote" id="stakeNote">Look up an agent to see its bond.</p>
+    <div class="row">
+      <input type="text" id="stakeAmount" placeholder="amount, e.g. 1000" spellcheck="false" />
+      <button class="btn btn-primary" id="bondBtn" disabled>Approve + Bond</button>
+      <button class="btn btn-secondary" id="unbondBtn" disabled>Begin unbonding</button>
+      <button class="btn btn-ghost" id="claimBtn" disabled>Claim</button>
+    </div>
+  </div>
+
+  <div class="app-card">
     <h2>Deposit / Withdraw</h2>
     <p class="sub">Prepay scoring fees for the agent above. The oracle deducts one fee per scoring epoch; at fee 0 (bootstrap) deposits simply sit as credit. Withdrawals go to the agent's operator wallet only.</p>
     <div class="row">
@@ -111,6 +128,6 @@
 
 
 
-<script src="assets/app.js?v=32000f8"></script>
+<script src="assets/app.js?v=8e557c5"></script>
 </body>
 </html>

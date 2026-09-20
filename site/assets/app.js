@@ -9,6 +9,7 @@ const EXPLORER = "https://explorer.testnet.arc.io";
 const IDENTITY   = "0x7e3aFC532eE5d922ab3cc3FFb510c7C8151477Dd";
 const REPUTATION = "0x6603C96275e85F724Cdf74666b399365e4cA29ed";
 const SVR        = "0x41De2D6D55318e197a00E8f5B496eA2790e23E6c";
+const STAKING    = "0xA69d62B2a6774D21A2c15d5d83b27277eD31d35B";
 // SigvaraEpochFees is not part of this deploy, so there is no registry to read.
 // Pointing at 0x0 is worse than useless: eth_call returns empty and BigInt throws,
 // which would abort the whole lookup. Everything fee-related is switched off.
@@ -23,6 +24,11 @@ const SEL = {
   approve: "0x095ea7b3", allowance: "0xdd62ed3e", balanceOf: "0x70a08231", faucet: "0x57915897",
   svr: "0x0b5ae4d9", symbol: "0x95d89b41", decimals: "0x313ce567", registerAgent: "0x367260d7", registrationDigest: "0x9aad085f",
   getReputation: "0xd14519d2", getPendingScore: "0x56cf76e7", challengeWindow: "0x861a1412",
+  // SigvaraStaking. Verified with `cast sig`, not guessed: getStake and minimumStake
+  // match the pair testnet.js already uses against the same deployment.
+  depositStake: "0xbeb78671", initiateWithdrawal: "0xa3d6f72b", claimWithdrawal: "0x8e88eccc",
+  getStake: "0xe765c122", minimumStake: "0xec5ffac2", getPendingWithdrawal: "0xd0fe00db",
+  unbondingPeriod: "0x6cf6d675", getSlashProposal: "0xc984f6f8",
 };
 // factor label, on-chain word index, and max — mirrors SigvaraReputation.ReputationData
 const FACTORS = [
@@ -256,11 +262,21 @@ async function lookup() {
       { to: REPUTATION, data: SEL.getPendingScore + pad32(didHash) },
       { to: REPUTATION, data: SEL.getReputation   + pad32(didHash) },
     ];
+    reads.push(
+      { to: STAKING, data: SEL.getStake             + pad32(didHash) },
+      { to: STAKING, data: SEL.minimumStake },
+      { to: STAKING, data: SEL.getPendingWithdrawal + pad32(didHash) },
+      { to: STAKING, data: SEL.getSlashProposal     + pad32(didHash) },
+      { to: STAKING, data: SEL.unbondingPeriod },
+    );
+    // Appended last, and only when live, so the staking positions above stay fixed.
     if (FEES_LIVE) reads.push(
       { to: FEES, data: SEL.balance   + pad32(didHash) },
       { to: FEES, data: SEL.isCovered + pad32(didHash) },
     );
-    const [ident, scoreRaw, pendingRaw, rep, balRaw, coveredRaw] = await rpcBatch(reads);
+    const [ident, scoreRaw, pendingRaw, rep,
+           stakeRaw, minStakeRaw, pendWRaw, slashRaw, unbondRaw,
+           balRaw, coveredRaw] = await rpcBatch(reads);
 
     const registeredAt = BigInt(word(ident, 4));
     const statusNum = Number(BigInt(word(ident, 3)));
@@ -281,14 +297,14 @@ async function lookup() {
       $("breakdown").innerHTML = FACTORS
         .map(([name, i, max]) => `${name} ${Number(BigInt(word(rep, i)))}/${max}`)
         .join(" &nbsp;·&nbsp; ")
-        + ' &nbsp; <a href="docs/reputation.html">what is this?</a>';
+        + ' &nbsp; <a href="docs/reputation">what is this?</a>';
     } else if (account) {
       $("regStatus").innerHTML = '<span class="pill-warn">not registered</span> <button id="regBtn" class="btn btn-secondary btn-inline-sm">Register this agent</button>';
       $("regBtn").onclick = registerAgentFlow;
       $("score").textContent = "—";
       $("breakdown").textContent = "—";
     } else {
-      $("regStatus").innerHTML = '<span class="pill-warn">not registered</span> — connect a wallet to register, or see <a href="docs/quickstart.html">Quickstart</a>';
+      $("regStatus").innerHTML = '<span class="pill-warn">not registered</span> — connect a wallet to register, or see <a href="docs/quickstart">Quickstart</a>';
       $("score").textContent = "—";
       $("breakdown").textContent = "—";
     }
@@ -296,10 +312,127 @@ async function lookup() {
     $("covered").innerHTML = !FEES_LIVE
       ? '<span class="pill-warn">n/a, no fee registry on this deploy</span>'
       : covered ? '<span class="pill-ok">yes</span>' : '<span class="pill-err">no — deposit below</span>';
+    renderStake({ ident, stakeRaw, minStakeRaw, pendWRaw, slashRaw, unbondRaw });
     $("agentInfo").classList.remove("u-hidden");
   } catch (e) {
     logLine(`<span class="pill-err">lookup failed: ${esc(e.message)}</span>`);
   }
+}
+
+// ---- bond ---------------------------------------------------------------------
+//
+// Every button here is enabled only when the chain would actually accept the call.
+// depositStake and initiateWithdrawal are both operator-only, initiateWithdrawal also
+// reverts while a slash is Pending or Disputed and while another withdrawal is already
+// queued, and claimWithdrawal reverts before the unbonding period elapses. A button
+// that looks live and then reverts inside the wallet teaches people the site is broken,
+// which on the one page that moves money is an expensive thing to teach.
+
+// Mirrors SigvaraStaking.SlashState.
+const SLASH_STATES = ["None", "Pending", "Executed", "Cancelled", "Disputed"];
+let stakeCtx = null;
+
+function fmtDuration(sec) {
+  if (sec <= 0) return "now";
+  const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600);
+  if (d) return `${d}d ${h}h`;
+  const m = Math.floor((sec % 3600) / 60);
+  if (h) return `${h}h ${m}m`;
+  return `${Math.max(1, m)}m`;
+}
+
+function renderStake({ ident, stakeRaw, minStakeRaw, pendWRaw, slashRaw, unbondRaw }) {
+  const operator   = "0x" + strip(word(ident, 0)).slice(24);
+  const statusNum  = Number(BigInt(word(ident, 3)));
+  const registered = BigInt(word(ident, 4)) !== 0n;
+  const staked     = BigInt(stakeRaw);
+  const minStake   = BigInt(minStakeRaw);
+  const pendAmt    = BigInt(word(pendWRaw, 0));
+  const claimAt    = Number(BigInt(word(pendWRaw, 1)));
+  // getSlashProposal returns a dynamically encoded struct, because evidenceHash is
+  // `bytes`. So word 0 is the offset to the tuple and the head starts at word 1:
+  // state lands on word 5 and challengeDeadline on word 7. Verified against the live
+  // contract rather than derived on paper.
+  const slashState = Number(BigInt(word(slashRaw, 5)));
+  const unbondSecs = Number(BigInt(unbondRaw));
+  const now        = Math.floor(Date.now() / 1000);
+  const isOperator = !!account && account.toLowerCase() === operator.toLowerCase();
+  const frozen     = slashState === 1 || slashState === 4;
+
+  stakeCtx = { staked, minStake, pendAmt, claimAt, isOperator, frozen, statusNum, registered };
+
+  $("stakeAmt").innerHTML = !registered ? "&mdash;"
+    : `${formatUnits(staked)} ${esc(tokenSymbol)} ` + (staked >= minStake
+        ? '<span class="pill-ok">at minimum</span>'
+        : '<span class="pill-warn">below minimum, not scoreable</span>');
+  $("stakeMin").textContent = `${formatUnits(minStake)} ${tokenSymbol}`;
+
+  if (pendAmt > 0n) {
+    const left = claimAt - now;
+    $("stakeUnbond").innerHTML = `${formatUnits(pendAmt)} ${esc(tokenSymbol)} queued &mdash; ` + (left > 0
+      ? `<span class="pill-warn">claimable in ${esc(fmtDuration(left))}</span>`
+      : '<span class="pill-ok">claimable now</span>');
+  } else {
+    // Stating the period up front matters: 21 days is long enough that finding out
+    // afterwards is a genuine surprise.
+    $("stakeUnbond").innerHTML = `none &mdash; unbonding takes ${esc(fmtDuration(unbondSecs))}`;
+  }
+
+  let note, why = null;
+  if (!registered)            { note = "Register the agent first, above."; why = "unregistered"; }
+  else if (statusNum === 2)   { note = "This agent has been slashed. Its bond cannot be topped up."; why = "slashed"; }
+  else if (!account)          { note = "Connect a wallet to bond."; why = "no wallet"; }
+  else if (!isOperator)       { note = `Only the operator wallet <code>${esc(operator.slice(0, 10))}…</code> can bond or withdraw for this agent.`; why = "not operator"; }
+  else if (frozen)            { note = `A slash proposal is <b>${esc(SLASH_STATES[slashState])}</b>. The bond is frozen until it resolves &mdash; withdrawing is blocked, topping up is not.`; }
+  else if (staked < minStake) { note = `Bond at least ${formatUnits(minStake - staked)} more ${esc(tokenSymbol)} to make this agent scoreable.`; }
+  else                        { note = "Bonded and scoreable."; }
+  $("stakeNote").innerHTML = frozen ? `<span class="pill-err">${note}</span>` : note;
+
+  const canWrite = isOperator && registered && statusNum !== 2;
+  $("bondBtn").disabled   = !canWrite;
+  $("unbondBtn").disabled = !canWrite || staked === 0n || pendAmt > 0n || frozen;
+  $("claimBtn").disabled  = !canWrite || pendAmt === 0n || now < claimAt;
+  void why;
+}
+
+async function bondStake() {
+  try {
+    if (!currentDidHash) await lookup();
+    const amt = parseUnits($("stakeAmount").value);
+    const allowance = BigInt(await rpcRead(tokenAddr, SEL.allowance + encAddr(account) + encAddr(STAKING)));
+    if (allowance < amt) {
+      logLine(`approving ${formatUnits(amt)} ${esc(tokenSymbol)} for the staking contract…`);
+      await sendTx(tokenAddr, SEL.approve + encAddr(STAKING) + encUint(amt));
+    }
+    logLine(`bonding ${formatUnits(amt)} ${esc(tokenSymbol)}…`);
+    await sendTx(STAKING, SEL.depositStake + pad32(currentDidHash) + encUint(amt));
+    await lookup(); await refreshSvrBalance();
+  } catch (e) { logLine(`<span class="pill-err">${esc(e.message)}</span>`); }
+}
+
+async function beginUnbond() {
+  try {
+    if (!currentDidHash) await lookup();
+    const amt = parseUnits($("stakeAmount").value);
+    // Said before the wallet opens, not after. Dropping below the minimum suspends the
+    // agent and stops it being scored, and the tokens are locked for the unbonding
+    // period either way — this is the least reversible thing the page can do.
+    if (stakeCtx && stakeCtx.staked - amt < stakeCtx.minStake) {
+      logLine('<span class="pill-warn">this takes the bond below the minimum — the agent stops being scoreable until it is topped back up</span>');
+    }
+    logLine(`starting unbonding of ${formatUnits(amt)} ${esc(tokenSymbol)}…`);
+    await sendTx(STAKING, SEL.initiateWithdrawal + pad32(currentDidHash) + encUint(amt));
+    await lookup();
+  } catch (e) { logLine(`<span class="pill-err">${esc(e.message)}</span>`); }
+}
+
+async function claimUnbond() {
+  try {
+    if (!currentDidHash) await lookup();
+    logLine("claiming unbonded stake…");
+    await sendTx(STAKING, SEL.claimWithdrawal + pad32(currentDidHash));
+    await lookup(); await refreshSvrBalance();
+  } catch (e) { logLine(`<span class="pill-err">${esc(e.message)}</span>`); }
 }
 
 // Returns markup describing a score that is proposed but not yet finalized,
@@ -351,7 +484,7 @@ async function registerAgentFlow() {
     if (currentAgent.toLowerCase() !== account.toLowerCase()) {
       logLine('<span class="pill-err">Registration needs a signature from the agent address. '
         + 'Connect the wallet for ' + esc(currentAgent) + ', or use the SDK flow in the '
-        + '<a href="docs/quickstart.html">Quickstart</a> to sign with its key separately.</span>');
+        + '<a href="docs/quickstart">Quickstart</a> to sign with its key separately.</span>');
       return;
     }
 
@@ -422,6 +555,9 @@ async function faucet() {
   $("depositBtn").onclick = deposit;
   $("withdrawBtn").onclick = withdrawFees;
   $("faucetBtn").onclick = faucet;
+  $("bondBtn").onclick = bondStake;
+  $("unbondBtn").onclick = beginUnbond;
+  $("claimBtn").onclick = claimUnbond;
   try {
     // fee token metadata comes from the chain: SVR faucet token on testnet,
     // USDC/WETH at mainnet — nothing on this page assumes a native token
