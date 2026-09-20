@@ -408,10 +408,19 @@ than becoming a claim in a document that quietly stops being true.
 
 Stated because they are true, not because they are solved.
 
-1. **One oracle operator.** The concentration this creates is the protocol's largest
-   open weakness. Checker mode exists to reduce it; a second operator is not yet running.
-2. **Agreement is not enforced on chain.** Even with a checker, nothing in the contract
-   requires two operators to agree. A human committee must act on the divergence. Making
+1. **Two operators, one of them auditing rather than deciding.** A second bonded
+   operator has run in checker mode since 20 September 2026, on separate hardware and a
+   separate RPC provider, and `activeCount` on `SigvaraOracleBond` is 2. On the first
+   agent both recomputed independently and agreed exactly.
+
+   That reduces the concentration; it does not remove it. Only the primary writes scores.
+   The checker recomputes and reports disagreement, which makes a bad number visible
+   inside the challenge window, but a committee still has to act on it. And both
+   operators are run by the same party today, so what has been demonstrated is that two
+   independent recomputations agree, not that two independent *parties* do.
+2. **Agreement is not enforced on chain.** Nothing in the contract requires the two
+   operators to agree, and the checker cannot reject anything itself. It makes a
+   disagreement legible; a human committee must act on it inside six hours. Making
    agreement a protocol guarantee needs N-of-M on `pendingScores` and a UUPS upgrade.
 3. **The checker can rarely overwrite.** It re-reads the pending slot immediately before
    writing, which narrows the race to one round trip but does not close it.
@@ -514,8 +523,19 @@ fails when the site states something the contracts do not.
 
 Ordered by what unblocks what, not by difficulty.
 
-1. **A second bonded operator in checker mode.** The only item that reduces the
-   concentration in 5.4. Runbook written, contracts ready.
+1. ~~**A second bonded operator in checker mode.**~~ Running since 20 September 2026.
+   VPS separate from the primary, separate RPC provider, its own bond of 25,000 SVR, its
+   own state. `activeCount` went from 1 to 2. Both operators independently computed the
+   demo agent at the same score from independently re-verified payment evidence.
+
+   The bring-up corrected the runbook more than it followed it. Of Arc's four RPC
+   endpoints only two can run a checker at all: Blockdaemon serves blocks and logs but
+   returns `null` for historical transactions, so payment verification silently fails and
+   every agent appears to diverge, and dRPC's free plan rejects log ranges of a thousand
+   blocks while its error text claims ten thousand. The check that had "verified" all
+   four was agreement on `getTotalScore`, an `eth_call` at head that every provider
+   passes including the ones that cannot serve a receipt. See
+   [RUNBOOK-second-operator.md](../oracle/RUNBOOK-second-operator.md).
 2. **A public slash.** *In progress.* Filed on Arc testnet on 20 September 2026 against a
    throwaway agent registered for the purpose, and now sitting in its seven-day challenge
    window; it settles on 27 September. Filing suspended the agent and froze its bond
@@ -533,8 +553,8 @@ Ordered by what unblocks what, not by difficulty.
 3. ~~**A divergence watcher.**~~ Built. Polls a checker's `/divergence`, re-verifies
    each disagreement against the live slot, and alerts the committee while rejection is
    still possible, escalating as the window closes. Treats a silent checker as an alert
-   rather than as quiet. Holds no key. Waiting on item 1, since there is no checker to
-   watch until a second operator runs.
+   rather than as quiet. Holds no key. Unblocked by item 1 as of 20 September 2026: a
+   checker now exists to poll, and the watcher is not yet pointed at it.
 4. **`proposeIfEmpty`.** Closes the checker's remaining overwrite race properly.
 5. **A reward distributor.** Replaces `rewardPool` as a plain address with a contract
    paying operators for epochs served.
