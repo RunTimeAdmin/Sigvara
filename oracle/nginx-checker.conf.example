@@ -1,0 +1,67 @@
+# Public read-only surface for a checking operator, as an nginx vhost.
+#
+# The watcher has to run on a third host, because it notifies only on state changes and
+# nothing downstream can distinguish a quiet watcher from a dead one. So it cannot reach
+# the checker's 127.0.0.1:3031 publish, and something has to expose two endpoints.
+#
+# Use this when the box already has a server on 80/443. It usually does, and a second one
+# fighting for the port is not an improvement: the first deployment hit exactly this, with
+# a system nginx already serving another project.
+#
+# nginx runs on the host, and the checker publishes to host loopback, so the proxy target
+# is simply 127.0.0.1:3031. No Docker networking, no shared external network, nothing to
+# recreate the checker for.
+#
+#   sudo cp nginx-checker.conf.example /etc/nginx/sites-available/checker.sigvara.xyz
+#   sudo ln -s /etc/nginx/sites-available/checker.sigvara.xyz /etc/nginx/sites-enabled/
+#   sudo nginx -t && sudo systemctl reload nginx
+#   sudo certbot --nginx -d checker.sigvara.xyz
+#
+# `nginx -t` before every reload. A bad config takes down every site this nginx serves,
+# not just this one.
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name checker.sigvara.xyz;
+
+    # certbot --nginx rewrites this block to add TLS and a redirect. Until it runs, the
+    # ACME challenge needs plain 80 reachable, which is why this is not a bare redirect.
+    location / {
+        return 404;
+    }
+
+    # Exactly what the watcher polls.
+    #   /health      liveness, and how the watcher tells "up and found nothing"
+    #                from "gone"
+    #   /divergence  the collection, and /divergence/<didHash> for one agent
+    #
+    # Everything else 404s before it reaches the service. The checker's write endpoints
+    # (/attest, /flag, /link, /epoch) are token-gated, but a path nobody can reach needs
+    # no token, and the token is one leaked env file from being the only thing in the way.
+    location = /health {
+        proxy_pass http://127.0.0.1:3031;
+        include /etc/nginx/proxy_params;
+    }
+
+    location = /divergence {
+        proxy_pass http://127.0.0.1:3031;
+        include /etc/nginx/proxy_params;
+    }
+
+    location ^~ /divergence/ {
+        proxy_pass http://127.0.0.1:3031;
+        include /etc/nginx/proxy_params;
+    }
+
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options DENY always;
+    add_header Referrer-Policy no-referrer always;
+
+    server_tokens off;
+}
+
+# On /divergence being public: the protocol already publishes evidence roots so anyone
+# can recompute a score. Publishing whether two independent operators agree on it is the
+# same argument one step further, and it carries nothing secret. Every field in it comes
+# from on-chain state plus payments the evidence endpoint already exposes.
