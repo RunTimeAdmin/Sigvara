@@ -2,8 +2,15 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-COPY package.json ./
-RUN npm install --omit=dev
+# Both manifests, then a lockfile install.
+#
+# This was `COPY package.json` and `npm install`, which resolves a fresh dependency graph
+# at build time and is free to pick versions nobody tested. The lockfile is committed and
+# CI installs from it, so the production image was the one artifact in the pipeline not
+# built from the reviewed tree. npm ci also fails loudly when the lockfile and manifest
+# have drifted, where install would quietly reconcile them.
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
 
 # Copy the source wholesale rather than naming each file.
 #

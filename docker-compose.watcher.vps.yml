@@ -32,9 +32,14 @@ services:
         set -e
         apk add --no-cache git >/dev/null
         rm -rf /src && git clone --depth 1 --branch main https://github.com/RunTimeAdmin/Sigvara.git /src
-        cp /src/oracle/*.js /src/oracle/package.json /app/
+        cp /src/oracle/*.js /src/oracle/package.json /src/oracle/package-lock.json /app/
         rm -f /app/*.test.js
-        npm install --omit=dev --no-audit --no-fund
+        # npm ci, not install: install resolves a fresh dependency graph on every
+        # container start and is free to pick versions nobody tested, which made the
+        # running oracles the one artifact in the pipeline not built from the reviewed
+        # tree. ci installs exactly the committed lockfile and fails loudly if the two
+        # have drifted.
+        npm ci --omit=dev --no-audit --no-fund
         exec node watcher.js
     volumes:
       # /app only. The watcher is deliberately stateless: it re-reads the checker's
