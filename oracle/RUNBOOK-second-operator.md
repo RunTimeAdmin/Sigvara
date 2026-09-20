@@ -7,6 +7,16 @@ instead of competing; this file is the sequence, not the reasoning.
 Nothing here is reversible in under a week: `initiateUnbond` starts a 7-day cooldown.
 Read step 8 before you start step 3.
 
+> **On the placeholders below.** `<THING>` marks a value you substitute. In bash the
+> angle brackets are redirect operators, so pasting a line with them intact fails with
+> `syntax error near unexpected token` before anything runs, including any `export` on
+> the same line. For keys, read them into a variable instead of editing them into the
+> command, which also keeps them out of your shell history:
+>
+> ```bash
+> read -rs -p "key: " KEY; echo
+> cast send ... --private-key "$KEY"
+> ```
 ## Addresses and parameters
 
 Arc testnet, chain ID `5042002`. All read off chain on 20 September 2026.

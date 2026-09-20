@@ -11,6 +11,16 @@ Budget **seven days**. `challengePeriod()` is 604800 seconds, and there is no wa
 shorten it. That makes this the long pole in front of anything that depends on the
 protocol looking finished.
 
+> **On the placeholders below.** `<THING>` marks a value you substitute. In bash the
+> angle brackets are redirect operators, so pasting a line with them intact fails with
+> `syntax error near unexpected token` before anything runs, including any `export` on
+> the same line. For keys, read them into a variable instead of editing them into the
+> command, which also keeps them out of your shell history:
+>
+> ```bash
+> read -rs -p "key: " KEY; echo
+> cast send ... --private-key "$KEY"
+> ```
 ## Rehearsed first
 
 [`test/SlashDrillFork.t.sol`](../test/SlashDrillFork.t.sol) runs this whole path against a
