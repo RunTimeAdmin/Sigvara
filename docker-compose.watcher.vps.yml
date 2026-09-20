@@ -1,0 +1,46 @@
+# Divergence watcher, shaped for a bare VPS.
+#
+# Use THIS file when the box has no repository checkout, which is how the Sigvara
+# components are actually deployed. docker-compose.watcher.yml builds from ./oracle and
+# needs a working tree; this one clones `main` in the container, so deploying a change
+# is `docker compose restart` and nothing else.
+#
+# Run it on a THIRD host: not the primary oracle, and not the checker. A watcher sharing
+# a machine with the thing it watches goes down with it, and its silence then reads as
+# "nothing to report". That is not a theoretical objection here: the watcher notifies on
+# state changes only, never on a healthy poll, so nothing downstream can tell a quiet
+# watcher from a dead one. An external dead-man's switch would not cover it either.
+#
+# It holds no private key, mounts no state and signs nothing. Every action is a read or
+# a notification, so a compromised watcher can lie to you but cannot touch the protocol.
+# That is why it gets no volumes and why CHECKER_URL should point at a read-only surface
+# exposing /health and /divergence rather than at the checker's full API.
+#
+#   cd /docker/sigvara-watcher && docker compose up -d
+services:
+  watcher:
+    image: node:20-alpine
+    container_name: sigvara-watcher
+    restart: unless-stopped
+    working_dir: /app
+    env_file:
+      - .env
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        apk add --no-cache git >/dev/null
+        rm -rf /src && git clone --depth 1 --branch main https://github.com/RunTimeAdmin/Sigvara.git /src
+        cp /src/oracle/*.js /src/oracle/package.json /app/
+        rm -f /app/*.test.js
+        npm install --omit=dev --no-audit --no-fund
+        exec node watcher.js
+    volumes:
+      # /app only. The watcher is deliberately stateless: it re-reads the checker's
+      # /divergence every poll and re-verifies each entry against the chain, so there is
+      # nothing it needs to remember that it cannot recompute.
+      - watcher_app:/app
+
+volumes:
+  watcher_app:
