@@ -77,6 +77,41 @@ The evidence root is what makes the off-chain half checkable: the oracle serves 
 leaves it counted, and anyone can re-verify each payment against the chain, rebuild the
 root, and compare it with what the contract holds.
 
+## Who checks the checker
+
+Three processes, on three hosts, with three different RPC providers. The separation is
+the design, not an accident of where things landed.
+
+| | Host | Chain view | Holds | Writes |
+|---|---|---|---|---|
+| **Primary oracle** | one | Circle | signing key, state | proposes and finalizes scores |
+| **Checker** | another | QuickNode | signing key, own state | only into an empty slot |
+| **Watcher** | a third | dRPC | nothing | nothing |
+
+The **checker** is a second bonded operator that audits instead of competing. It
+recomputes each pending score from payment evidence it re-verified against the chain
+itself, and records disagreement. It never overwrites a live proposal and never finalizes
+one it disputes: overwriting would restart the challenge window and buy a bad proposal
+another six hours out of the committee's reach, and finalizing a number it doubts would
+launder it into the live value. Two operators competing for one `pendingScores` slot
+would produce a race, not agreement, which is why it audits.
+
+The **watcher** exists because a disagreement nobody reads inside six hours is the same
+as no disagreement. It polls the checker, re-reads each disputed slot on chain to see
+whether the proposal is still live and rejectable, and escalates as the window closes. It
+holds no key, so a compromised watcher can lie to you but cannot touch the protocol.
+
+It runs on a third host for a specific reason rather than a general one: it notifies on
+state changes only and never on a healthy poll, so nothing downstream can tell a quiet
+watcher from a dead one. Sharing a host with the checker would mean one failure silences
+both, and the silence would read as "nothing to report".
+
+**What this does not do.** Nothing in the contract requires the two operators to agree.
+The checker cannot reject anything; it makes a disagreement legible and a human committee
+must act on it. And both operators are run by the same party today, so what has been
+demonstrated is that two independent recomputations agree, not that two independent
+parties do. See section 5.4 of the whitepaper.
+
 ## A deliberate loop-break
 
 CounterAudit feeds the oracle directly (attestations → success factor) **and**

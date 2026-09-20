@@ -505,15 +505,19 @@ attestations with evidence roots; public unauthenticated reads at `/health`, `/s
 raising and resolution with half-life decay; a two-way integration with CounterAudit that
 both enriches audit packets with Sigvara identity and reports settlement outcomes back.
 
-**Built and tested, not yet deployed:** checker mode, awaiting a second bonded operator,
-and the divergence watcher that consumes its output. Both are blocked on the same thing.
+**Deployed 20 September 2026:** a second bonded operator in checker mode, on separate
+hardware from the primary and a separate RPC provider, with its own 25,000 SVR bond and
+its own state; and the divergence watcher that consumes its output, on a third host with
+no key and no state. `activeCount` on `SigvaraOracleBond` is 2. The checker exposes
+`/health` and `/divergence` publicly at `checker.sigvara.xyz`; every write path 404s
+before reaching the service.
 
 **Not deployed:** `SigvaraEpochFees`. Scoring on Arc testnet is free and nothing is
 charged. The app disables every fee control rather than pointing at an address with no
 code.
 
-**Test coverage**, all passing: 246 contract tests across 12 Foundry suites including
-fuzz and invariant tests, 266 oracle tests, 58 SDK tests. CI runs Foundry, the oracle and
+**Test coverage**, all passing: 252 contract tests across 13 Foundry suites including
+fuzz and invariant tests (2 skipped), 303 oracle tests, plus the SDK suite. CI runs Foundry, the oracle and
 SDK suites, and Slither static analysis on every push, plus a documentation check that
 fails when the site states something the contracts do not.
 
@@ -550,11 +554,19 @@ Ordered by what unblocks what, not by difficulty.
    are all addresses one party controls, so it demonstrates a mechanism and not a
    governance decision. Until it settles, the consequence side of the protocol is still
    theory. After it settles, it is a demonstration, not a proof.
-3. ~~**A divergence watcher.**~~ Built. Polls a checker's `/divergence`, re-verifies
-   each disagreement against the live slot, and alerts the committee while rejection is
-   still possible, escalating as the window closes. Treats a silent checker as an alert
-   rather than as quiet. Holds no key. Unblocked by item 1 as of 20 September 2026: a
-   checker now exists to poll, and the watcher is not yet pointed at it.
+3. ~~**A divergence watcher.**~~ Running since 20 September 2026, on a third host that is
+   neither the primary nor the checker. Polls `/divergence`, re-reads each disputed slot
+   on chain, and alerts while rejection is still possible, escalating as the window
+   closes. Treats a silent checker as an alert rather than as quiet. Holds no key, mounts
+   no state, signs nothing.
+
+   It must not share a host with what it watches, and the reason is specific: it notifies
+   on state changes only, never on a healthy poll, so nothing downstream can distinguish a
+   quiet watcher from a dead one. An external dead-man's switch does not rescue that.
+
+   **Its alerts currently go to a container log.** `WEBHOOK_URL` is unset, so the
+   component that exists for 3am cannot reach anyone at 3am. That is the next thing to
+   fix, and it is worth more than any remaining item on this list.
 4. **`proposeIfEmpty`.** Closes the checker's remaining overwrite race properly.
 5. **A reward distributor.** Replaces `rewardPool` as a plain address with a contract
    paying operators for epochs served.
