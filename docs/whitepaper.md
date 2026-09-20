@@ -419,7 +419,8 @@ attestations with evidence roots; public unauthenticated reads at `/health`, `/s
 raising and resolution with half-life decay; a two-way integration with CounterAudit that
 both enriches audit packets with Sigvara identity and reports settlement outcomes back.
 
-**Built and tested, not yet deployed:** checker mode, awaiting a second bonded operator.
+**Built and tested, not yet deployed:** checker mode, awaiting a second bonded operator,
+and the divergence watcher that consumes its output. Both are blocked on the same thing.
 
 **Not deployed:** `SigvaraEpochFees`. Scoring on Arc testnet is free and nothing is
 charged. The app disables every fee control rather than pointing at an address with no
@@ -440,8 +441,11 @@ Ordered by what unblocks what, not by difficulty.
    concentration in 5.3. Runbook written, contracts ready.
 2. **A public slash.** One executed slash, or a scheduled drill, with a written account.
    Until that exists the consequence side of the protocol is theory.
-3. **A divergence watcher.** Something that consumes `/divergence` and alerts the
-   committee inside the challenge window. The signal exists; nothing yet consumes it.
+3. ~~**A divergence watcher.**~~ Built. Polls a checker's `/divergence`, re-verifies
+   each disagreement against the live slot, and alerts the committee while rejection is
+   still possible, escalating as the window closes. Treats a silent checker as an alert
+   rather than as quiet. Holds no key. Waiting on item 1, since there is no checker to
+   watch until a second operator runs.
 4. **`proposeIfEmpty`.** Closes the checker's remaining overwrite race properly.
 5. **A reward distributor.** Replaces `rewardPool` as a plain address with a contract
    paying operators for epochs served.

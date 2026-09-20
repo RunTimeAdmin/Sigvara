@@ -404,6 +404,57 @@ Setup, step by step with the exact transactions, is in
 
 Exit is not instant: `initiateUnbond()` starts a 7-day cooldown before `withdrawBond()`.
 
+## The divergence watcher
+
+A checker can only record that it disagrees. It cannot reject a proposal; only
+`SLASHING_COMMITTEE_ROLE` can, and only inside the challenge window. Six hours on Arc.
+Nobody watches an HTTP endpoint for six hours, so without something consuming
+`/divergence` the signal is a log nobody reads and the committee's power stays
+theoretical.
+
+`watcher.js` closes that loop.
+
+```bash
+CHECKER_URL=https://checker.example RPC_URL=https://rpc.drpc.testnet.arc.io REPUTATION_ADDRESS=0x6603C96275e85F724Cdf74666b399365e4cA29ed node watcher.js
+```
+
+Or `docker compose -f docker-compose.watcher.yml up -d --build` from the repo root.
+
+**It re-reads the chain before alerting.** The checker records what it saw when it saw
+it. By the time the watcher polls, the disputed proposal may have been finalized,
+rejected, or replaced by a newer one the checker has not examined. So each divergence is
+classified against the live slot:
+
+| Classification | Meaning | Alerts |
+|---|---|---|
+| `actionable` | same proposal, window still open | **yes** |
+| `expired` | same proposal, window closed | no, too late to reject |
+| `superseded` | a newer proposal holds the slot | no, the checker will re-examine it |
+| `closed` | nothing pending | no |
+
+Alerting about a proposal that no longer exists is how you train a committee to ignore
+alerts, which is the failure this path exists to prevent.
+
+**It alerts twice.** Once on discovery, and once more when the window is nearly gone
+(`FINAL_WARNING_MINUTES`, default 60) if nothing has happened. The first says look; the
+second says you are about to lose the ability to act.
+
+**A silent checker is an alert, not quiet.** This is the property that makes the
+component worth running. The watcher raises an alarm when the checker is unreachable,
+when it is up but has not completed an epoch within `MAX_SILENCE_MINUTES`, when the URL
+turns out to be a primary rather than a checker, or when the checker reports
+`seesProposals: false` because its epoch is too long to catch proposals before they
+expire. Any of those make an empty divergence list meaningless, and a watcher that
+reported them as "no divergences" would manufacture confidence out of an outage.
+
+**It holds no private key.** Every action is a read or a notification, so a compromised
+watcher can lie to you but cannot touch the protocol. Set `WEBHOOK_URL` to send alerts
+somewhere a human will see them; without it they go to the container log, which nobody
+reads at the hour this matters.
+
+Run it on a third host. A watcher sharing a machine with the checker goes down with it,
+and then its silence means nothing.
+
 ## Environment Variables
 
 ### Required

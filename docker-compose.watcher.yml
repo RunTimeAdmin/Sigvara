@@ -1,0 +1,40 @@
+# Divergence watcher.
+#
+# Polls a checking operator's /divergence, re-verifies each disagreement against the
+# chain, and alerts while the slashing committee can still reject the proposal.
+#
+# Run it on a THIRD host: not the primary oracle, and not the checker. A watcher that
+# shares a machine with the thing it watches goes down with it, and its silence then
+# reads as "nothing to report". The whole point of the component is that silence means
+# something, so it has to be able to outlive what it monitors.
+#
+#   docker compose -f docker-compose.watcher.yml up -d --build
+#
+# It holds no private key, mounts no state and signs nothing. Every action is a read or
+# a notification, so a compromised watcher can lie to you but cannot touch the protocol.
+services:
+  watcher:
+    build:
+      context: ./oracle
+      dockerfile: Dockerfile
+    container_name: sigvara-watcher
+    restart: unless-stopped
+    command: ["node", "watcher.js"]
+    environment:
+      # The checker to watch. Must be a checker: a primary returns 404 on /divergence
+      # and the watcher treats that as a misconfiguration rather than as good news.
+      CHECKER_URL: ${CHECKER_URL:?set CHECKER_URL}
+      # A different RPC provider from both the oracle and the checker. Arc testnet has
+      # four. If the watcher shares a chain view with the checker, the pair can agree
+      # about a chain that neither is seeing correctly.
+      RPC_URL: ${WATCHER_RPC_URL:-https://rpc.drpc.testnet.arc.io}
+      REPUTATION_ADDRESS: ${REPUTATION_ADDRESS:?set REPUTATION_ADDRESS}
+      # Poll often enough to leave the committee usable time inside a 6h window.
+      POLL_SECONDS: ${POLL_SECONDS:-300}
+      # Silence from the checker for longer than this is itself an alert.
+      MAX_SILENCE_MINUTES: ${MAX_SILENCE_MINUTES:-120}
+      # Second, louder alert when a window is this close to closing.
+      FINAL_WARNING_MINUTES: ${FINAL_WARNING_MINUTES:-60}
+      # Optional. Without it alerts go to the container log only, which nobody reads at
+      # 3am, which is the hour this matters.
+      WEBHOOK_URL: ${WEBHOOK_URL:-}
