@@ -18,6 +18,7 @@ const OPERATOR_SET_ABI = ['function isActiveOperator(address) view returns (bool
 const REPUTATION_ABI = [
   'function operatorBond() view returns (address)',
   'function getTotalScore(bytes32 didHash) view returns (uint8)',
+  'function getReputation(bytes32 didHash) view returns (tuple(uint8 feeScore, uint8 successScore, uint8 ageScore, uint8 externalScore, uint8 communityScore, uint8 propagationScore, uint256 lastUpdated))',
   'function proposeReputation(bytes32 didHash, tuple(uint8 feeScore, uint8 successScore, uint8 ageScore, uint8 externalScore, uint8 communityScore, uint8 propagationScore, uint256 lastUpdated) data, bytes32 evidenceRoot)',
   'function finalizeReputation(bytes32 didHash)',
   'function getPendingScore(bytes32 didHash) view returns (tuple(tuple(uint8 feeScore, uint8 successScore, uint8 ageScore, uint8 externalScore, uint8 communityScore, uint8 propagationScore, uint256 lastUpdated) data, uint256 proposedAt, bool exists))',
@@ -252,7 +253,24 @@ async function getAgentScore(address) {
     const id = await identityContract.getIdentity(didHash);
     if (Number(id.registeredAt) === 0) return 0;
     if (Number(id.status) === STATUS_SLASHED) return 0;
-    return Number(await reputationContract.getTotalScore(didHash));
+
+    // The HARD part of a counterparty's standing, not its total.
+    //
+    // Weighting by the total let a farmed score launder into someone else's. A sybil
+    // that wash-traded its way to 100 raised its target's per-payer cap (trustMultiplier
+    // doubles it) and counted as a fully trusted voucher (propagationScore). Measured:
+    // scored sybils maxed the 30-point fee factor with four payers instead of six.
+    //
+    // externalScore is the one factor a single party cannot manufacture, because it is
+    // ERC-8004 standing in a registry this protocol does not control. Capping it by the
+    // matured total keeps the existing lag: an identity cannot link an 8004 history and
+    // propagate it the same epoch, and a handover restarts maturity, so bought standing
+    // is not instantly spendable through counterparties either.
+    const [rep, matured] = await Promise.all([
+      reputationContract.getReputation(didHash),
+      reputationContract.getTotalScore(didHash),
+    ]);
+    return Math.min(Number(rep.externalScore), Number(matured));
   } catch {
     return 0;
   }

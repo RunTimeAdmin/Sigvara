@@ -387,11 +387,19 @@ test('trustMultiplier: an unknown wallet is weighted exactly as before', () => {
   assert.equal(trustMultiplier('0xstranger', null, 1), 1);
 });
 
-test('trustMultiplier: scales with the counterparty score, and is capped', () => {
-  assert.equal(trustMultiplier('0xa', { '0xa': 100 }, 1), 2);
-  assert.equal(trustMultiplier('0xa', { '0xa': 50 }, 1), 1.5);
+test('trustMultiplier: scales with HARD standing, not the total score', () => {
+  // payerScores carries hard standing, 0..15 (ERC-8004 capped by the matured total),
+  // because weighting by the total let a farmed score launder into someone else's cap.
+  assert.equal(trustMultiplier('0xa', { '0xa': 15 }, 1), 2);
+  assert.equal(trustMultiplier('0xa', { '0xa': 7.5 }, 1), 1.5);
   assert.equal(trustMultiplier('0xa', { '0xa': 999 }, 1), 2, 'a bad score cannot inflate it');
   assert.equal(trustMultiplier('0xa', { '0xa': -5 }, 1), 1);
+});
+
+test('trustMultiplier: a wash-farmed counterparty raises nothing', () => {
+  // The laundering this closed. A sybil at total 100 with no external standing reads
+  // as hard 0 and so leaves the cap exactly where an anonymous wallet leaves it.
+  assert.equal(trustMultiplier('0xa', { '0xa': 0 }, 1), 1);
 });
 
 test('trustMultiplier: a weight of 0 disables the web of trust', () => {
@@ -413,8 +421,15 @@ test('propagationScore: one point per fully trusted counterparty', () => {
 
 test('propagationScore: pro-rated, so half-trusted counterparties count half', () => {
   const ev = ['0xa', '0xb', '0xc', '0xd'].map(p => tev(p, 1n));
-  const scores = { '0xa': 50, '0xb': 50, '0xc': 50, '0xd': 50 };
+  const scores = { '0xa': 7.5, '0xb': 7.5, '0xc': 7.5, '0xd': 7.5 };
   assert.equal(propagationScore(ev, scores), 2);
+});
+
+test('propagationScore: farmed counterparties are inherited as nothing', () => {
+  // Hard standing 0 means the voucher has no ERC-8004 history, however high its total.
+  const ev = ['0xa', '0xb', '0xc', '0xd', '0xe'].map(p => tev(p, 1n));
+  assert.equal(propagationScore(ev, { '0xa': 0, '0xb': 0, '0xc': 0, '0xd': 0, '0xe': 0 }), 0);
+  assert.equal(propagationScore(ev, { '0xa': 15, '0xb': 15, '0xc': 15, '0xd': 15, '0xe': 15 }), 5);
 });
 
 test('propagationScore: capped at 5 however many vouch', () => {

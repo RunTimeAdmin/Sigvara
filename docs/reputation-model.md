@@ -149,8 +149,10 @@ Flags are submitted through a governance mechanism (separate from slashing). Sla
 
 ### Trust Propagation (5 pts)
 
-Network-effect scoring. An agent paid by counterparties that are themselves scored,
-bonded and slashable inherits a fraction of that standing. It is live; the mechanics,
+Network-effect scoring. An agent paid by counterparties that hold **outside** standing,
+meaning ERC-8004 reputation capped by their matured total, inherits a fraction of it.
+Deliberately not their total Sigvara score: weighting by the total let a farmed number be
+inherited, so a wash-traded counterparty vouched for its own ring. It is live; the mechanics,
 and the two properties that keep it from being a Sybil amplifier, are in
 [Inherited trust](#inherited-trust-5-pts) below.
 

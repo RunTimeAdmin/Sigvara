@@ -147,21 +147,33 @@ test('a ring of fresh agents grants each other nothing', () => {
   assert.equal(withScores.propagationScore, 0, 'zero-scored payers granted propagation');
 });
 
-test('MEASURED: what it costs once the sybils are themselves scored', () => {
+test('MEASURED: farming the sybils themselves now buys nothing', () => {
+  // payerScores carries HARD standing (ERC-8004 capped by the matured total), not the
+  // total score. A sybil that wash-traded itself to 100 has no external history, so it
+  // reads 0 here and launders nothing into its target. Before this change a farmed
+  // sybil doubled its target per-payer cap and counted as a full voucher: four scored
+  // payers maxed the 30-point fee factor where six are supposed to be needed.
   const ring = washRing(6, 600);
+  const cases = [
+    ['farmed to 100, no ERC-8004', 0],
+    ['real 8004 standing 7/15', 7],
+    ['full 8004 standing 15/15', 15],
+  ];
+  console.log('');
+  console.log('  6-wallet ring, by the counterparties HARD standing:');
+  console.log('  counterparties             | fee | propagation | TOTAL');
   const rows = [];
-  for (const sybilScore of [0, 25, 50, 100]) {
-    const scores = Object.fromEntries(Array.from({ length: 6 }, (_, w) => [`0xsybil${w}`, sybilScore]));
+  for (const [label, hard] of cases) {
+    const scores = Object.fromEntries(Array.from({ length: 6 }, (_, w) => [`0xsybil${w}`, hard]));
     const s = scoreOf(ring, { payerScores: scores });
-    rows.push({ sybilScore, fee: s.feeScore, prop: s.propagationScore, total: s.total });
+    rows.push(s);
+    console.log(`  ${label.padEnd(26)} | ${String(s.feeScore).padStart(3)} | ${String(s.propagationScore).padStart(11)} | ${String(s.total).padStart(5)}`);
   }
-  console.log('\n  6-wallet ring, sybils themselves scored:');
-  console.log('  sybil score | fee | propagation | TOTAL');
-  for (const r of rows) {
-    console.log(`  ${String(r.sybilScore).padStart(11)} | ${String(r.fee).padStart(3)} | ${String(r.prop).padStart(11)} | ${String(r.total).padStart(5)}`);
-  }
-  // Recursion has to cost something: scoring the sybils is itself the same work again.
-  assert.ok(rows[3].total > rows[0].total, 'scored sybils should be worth more, or the web of trust does nothing');
+  const unscored = scoreOf(ring);
+  assert.equal(rows[0].total, unscored.total,
+    'a farmed counterparty must be worth exactly what an anonymous wallet is worth');
+  assert.equal(rows[0].propagationScore, 0, 'farmed standing must not propagate');
+  assert.ok(rows[2].total > rows[0].total, 'genuine outside standing should still count');
 });
 
 // ---------------------------------------------------------------------------------

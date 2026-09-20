@@ -349,7 +349,11 @@ a ring active over roughly six weeks:
 
 Six wallets is the threshold because `maxPerPayer` caps any single counterparty at 5
 points of the 30-point fee factor. Beyond six, more wallets buy almost nothing. If the
-sybils are themselves scored agents, the web-of-trust weighting lifts this to **72**.
+sybils are themselves scored agents this changes nothing: the web-of-trust weighting
+reads their **hard** standing, meaning ERC-8004 reputation capped by the matured total,
+so a counterparty that farmed its own score to 100 is worth exactly what an anonymous
+wallet is worth. Reaching 72 requires counterparties with genuine outside standing,
+which is the one input an attacker cannot manufacture.
 
 **What holds.** The per-payer cap binds, and splitting one wallet's volume across
 hundreds of dust payments does not defeat it. A ring of zero-scored agents grants its

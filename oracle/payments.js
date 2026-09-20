@@ -290,19 +290,23 @@ function byPayer(events, halfLifeMs, now = Date.now()) {
  * the behaviour before any of this existed. A ring of fresh agents all score 0 and so
  * grant each other nothing, which is the property that matters: a web of trust that
  * could be bootstrapped from nothing would be worse than no web at all.
+ *
+ * `payerScores` carries HARD standing, 0..15, not the total score. A ring that farmed
+ * itself to 100 has no external standing and so raises nothing, at any depth.
  */
 function trustMultiplier(payer, payerScores, trustWeight) {
   if (!trustWeight || trustWeight <= 0 || !payerScores) return 1;
-  const score = payerScores[String(payer || '').toLowerCase()] || 0;
-  return 1 + (Math.max(0, Math.min(100, score)) / 100) * trustWeight;
+  const hard = payerScores[String(payer || '').toLowerCase()] || 0;
+  return 1 + (Math.max(0, Math.min(MAX_HARD_SCORE, hard)) / MAX_HARD_SCORE) * trustWeight;
 }
 
 /**
  * Inherited trust, 0 to 5.
  *
- * One point per counterparty that is itself fully trusted, pro-rated by its score, so
- * five perfectly scored counterparties reach the cap and ten half-scored ones do the
- * same. Each counterparty contributes at most once however much it pays, because this
+ * One point per counterparty that is itself fully trusted, pro-rated by its HARD
+ * standing rather than its total score, so five counterparties with full ERC-8004
+ * standing reach the cap and ten half-standing ones do the same. Weighting by the total
+ * let a farmed score be inherited, which is the one thing this factor must not do. Each counterparty contributes at most once however much it pays, because this
  * factor is about the breadth of who vouches for an agent, not the size of the
  * cheques. Scores are the matured ones, which lag, so a reciprocal pair cannot lift
  * each other in a single epoch.
@@ -315,10 +319,19 @@ function propagationScore(events, payerScores, max = 5) {
     const key = String(e.payer || '').toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
-    trust += Math.max(0, Math.min(100, payerScores[key] || 0)) / 100;
+    trust += Math.max(0, Math.min(MAX_HARD_SCORE, payerScores[key] || 0)) / MAX_HARD_SCORE;
   }
   return Math.min(max, Math.floor(trust));
 }
+
+/// The maximum a counterparty's HARD standing can be: externalScore caps at 15.
+///
+/// payerScores used to carry the total score, 0..100. That let a farmed number launder
+/// into someone else's: a wash-traded sybil at 100 doubled its target's per-payer cap
+/// and counted as a fully trusted voucher. It now carries hard standing only, which is
+/// ERC-8004 reputation capped by the matured total (see chain.getAgentScore), so trust
+/// that was manufactured cannot be passed on.
+const MAX_HARD_SCORE = 15;
 
 /// Scale for the fractional trust multiplier: a float cannot survive BigInt arithmetic,
 /// so it is scaled up, applied, and divided back.
@@ -437,5 +450,6 @@ module.exports = {
   distinctPayers,
   activityWindow,
   WEIGHT_SCALE,
+  MAX_HARD_SCORE,
   TRANSFER_TOPIC,
 };
