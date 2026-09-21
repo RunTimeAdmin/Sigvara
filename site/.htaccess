@@ -1,5 +1,24 @@
-# Apache 2.4 security headers for the HTTPS virtual host.
-# Enable mod_headers before using this file.
+# The only place this site's response headers are defined.
+#
+# There used to be four: this file, _headers (Netlify), vercel.json and
+# nginx-security.conf. The site is served by Apache, so three of them did nothing
+# except sit in the document root where anyone could read them, and every policy change
+# had to be made four times by hand. Adding one source to img-src for the score badge
+# meant editing four files, which is the moment it stopped being tidy and started being
+# a way to ship a weaker policy than intended.
+#
+# That failure is not hypothetical. Two untracked copies of this site elsewhere in the
+# working tree still carry `script-src 'self' 'unsafe-inline'`, a policy this one
+# dropped, and nothing would have caught a deploy from one of those.
+#
+# The deleted files are in git history if a move to Netlify or Vercel ever needs them.
+# Their per-path cache rules were deliberately NOT ported: they were never active here,
+# and `/assets/* immutable max-age=31536000` is not a thing to enable untested on a host
+# whose CDN was observed serving stale 404s for a file that existed.
+#
+# scripts/check-headers.mjs fails the build if a second header source reappears.
+#
+# Apache 2.4. Enable mod_headers before using this file.
 <IfModule mod_headers.c>
   Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
   Header always set X-Content-Type-Options "nosniff"

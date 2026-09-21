@@ -70,6 +70,14 @@ jobs:
         working-directory: .
         run: node scripts/check-docs.mjs
 
+      # The site's response headers were defined in four files, of which one was live.
+      # Editing the policy meant editing four places by hand, and two untracked copies
+      # of the site had already drifted to allowing 'unsafe-inline'. This fails the
+      # build if a second source reappears or the live policy loses a directive.
+      - name: One source of response headers
+        working-directory: .
+        run: node scripts/check-headers.mjs
+
   slither:
     name: Static analysis (slither)
     runs-on: ubuntu-latest
