@@ -9,6 +9,7 @@ const { computeScore } = require('./scoring');
 const {
   decideAction, decideCheckerAction, scoreDivergence,
   epochIntervalError, divergenceToleranceError, DEFAULT_DIVERGENCE_TOLERANCE,
+  mapChunked,
 } = require('./epoch-policy');
 const { json, readBody, readCredentials, identifyCaller, mayAttestUnauthenticated, parseScorePath, rateLimited, clientKey, adminTokenPolicyError } = require('./http-helpers');
 const payments = require('./payments');
@@ -290,21 +291,40 @@ async function runEpochInner() {
   const gatingActive = chain.feeGatingConfigured() && (await chain.getEpochFee()) > 0n;
   if (gatingActive) console.log('[oracle] epoch-fee gating ACTIVE');
 
-  // Phase 1: reads are stateless — fire them concurrently instead of one at a time.
-  const agentInfos = await Promise.all(
-    agents.map(async ({ didHash }) => {
-      try {
-        const [info, pending, covered] = await Promise.all([
-          chain.getAgentInfo(didHash),
-          chain.getPendingScore(didHash),
-          gatingActive ? chain.isCovered(didHash) : Promise.resolve(true),
-        ]);
-        return { didHash, ...info, pending, covered, error: null };
-      } catch (err) {
-        return { didHash, registeredAt: 0, status: -1, pending: null, covered: false, error: err };
-      }
-    })
-  );
+  // Phase 1: reads are stateless — fire them concurrently, but a chunk at a time.
+  //
+  // "Concurrently" and "all at once" are not the same thing, and this used to be all at
+  // once: one Promise.all over every registered agent, which is 2 logical reads each, or
+  // 3 with fee gating. The agent set is small today and that was fine. At 10,000 agents
+  // it is 30,000 reads released in a single tick.
+  //
+  // What that actually costs is worth stating precisely, because the logical number
+  // overstates it. ethers folds calls issued in the same tick into batched JSON-RPC
+  // requests (measured on ethers 6.17: batchMaxCount 100, batchStallTime 10ms), so
+  // 30,000 reads arrive as ~300 HTTP requests carrying 100 calls each, not 30,000
+  // sockets. That is still the wrong shape in two ways: 300 near-simultaneous requests
+  // is a burst most public endpoints will rate-limit, and a 100-call batch is itself
+  // over the limit several providers accept. Both failures then land in
+  // readWithBackoff, which retries, which makes the burst worse rather than better.
+  //
+  // 32 to match the phase-two guard loop below: one chunk is 64 to 96 logical reads,
+  // which ethers sends as a single batched round trip, so RPC pressure is flat in the
+  // agent count instead of linear. See mapChunked for what chunking costs. It preserves
+  // input order, so agentInfos stays aligned with agents exactly as the single
+  // Promise.all left it and candidate ordering downstream is unchanged.
+  const PHASE_ONE_CHUNK = 32;
+  const agentInfos = await mapChunked(agents, PHASE_ONE_CHUNK, async ({ didHash }) => {
+    try {
+      const [info, pending, covered] = await Promise.all([
+        chain.getAgentInfo(didHash),
+        chain.getPendingScore(didHash),
+        gatingActive ? chain.isCovered(didHash) : Promise.resolve(true),
+      ]);
+      return { didHash, ...info, pending, covered, error: null };
+    } catch (err) {
+      return { didHash, registeredAt: 0, status: -1, pending: null, covered: false, error: err };
+    }
+  });
 
   // Agents worth writing for, filtered from the phase-1 batch before any further reads.
   const candidates = [];

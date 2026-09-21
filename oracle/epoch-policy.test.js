@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  decideAction, decideCheckerAction, scoreDivergence,
+  decideAction, decideCheckerAction, scoreDivergence, mapChunked,
   epochIntervalError, divergenceToleranceError, MAX_TIMER_MS, MIN_EPOCH_MS,
 } = require('./epoch-policy');
 
@@ -250,4 +250,67 @@ test('divergenceToleranceError: rejects what would silently disable the check', 
   assert.match(divergenceToleranceError(Infinity), /did not parse/);
   assert.match(divergenceToleranceError(-1), /negative/);
   assert.match(divergenceToleranceError(100), /past the maximum/);
+});
+
+// -------------------------------------------------------------------------
+// mapChunked
+// -------------------------------------------------------------------------
+
+test('mapChunked: preserves input order regardless of completion order', async () => {
+  // The property the epoch depends on. Phase one builds agentInfos positionally and
+  // phase two reads it back beside the agent list, so a reordering here would attach
+  // one agent's pending score to another agent and score the wrong thing.
+  const items = [40, 10, 30, 20, 0, 50, 5];
+  const out = await mapChunked(items, 3, async (ms) => {
+    await new Promise(r => setTimeout(r, ms));
+    return ms;
+  });
+  assert.deepEqual(out, items);
+});
+
+test('mapChunked: never exceeds the requested concurrency', async () => {
+  // The regression this exists to catch. Reverting to a single Promise.all over every
+  // agent still returns correct results in the right order, so only a peak-in-flight
+  // assertion notices: it is a load property, not a correctness one.
+  let inFlight = 0;
+  let peak = 0;
+  const items = Array.from({ length: 200 }, (_, i) => i);
+
+  const out = await mapChunked(items, 8, async (i) => {
+    inFlight++;
+    if (inFlight > peak) peak = inFlight;
+    await new Promise(r => setTimeout(r, 1));
+    inFlight--;
+    return i * 2;
+  });
+
+  assert.equal(peak, 8, `peak concurrency should be the chunk size, got ${peak}`);
+  assert.equal(out.length, 200);
+  assert.equal(out[199], 398);
+});
+
+test('mapChunked: handles an empty list and a size larger than the list', async () => {
+  assert.deepEqual(await mapChunked([], 32, async x => x), []);
+  assert.deepEqual(await mapChunked([1, 2], 32, async x => x * 10), [10, 20]);
+});
+
+test('mapChunked: rejects a size that would not bound anything', async () => {
+  // Silently treating 0 or a non-integer as "unbounded" would reintroduce the burst
+  // this function exists to prevent, and it would do it quietly.
+  for (const bad of [0, -1, 1.5, NaN, undefined]) {
+    await assert.rejects(() => mapChunked([1], bad, async x => x), TypeError);
+  }
+});
+
+test('mapChunked: a rejecting mapper rejects the whole call', async () => {
+  // Phase one catches per-agent errors inside its mapper and returns a sentinel, so
+  // this path should not arise there. Pinning it anyway: the alternative, swallowing,
+  // would turn a broken read into a silently short result list.
+  await assert.rejects(
+    () => mapChunked([1, 2, 3], 2, async (x) => {
+      if (x === 2) throw new Error('boom');
+      return x;
+    }),
+    /boom/,
+  );
 });

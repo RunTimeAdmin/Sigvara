@@ -157,8 +157,36 @@ function decideCheckerAction(pending, own, challengeWindowSeconds, nowSeconds, t
   return nowSeconds >= pending.proposedAt + challengeWindowSeconds ? 'finalize' : 'skip';
 }
 
+/**
+ * Map over `items` with at most `size` calls in flight, preserving input order.
+ *
+ * How fast the epoch is allowed to ask is an epoch pacing decision, which is why this
+ * lives beside decideAction rather than in the entrypoint: it is the one part of the
+ * read path worth testing on its own.
+ *
+ * Chunked rather than a sliding pool. A chunk waits for its slowest member before the
+ * next starts, so one slow call delays the finished ones beside it, and a pool would
+ * not. The tradeoff buys an implementation short enough to read in one go and matching
+ * the guard loop the epoch already uses, and with comparable per-call latency the
+ * difference is noise. If the epoch ever spans providers with very different latency,
+ * this is the thing to revisit.
+ */
+async function mapChunked(items, size, mapper) {
+  if (!Number.isInteger(size) || size < 1) {
+    throw new TypeError(`mapChunked: size must be a positive integer, got ${size}`);
+  }
+  const out = [];
+  for (let i = 0; i < items.length; i += size) {
+    // mapper is called with the item alone. Passing it through Array.map directly would
+    // hand it a chunk-local index, which reads like a position in `items` and is not.
+    const done = await Promise.all(items.slice(i, i + size).map(item => mapper(item)));
+    for (const d of done) out.push(d);
+  }
+  return out;
+}
+
 module.exports = {
-  decideAction, decideCheckerAction, scoreDivergence,
+  decideAction, decideCheckerAction, scoreDivergence, mapChunked,
   epochIntervalError, divergenceToleranceError, MAX_TIMER_MS, MIN_EPOCH_MS,
   SCORE_FACTORS, DEFAULT_DIVERGENCE_TOLERANCE, MAX_DIVERGENCE_TOLERANCE,
 };
