@@ -371,9 +371,28 @@ test('distinctPayers: counts counterparties, not payments', () => {
   assert.equal(distinctPayers(ev, H90, NOW), 2);
 });
 
-test('readConfig: maxPerPayer defaults to 5 and 0 disables it', () => {
-  assert.equal(readConfig({}).maxPerPayer, 5);
+test('readConfig: maxPerPayer defaults to 4 and 0 disables it', () => {
+  // 4, not 5, since 21 Sep 2026. With MAX_FEE_SCORE at 20 this is the number of
+  // points one counterparty can contribute, so it sets how many distinct payers a
+  // ring needs to saturate the fee factor: five at 4, four at 5.
+  assert.equal(readConfig({}).maxPerPayer, 4);
   assert.equal(readConfig({ PAYMENT_MAX_PER_PAYER: '0' }).maxPerPayer, 0);
+});
+
+test('a ring needs five distinct payers to max the fee factor', () => {
+  // The property the default exists for, asserted directly rather than left to a
+  // comment. A comment claiming six is what went stale when the cap moved.
+  const cfg = readConfig({ PAYMENT_VERIFICATION: 'required', PAYMENT_ASSET: ASSET });
+  const now = Date.now();
+  const scoreFor = (n) => {
+    const ev = [];
+    for (let i = 0; i < n; i++) {
+      ev.push({ txHash: '0x' + i, ts: now, amount: (10000n * 1000000n).toString(), payer: '0xp' + i, success: true });
+    }
+    return feeScoreFromVolume(diversifiedVolume(ev, cfg, now, null), cfg.feeUnit);
+  };
+  assert.equal(scoreFor(4), 16, 'four payers fall short of the cap');
+  assert.equal(scoreFor(5), 20, 'five reach it');
 });
 
 // ---- web of trust ----------------------------------------------------------

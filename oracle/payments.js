@@ -76,14 +76,20 @@ function readConfig(env = process.env) {
     // of feeScore, and this many attestations of weight. Volume from a single
     // payer is otherwise indistinguishable from volume from a hundred, which is
     // what makes a small ring of wallets as good as a real customer base. At the
-    // default of 5, reaching the 20-point cap needs at least four distinct payers.
+    // default of 4, reaching the 20-point cap needs at least five distinct payers.
     //
-    // It needed six when the cap was 30. Lowering MAX_FEE_SCORE to 20 on 20 Sep
-    // made the factor worth less and also made it cheaper to saturate, because the
-    // per-payer cap did not move with it. Raise maxPerPayer's denominator, or lower
-    // maxPerPayer, if six was the number that mattered.
+    // It was 5, needing four payers, and before the 20 Sep reweight it needed six:
+    // MAX_FEE_SCORE fell from 30 to 20 and the per-payer cap did not move with it,
+    // so the factor became both worth less and cheaper to saturate. Nothing ties the
+    // two together, which is why it went unnoticed until a stale comment claiming
+    // "six" was read back off a screen.
+    //
+    // Five and not six because no integer gives six against a 20-point cap: 4 needs
+    // five payers, 3 needs seven. Measured rather than derived, with 10,000 USDC
+    // from each payer the scores run 4, 8, 12, 16, 20 as payers are added. If six is
+    // a hard floor, set this to 3 and accept seven.
     // 0 disables the cap.
-    maxPerPayer: Number(env.PAYMENT_MAX_PER_PAYER ?? 5),
+    maxPerPayer: Number(env.PAYMENT_MAX_PER_PAYER ?? 4),
     // Web of trust. A counterparty that is itself a scored Sigvara agent is better
     // evidence than an anonymous wallet, so its cap is raised in proportion to its
     // own score: at the default of 1.0 a perfectly scored counterparty counts double.
