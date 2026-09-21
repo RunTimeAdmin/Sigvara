@@ -38,6 +38,14 @@ import "../src/SVRToken.sol";
  *   MATURITY_RATE_PER_DAY  — points of score released per day (default: 4, so 100 takes 25 days)
  */
 contract Deploy is Script {
+    /// 1,000 whole units of an 18-decimal bond token.
+    ///
+    /// The decimals are the token’s, not a constant of the protocol. Arc USDC has 6,
+    /// so 1,000 USDC is 1_000e6 and deploying against it with this value would set the
+    /// minimum stake to a quadrillion dollars and lock every agent out of bonding. The
+    /// bond token is fixed at initialize with no setter, so that mistake is a
+    /// redeployment rather than a fix. Override MINIMUM_STAKE when the bond is not an
+    /// 18-decimal token.
     uint256 constant DEFAULT_MINIMUM_STAKE = 1_000e18;
     uint256 constant DEFAULT_CHALLENGE_PERIOD = 7 days;
     uint256 constant DEFAULT_SCORE_CHALLENGE_WINDOW = 6 hours;

@@ -589,6 +589,14 @@ cast call <oracleBond proxy> "isActiveOperator(address)(bool)" <operator> --rpc-
 - [ ] `deployments/5042002.json` committed
 - [ ] oracle `.env` pointed at Arc, `ORACLE_ROLE` confirmed, first epoch scored
 - [ ] SDK integration tests green against Arc
-- [ ] verify whether native USDC exposes a usable `IERC20` for bonds (address, decimals)
+- [x] verify whether native USDC exposes a usable `IERC20` for bonds (address, decimals)
+      — **it does.** `0x3600000000000000000000000000000000000000`, symbol USDC,
+      **6 decimals**, real code, standard Transfer events. Confirmed on testnet
+      21 Sep 2026. Note the decimals: every amount in the deployed contracts is
+      sized for an 18-decimal token (`minimumStake` is `1e21`, `bondAmount`
+      `25000e18`), so pointing a bond at USDC without resizing makes the minimum
+      stake a quadrillion dollars and nobody can ever bond. The bond token is set
+      at `initialize` with no setter, so this is a redeployment or a migration,
+      not a config change.
 - [ ] mainnet `bondAmount` and `minimumStake` set per [token.md](token.md#mainnet-parameters),
       not left at the `Deploy.s.sol` testnet defaults
