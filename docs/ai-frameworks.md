@@ -2,6 +2,20 @@
 
 This guide shows how to add Sigvara identity to agents built with common AI frameworks. The pattern is the same in every framework: generate a DID at startup, sign challenges when asked to authenticate, and include `agent_did` in every audit call.
 
+> **There is no Python SDK.** Three of the four sections below are Python and import
+> `sigvara`, a package that is not published and does not exist. They are **pseudocode
+> showing the shape of the integration**, not code that runs. Only the
+> [TypeScript section](#typescript--nodejs-framework-agnostic) uses a real package,
+> [`@sigvara/protocol-sdk`](https://www.npmjs.com/package/@sigvara/protocol-sdk).
+>
+> This was not flagged here until an outside review pointed out that the guide presents
+> Python as first-class across four frameworks while shipping no way to do it. Until a
+> Python SDK exists, a Python agent has two honest options: call the oracle's HTTP API
+> directly (`/score`, `/evidence`, `POST /attest` — see
+> [oracle/README.md](../oracle/README.md)), which needs no SDK at all, or run the
+> TypeScript SDK in a sidecar. The HTTP route is the one to reach for: every read in
+> these examples is a plain GET.
+
 ---
 
 ## LangChain (Python)
@@ -64,12 +78,15 @@ from sigvara import SigvaraVerifier
 
 verifier = SigvaraVerifier.from_env()
 
-def run_agent_if_trusted(agent_did: str, task: str, min_score: int = 40) -> str:
+def run_agent_if_trusted(executor, agent_did: str, task: str, min_score: int = 40) -> str:
+    """`executor` is your AgentExecutor. It was an undefined `langchain_agent` here
+    until an outside review caught it, which is the hazard of pseudocode that reads like
+    a working snippet."""
     if not verifier.meets_threshold(agent_did, min_score):
         raise PermissionError(
             f"Agent {agent_did} does not meet minimum reputation score of {min_score}"
         )
-    return langchain_agent.run(task)
+    return executor.run(task)
 ```
 
 ---

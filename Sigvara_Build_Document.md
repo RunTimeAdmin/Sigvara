@@ -350,4 +350,4 @@ async function handleAgentRequest(request) {
 ---
 **Document Status:** DRAFT v1.0  
 **Target Audience:** Protocol Architects, Senior Smart Contract Engineers  
-**Classification:** Internal Build Specification
+**Classification:** Public. This lives in a public repository and always has; the "internal" label was inherited from the document it was drafted as and described nothing about how it was published.

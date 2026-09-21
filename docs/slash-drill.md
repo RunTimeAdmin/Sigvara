@@ -3,7 +3,7 @@
 Executing one slash in public, end to end, on Arc testnet, and publishing what happened.
 
 Sigvara's claim is that reputation carries weight because misbehaviour costs capital. The
-contracts implement that and 246 tests cover it, but nobody has ever watched a bond
+contracts implement that and the contract suite covers it, but nobody has ever watched a bond
 actually get taken. Until they have, the consequence half of the protocol is an assertion.
 This closes that.
 

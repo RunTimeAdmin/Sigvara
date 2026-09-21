@@ -548,7 +548,7 @@ charged. The app disables every fee control rather than pointing at an address w
 code.
 
 **Test coverage**, all passing: 258 contract tests across 13 Foundry suites including
-fuzz and invariant tests (2 skipped), 314 oracle tests, plus the SDK suite. CI runs Foundry, the oracle and
+fuzz and invariant tests (2 skipped), 356 oracle tests and 91 in the SDK. CI runs Foundry, the oracle and
 SDK suites, and Slither static analysis on every push, plus a documentation check that
 fails when the site states something the contracts do not.
 
