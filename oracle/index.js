@@ -11,7 +11,7 @@ const {
   epochIntervalError, divergenceToleranceError, DEFAULT_DIVERGENCE_TOLERANCE,
   mapChunked,
 } = require('./epoch-policy');
-const { json, readBody, readCredentials, identifyCaller, mayAttestUnauthenticated, parseScorePath, rateLimited, clientKey, adminTokenPolicyError } = require('./http-helpers');
+const { json, readBody, readCredentials, identifyCaller, mayAttestUnauthenticated, parseScorePath, rateLimited, clientKey, adminTokenPolicyError, runningCommit } = require('./http-helpers');
 const payments = require('./payments');
 const merkle = require('./merkle');
 const metrics = require('./metrics');
@@ -725,6 +725,7 @@ const server = http.createServer(async (req, res) => {
       statePath: getStatePath(),
       attestCooldownMs: ATTEST_COOLDOWN_MS,
       epochRunning,
+      commit: runningCommit(),
     });
   }
 

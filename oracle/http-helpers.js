@@ -210,6 +210,32 @@ function adminTokenPolicyError(host, credentials) {
   return `no write credentials are configured but HOST=${host} is not loopback; refusing to expose unauthenticated write endpoints. Set ORACLE_ADMIN_TOKEN or an ORACLE_TOKEN_<NAME> (openssl rand -hex 32), or bind to 127.0.0.1.`;
 }
 
+/**
+ * The commit this process is running, or null when it was not told.
+ *
+ * Deployments clone `main` inside the container at start, so "which code is this
+ * operator running" had no answer from outside. During the reweight skew it was a live
+ * question and could only be settled by inference: the container restarted, main was at
+ * such-and-such, therefore it must be running that. Sound reasoning, not verification,
+ * and the first thing worth ruling out when two oracles disagree is that they are
+ * running different scoring code.
+ *
+ * **This is not a trust anchor.** The value is whatever the operator's container put in
+ * an environment variable, so a dishonest one can print anything. It catches accident,
+ * which is the failure that actually happens: a box that missed a deploy, a container
+ * pinned to a stale image, two operators a few commits apart. For anything adversarial
+ * the evidence endpoints are the answer, because those can be recomputed against the
+ * chain and this cannot.
+ *
+ * Shape-checked to 40 hex so a failed `git rev-parse` publishes null rather than its
+ * own error text, and null is reported explicitly rather than omitted so "does not say"
+ * stays distinguishable from "too old to have the field".
+ */
+function runningCommit(env = process.env) {
+  const raw = String(env.SIGVARA_COMMIT ?? '').trim();
+  return /^[0-9a-f]{40}$/.test(raw) ? raw : null;
+}
+
 module.exports = {
   adminTokenPolicyError,
   clientKey,
@@ -224,4 +250,5 @@ module.exports = {
   parseScorePath,
   rateLimited,
   rateBucketCount,
+  runningCommit,
 };

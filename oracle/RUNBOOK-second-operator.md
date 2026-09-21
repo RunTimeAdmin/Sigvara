@@ -399,6 +399,30 @@ RPC=https://rpc.testnet.arc.io
 REP=0x6603C96275e85F724Cdf74666b399365e4cA29ed
 ```
 
+**0. Are they even running the same code?** The cheapest question, and it was
+unanswerable until `/health` started reporting a commit.
+
+```bash
+for U in https://oracle.sigvara.xyz https://checker.sigvara.xyz; do
+  printf "%-32s " "$U"
+  curl -sf $U/health | grep -o '"commit":[^,}]*'
+done
+```
+
+Different commits do not by themselves explain a divergence, and matching ones do not
+clear anyone. What they tell you is which explanation to rule out first. The 20:31 entry
+below was partly a reweight skew, two oracles applying different factor caps to the same
+evidence, and that took a while to see precisely because there was no way to ask this.
+
+`"commit":null` means the operator does not report one, which is the honest answer for a
+deployment that predates this or was built another way. It is not evidence of anything.
+
+**Do not treat a reported commit as proof.** It is whatever that operator's container put
+in an environment variable. A dishonest operator prints whatever it likes, and nothing
+here is verified against the code actually executing. It catches the failure that
+actually happens, which is a box that missed a deploy. For adversarial questions the
+evidence endpoints are the answer, because those recompute against the chain.
+
 **1. Read the record.** `factors` names the factor that moved, which usually names the
 cause.
 
@@ -577,6 +601,7 @@ Then prove the surface is what you think it is, rather than assuming:
 ```bash
 DID=<a didHash this checker has scored>
 
+# /health now carries "commit": the sha the container cloned, or null.
 for P in /health /divergence /divergence/$DID /evidence/$DID; do
   printf "%-22s %s\n" "$P" "$(curl -s -o /dev/null -w '%{http_code}' https://checker.<domain>$P)"
 done

@@ -40,6 +40,12 @@ services:
         set -e
         apk add --no-cache git >/dev/null
         rm -rf /src && git clone --depth 1 --branch main https://github.com/RunTimeAdmin/Sigvara.git /src
+        # What got cloned, so /health can say which code is running. Reported, never
+        # trusted: an operator's container can print anything here. It catches a box
+        # that missed a deploy, which is the failure that actually happens.
+        SIGVARA_COMMIT=$$(git -C /src rev-parse HEAD)
+        export SIGVARA_COMMIT
+        echo "[deploy] running $$SIGVARA_COMMIT"
         cp /src/oracle/*.js /src/oracle/package.json /src/oracle/package-lock.json /app/
         rm -f /app/*.test.js
         # npm ci, not install: install resolves a fresh dependency graph on every

@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
-const { readBody, readCredentials, identifyCaller, mayAttestUnauthenticated, parseScorePath, rateLimited, RATE_MAX, RATE_WINDOW_MS, clientKey, adminTokenPolicyError, rateBucketCount } = require('./http-helpers');
+const { readBody, readCredentials, identifyCaller, mayAttestUnauthenticated, parseScorePath, rateLimited, RATE_MAX, RATE_WINDOW_MS, clientKey, adminTokenPolicyError, rateBucketCount, runningCommit } = require('./http-helpers');
 
 // Minimal fake matching the subset of http.IncomingMessage that readBody uses:
 // an EventEmitter with data/end/error events plus a destroy() method.
@@ -355,4 +355,43 @@ test('mayAttestUnauthenticated: paymentsRequired must be exactly true', () => {
   assert.equal(mayAttestUnauthenticated(true, 'required'), false);
   assert.equal(mayAttestUnauthenticated(true, 1), false);
   assert.equal(mayAttestUnauthenticated(true, {}), false);
+});
+
+// -------------------------------------------------------------------------
+// runningCommit
+// -------------------------------------------------------------------------
+
+test('runningCommit: reports a 40-hex sha', () => {
+  const sha = '8bddc60f1e2a3b4c5d6e7f8091a2b3c4d5e6f708';
+  assert.equal(runningCommit({ SIGVARA_COMMIT: sha }), sha);
+});
+
+test('runningCommit: null when the deployment did not say', () => {
+  // Explicitly null rather than absent, so an operator that does not report stays
+  // distinguishable from one too old to have the field at all.
+  assert.equal(runningCommit({}), null);
+  assert.equal(runningCommit({ SIGVARA_COMMIT: '' }), null);
+  assert.equal(runningCommit({ SIGVARA_COMMIT: '   ' }), null);
+});
+
+test('runningCommit: refuses anything that is not a sha', () => {
+  // The value comes from `git rev-parse HEAD` inside the container. When that fails it
+  // writes its complaint to the variable, and publishing "fatal: not a git repository"
+  // as this operator's version would be worse than publishing nothing.
+  const bad = [
+    'fatal: not a git repository',
+    '8bddc60',                                    // short sha
+    '8bddc60f1e2a3b4c5d6e7f8091a2b3c4d5e6f7089',  // 41
+    '8BDDC60F1E2A3B4C5D6E7F8091A2B3C4D5E6F708',   // upper
+    'main',
+    '$SIGVARA_COMMIT',                            // escaping went wrong in compose
+  ];
+  for (const v of bad) {
+    assert.equal(runningCommit({ SIGVARA_COMMIT: v }), null, `should reject: ${v}`);
+  }
+});
+
+test('runningCommit: tolerates surrounding whitespace from a captured command', () => {
+  const sha = '0123456789abcdef0123456789abcdef01234567';
+  assert.equal(runningCommit({ SIGVARA_COMMIT: `\n${sha}\n` }), sha);
 });
