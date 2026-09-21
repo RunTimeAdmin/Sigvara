@@ -32,9 +32,17 @@ const CANONICAL = join(SITE, '.htaccess');
 const show = (p) => p.split(sep).join('/');
 
 /**
- * A real policy, in any of the four formats this repo has used, is the header name
- * followed by a value containing `default-src`. Prose that merely mentions the header
- * does not match, which is what lets this file describe the problem it prevents.
+ * A file declares a policy when it names the header AND carries a real value.
+ *
+ * Matched in two parts rather than one, after both halves of one expression went wrong.
+ * Joining them means guessing the punctuation between name and value, which differs
+ * across Apache, Netlify, nginx and JSON. And the value class first excluded `'`, so
+ * the capture stopped dead at `'self'` and every directive afterwards read as missing:
+ * a false alarm that looks exactly like a policy which lost its directives. A checker
+ * whose failure mode is crying wolf on correct input is one that gets commented out.
+ *
+ * Prose naming the header does not match, because it carries no `default-src`. That is
+ * what lets the comment above quote the directives this file exists to forbid.
  */
 const NAMES = /Content-Security-Policy/i;
 const VALUE = /default-src[^"\n]*/i;
