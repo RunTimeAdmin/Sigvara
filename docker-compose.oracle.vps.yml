@@ -1,0 +1,70 @@
+# The primary oracle, shaped for a bare VPS.
+#
+# Use THIS file when the box has no repository checkout, which is how the primary is
+# actually deployed. docker-compose.oracle.yml builds from ./oracle and needs a working
+# tree; this one clones `main` in the container, so deploying a code change is
+# `docker compose restart` and nothing else.
+#
+# This file existed only on the host until 21 Sep 2026. The repo carried
+# docker-compose.oracle.yml, which builds an image and is not what runs, so the artifact
+# in production had no reviewed source and drifted from the checker: when the checker
+# moved to `npm ci`, the primary was left on `npm install` and nobody could see it by
+# reading the repo. Keep the two files in step, and change them here rather than on the
+# box.
+#
+# On the host this is installed as /docker/sigvara-oracle/docker-compose.yml, the name
+# compose looks for by default, so no -f is needed there. The checker keeps its repo
+# filename instead and does need one; the two boxes differ and the runbook says so.
+#
+#   cd /docker/sigvara-oracle && docker compose -p sigvara-oracle up -d
+services:
+  oracle:
+    image: node:20-alpine
+    container_name: sigvara-oracle
+    restart: unless-stopped
+    working_dir: /app
+    env_file:
+      - .env
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        apk add --no-cache git >/dev/null
+        rm -rf /src && git clone --depth 1 --branch main https://github.com/RunTimeAdmin/Sigvara.git /src
+        # What got cloned, so /health can say which code is running. Reported, never
+        # trusted: an operator's container can print anything here. It catches a box
+        # that missed a deploy, which is the failure that actually happens.
+        SIGVARA_COMMIT=$$(git -C /src rev-parse HEAD)
+        export SIGVARA_COMMIT
+        echo "[deploy] running $$SIGVARA_COMMIT"
+        cp /src/oracle/*.js /src/oracle/package.json /src/oracle/package-lock.json /app/
+        rm -f /app/*.test.js
+        # npm ci, not install: install resolves a fresh dependency graph on every
+        # container start and is free to pick versions nobody tested, which made the
+        # running oracles the one artifact in the pipeline not built from the reviewed
+        # tree. ci installs exactly the committed lockfile and fails loudly if the two
+        # have drifted.
+        npm ci --omit=dev --no-audit --no-fund
+        exec node index.js
+    ports:
+      # Loopback only. The public surface is whatever terminates TLS on the box.
+      - "127.0.0.1:3030:3030"
+    networks:
+      - default
+      # Shared with CounterAudit so it can reach the oracle without a host port.
+      - sigvara-web
+    volumes:
+      # oracle_state holds paymentEvents, which a rescan cannot rebuild: attestations
+      # arrive over HTTP, not from the chain. Losing this volume means re-seeding every
+      # settlement by hand, so it outlives container recreates on purpose.
+      - oracle_state:/data
+      - oracle_app:/app
+
+volumes:
+  oracle_state:
+  oracle_app:
+
+networks:
+  sigvara-web:
+    external: true
