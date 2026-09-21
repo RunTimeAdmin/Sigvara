@@ -44,6 +44,15 @@ oracle.sigvara.xyz {
 		path /health
 		path /score/*
 		path /evidence/*
+		# The badge is loaded from pages this operator does not control. It rides the
+		# same block as the other reads because the two headers set below are harmless
+		# to it: an <img> needs no CORS, so the pinned Allow-Origin costs nothing, and
+		# the shorter Cache-Control only sends more requests at the oracle's own cache.
+		#
+		# Cross-Origin-Resource-Policy is the header that actually matters, and it is
+		# not set here, so the oracle's own `cross-origin` reaches the browser. Setting
+		# one here would break the badge everywhere it is meant to work.
+		path /badge/*
 	}
 
 	# /attest is published too, but only POST. Publishing the path does not open the
@@ -54,31 +63,6 @@ oracle.sigvara.xyz {
 	@attest {
 		path /attest
 		method POST OPTIONS
-	}
-
-	# The score badge, which is the one endpoint whose whole purpose is to be loaded
-	# from pages this operator does not control. It gets its own block rather than
-	# joining @public, because @public pins Access-Control-Allow-Origin to this site's
-	# own origin and overrides Cache-Control. Both are right for the JSON read paths
-	# and wrong for an image meant to be embedded anywhere.
-	@badge {
-		path /badge/*
-	}
-
-	handle @badge {
-		header Access-Control-Allow-Origin "*"
-		header Access-Control-Allow-Methods "GET, OPTIONS"
-		header Vary "Origin"
-
-		# No Cache-Control here on purpose. The oracle sets its own, and it shortens the
-		# lifetime when the chain could not be read so a transient failure is not pinned
-		# into every CDN for five minutes. Setting one here would replace that with a
-		# fixed number that cannot tell the two cases apart.
-		#
-		# Cross-Origin-Resource-Policy comes from the oracle too, and has to survive:
-		# without it a browser enforcing CORP refuses the image and the badge shows as
-		# broken on exactly the third-party pages it exists for.
-		reverse_proxy sigvara-oracle:3030
 	}
 
 	handle @attest {
