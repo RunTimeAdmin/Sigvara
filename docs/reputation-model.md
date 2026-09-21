@@ -189,14 +189,33 @@ measures the breadth of who will vouch for an agent, not the size of the cheques
 Two properties make it worth having rather than dangerous.
 
 **It cannot be bootstrapped.** A ring of fresh identities all score zero and so grant
-each other nothing. Someone who stands up five Sybils gains no inherited trust from
-them until each has independently earned a score, which needs its own bond, its own
-diverse payers and its own tenure. Collusion has to start from real standing rather
-than manufacture it.
+each other nothing. Collusion has to start from real standing rather than manufacture
+it.
 
-**It is damped against reflexivity.** The scores read are the matured ones, which lag
-what has just been earned, so a reciprocal pair cannot lift each other inside one
-epoch. Unknown counterparties and unreachable nodes both read as zero, because no
+**Only the external part of a counterparty's score is inherited**, and this is
+stronger than it first reads. What propagates is `min(externalScore, matured total)`,
+not the total. A counterparty with an excellent fee, success and tenure score and no
+ERC-8004 standing vouches for **nothing at all**.
+
+The reason is that everything except `externalScore` can be manufactured by the party
+being scored. Inheriting a total let a farmed score launder into someone else's: a
+Sybil that wash-traded its way to 100 both raised its target's per-payer cap and
+counted as a fully trusted voucher, measured as scored Sybils maxing the fee factor
+with four payers instead of six. `externalScore` is the one factor a single party
+cannot mint, because it is standing in a registry this protocol does not control.
+
+**The network-level consequence.** Propagation is therefore gated on ERC-8004 adoption,
+not on Sigvara activity. Until counterparties hold external standing, this factor is 0
+for every agent however many people pay it, and the 25 external points and the 5
+propagation points are one dependency rather than two independent gaps. On a network
+with no linked agents the reachable ceiling is 70 of 100, which is the number to set a
+threshold against. That is the design working as intended, not a defect, but it is not
+visible from either call site and is easy to mistake for a bug.
+
+**It is damped against reflexivity.** The matured total caps what is inherited, and
+maturity lags what has just been earned, so a reciprocal pair cannot lift each other
+inside one epoch and a linked 8004 history cannot be propagated the same epoch it is
+linked. Unknown counterparties and unreachable nodes both read as zero, because no
 evidence of standing and no ability to check are the same thing as far as granting a
 bonus goes.
 

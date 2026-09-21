@@ -566,3 +566,77 @@ test('isSlotTaken: a real failure is not mistaken for a lost race', () => {
   assert.equal(chain.isSlotTaken(null), false);
   assert.equal(chain.isSlotTaken(undefined), false);
 });
+
+// -------------------------------------------------------------------------
+// getAgentScore — counterparty standing, and why it is not the total
+//
+// This feeds two things: the per-payer cap in diversifiedVolume, and
+// propagationScore. It had no tests, and it carries the anti-laundering property
+// the whole web of trust rests on.
+//
+// Returning a counterparty's TOTAL would let a farmed score launder into someone
+// else's: a sybil that wash-traded to 100 would raise its target's per-payer cap and
+// count as a fully trusted voucher. The code comment records that measured as scored
+// sybils maxing the fee factor with four payers instead of six. So it returns the
+// HARD part only, externalScore, which is standing in a registry this protocol does
+// not control and a single party cannot manufacture.
+//
+// The consequence is worth stating plainly, because it is not obvious from either
+// call site: propagationScore is gated on counterparties having ERC-8004 standing.
+// Until that exists anywhere in the network, propagation is 0 for every agent no
+// matter how many counterparties it has. The 25 external points and the 5 propagation
+// points are one dependency, not two independent gaps.
+// -------------------------------------------------------------------------
+
+function makeStandingContracts({ registeredAt = 1, status = 0, externalScore = 0, total = 0 } = {}) {
+  return {
+    identityContract: {
+      computeDidHash: async () => '0xdeadbeef',
+      getIdentity: async () => ({ registeredAt: BigInt(registeredAt), status }),
+    },
+    reputationContract: {
+      getReputation: async () => ({ externalScore: BigInt(externalScore) }),
+      getTotalScore: async () => BigInt(total),
+    },
+  };
+}
+
+test('getAgentScore: returns the external part, not the total', async () => {
+  // The laundering guard. A counterparty sitting on 100 points of self-generated
+  // volume vouches for nothing.
+  chain.init(CFG, { provider: makeFakeProvider(1), ...makeStandingContracts({ externalScore: 0, total: 100 }) });
+  assert.equal(await chain.getAgentScore('0xPayer'), 0);
+});
+
+test('getAgentScore: external standing counts, up to the matured total', async () => {
+  chain.init(CFG, { provider: makeFakeProvider(1), ...makeStandingContracts({ externalScore: 20, total: 60 }) });
+  assert.equal(await chain.getAgentScore('0xPayer'), 20);
+});
+
+test('getAgentScore: capped by the matured total, so linked standing is not instantly spendable', async () => {
+  // An identity cannot link an 8004 history and propagate it the same epoch: maturity
+  // still applies, and a handover restarts it.
+  chain.init(CFG, { provider: makeFakeProvider(1), ...makeStandingContracts({ externalScore: 25, total: 4 }) });
+  assert.equal(await chain.getAgentScore('0xPayer'), 4);
+});
+
+test('getAgentScore: an unregistered counterparty has no standing', async () => {
+  chain.init(CFG, { provider: makeFakeProvider(1), ...makeStandingContracts({ registeredAt: 0, externalScore: 25, total: 90 }) });
+  assert.equal(await chain.getAgentScore('0xStranger'), 0);
+});
+
+test('getAgentScore: a slashed counterparty has no standing', async () => {
+  chain.init(CFG, { provider: makeFakeProvider(1), ...makeStandingContracts({ status: chain.STATUS_SLASHED, externalScore: 25, total: 90 }) });
+  assert.equal(await chain.getAgentScore('0xSlashed'), 0);
+});
+
+test('getAgentScore: an unreachable counterparty reads as no standing, never throws', async () => {
+  // payerScoresFor awaits these together and relies on them not rejecting: one
+  // unreachable payer must cost a factor, not the epoch.
+  chain.init(CFG, {
+    provider: makeFakeProvider(1),
+    identityContract: { computeDidHash: async () => { throw new Error('rpc down'); }, getIdentity: async () => ({}) },
+    reputationContract: { getReputation: async () => ({}), getTotalScore: async () => 0n },
+  });
+  assert.equal(await chain.getAgentScore('0xUnreachable'), 0);
+});
