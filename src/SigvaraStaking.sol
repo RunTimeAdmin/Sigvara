@@ -105,6 +105,21 @@ contract SigvaraStaking is
     ///      leave the last withdrawer unable to claim. SVR is a plain fixed-supply ERC-20,
     ///      but this contract accepts any IERC20 at deploy and the README says as much, so
     ///      the requirement belongs where the assumption is made rather than in prose.
+    /**
+     * @notice The bond token. Set once at initialize and treated as a plain ERC20.
+     * @dev    Deposits credit the measured balance delta, so a fee-on-transfer token
+     *         is accounted correctly rather than over-credited. Two caveats remain for
+     *         anyone deploying with an unusual token:
+     *
+     *         - **Rebasing tokens are not supported.** Stake is stored as a fixed
+     *           amount, so a balance that changes on its own desynchronises from the
+     *           accounting in either direction and this contract cannot detect it.
+     *         - **Outbound transfers send the recorded amount.** With a fee-on-transfer
+     *           token a withdrawal or slash payout arrives smaller than the number in
+     *           the event. That shortfall lands on the recipient and does not affect
+     *           this contract's solvency, which is why it is documented rather than
+     *           compensated: paying out more than was debited would.
+     */
     IERC20 public svrToken;
     SigvaraIdentity public identityRegistry;
     IReputationZero public reputationRegistry;
@@ -251,8 +266,29 @@ contract SigvaraStaking is
         }
         if (id.operator != msg.sender) revert NotOperator(didHash, msg.sender);
 
+        // Credit what arrived, not what was asked for.
+        //
+        // A fee-on-transfer token delivers less than `amount`, and crediting `amount`
+        // would book stake this contract does not hold. Every deposit would widen the
+        // gap between `stakes[].amount` and the real balance until the last operators
+        // to withdraw found nothing there, and an agent could cross `minimumStake` on
+        // tokens it never actually transferred, which is the bond behind a slashable
+        // claim.
+        //
+        // `svrToken` is a plain `IERC20` set at initialize, so which token this is
+        // depends on the deployment. The token used on Arc testnet and the one planned
+        // for mainnet both transfer exactly, meaning this changes nothing for them.
+        // That is the argument for measuring rather than documenting a constraint: a
+        // requirement written in a README does not bind whoever deploys this next, and
+        // the failure it prevents is silent and unrecoverable.
+        //
+        // Two extra `balanceOf` calls. Cheap against the alternative of the accounting
+        // and the balance disagreeing.
+        uint256 balanceBefore = svrToken.balanceOf(address(this));
         svrToken.safeTransferFrom(msg.sender, address(this), amount);
-        stakes[didHash].amount += amount;
+        uint256 received = svrToken.balanceOf(address(this)) - balanceBefore;
+
+        stakes[didHash].amount += received;
         stakes[didHash].lockedAt = block.timestamp;
 
         // The bond is what activates a new agent. Only from PendingBond: an agent that
@@ -263,7 +299,9 @@ contract SigvaraStaking is
             identityRegistry.updateStatus(didHash, SigvaraIdentity.AgentStatus.Active);
         }
 
-        emit StakeDeposited(didHash, msg.sender, amount);
+        // The credited amount, which is what the stake actually grew by. For an exact
+        // token this is the amount requested.
+        emit StakeDeposited(didHash, msg.sender, received);
     }
 
     /**

@@ -192,6 +192,34 @@ buybacks, which pay for bonds out of 0.64% of buy volume and therefore need roug
 of cumulative buy volume for every $1 of bond. The review triggers above exist because
 the first honest thing to say about these figures is that they will be wrong later.
 
+## What the staking contract requires of a bond token
+
+`SigvaraStaking.svrToken` is a plain `IERC20` chosen at initialize, so this applies to
+any deployment, not just the ones described above.
+
+**Fee-on-transfer is handled, not merely disallowed.** `depositStake` records the
+measured balance delta rather than the amount requested, so a token that takes a cut in
+transit credits what actually arrived. This matters even though neither deployed token
+does it: crediting the requested amount would book stake the contract never received,
+the gap would widen with every deposit, and it would surface only when the last
+operators to withdraw found the balance short. An agent could also cross
+`minimumStake` on tokens it never transferred, and that bond is what backs a slashable
+claim. A requirement written in a document does not bind whoever deploys this next; two
+`balanceOf` calls do.
+
+**Rebasing tokens are not supported.** Stake is stored as a fixed amount. A balance that
+changes on its own drifts from the accounting in either direction, and nothing in the
+contract can detect it. Do not deploy with one.
+
+**Outbound transfers send the recorded amount.** With a fee-on-transfer token a
+withdrawal or a slash payout arrives smaller than the figure in the event. That
+shortfall falls on the recipient and does not threaten the contract's solvency, which is
+why it is documented rather than compensated: paying out more than was debited would
+create the very shortfall the deposit path exists to prevent.
+
+Covered by [`test/FeeOnTransfer.t.sol`](../test/FeeOnTransfer.t.sol), which deploys a
+real fee-taking token and asserts the booked stake never exceeds the tokens held.
+
 ## Impersonation
 
 Anyone can deploy a token called SVR or Sigvara on any launchpad. Before this
