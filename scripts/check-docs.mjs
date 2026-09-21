@@ -169,12 +169,46 @@ const banned = [
   ['pending deployment', 'the contracts are deployed; deployments/5042002.json is committed'],
   ['maxes at 95', 'all six factors are live, so the ceiling is 100'],
   ['totalFeesUSD', 'feeScore is base units over PAYMENT_FEE_UNIT, not a USD total'],
+  ['verifier.getTotalScore', 'not on the published SDK; use getReputation(did).total'],
 ];
 for (const f of docFiles()) {
   if (f.startsWith('archive')) continue;
   const text = read(f);
   for (const [needle, why] of banned) {
     if (text.includes(needle)) fail(f, `"${needle}" — ${why}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 5. SDK methods the website tells people to call.
+//
+//    site/docs/quickstart.html shipped a snippet calling verifier.getTotalScore(),
+//    which SigvaraVerifier did not have. Anyone following the guide got a TypeError
+//    on the line the guide said would print their score. Section 1 checks contract
+//    selectors and never looked at the SDK, so nothing caught it.
+//
+//    Checked against packages/sdk/src, which catches a typo or a removed method.
+//    It does NOT catch the case that actually happened, where the source has a
+//    method and the version on npm does not: the guide says `npm install` with no
+//    version, so what users get is whatever was published last. That gap is a
+//    release-process problem, and the banned-claims list above pins the one
+//    instance rather than pretending this section covers it.
+// ---------------------------------------------------------------------------
+const verifierSrc = read('packages/sdk/src/verifier.ts');
+const verifierMethods = new Set(
+  [...verifierSrc.matchAll(/^\s{2}(?:async\s+)?([a-zA-Z][\w]*)\s*\(/gm)].map(m => m[1]),
+);
+
+for (const f of docFiles()) {
+  if (!f.startsWith('site/')) continue;
+  const text = read(f);
+  // Snippets mark identifiers up, so the call reads
+  // verifier.<span class="fn">getIdentity</span>(
+  for (const m of text.matchAll(/verifier\.(?:<span class="fn">)?([a-zA-Z]\w*)/g)) {
+    const method = m[1];
+    if (!verifierMethods.has(method)) {
+      fail(f, `verifier.${method}() is not a method on SigvaraVerifier`);
+    }
   }
 }
 

@@ -95,6 +95,7 @@
         </table>
 
         <p>The token contract is Tolly's <code>TollyToken</code>, a plain OpenZeppelin ERC-20 with public source (<a href="https://github.com/TollyLabs/v3-contracts" target="_blank" rel="noopener">TollyLabs/v3-contracts</a>). It has no owner, no mint, no pause, no blacklist and no transfer tax. Its one deviation is an anti-snipe cap of 3% of supply per wallet for the first 300 seconds after launch, after which it is a vanilla ERC-20. That is exactly what the protocol contracts need from a bond asset: <code>SigvaraStaking</code>, <code>SigvaraOracleBond</code> and <code>SigvaraEpochFees</code> take the token by address at initialization and treat it as a plain <code>IERC20</code>.</p>
+        <p>Because the token is chosen at initialization rather than compiled in, <code>SigvaraStaking</code> does not assume it behaves. Deposits credit the <em>measured</em> balance change rather than the amount requested, so a token that takes a cut in transit is accounted for what actually arrived instead of booking stake the contract never received. Neither deployed token does that, which is the point: the guard is there for whoever deploys these contracts next. Rebasing tokens remain unsupported, since stake is stored as a fixed amount and a balance that moves on its own cannot be detected from inside the contract.</p>
 
         <h3>Addresses</h3>
         <table class="data-table">

@@ -127,14 +127,14 @@ const identity = await verifier.getIdentity(agent.did);
 console.log('Status:', identity.status);   // → Active
 console.log('Registered at block:', identity.registeredAt);
 
-const score = await verifier.getTotalScore(agent.did);
-console.log('Reputation score:', score);   // → 0 until the first epoch finalizes
+const { total } = await verifier.getReputation(agent.did);
+console.log('Reputation score:', total);   // → 0 until the first epoch finalizes
 ```
 
 Two reasons that reads 0 at first. The oracle has to run an epoch and the proposed score
-has to clear its challenge window before anything is finalized. And `getTotalScore`
-returns the *matured* score, which climbs toward the earned one over days rather than
-landing at once — `getEarnedScore` shows the raw figure. A freshly bonded agent with no
+has to clear its challenge window before anything is finalized. And `total` is the
+*matured* score, which climbs toward the earned one over days rather than landing at
+once — `getEarnedScore` on the contract shows the raw figure. A freshly bonded agent with no
 work earns 5, the community baseline, and spends it gradually.
 
 ## 7. Sign a challenge (agent-to-agent authentication)

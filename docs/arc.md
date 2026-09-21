@@ -98,6 +98,14 @@ The ERC-8004 external-score feed (`EXTERNAL_RPC`, `EXTERNAL_IDENTITY_ADDRESS`,
 `EXTERNAL_REPUTATION_ADDRESS`) is a separate read against Base Sepolia and does
 not depend on Arc. Leave it as-is.
 
+Both operators have had it configured since 21 September 2026, and `/health` reports
+`externalFeed: configured` so it can be checked from outside. It changes no score
+today: `externalScore` needs an agent linked to an ERC-8004 id whose NFT is held by
+the same wallet, and none is. `propagationScore` inherits only a counterparty's
+external standing, so it is 0 for the same reason, which puts the reachable ceiling at
+70 of 100 until linked agents exist. The reads are fail-safe: an unreachable Base
+Sepolia costs the factor, never the epoch.
+
 ### Where it runs
 
 The testnet oracle runs on a dedicated VPS as a Docker Compose project with

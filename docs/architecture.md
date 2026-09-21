@@ -55,8 +55,13 @@ The oracle recomputes every factor each epoch from observable data:
 - **ERC-8004 feedback** — for an agent linked to an ERC-8004 identity it owns,
   the oracle reads that agent's on-chain feedback and normalizes the rating
   dimensions it recognizes into the external-trust factor (`externalScore`).
-- **Counterparty standing** — the matured scores of the agents that paid, which
-  raise how much their evidence is worth and feed the propagation factor.
+- **Counterparty standing** — a payer's own `externalScore`, capped by its matured
+  total, which raises how much that payer's evidence is worth and feeds the
+  propagation factor. The external part only, not the total: everything else in a
+  score can be manufactured by the party being scored, so inheriting a total would
+  let a farmed score launder into someone else's. A consequence worth knowing is
+  that propagation stays 0 until counterparties hold ERC-8004 standing, however
+  well scored they otherwise are.
 - **Tenure** — the span between the agent's first and most recent verified
   payment, faded by how long ago that last one was. Deliberately not calendar
   age since registration: waiting is free, and trading is not.

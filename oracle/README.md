@@ -83,13 +83,29 @@ Health check with operational signals for production alerting.
   "storeWritable": true,
   "statePath": "/data/oracle-state.json",
   "attestCooldownMs": 3600000,
-  "epochRunning": false
+  "epochRunning": false,
+  "commit": "1f1456e3f6df0a625f0a107b84d4198f0a88f669",
+  "externalFeed": "configured"
 }
 ```
 
 Returns 503 when:
 - State file path is not writable (likely volume mount issue)
 - No successful epoch in the last 2× epoch interval (stale scoring)
+
+`commit` is the git revision the container cloned at start, or `null` when the
+deployment did not report one. It answers "are these two operators running the same
+scoring code", which is the first thing to rule out when a checker disagrees and was
+otherwise unanswerable from outside: the deployments clone `main` at container start,
+so the only alternative was inferring it from restart times. **It is not a trust
+anchor.** The value is whatever the operator's container put in an environment
+variable, so it catches a box that missed a deploy, not a dishonest operator. Anything
+adversarial belongs to `/evidence`, which recomputes against the chain.
+
+`externalFeed` is `configured` or `disabled`, and exists because `externalScore`
+renders 0 in three unrelated situations: `EXTERNAL_*` was never set, the agent is not
+linked to an ERC-8004 id, or it is linked with no feedback in a recognized tag. Those
+need different responses and the score cannot tell them apart.
 
 ### `GET /metrics`
 
@@ -108,6 +124,22 @@ sigvara_oracle_epochs_total{status="failed"} 1
 
 # ... and more (propose, finalize, attest, flags, links, rate limits)
 ```
+
+Also exposed, and worth knowing about:
+
+| series | what it answers |
+|---|---|
+| `sigvara_oracle_checker_comparisons_total{verdict}` | how many pending scores this checker re-measured, and how many it disagreed with. Zero on a primary, which never compares. |
+| `sigvara_oracle_propose_total{result="slot_taken"}` | `proposeIfEmpty` declining to overwrite a pending score. A normal race outcome, not a failure. |
+| `sigvara_oracle_propose_attempts_total`, `..._finalize_attempts_total` | attempts, so success + error + slot_taken can be reconciled rather than assumed to account for everything. |
+| `sigvara_oracle_proposals_rejected_total` | scores the slashing committee rejected. |
+| `sigvara_oracle_evidence_cache_total{result}` | `/evidence` responses served from cache against rebuilt. A miss hashes a Merkle tree over the agent's whole payment history and derives every proof, so the hit rate is the difference between a cheap endpoint and an expensive one. |
+
+The first four were incremented by the epoch for some time while being declared nowhere,
+and `metrics.inc()` ignores names it does not know. So they read zero throughout,
+including the checker's disagreement counter while it was disagreeing. A test now scans
+the source for every `metrics.inc`/`set` name and fails if one is undeclared, because
+a counter that silently reads zero is worse than one that is missing.
 
 Scrape at `/metrics` with Prometheus or compatible tools.
 

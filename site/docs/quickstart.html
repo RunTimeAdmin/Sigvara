@@ -162,9 +162,10 @@ console.log(<span class="str">'Bonded:'</span>, bond.txHash, bond.approveTxHash 
 <span class="kw">const</span> identity = <span class="kw">await</span> verifier.<span class="fn">getIdentity</span>(agent.did);
 console.log(identity.status);   <span class="cm">// → Active</span>
 
-<span class="kw">const</span> score = <span class="kw">await</span> verifier.<span class="fn">getTotalScore</span>(agent.did);
-console.log(score);             <span class="cm">// → 0 until the first epoch finalizes</span></code></pre>
-            <p class="u-muted-13">Two reasons that reads 0 at first. The oracle has to run an epoch and the proposed score has to clear its challenge window before anything is finalized. And <code>getTotalScore</code> returns the <em>matured</em> score, which climbs toward the earned one over days rather than landing at once — <code>getEarnedScore</code> shows the raw figure. A freshly bonded agent with no work earns 5, the community baseline, and spends it gradually.</p>
+<span class="kw">const</span> { total } = <span class="kw">await</span> verifier.<span class="fn">getReputation</span>(agent.did);
+console.log(total);             <span class="cm">// → 0 until the first epoch finalizes</span></code></pre>
+            <p class="u-muted-13">Two reasons that reads 0 at first. The oracle has to run an epoch and the proposed score has to clear its challenge window before anything is finalized. And <code>total</code> is the <em>matured</em> score, which climbs toward the earned one over days rather than landing at once — <code>getEarnedScore</code> on the contract shows the raw figure. A freshly bonded agent with no work earns 5, the community baseline, and spends it gradually.</p>
+            <p class="u-muted-13">This snippet previously called <code>getTotalScore</code> on the verifier, which the published SDK does not have: it went out as a plain <code>TypeError</code> for anyone following along. The method exists in the source now, but <code>getReputation</code> is used here because it works against the version actually on npm. The factor breakdown comes back in the same object.</p>
           </div>
         </div>
 

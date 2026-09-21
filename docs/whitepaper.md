@@ -171,17 +171,27 @@ score.
 | Age | 30 | Span between first and last paid activity, multiplied by recency. Not calendar age. An agent that traded for two years and stopped keeps very little. |
 | External | 25 | ERC-8004 feedback, for agents that have linked an 8004 identity they demonstrably own. |
 | Community | 5 | `max(0, 5 - 2 x flags)`, where flags decay on a half-life rather than lasting forever. |
-| Propagation | 5 | Breadth of counterparties that are themselves trusted. One point per fully-scored payer, pro-rated by that payer's score, each counting once however much it pays. |
+| Propagation | 5 | Breadth of counterparties that are themselves trusted. One point per fully trusted payer, pro-rated by that payer's *external* standing, each counting once however much it pays. |
 
 Two deliberate choices are worth naming.
 
 **Age is tenure, not enrolment.** Registering early and doing nothing earns zero. The
 quantity that cannot be shortcut is sustained paid operation, so that is what is measured.
 
-**Propagation uses matured scores.** A counterparty's contribution is computed from its
-finalized score, which lags what it has just earned. Two agents paying each other
-therefore cannot lift each other inside one epoch, which is the cheapest attack on any
-inherited-trust design.
+**Propagation inherits external standing only, damped by maturity.** A counterparty
+contributes `min(externalScore, matured total)`, not its total score. The cap means a
+contribution lags what has just been earned, so two agents paying each other cannot lift
+each other inside one epoch, which is the cheapest attack on any inherited-trust design.
+The choice of `externalScore` closes the more expensive one: every other factor can be
+manufactured by the party being scored, so inheriting a total would let a farmed score
+launder into someone else's, and a counterparty with excellent fee, success and tenure
+figures and no external standing therefore vouches for nothing.
+
+The cost of that is worth stating rather than discovering. Propagation is gated on
+adoption of ERC-8004 rather than on activity in this protocol, so on a network where no
+agent has linked an external identity both the external and propagation factors are 0
+for everyone, and the reachable ceiling is 70 of 100. A threshold should be set against
+that number, not against 100.
 
 A new agent ramps rather than starting at zero forever, and a slash resets everything.
 
