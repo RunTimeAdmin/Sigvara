@@ -188,8 +188,14 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
     /// Arc testnet proxy. Inserting this above it moved operatorBond down one slot,
     /// where it read zero, and zero is the "bonded-operator check disabled" mode: the
     /// upgrade would have quietly removed the requirement without reverting anything.
-    /// Caught by the fork rehearsal in test/VerifyUpgradeFork.t.sol. Anything added
-    /// here goes below this line.
+    /// Caught by a fork rehearsal: an upgrade replayed against the live Arc proxy
+    /// before broadcasting. Those live in test/Verify*.t.sol, which is gitignored
+    /// because each one is written for a specific upgrade, needs a live RPC and goes
+    /// stale the moment that upgrade ships. So there is no such file in a fresh clone,
+    /// and this comment used to name one as though there were. Write the rehearsal,
+    /// run it with --fork-url, then let it go.
+    ///
+    /// Anything added here goes below this line.
     mapping(bytes32 => bytes32) public evidenceRoots;
 
     // -------------------------------------------------------------------------
