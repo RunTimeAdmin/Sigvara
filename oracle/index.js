@@ -14,6 +14,7 @@ const {
 const { json, readBody, readCredentials, identifyCaller, mayAttestUnauthenticated, parseScorePath, rateLimited, clientKey, adminTokenPolicyError, runningCommit } = require('./http-helpers');
 const payments = require('./payments');
 const merkle = require('./merkle');
+const { createResponseCache } = require('./response-cache');
 const metrics = require('./metrics');
 
 // Verified-payment settings. Read once at startup so a malformed value fails the
@@ -690,6 +691,48 @@ async function runEpochInner() {
 
 // ---- HTTP API --------------------------------------------------------------
 
+// 32MB of serialized evidence responses. The revision token is the payment-event array
+// itself: the store replaces it on every change, so nothing has to remember to
+// invalidate this, and a case it somehow missed degrades to a cache miss rather than to
+// stale evidence.
+const evidenceCache = createResponseCache({ maxBytes: 32 * 1024 * 1024 });
+
+/**
+ * The /evidence body for an agent, as a JSON string.
+ *
+ * Built once per (agent, payment set). Everything here is a pure function of `events`,
+ * which is why it caches cleanly: the tree, every proof and the serialization are
+ * O(E log E) work that does not change until a payment is credited or pruned.
+ */
+function buildEvidenceBody(didHash, events) {
+  const tree = merkle.buildTree(events);
+  return JSON.stringify({
+    didHash,
+    evidenceRoot: tree.root,
+    count: events.length,
+    // Exactly what the root commits to, in leaf order, so nobody has to read this
+    // service's source to know which fields are covered. counterauditPacketId is
+    // deliberately absent: it identifies an independently timestamped record of the
+    // same work, which a verifier fetches and checks for themselves, and committing
+    // to it would have changed the leaf format and made roots already published on
+    // chain unreproducible.
+    committedFields: ['txHash', 'payer', 'amount', 'settledAt', 'success'],
+    // The leaf is derivable from the payment, so a verifier rebuilds it rather than
+    // trusting the one served here; it is included to make that comparison easy.
+    evidence: events.map((e, i) => ({
+      txHash: e.txHash ?? null,
+      payer: e.payer,
+      amount: e.amount,
+      settledAt: merkle.settledSeconds(e),
+      success: e.success,
+      leaf: tree.leaves[i],
+      proof: merkle.proofFor(tree, i),
+      // Corroboration, NOT part of the leaf. See committedFields above.
+      ...(e.packetId ? { counterauditPacketId: e.packetId } : {}),
+    })),
+  });
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${cfg.port}`);
   const { pathname } = url;
@@ -942,10 +985,12 @@ const server = http.createServer(async (req, res) => {
   // read off the chain, and the root can be compared with the one the reputation
   // contract holds. Deliberately unauthenticated, like /score: evidence nobody can
   // fetch is evidence nobody can audit.
+
   if (readMethod === 'GET' && pathname.startsWith('/evidence/')) {
-    // Unauthenticated does not mean unmetered. Every call rebuilds a Merkle tree over
+    // Unauthenticated does not mean unmetered. A cache miss rebuilds a Merkle tree over
     // the agent's payment history, so this is the most expensive thing a stranger can
-    // ask for once the read paths are proxied to the public internet.
+    // ask for once the read paths are proxied to the public internet. The cache below
+    // bounds repeat cost, not first-request cost, and the limiter still matters.
     if (rateLimited(clientKey(req))) {
       metrics.inc('rateLimitHits');
       return json(res, 429, { error: 'Rate limited' });
@@ -955,32 +1000,12 @@ const server = http.createServer(async (req, res) => {
       return json(res, 400, { error: 'didHash must be a 32-byte hex string' });
     }
     const events = getPaymentEvents(didHash);
-    const tree = merkle.buildTree(events);
-    return json(res, 200, {
-      didHash,
-      evidenceRoot: tree.root,
-      count: events.length,
-      // Exactly what the root commits to, in leaf order, so nobody has to read this
-      // service's source to know which fields are covered. counterauditPacketId is
-      // deliberately absent: it identifies an independently timestamped record of the
-      // same work, which a verifier fetches and checks for themselves, and committing
-      // to it would have changed the leaf format and made roots already published on
-      // chain unreproducible.
-      committedFields: ['txHash', 'payer', 'amount', 'settledAt', 'success'],
-      // The leaf is derivable from the payment, so a verifier rebuilds it rather than
-      // trusting the one served here; it is included to make that comparison easy.
-      evidence: events.map((e, i) => ({
-        txHash: e.txHash ?? null,
-        payer: e.payer,
-        amount: e.amount,
-        settledAt: merkle.settledSeconds(e),
-        success: e.success,
-        leaf: tree.leaves[i],
-        proof: merkle.proofFor(tree, i),
-        // Corroboration, NOT part of the leaf. See committedFields below.
-        ...(e.packetId ? { counterauditPacketId: e.packetId } : {}),
-      })),
-    });
+    const body = evidenceCache.get(didHash, events, () => buildEvidenceBody(didHash, events));
+
+    // Same bytes a miss would have produced, so a hit is indistinguishable to the
+    // caller. json() is not used because it would re-serialize what is already a string.
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end(body);
   }
 
   // POST /flag  — body: { didHash }

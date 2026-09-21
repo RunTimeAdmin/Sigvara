@@ -414,3 +414,46 @@ test('allDivergences: keyed by didHash for the whole-checker view', () => {
   assert.deepEqual(Object.keys(all), [DID_DIV]);
   assert.equal(all[DID_DIV].length, 1);
 });
+
+// -------------------------------------------------------------------------
+// Payment-event array identity
+//
+// /evidence caches its serialized response and uses the payment-event array itself as
+// the revision token: a cache entry is served only while getPaymentEvents returns the
+// very same array. That is safe precisely because this store never mutates a list in
+// place, and these tests exist so it stays that way.
+//
+// Switching creditPayment to `list.push(event)` would look like a harmless allocation
+// saving and would make /evidence serve a stale Merkle root and a stale payment list
+// for as long as the entry survived. On an endpoint whose whole purpose is letting a
+// third party check the operator, that is the worst bug available.
+// -------------------------------------------------------------------------
+
+test('creditPayment: replaces the event array rather than mutating it', () => {
+  const did = '0x' + 'e1'.repeat(32);
+  creditPayment(did, '0x' + 'd7'.repeat(32), 1_000n);
+  const before = getPaymentEvents(did);
+
+  creditPayment(did, '0x' + 'd8'.repeat(32), 2_000n);
+  const after = getPaymentEvents(did);
+
+  assert.notEqual(before, after, 'a credit must produce a new array identity');
+  assert.equal(before.length, 1, 'the array handed out earlier is left untouched');
+  assert.equal(after.length, 2);
+});
+
+test('prunePaymentEvents: replaces the array when it drops something, keeps identity when it does not', () => {
+  const did = '0x' + 'e2'.repeat(32);
+  const now = Date.now();
+  creditPayment(did, '0x' + 'd9'.repeat(32), 1_000n, undefined, true, now);
+  const fresh = getPaymentEvents(did);
+
+  // Nothing is old enough to drop: identity must survive, or every prune would
+  // needlessly invalidate every cached evidence response.
+  prunePaymentEvents(90 * 24 * 60 * 60 * 1000, 0.001, now);
+  assert.equal(getPaymentEvents(did), fresh, 'an empty prune keeps the same array');
+
+  // Now age it out. Dropping an event must change identity so the cache rebuilds.
+  prunePaymentEvents(1, 0.5, now + 1_000_000);
+  assert.notEqual(getPaymentEvents(did), fresh, 'a prune that drops must replace the array');
+});
