@@ -48,10 +48,25 @@ const head = async (n, t) => {
 };
 const kv = (k, v, colour = '') => say(`     ${k.padEnd(22)} ${colour}${v}${C.reset}`);
 
-/** Print the lines of a source file that do the thing being claimed. */
-function showSource(file, from, to, note) {
+/**
+ * Print a named function from a source file.
+ *
+ * Found by name, not by line number. It was by line number until editing a comment
+ * fifteen lines higher pushed the function down and the demo started displaying the
+ * config block instead, which would have gone out on camera as "the code that reads a
+ * payment". A demo that cites source has to find that source the way a reader would.
+ */
+function showFunction(file, fnName, note) {
   const abs = path.join(__dirname, file);
-  const lines = fs.readFileSync(abs, 'utf8').split('\n').slice(from - 1, to);
+  const all = fs.readFileSync(abs, 'utf8').split('\n');
+  const start = all.findIndex(l => l.startsWith(`function ${fnName}(`));
+  if (start === -1) throw new Error(`${fnName} not found in ${file} — has it been renamed?`);
+  // Closing brace of a top-level function: the next line that is exactly "}".
+  let end = start;
+  while (end < all.length && all[end] !== '}') end++;
+  const from = start + 1;
+  const to = end + 1;
+  const lines = all.slice(start, end + 1);
   say(`     ${C.dim}${file}:${from}-${to}${C.reset}`);
   say();
   lines.forEach((l, i) => say(`     ${C.dim}${String(from + i).padStart(3)}${C.reset}  ${l}`));
@@ -110,8 +125,8 @@ async function findRecentTransfer(provider) {
 
   // ---------------------------------------------------------------- 2
   await head(2, 'The code that reads a payment');
-  showSource(
-    'payments.js', 93, 111,
+  showFunction(
+    'payments.js', 'transfersTo',
     'Nothing here is USDC-specific. It matches the configured asset and reads the\n     standard Transfer topics, which is why settling in USDC is configuration.',
   );
   await pause(3);
