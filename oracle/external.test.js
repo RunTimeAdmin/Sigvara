@@ -3,6 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { computeExternalScore, MAX_EXTERNAL_SCORE } = require('./external');
+const external = require('./external');
 
 // ---- computeExternalScore (the pure normalization) -------------------------
 
@@ -53,4 +54,41 @@ test('externalScore: negative rating clamps to 0 contribution', () => {
     { value: 100, tag: 'quality' },
   ];
   assert.equal(computeExternalScore(rows), 13);
+});
+
+// -------------------------------------------------------------------------
+// configured()
+// -------------------------------------------------------------------------
+
+test('configured(): false until all three EXTERNAL_* values are present', () => {
+  // Partial config is the dangerous case. Two of three set looks configured to a
+  // reader of the env file and is inert at runtime, which is how externalScore can
+  // read 0 for every agent while the roadmap says the feature is live.
+  external.init({ externalRpc: '', externalIdentity: '', externalReputation: '' });
+  assert.equal(external.configured(), false);
+
+  external.init({
+    externalRpc: 'https://sepolia.base.org',
+    externalIdentity: '0x8004A818BFB912233c491871b3d84c89A494BD9e',
+    externalReputation: '',
+  });
+  assert.equal(external.configured(), false, 'two of three is not configured');
+
+  external.init({
+    externalRpc: 'https://sepolia.base.org',
+    externalIdentity: '0x8004A818BFB912233c491871b3d84c89A494BD9e',
+    externalReputation: '0x8004B663056A597Dffe9eCcC1965A193B7388713',
+  });
+  assert.equal(external.configured(), true);
+
+  // Leave the module inert for any test that runs after this one.
+  external.init({ externalRpc: '', externalIdentity: '', externalReputation: '' });
+});
+
+test('externalScoreFor: returns 0 and does not throw when unconfigured', () => {
+  // The fail-safe the epoch depends on: an unconfigured or unreachable external
+  // registry must cost a factor, never an epoch.
+  external.init({ externalRpc: '', externalIdentity: '', externalReputation: '' });
+  return external.externalScoreFor(1, '0x0000000000000000000000000000000000000001')
+    .then(v => assert.equal(v, 0));
 });

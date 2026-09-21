@@ -769,6 +769,14 @@ const server = http.createServer(async (req, res) => {
       attestCooldownMs: ATTEST_COOLDOWN_MS,
       epochRunning,
       commit: runningCommit(),
+      // Whether the ERC-8004 feed is wired at all.
+      //
+      // externalScore renders as 0 in three unrelated situations: the operator never
+      // configured EXTERNAL_*, the agent is not linked to an 8004 id, or it is linked
+      // and has no feedback this oracle recognizes. Those call for completely
+      // different responses and the score cannot tell them apart, so the first one is
+      // answered here instead of being guessed at.
+      externalFeed: external.configured() ? 'configured' : 'disabled',
     });
   }
 
