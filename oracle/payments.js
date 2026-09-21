@@ -59,8 +59,15 @@ function readConfig(env = process.env) {
     minAmount: BigInt(env.PAYMENT_MIN_AMOUNT || '0'),
     minConfirmations: Number(env.PAYMENT_MIN_CONFIRMATIONS || 1),
     // Base units of volume per point of feeScore. The default is 100 USDC per
-    // point, so the 30-point cap lands at 3,000 USDC of settled volume, which is
-    // the figure docs/reputation-model.md has always quoted for this factor.
+    // point, so the 20-point cap lands at 2,000 USDC of settled volume. It said
+    // 3,000 and a 30-point cap until 21 Sep 2026: the reweight the day before took
+    // MAX_FEE_SCORE from 30 to 20 and this was not followed through.
+    //
+    // 100 USDC per point is almost certainly too small once settlement is in real
+    // USDC rather than a faucet token. A single observed payment on Arc was 2,548
+    // USDC, which maxes the factor on its own, and a fee score that saturates on
+    // one invoice measures whether an agent has ever been paid rather than how much
+    // it trades. Recalibrate before switching PAYMENT_ASSET to USDC.
     feeUnit: BigInt(env.PAYMENT_FEE_UNIT || '100000000'),
     // Days after which a payment counts half. 0 disables decay, which makes a
     // score answer "was this agent ever busy" rather than "is it busy now".
@@ -69,7 +76,12 @@ function readConfig(env = process.env) {
     // of feeScore, and this many attestations of weight. Volume from a single
     // payer is otherwise indistinguishable from volume from a hundred, which is
     // what makes a small ring of wallets as good as a real customer base. At the
-    // default of 5, reaching the 30-point cap needs at least six distinct payers.
+    // default of 5, reaching the 20-point cap needs at least four distinct payers.
+    //
+    // It needed six when the cap was 30. Lowering MAX_FEE_SCORE to 20 on 20 Sep
+    // made the factor worth less and also made it cheaper to saturate, because the
+    // per-payer cap did not move with it. Raise maxPerPayer's denominator, or lower
+    // maxPerPayer, if six was the number that mattered.
     // 0 disables the cap.
     maxPerPayer: Number(env.PAYMENT_MAX_PER_PAYER ?? 5),
     // Web of trust. A counterparty that is itself a scored Sigvara agent is better
