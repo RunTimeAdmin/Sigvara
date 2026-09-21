@@ -289,6 +289,40 @@ async function verifyDidHashDerivation() {
   }
 }
 
+/**
+ * didHash for an address, derived locally once that derivation has been checked against
+ * the registry and asked of the chain until then.
+ *
+ * Same rule `getAgentScore` applies inline, exported because the badge endpoint needs it
+ * too and a second copy of "derive it locally if that is safe" is a second place for the
+ * two to drift apart.
+ */
+async function didHashFor(address) {
+  return localDidHash
+    ? didHashOf(address, localDidHash.chainId)
+    : identityContract.computeDidHash(address);
+}
+
+/**
+ * The finalized reputation tuple.
+ *
+ * `lastUpdated` is the reason this exists: it is 0 until a score is finalized, and it is
+ * the only thing separating an agent scored zero from one nobody has scored yet.
+ * `getTotalScore` returns 0 for both.
+ */
+async function getReputationData(didHash) {
+  const rep = await readWithBackoff('getReputation', () => reputationContract.getReputation(didHash));
+  return {
+    feeScore: Number(rep.feeScore),
+    successScore: Number(rep.successScore),
+    ageScore: Number(rep.ageScore),
+    externalScore: Number(rep.externalScore),
+    communityScore: Number(rep.communityScore),
+    propagationScore: Number(rep.propagationScore),
+    lastUpdated: Number(rep.lastUpdated),
+  };
+}
+
 async function getAgentScore(address) {
   try {
     // Was three serial round trips per counterparty. The first is now arithmetic when
@@ -489,6 +523,8 @@ module.exports = {
   reset,
   verifyDidHashDerivation,
   didHashOf,
+  didHashFor,
+  getReputationData,
   resetStakeViewCache,
   getRegisteredAgents,
   getAgentInfo,

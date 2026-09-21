@@ -29,6 +29,12 @@ const counters = {
   linksCreated: 0,
   scoreRpcErrors: 0,
   scoreErrors: 0,
+  // Badges are embedded on pages this oracle does not control, so request volume is
+  // set by an agent's audience. The hit ratio is the thing to watch: a falling one
+  // means the cache is being missed and every reader is costing two RPC calls.
+  badgeRequests: 0,
+  badgeCacheHits: 0,
+  badgeRpcErrors: 0,
   rateLimitHits: 0,
   httpRequests: 0,
 
@@ -184,6 +190,21 @@ function toPrometheusText(extra = {}) {
   lines.push('# HELP sigvara_oracle_score_errors_total /score failures that were not upstream, answered 500');
   lines.push('# TYPE sigvara_oracle_score_errors_total counter');
   lines.push(`sigvara_oracle_score_errors_total ${counters.scoreErrors}`);
+
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_badge_requests_total Badge SVG requests');
+  lines.push('# TYPE sigvara_oracle_badge_requests_total counter');
+  lines.push(`sigvara_oracle_badge_requests_total ${counters.badgeRequests}`);
+
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_badge_cache_hits_total Badge requests served without touching the chain');
+  lines.push('# TYPE sigvara_oracle_badge_cache_hits_total counter');
+  lines.push(`sigvara_oracle_badge_cache_hits_total ${counters.badgeCacheHits}`);
+
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_badge_rpc_errors_total Badge reads that could not reach the chain');
+  lines.push('# TYPE sigvara_oracle_badge_rpc_errors_total counter');
+  lines.push(`sigvara_oracle_badge_rpc_errors_total ${counters.badgeRpcErrors}`);
 
   lines.push('');
   lines.push('# HELP sigvara_oracle_rate_limit_hits_total Rate limit rejections');

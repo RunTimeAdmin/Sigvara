@@ -15,6 +15,7 @@ const { json, readBody, readCredentials, identifyCaller, mayAttestUnauthenticate
 const payments = require('./payments');
 const merkle = require('./merkle');
 const { createResponseCache } = require('./response-cache');
+const badge = require('./badge');
 const metrics = require('./metrics');
 
 // Verified-payment settings. Read once at startup so a malformed value fails the
@@ -697,6 +698,38 @@ async function runEpochInner() {
 // stale evidence.
 const evidenceCache = createResponseCache({ maxBytes: 32 * 1024 * 1024 });
 
+const badgeCache = badge.createBadgeCache({ ttlMs: 60_000, maxEntries: 500 });
+
+/**
+ * What an address's badge should say, read from the chain.
+ *
+ * Reports the FINALIZED score, not this oracle's preview. A badge is shown to strangers
+ * as a trust claim, so it carries the number that survived a challenge window rather
+ * than the number this operator would like to propose.
+ */
+async function readBadgeState(address) {
+  try {
+    const didHash = await chain.didHashFor(address);
+    const info = await chain.getAgentInfo(didHash);
+    if (!info.registeredAt) return { kind: 'unregistered' };
+    if (info.status === chain.STATUS_SLASHED) return { kind: 'slashed' };
+
+    // getTotalScore applies maturity, so it is not the sum of the factors and has to be
+    // read rather than derived. lastUpdated comes along to tell a genuine zero apart
+    // from an agent nobody has scored yet.
+    const [rep, score] = await Promise.all([
+      chain.getReputationData(didHash),
+      chain.getTotalScore(didHash),
+    ]);
+    if (!rep.lastUpdated) return { kind: 'unscored' };
+    return { kind: 'scored', score };
+  } catch (err) {
+    metrics.inc('badgeRpcErrors');
+    console.warn(`[oracle] /badge chain read failed for ${address}: ${err.message}`);
+    return { kind: 'unavailable' };
+  }
+}
+
 /**
  * The /evidence body for an agent, as a JSON string.
  *
@@ -1100,6 +1133,45 @@ const server = http.createServer(async (req, res) => {
     } catch (err) {
       return json(res, 400, { error: err.message });
     }
+  }
+
+  // GET /badge/<address>.svg — the embeddable score badge.
+  const badgeAddress = badge.parseBadgePath(pathname);
+  if (readMethod === 'GET' && badgeAddress) {
+    metrics.inc('badgeRequests');
+    const key = badgeAddress.toLowerCase();
+    let state = badgeCache.get(key);
+
+    if (state) {
+      metrics.inc('badgeCacheHits');
+    } else if (rateLimited(clientKey(req))) {
+      // The limiter guards the miss path only. One badge in a popular README is a
+      // single address fetched by thousands of readers, which the cache absorbs
+      // entirely; somebody walking the address space is thousands of addresses that
+      // all miss, and that is the traffic worth refusing.
+      metrics.inc('rateLimitHits');
+      state = { kind: 'unavailable' };
+    } else {
+      state = await readBadgeState(badgeAddress);
+      // An unreadable chain is this oracle's problem and should clear by itself rather
+      // than being pinned into the cache for the full five minutes.
+      badgeCache.set(key, state, state.kind === 'unavailable' ? 15_000 : 60_000);
+    }
+
+    // 200 for every state that renders, including "not registered". An error status
+    // here paints a broken image on somebody else's page, which reads as "this
+    // protocol is broken" rather than "this address has no agent".
+    res.writeHead(200, {
+      'Content-Type': 'image/svg+xml; charset=utf-8',
+      'Cache-Control': state.kind === 'unavailable'
+        ? 'public, max-age=15'
+        : 'public, max-age=300, stale-while-revalidate=600',
+      // The whole point of the endpoint is being loaded from other origins, and a
+      // browser enforcing CORP refuses it without this.
+      'Cross-Origin-Resource-Policy': 'cross-origin',
+      'Access-Control-Allow-Origin': '*',
+    });
+    return res.end(badge.renderBadge(state));
   }
 
   // GET /score/:didHash  — preview computed score without writing to chain
