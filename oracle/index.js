@@ -775,7 +775,7 @@ const server = http.createServer(async (req, res) => {
   // GET /metrics — Prometheus text format
   if (readMethod === 'GET' && pathname === '/metrics') {
     res.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4; charset=utf-8' });
-    return res.end(metrics.toPrometheusText());
+    return res.end(metrics.toPrometheusText({ evidenceCache: evidenceCache.stats() }));
   }
 
   // POST /epoch  — trigger a manual run (useful for testing)

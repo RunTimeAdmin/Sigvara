@@ -31,6 +31,20 @@ const counters = {
   scoreErrors: 0,
   rateLimitHits: 0,
   httpRequests: 0,
+
+  // Checker mode. These were incremented by index.js for a week without being declared
+  // here, and inc() drops unknown names silently, so every divergence this operator
+  // found was counted into nothing. The checker's whole job is noticing disagreement
+  // and its disagreement counter read zero.
+  checkerDivergences: 0,
+  checkerAgreed: 0,
+
+  // Write outcomes that are neither success nor error and were likewise undeclared.
+  // proposeSlotTaken is the ordinary result of proposeIfEmpty losing a race, and
+  // proposalsRejected is the committee rejecting a score: both are things you want a
+  // rate for, and both read zero.
+  proposeSlotTaken: 0,
+  proposalsRejected: 0,
 };
 
 const gauges = {
@@ -56,7 +70,16 @@ function uptimeSeconds() {
   return Math.floor((Date.now() - processStartTime) / 1000);
 }
 
-function toPrometheusText() {
+/**
+ * Render the exposition.
+ *
+ * `extra.evidenceCache` takes a stats object straight from the response cache. It is
+ * passed in rather than imported so this module keeps no second copy of numbers the
+ * cache already owns: a mirrored counter is a counter that can disagree with its
+ * source, and the point of reporting the hit rate is to find out whether the cache is
+ * working, not to read back what we assumed.
+ */
+function toPrometheusText(extra = {}) {
   const lines = [];
   lines.push('# HELP sigvara_oracle_uptime_seconds Process uptime in seconds');
   lines.push('# TYPE sigvara_oracle_uptime_seconds gauge');
@@ -74,12 +97,26 @@ function toPrometheusText() {
   lines.push('# TYPE sigvara_oracle_propose_total counter');
   lines.push(`sigvara_oracle_propose_total{result="success"} ${counters.proposeSuccesses}`);
   lines.push(`sigvara_oracle_propose_total{result="error"} ${counters.proposeErrors}`);
+  // slot_taken is proposeIfEmpty declining to overwrite a pending score, which is a
+  // normal race outcome rather than a failure. Attempts are exposed so success + error
+  // + slot_taken can be checked to account for all of them.
+  lines.push(`sigvara_oracle_propose_total{result="slot_taken"} ${counters.proposeSlotTaken}`);
+
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_propose_attempts_total Proposals attempted, before their outcome');
+  lines.push('# TYPE sigvara_oracle_propose_attempts_total counter');
+  lines.push(`sigvara_oracle_propose_attempts_total ${counters.proposeAttempts}`);
 
   lines.push('');
   lines.push('# HELP sigvara_oracle_finalize_total Score finalization attempts');
   lines.push('# TYPE sigvara_oracle_finalize_total counter');
   lines.push(`sigvara_oracle_finalize_total{result="success"} ${counters.finalizeSuccesses}`);
   lines.push(`sigvara_oracle_finalize_total{result="error"} ${counters.finalizeErrors}`);
+
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_finalize_attempts_total Finalizations attempted, before their outcome');
+  lines.push('# TYPE sigvara_oracle_finalize_attempts_total counter');
+  lines.push(`sigvara_oracle_finalize_attempts_total ${counters.finalizeAttempts}`);
 
   lines.push('# HELP sigvara_oracle_fee_charges_total Epoch-fee charges attempted by the oracle');
   lines.push('# TYPE sigvara_oracle_fee_charges_total counter');
@@ -92,18 +129,36 @@ function toPrometheusText() {
   lines.push(`sigvara_oracle_attest_total{result="accepted"} ${counters.attestAccepted}`);
   lines.push(`sigvara_oracle_attest_total{result="rejected_cooldown"} ${counters.attestRejectedCooldown}`);
   lines.push(`sigvara_oracle_attest_total{result="rejected_payment"} ${counters.attestRejectedPayment}`);
-  lines.push('');
+  // Kept with the rest of its family. This line used to sit after the payment counters,
+  // which splits one metric family across the exposition; strict parsers object and
+  // readers more so.
+  lines.push(`sigvara_oracle_attest_total{result="rejected_other"} ${counters.attestRejectedOther}`);
+
   lines.push('');
   lines.push('# HELP sigvara_oracle_skipped_unbonded_total Agents skipped for holding less than minimumStake');
   lines.push('# TYPE sigvara_oracle_skipped_unbonded_total counter');
   lines.push(`sigvara_oracle_skipped_unbonded_total ${counters.skippedUnbonded}`);
+
+  lines.push('');
   lines.push('# HELP sigvara_oracle_payments_verified_total Attestations backed by a verified settlement');
   lines.push('# TYPE sigvara_oracle_payments_verified_total counter');
   lines.push(`sigvara_oracle_payments_verified_total ${counters.paymentsVerified}`);
+
+  lines.push('');
   lines.push('# HELP sigvara_oracle_payment_rpc_errors_total Receipt lookups that failed on the RPC, not on the payment');
   lines.push('# TYPE sigvara_oracle_payment_rpc_errors_total counter');
   lines.push(`sigvara_oracle_payment_rpc_errors_total ${counters.paymentRpcErrors}`);
-  lines.push(`sigvara_oracle_attest_total{result="rejected_other"} ${counters.attestRejectedOther}`);
+
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_checker_comparisons_total Pending scores this checker re-measured');
+  lines.push('# TYPE sigvara_oracle_checker_comparisons_total counter');
+  lines.push(`sigvara_oracle_checker_comparisons_total{verdict="diverged"} ${counters.checkerDivergences}`);
+  lines.push(`sigvara_oracle_checker_comparisons_total{verdict="agreed"} ${counters.checkerAgreed}`);
+
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_proposals_rejected_total Proposals rejected by the slashing committee');
+  lines.push('# TYPE sigvara_oracle_proposals_rejected_total counter');
+  lines.push(`sigvara_oracle_proposals_rejected_total ${counters.proposalsRejected}`);
 
   lines.push('');
   lines.push('# HELP sigvara_oracle_flags_total Flags received');
@@ -149,6 +204,23 @@ function toPrometheusText() {
   lines.push('# HELP sigvara_oracle_active_agents Number of agents scored in last epoch');
   lines.push('# TYPE sigvara_oracle_active_agents gauge');
   lines.push(`sigvara_oracle_active_agents ${gauges.activeAgents}`);
+
+  if (extra.evidenceCache) {
+    const c = extra.evidenceCache;
+    lines.push('');
+    lines.push('# HELP sigvara_oracle_evidence_cache_total Evidence responses served from cache or rebuilt');
+    lines.push('# TYPE sigvara_oracle_evidence_cache_total counter');
+    lines.push(`sigvara_oracle_evidence_cache_total{result="hit"} ${c.hits}`);
+    lines.push(`sigvara_oracle_evidence_cache_total{result="miss"} ${c.misses}`);
+    lines.push(`sigvara_oracle_evidence_cache_evictions_total ${c.evictions}`);
+    lines.push('');
+    lines.push('# HELP sigvara_oracle_evidence_cache_entries Cached evidence responses held');
+    lines.push('# TYPE sigvara_oracle_evidence_cache_entries gauge');
+    lines.push(`sigvara_oracle_evidence_cache_entries ${c.entries}`);
+    lines.push('# HELP sigvara_oracle_evidence_cache_bytes Serialized bytes held by the evidence cache');
+    lines.push('# TYPE sigvara_oracle_evidence_cache_bytes gauge');
+    lines.push(`sigvara_oracle_evidence_cache_bytes ${c.bytes}`);
+  }
 
   return lines.join('\n') + '\n';
 }
