@@ -32,6 +32,10 @@ node examples/mcp-gated-tool/server.mjs
 `SigvaraGate` ships in `@sigvara/protocol-sdk` from 1.0.0-alpha.9. Earlier versions do
 not contain it, so an older install fails on the import rather than at runtime.
 
+From a checkout of this repo the install is optional: the import falls back to
+`packages/sdk/dist` when the package is not present, so `npm run build` in
+`packages/sdk` is enough. Copy the file anywhere else and the package is what it uses.
+
 It speaks JSON-RPC over stdio, so you can drive it from a terminal:
 
 ```bash

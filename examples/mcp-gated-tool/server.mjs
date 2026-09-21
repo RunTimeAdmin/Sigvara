@@ -27,10 +27,18 @@ import { createRequire } from 'node:module';
 import readline from 'node:readline';
 
 const require = createRequire(import.meta.url);
-// The published package, so this file works wherever it is copied to. Point it at
-// ../../packages/sdk/dist/index.js instead when you are testing a change to the SDK
-// that has not shipped yet.
-const { SigvaraGate } = require('@sigvara/protocol-sdk');
+// Prefer the published package, so this file works wherever it is copied to, and fall
+// back to the build in this repo so it also runs from a checkout without installing
+// anything. Importing only the package broke the second case, since nothing in the repo
+// root resolves the package name; importing only the relative path broke the first,
+// which is how the example shipped for a while.
+let SigvaraGate;
+try {
+  ({ SigvaraGate } = require('@sigvara/protocol-sdk'));
+} catch (err) {
+  if (err.code !== 'MODULE_NOT_FOUND') throw err;
+  ({ SigvaraGate } = require('../../packages/sdk/dist/index.js'));
+}
 
 const CHAIN_ID = Number(process.env.CHAIN_ID || 5042002);
 const THRESHOLD = Number(process.env.SIGVARA_THRESHOLD || 35);
