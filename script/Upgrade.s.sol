@@ -46,6 +46,16 @@ import "../src/SigvaraEpochFees.sol";
  * This script does not verify storage-layout compatibility. That is what the
  * slot-pinning tests in test/ and test/Upgrade.t.sol are for; run them before
  * broadcasting.
+ *
+ * AFTERWARDS, record what actually landed:
+ *
+ *   node scripts/record-implementations.mjs
+ *
+ * The deployment artifact holds proxy addresses, which by design never change, so
+ * nothing in this repo said which implementation was live. Two upgrades shipped on
+ * 21 September and neither left a trace. That script reads the ERC-1967 slot back off
+ * the chain rather than recording what this script intended, and `--check` fails when
+ * the artifact and the chain disagree, which is how an unrecorded upgrade gets noticed.
  */
 contract Upgrade is Script {
     /// ERC-1967 implementation slot: keccak256("eip1967.proxy.implementation") - 1.

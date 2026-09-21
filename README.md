@@ -40,6 +40,16 @@ If you're looking for a hosted MCP server or React trust-badge components, those
 
 ## Deployed contracts (Arc testnet)
 
+> **Proxy addresses are stable; the code behind them is not.** Every registry here is a
+> UUPS proxy, so the address below never changes and the implementation does. The
+> implementation each one is currently running is recorded under `implementations` in
+> [`deployments/5042002.json`](deployments/5042002.json), with the previous ones kept
+> in `history` because that is what a rollback targets and what an incident review
+> reads. Those records are read back off the chain, not written from intent:
+> `node scripts/record-implementations.mjs --check` fails if the file and the chain
+> disagree.
+
+
 Chain ID `5042002`, RPC `https://rpc.testnet.arc.io`, USDC as native gas. Canonical
 source is [`deployments/5042002.json`](deployments/5042002.json); the table below is a
 convenience copy.

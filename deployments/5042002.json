@@ -5,5 +5,39 @@
   "reputation": "0x6603C96275e85F724Cdf74666b399365e4cA29ed",
   "staking": "0xA69d62B2a6774D21A2c15d5d83b27277eD31d35B",
   "svrToken": "0x41De2D6D55318e197a00E8f5B496eA2790e23E6c",
-  "oracleBond": "0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171"
+  "oracleBond": "0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171",
+  "implementations": {
+    "identity": {
+      "current": "0xb2616F4a449726b195951B6a576Aba6847e174ef",
+      "history": [],
+      "recordedAt": "2026-09-21T02:56:38.421Z"
+    },
+    "reputation": {
+      "current": "0x87492399E34e5247740d0280C329e7553403404c",
+      "history": [],
+      "recordedAt": "2026-09-21T02:56:38.421Z"
+    },
+    "staking": {
+      "current": "0x169f1ADA8a3568E229d24E74515b4eF889B8a6BD",
+      "history": [
+        {
+          "implementation": "0x3501f936f629dbC2E97AE0717C501456Ca8215E0",
+          "replacedAt": "2026-09-21",
+          "note": "reconstructed from the upgrade session on 2026-09-21, not recorded at the time"
+        }
+      ],
+      "recordedAt": "2026-09-21T02:56:38.421Z"
+    },
+    "oracleBond": {
+      "current": "0x9ED31f024E0C3E7dF853c411744bABB53f5AaFFA",
+      "history": [
+        {
+          "implementation": "0xf8464144726850d222a06b85a230c8030673b933",
+          "replacedAt": "2026-09-21",
+          "note": "reconstructed from the upgrade session on 2026-09-21, not recorded at the time"
+        }
+      ],
+      "recordedAt": "2026-09-21T02:56:38.421Z"
+    }
+  }
 }
