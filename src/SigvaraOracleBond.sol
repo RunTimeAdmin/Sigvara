@@ -143,11 +143,24 @@ contract SigvaraOracleBond is
         Operator storage op = operators[msg.sender];
         if (op.status == Status.Exiting) revert WrongStatus(msg.sender, op.status);
 
+        // Credit what arrived. See the same guard in SigvaraStaking.depositStake: a
+        // fee-on-transfer token delivers less than `amount`, and crediting `amount`
+        // books a bond this contract does not hold. Here that is worse than in staking,
+        // because this bond is what an operator loses for misbehaving, and slash() can
+        // take the whole of it. An over-credited bond is a deterrent that cannot be
+        // collected: the accounting says the operator has it and the balance does not.
+        //
+        // `svr` is a plain IERC20 chosen at initialize, so which token this is depends
+        // on the deployment. Neither deployed token takes a fee, which is exactly why
+        // this was easy to miss twice.
+        uint256 balanceBefore = svr.balanceOf(address(this));
         svr.safeTransferFrom(msg.sender, address(this), amount);
-        op.bond += amount;
+        uint256 received = svr.balanceOf(address(this)) - balanceBefore;
+
+        op.bond += received;
         if (op.status == Status.None) op.status = Status.Bonded;
 
-        emit BondDeposited(msg.sender, amount, op.bond);
+        emit BondDeposited(msg.sender, received, op.bond);
     }
 
     /**

@@ -9,6 +9,8 @@ import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "../src/SigvaraIdentity.sol";
 import "../src/SigvaraReputation.sol";
 import "../src/SigvaraStaking.sol";
+import "../src/SigvaraOracleBond.sol";
+import "../src/SigvaraEpochFees.sol";
 
 /**
  * A token that takes a cut on every transfer, which is the case depositStake used to
@@ -191,4 +193,114 @@ contract FeeOnTransferTest is Test, RegistrationHelper {
         (uint256 amount, uint256 lockedAt, uint256 queued,) = staking.stakes(d);
         return (amount, lockedAt, queued);
     }
+}
+
+
+/**
+ * The same guard in the two contracts that took the token by address and did not have it.
+ *
+ * Staking was fixed first and these were left, which is the ordinary way a bug class
+ * survives: the fix goes in where it was noticed. An outside review found them.
+ */
+contract FeeOnTransferSiblingsTest is Test, RegistrationHelper {
+    FeeOnTransferToken token;
+    SigvaraIdentity identity;
+    SigvaraOracleBond bondReg;
+    SigvaraEpochFees fees;
+
+    address admin    = makeAddr("admin");
+    address operator = makeAddr("operator");
+    address funder   = makeAddr("funder");
+    address agentAddr;
+    uint256 agentPk;
+    bytes32 didHash;
+
+    bytes32 constant PUB_KEY = bytes32(uint256(0xbeef));
+    uint256 constant FEE_BPS = 100; // 1%
+
+    function setUp() public {
+        (agentAddr, agentPk) = makeAddrAndKey("agent");
+        token = new FeeOnTransferToken(FEE_BPS);
+
+        identity = SigvaraIdentity(address(new ERC1967Proxy(
+            address(new SigvaraIdentity()),
+            abi.encodeCall(SigvaraIdentity.initialize, (admin, address(0)))
+        )));
+        didHash = registerSigned(identity, operator, agentPk, PUB_KEY);
+
+        bondReg = SigvaraOracleBond(address(new ERC1967Proxy(
+            address(new SigvaraOracleBond()),
+            abi.encodeCall(SigvaraOracleBond.initialize, (
+                admin, admin, address(token), 1000e18, 7 days, makeAddr("slashBeneficiary")
+            ))
+        )));
+
+        fees = SigvaraEpochFees(address(new ERC1967Proxy(
+            address(new SigvaraEpochFees()),
+            abi.encodeCall(SigvaraEpochFees.initialize, (
+                admin, admin, address(token), address(identity), makeAddr("rewardPool"), 1e18
+            ))
+        )));
+
+        token.mint(operator, 10_000e18);
+        token.mint(funder, 10_000e18);
+        vm.prank(operator);
+        token.approve(address(bondReg), type(uint256).max);
+        vm.prank(funder);
+        token.approve(address(fees), type(uint256).max);
+    }
+
+    function test_oracleBond_creditsWhatArrived() public {
+        vm.prank(operator);
+        bondReg.depositBond(1000e18);
+
+        (uint256 bond,,) = bondReg.operators(operator);
+        assertEq(bond, 990e18, "bond must equal the tokens actually received");
+        assertLe(bond, token.balanceOf(address(bondReg)), "booked bond exceeds tokens held");
+    }
+
+    function test_oracleBond_overCreditWouldBeAnUncollectableDeterrent() public {
+        // The reason this one matters more than staking's: slash() can take the whole
+        // bond, so a bond booked above what is held is a penalty that cannot be paid.
+        vm.startPrank(operator);
+        bondReg.depositBond(1000e18);
+        bondReg.depositBond(1000e18);
+        vm.stopPrank();
+
+        (uint256 bond,,) = bondReg.operators(operator);
+        assertLe(bond, token.balanceOf(address(bondReg)), "slashable bond is not fully held");
+    }
+
+    function test_epochFees_creditsWhatArrived() public {
+        vm.prank(funder);
+        fees.depositFor(didHash, 1000e18);
+
+        assertEq(fees.balance(didHash), 990e18, "prepaid balance must equal what arrived");
+        assertLe(fees.balance(didHash), token.balanceOf(address(fees)), "balance exceeds tokens held");
+    }
+
+    function test_epochFees_balancesAcrossAgentsNeverExceedHoldings() public {
+        bytes32 other = registerSigned(identity, makeAddr("op2"), uint256(keccak256("k2")), PUB_KEY);
+
+        vm.startPrank(funder);
+        fees.depositFor(didHash, 1000e18);
+        fees.depositFor(other, 500e18);
+        vm.stopPrank();
+
+        uint256 booked = fees.balance(didHash) + fees.balance(other);
+        assertLe(booked, token.balanceOf(address(fees)), "prepaid balances sum above holdings");
+    }
+
+    function test_exactTokenUnaffected() public {
+        token.setFee(0);
+        vm.prank(operator);
+        bondReg.depositBond(1000e18);
+        (uint256 bond,,) = bondReg.operators(operator);
+        assertEq(bond, 1000e18);
+
+        vm.prank(funder);
+        fees.depositFor(didHash, 1000e18);
+        assertEq(fees.balance(didHash), 1000e18);
+    }
+
 }

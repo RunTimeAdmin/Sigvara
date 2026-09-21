@@ -152,9 +152,17 @@ contract SigvaraEpochFees is
         // so funding an unregistered hash hands the balance to whoever registers that
         // address next -- or strands it forever if nobody does.
         if (identityRegistry.getIdentity(didHash).registeredAt == 0) revert AgentNotRegistered(didHash);
+        // Credit what arrived, as SigvaraStaking.depositStake does. A fee-on-transfer
+        // token delivers less than `amount`, and crediting `amount` would let prepaid
+        // balances across all agents sum to more than the contract holds. The shortfall
+        // surfaces at withdraw(), on whoever is last, and until then isCovered() reports
+        // an agent as funded for epochs it cannot actually pay for.
+        uint256 balanceBefore = svr.balanceOf(address(this));
         svr.safeTransferFrom(msg.sender, address(this), amount);
-        balance[didHash] += amount;
-        emit FeesDeposited(didHash, msg.sender, amount, balance[didHash]);
+        uint256 received = svr.balanceOf(address(this)) - balanceBefore;
+
+        balance[didHash] += received;
+        emit FeesDeposited(didHash, msg.sender, received, balance[didHash]);
     }
 
     /**
