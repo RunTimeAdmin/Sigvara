@@ -433,6 +433,15 @@ actionable.
 
 **3. Diff the inputs before blaming either side.** This is the step that decides it.
 
+These use `jq`, which is not installed on a stock Ubuntu box and was not on the first
+checker host. A missing `jq` prints an error to stderr and nothing to stdout, so the
+commands below produce two empty files, and the emptiness checks exist because of it.
+Install it first, or the step fails by looking like agreement:
+
+```bash
+command -v jq >/dev/null || apt-get install -y jq
+```
+
 ```bash
 curl -sf https://oracle.sigvara.xyz/evidence/$DID  | jq -r '.evidence[].txHash' | sort > /tmp/primary.txt
 curl -sf https://checker.sigvara.xyz/evidence/$DID | jq -r '.evidence[].txHash' | sort > /tmp/checker.txt

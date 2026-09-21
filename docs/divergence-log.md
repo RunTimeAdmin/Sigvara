@@ -169,10 +169,31 @@ Two smaller things the exercise surfaced:
 
 ### Resolution
 
-The checker is being seeded with the six missing settlements, re-verified against the
-chain by the checker itself rather than copied from the primary. Its next epoch should
-agree. The 23:51 record stays visible and ages out after 30 days; it stops being
-actionable as soon as this proposal turns over.
+Seeded at 00:14Z with the six missing settlements, re-verified against the chain by the
+checker itself rather than copied from the primary. Both oracles then computed the same
+evidence root independently:
+
+```
+primary  8 payments  0xd4a95fc0559b4118…
+checker  8 payments  0xd4a95fc0559b4118…   identical
+```
+
+txHashes, amounts and `settledAt` all match, the last of those re-read from the blocks by
+each oracle separately rather than taken on the primary's word.
+
+The checker's next epoch, 00:17:31Z, reported `0 proposed, 0 finalized, 0 diverged`. It
+agrees.
+
+**The 23:51 record does not go away, and the watcher does not know any of this.** The log
+is append-only, so a checker cannot retract an opinion it has since revised. The disputed
+proposal's window runs to 05:44:10Z and the primary will not turn it over before then
+(its 00:44 epoch sees a pending score inside the window and skips), so until then the
+record still classifies as `actionable`: a live alert, with remediation steps, against a
+primary that did nothing wrong. The runbook warns about exactly this and the warning was
+accurate.
+
+That is the cost of seeding late rather than before the first epoch. It is bounded by one
+proposal's lifetime, and it is the second time this has happened.
 
 ### Still not demonstrated
 
