@@ -56,6 +56,31 @@ oracle.sigvara.xyz {
 		method POST OPTIONS
 	}
 
+	# The score badge, which is the one endpoint whose whole purpose is to be loaded
+	# from pages this operator does not control. It gets its own block rather than
+	# joining @public, because @public pins Access-Control-Allow-Origin to this site's
+	# own origin and overrides Cache-Control. Both are right for the JSON read paths
+	# and wrong for an image meant to be embedded anywhere.
+	@badge {
+		path /badge/*
+	}
+
+	handle @badge {
+		header Access-Control-Allow-Origin "*"
+		header Access-Control-Allow-Methods "GET, OPTIONS"
+		header Vary "Origin"
+
+		# No Cache-Control here on purpose. The oracle sets its own, and it shortens the
+		# lifetime when the chain could not be read so a transient failure is not pinned
+		# into every CDN for five minutes. Setting one here would replace that with a
+		# fixed number that cannot tell the two cases apart.
+		#
+		# Cross-Origin-Resource-Policy comes from the oracle too, and has to survive:
+		# without it a browser enforcing CORP refuses the image and the badge shows as
+		# broken on exactly the third-party pages it exists for.
+		reverse_proxy sigvara-oracle:3030
+	}
+
 	handle @attest {
 		header Access-Control-Allow-Origin "https://sigvara.xyz"
 		header Access-Control-Allow-Methods "POST, OPTIONS"

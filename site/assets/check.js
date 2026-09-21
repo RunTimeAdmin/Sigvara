@@ -10,10 +10,16 @@
 
   var ORACLE = 'https://oracle.sigvara.xyz';
   var EXPLORER = 'https://explorer.testnet.arc.io';
-  /* The agent the site, the whitepaper and the on-ramp all point at. Offered so the
-   * page is usable by someone who arrived with no address of their own, which is most
-   * people the first time. */
-  var DEMO_AGENT = '0x9a940B2e62a2c4a51E3cC38837944296717C4a96';
+
+  /* No address is prefilled, deliberately.
+   *
+   * The obvious convenience is to seed the field with a known agent so a first-time
+   * visitor can press the button and see something. The only registered agent on this
+   * deployment is the slash drill's target, which is suspended now and will read
+   * "slashed" permanently from 27 September. Prefilling it would make the first thing
+   * every visitor sees a punished agent, and prefilling any single address bakes that
+   * address's fate into the page. An empty field with a clear placeholder asks for what
+   * the visitor already has. */
 
   var BANDS = [
     { min: 75, color: '#15803d', label: '75 – 100', reading: 'Long track record of settled payments. Little left to prove.' },
@@ -137,8 +143,5 @@
   if (fromUrl && isAddress(fromUrl)) {
     addr.value = fromUrl;
     check(fromUrl);
-  } else {
-    addr.value = DEMO_AGENT;
-    note.textContent = 'Prefilled with the demo agent. Replace it with any address.';
   }
 })();
