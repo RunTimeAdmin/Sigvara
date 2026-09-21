@@ -1,6 +1,6 @@
 {
   "name": "@sigvara/protocol-sdk",
-  "version": "1.0.0-alpha.8",
+  "version": "1.0.0-alpha.9",
   "description": "TypeScript SDK for Sigvara. On-chain agent identity, reputation, and A2A challenge-response authentication.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
