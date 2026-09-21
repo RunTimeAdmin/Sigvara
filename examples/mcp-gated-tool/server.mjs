@@ -27,7 +27,10 @@ import { createRequire } from 'node:module';
 import readline from 'node:readline';
 
 const require = createRequire(import.meta.url);
-const { SigvaraGate } = require('../../packages/sdk/dist/index.js');
+// The published package, so this file works wherever it is copied to. Point it at
+// ../../packages/sdk/dist/index.js instead when you are testing a change to the SDK
+// that has not shipped yet.
+const { SigvaraGate } = require('@sigvara/protocol-sdk');
 
 const CHAIN_ID = Number(process.env.CHAIN_ID || 5042002);
 const THRESHOLD = Number(process.env.SIGVARA_THRESHOLD || 35);

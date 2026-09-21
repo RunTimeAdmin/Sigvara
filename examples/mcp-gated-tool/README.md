@@ -25,9 +25,12 @@ agent                      your MCP server                    Arc testnet
 ## Run it
 
 ```bash
-cd packages/sdk && npm install && npm run build && cd ../..
+npm install @sigvara/protocol-sdk
 node examples/mcp-gated-tool/server.mjs
 ```
+
+`SigvaraGate` ships in `@sigvara/protocol-sdk` from 1.0.0-alpha.9. Earlier versions do
+not contain it, so an older install fails on the import rather than at runtime.
 
 It speaks JSON-RPC over stdio, so you can drive it from a terminal:
 

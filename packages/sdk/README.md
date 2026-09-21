@@ -41,6 +41,9 @@ Runtime dependencies are `ethers` v6 and `tweetnacl`. Node 18 or newer.
 - **Stake.** `depositStake` handles the ERC-20 approval and the deposit in one
   call, and is what moves a newly registered agent from `PendingBond` to
   `Active`.
+- **A gate.** `SigvaraGate` turns the reads above into one decision: issue a
+  challenge, admit or refuse, and say which of four reasons applies. It owns
+  the nonce, so replay protection is not left to the caller.
 
 Scores come in two forms. The earned score is what the oracle last finalized; the total
 score is the matured one, which climbs toward it over time and is what `meetsThreshold`
@@ -83,20 +86,69 @@ const ok = await verifier.verifySignature(
 const trusted = ok && (await verifier.isActive(agent.did)) && (await verifier.meetsThreshold(agent.did, 40));
 ```
 
-Signature validity, status and score are separate reads; combine them into your
-own routing decision. Full protocol documentation, the reputation model and the
-contract addresses live in the repository.
+Signature validity, status and score are separate reads. Combining them correctly is
+easy to get subtly wrong, so there is a piece that does it.
 
-### Two things the SDK cannot do for you
+## Refusing work: `SigvaraGate`
 
-**Remember the nonce.** Every challenge carries a fresh one, and `verifySignature` has no
-memory, so a captured response replays against you until the challenge expires. Store the
-nonces you issue, reject one you have seen, and drop them once past the TTL. The library
-cannot do this for you because it does not own your storage.
+```typescript
+import { SigvaraGate } from '@sigvara/protocol-sdk';
 
-**Give each verifier its own audience.** It is what stops a response you received being
-presented to somebody else as proof the agent was talking to them. Use one stable value
-per service, not per request.
+const gate = new SigvaraGate({
+  rpcUrl: RPC, addresses, chainId: CHAIN_ID,
+  threshold: 40,
+  audience: 'https://your-service.example', // required, and signed into every challenge
+});
+
+// 1. hand the challenge to the agent
+const challenge = gate.challenge(agentDid);
+
+// 2. the agent signs challenge.payload and returns the signature
+
+// 3. decide
+const result = await gate.admit(agentDid, challenge, signature);
+if (!result.ok) {
+  // 'bad_proof' | 'replayed' | 'not_active' | 'below_threshold'
+  return refuse(result.reason);
+}
+```
+
+The four reasons are separate because they need different responses. `bad_proof` means
+nothing was proven. `replayed` means a valid signature arrived twice. `not_active`
+means a real, proven agent that is unbonded, suspended or slashed, and telling that
+caller to earn more points would be wrong. Only `below_threshold` is about reputation,
+and it carries the score so you can say how short they were.
+
+The proof is checked before anything is read from the chain, so an unauthenticated caller
+cannot make your gate do RPC work on its behalf, and a failed proof does not consume the
+nonce, so nobody can lock out a challenge's legitimate holder by spending it with
+garbage.
+
+**The default nonce store is per process.** It is correct for one instance and wrong for
+a fleet: two processes do not share a set, so a response accepted by one replays against
+the other. Pass a `NonceStore` backed by Redis or your database, and implement its
+optional `consume(nonce, expiresAt)` as an atomic insert-if-absent (`SET NX`, a unique
+index, a conditional put). `seen` then `add` is two round trips, and two concurrent
+requests carrying the same nonce can both observe it unspent before either writes.
+
+Full protocol documentation, the reputation model and the contract addresses live in the
+repository.
+
+### What the SDK still needs from you
+
+**An audience you control.** `SigvaraGate` requires one at construction and refuses to
+be built without it. It is signed into every challenge and is what stops a response you
+received being presented to somebody else as proof the agent was talking to them. Use one
+stable value per service, normally your origin, not one per request.
+
+**A shared nonce store, if you run more than one instance.** The gate remembers nonces so
+you do not have to, which is the one thing this section used to say the library could not
+do. The default store is in memory and therefore per process; see the note above for what
+a distributed one has to implement.
+
+**Using `verifySignature` directly still leaves the nonce to you.** It has no memory by
+design, so if you are not going through the gate, store the nonces you issue, reject one
+you have seen, and drop them past the TTL.
 
 ## Links
 

@@ -213,6 +213,42 @@ for (const f of docFiles()) {
 }
 
 // ---------------------------------------------------------------------------
+// 6. Factor caps quoted next to a factor read.
+//
+//    The 20 September reweight swapped feeScore and ageScore, 30/20 becoming 20/30.
+//    site/docs/reputation.html kept the old pair in the comments beside its SDK
+//    snippet for a day, so the published page told readers feeScore tops out at 30
+//    and tenure at 20, both wrong and both plausible.
+//
+//    Deliberately narrow. The docs discuss the previous weights on purpose when they
+//    explain why the reweight happened ("fee activity and success rate were 30 and
+//    25"), and that prose is correct. So this only looks at a cap stated as a comment
+//    directly after reading the factor, which is the form that is claiming what the
+//    value is today rather than what it used to be.
+// ---------------------------------------------------------------------------
+const repSol = read('src/SigvaraReputation.sol');
+const caps = {};
+for (const m of repSol.matchAll(/uint8 public constant MAX_(\w+)_SCORE = (\d+);/g)) {
+  // MAX_AGE_SCORE guards ageScore, MAX_FEE_SCORE guards feeScore, and so on.
+  caps[m[1].toLowerCase() + 'score'] = Number(m[2]);
+}
+
+for (const f of docFiles()) {
+  if (f.startsWith('archive')) continue;
+  const text = read(f);
+  // rep.feeScore ... // 0-20   (the dash may be an en dash, and tags may sit between)
+  const re = /\b(fee|success|age|external|community|propagation)Score\b[^\n]{0,120}?\/\/[^\n]{0,40}?0\s*[-\u2013]\s*(\d+)/gi;
+  for (const m of text.matchAll(re)) {
+    const key = m[1].toLowerCase() + 'score';
+    const claimed = Number(m[2]);
+    const actual = caps[key];
+    if (actual !== undefined && claimed !== actual) {
+      fail(f, `${m[1]}Score is capped at ${actual}, not ${claimed}`);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 if (problems.length === 0) {
   console.log('docs check: ok');
   process.exit(0);

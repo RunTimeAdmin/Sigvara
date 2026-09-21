@@ -180,11 +180,40 @@
 <span class="cm">// Get full breakdown</span>
 <span class="kw">const</span> rep = <span class="kw">await</span> verifier.<span class="fn">getReputation</span>(agentDid);
 console.log(rep.total);          <span class="cm">// 0–100</span>
-console.log(rep.feeScore);       <span class="cm">// 0–30</span>
-console.log(rep.ageScore);       <span class="cm">// 0–20</span>
+console.log(rep.feeScore);       <span class="cm">// 0–20</span>
+console.log(rep.ageScore);       <span class="cm">// 0–30 (tenure)</span>
 
 <span class="cm">// Simple threshold check (no gas)</span>
-<span class="kw">const</span> trusted = <span class="kw">await</span> verifier.<span class="fn">meetsThreshold</span>(agentDid, <span class="num">60</span>);</code></pre>
+<span class="kw">const</span> trusted = <span class="kw">await</span> verifier.<span class="fn">meetsThreshold</span>(agentDid, <span class="num">40</span>);</code></pre>
+
+        <h3>Acting on a Score</h3>
+        <p>Reading a score is the easy half. <code>SigvaraGate</code>, in the SDK from
+        <span class="mono">1.0.0-alpha.9</span>, turns it into a decision: it issues a challenge, checks the
+        proof before touching the chain, spends the nonce so a captured response cannot be replayed, and
+        refuses with a reason you can act on.</p>
+        <pre><code><span class="kw">import</span> { <span class="fn">SigvaraGate</span> } <span class="kw">from</span> <span class="str">'@sigvara/protocol-sdk'</span>;
+
+<span class="kw">const</span> gate = <span class="kw">new</span> <span class="fn">SigvaraGate</span>({
+  rpcUrl, addresses, threshold: <span class="num">40</span>,
+  audience: <span class="str">'https://your-service.example'</span>,   <span class="cm">// signed into every challenge</span>
+});
+
+<span class="kw">const</span> challenge = gate.<span class="fn">challenge</span>(agentDid);
+<span class="cm">// ...the agent signs challenge.payload and returns the signature...</span>
+
+<span class="kw">const</span> result = <span class="kw">await</span> gate.<span class="fn">admit</span>(agentDid, challenge, signature);
+<span class="kw">if</span> (!result.ok) <span class="kw">return</span> <span class="fn">refuse</span>(result.reason);
+<span class="cm">// 'bad_proof' | 'replayed' | 'not_active' | 'below_threshold'</span></code></pre>
+        <p class="u-muted-13">Only <code>below_threshold</code> is about reputation. <code>not_active</code>
+        is a real, proven agent that is unbonded, suspended or slashed, and telling that caller to go earn
+        points would be the wrong instruction. The default nonce store is per process; behind a load balancer
+        pass a <code>NonceStore</code> with an atomic <code>consume()</code>.</p>
+
+        <div class="callout"><strong>Pick the threshold against what is reachable.</strong> External trust
+        and propagation both depend on ERC-8004 standing that no agent holds yet, so 30 of the 100 points
+        are currently unreachable by anyone and a real ceiling is about 70. A gate set at 60 leaves ten
+        points of headroom and will refuse almost everybody; the examples here use 40 for that reason.
+        Revisit it when linked agents exist.</div>
 
         <h3>Score Trust Tiers</h3>
         <table class="data-table">

@@ -16,7 +16,7 @@ This repository (`sigvara`) is the **decentralized protocol**: computed reputati
 
 There is a **separate product**, the Countersig platform ([countersig.com](https://countersig.com), public docs: [`Countersig-Public`](https://github.com/RunTimeAdmin/Countersig-Public)), which ships its own npm packages — `@countersig/sdk`, `@countersig/verify`, `@countersig/mcp`, `@countersig/react`. That platform is a centralized, hosted non-human-identity verification service. It is a different product with a different trust model, built by the same team, but it is **not this protocol** and does not read from or write to the contracts below. It kept the Countersig name; the protocol did not (see [docs/lineage.md](docs/lineage.md) for why).
 
-If you're looking for MCP server support or React trust-badge components, those live in the platform repo, not here. If you're integrating with the on-chain protocol — DIDs, staked reputation, permissionless verification — you're in the right place, and [`@sigvara/protocol-sdk`](https://www.npmjs.com/package/@sigvara/protocol-sdk) (source in [`packages/sdk`](packages/sdk), successor to the now-deprecated `@countersig/protocol-sdk`) is the only SDK for it.
+If you're looking for a hosted MCP server or React trust-badge components, those live in the platform repo, not here — though this repo does ship a small [MCP tool gated on protocol reputation](examples/mcp-gated-tool), built on `SigvaraGate`, which refuses a tool call to an agent that cannot prove itself or is below a threshold. If you're integrating with the on-chain protocol — DIDs, staked reputation, permissionless verification — you're in the right place, and [`@sigvara/protocol-sdk`](https://www.npmjs.com/package/@sigvara/protocol-sdk) (source in [`packages/sdk`](packages/sdk), successor to the now-deprecated `@countersig/protocol-sdk`) is the only SDK for it.
 
 ## Documentation
 
@@ -371,6 +371,38 @@ Slashed agents cannot rotate. The identity is permanently terminated.
 ```bash
 npm install @sigvara/protocol-sdk
 ```
+
+### Refusing work to an agent without standing
+
+The shortest path from a score to a decision. `SigvaraGate` issues a challenge, checks
+the proof before touching the chain, spends the nonce so a captured response cannot be
+replayed, and refuses with a reason you can act on.
+
+```typescript
+import { SigvaraGate } from '@sigvara/protocol-sdk';
+
+const gate = new SigvaraGate({
+  rpcUrl: 'https://rpc.testnet.arc.io',
+  addresses,                                // deployments/5042002.json
+  threshold: 40,
+  audience: 'https://your-service.example', // signed into every challenge
+});
+
+const challenge = gate.challenge(agentDid);
+// ...the agent signs challenge.payload and returns the signature...
+
+const result = await gate.admit(agentDid, challenge, signature);
+if (!result.ok) {
+  // 'bad_proof' | 'replayed' | 'not_active' | 'below_threshold'
+  return refuse(result.reason);
+}
+```
+
+Only `below_threshold` is about reputation. `not_active` is a real, proven agent that
+is unbonded, suspended or slashed, and sending that caller off to earn points would be
+the wrong instruction. The default nonce store is per process; behind a load balancer
+pass a `NonceStore` with an atomic `consume()`. Requires 1.0.0-alpha.9 or later. A
+worked example lives in [examples/mcp-gated-tool](examples/mcp-gated-tool).
 
 ### Agent-to-Agent authentication
 
