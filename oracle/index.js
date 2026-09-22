@@ -98,6 +98,10 @@ if (cfg.checkerMode) {
 
 chain.init(cfg);
 external.init(cfg);
+// Resolve the external chain id once at boot, so /health can answer without a round trip
+// and a feed pointed at a dead host is visible from the first request rather than the
+// first time somebody thinks to check.
+external.refreshChainId().catch(() => {});
 
 // Most recent divergences returned by the collection route. Bounded so an anonymous
 // caller cannot make the oracle serialise its whole history on every request.
@@ -785,6 +789,10 @@ const server = http.createServer(async (req, res) => {
 
   // GET /health — extended for production alerting
   if (readMethod === 'GET' && pathname === '/health') {
+    // Never awaited. /health has to answer while the thing it reports on is broken,
+    // which is exactly when an unreachable RPC would make it hang.
+    const externalState = external.chainState();
+    if (externalState.status === 'unreachable') external.refreshChainId().catch(() => {});
     const lastEpoch = metrics.get('lastSuccessfulEpochMs');
     const timeSinceLastEpoch = lastEpoch ? Date.now() - lastEpoch : null;
     const storeWritable = isStatePathWritable();
@@ -809,7 +817,13 @@ const server = http.createServer(async (req, res) => {
       // and has no feedback this oracle recognizes. Those call for completely
       // different responses and the score cannot tell them apart, so the first one is
       // answered here instead of being guessed at.
-      externalFeed: external.configured() ? 'configured' : 'disabled',
+      // 'disabled' | 'configured' | 'unreachable'. The last one used to be invisible:
+      // the old check could not distinguish a working feed from one pointed at a dead
+      // host, and reported success for both.
+      externalFeed: externalState.status,
+      // Which chain the feed is really reading. The value that would have caught a
+      // stale container holding an RPC for a different chain in one request.
+      externalChainId: externalState.chainId,
     });
   }
 

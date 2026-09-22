@@ -59,6 +59,22 @@ function computeExternalScore(rows) {
 // ---- chain-connected side (opt-in) -----------------------------------------
 let provider, idContract, repContract, enabled = false;
 
+// Which chain the feed is actually reading, resolved from the provider rather than
+// parsed out of the URL.
+//
+// This exists because `configured()` answers a question nobody was asking. It is a
+// truthiness check on three environment strings, so it reported "configured" while the
+// container held a stale RPC pointing at a different chain entirely, and it would report
+// the same for an RPC pointing at nothing at all. A status that cannot fail is not a
+// status. The chain id can fail, which is what makes it worth reporting.
+//
+// The URL is deliberately NOT exposed: an RPC endpoint often carries an API key in its
+// path, and /health is public.
+let chainId = null;
+let chainIdError = null;
+let resolving = false;
+
+
 // deps lets tests inject fake contracts. Production (index.js) calls init(cfg).
 function init(cfg, deps = {}) {
   enabled = !!(cfg.externalRpc && cfg.externalIdentity && cfg.externalReputation);
@@ -66,6 +82,44 @@ function init(cfg, deps = {}) {
   provider = deps.provider ?? new ethers.JsonRpcProvider(cfg.externalRpc);
   idContract = deps.idContract ?? new ethers.Contract(cfg.externalIdentity, ID_ABI, provider);
   repContract = deps.repContract ?? new ethers.Contract(cfg.externalReputation, REP_ABI, provider);
+  // A re-init points at a different chain, so anything cached about the old one is a
+  // lie until proven otherwise.
+  chainId = null;
+  chainIdError = null;
+}
+
+/**
+ * Resolve the feed's chain id and cache it. Safe to call repeatedly.
+ *
+ * Returns the id, or null when the feed is disabled or the chain could not be read.
+ * Never throws: a health endpoint that fails because the thing it reports on is broken
+ * tells you less than one that says so.
+ */
+async function refreshChainId() {
+  if (!enabled || resolving) return chainId;
+  resolving = true;
+  try {
+    const net = await withTimeout(provider.getNetwork());
+    chainId = Number(net.chainId);
+    chainIdError = null;
+  } catch (err) {
+    chainId = null;
+    chainIdError = String((err && err.message) || err).slice(0, 120);
+  } finally {
+    resolving = false;
+  }
+  return chainId;
+}
+
+/**
+ * What to report about the feed. Three outcomes, because "disabled" and "configured but
+ * unreachable" are different problems and collapsing them hides the second one, which is
+ * the one that happens by accident.
+ */
+function chainState() {
+  if (!enabled) return { status: 'disabled', chainId: null };
+  if (chainId !== null) return { status: 'configured', chainId };
+  return { status: 'unreachable', chainId: null, error: chainIdError };
 }
 
 function configured() { return enabled; }
@@ -117,4 +171,5 @@ async function externalScoreFor(agentId, expectedOwner) {
 module.exports = {
   init, configured, computeExternalScore, readFeedbackRows,
   verifyOwnership, externalScoreFor, TAG_NORMALIZERS, MAX_EXTERNAL_SCORE,
+  refreshChainId, chainState,
 };

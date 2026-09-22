@@ -85,7 +85,8 @@ Health check with operational signals for production alerting.
   "attestCooldownMs": 3600000,
   "epochRunning": false,
   "commit": "1f1456e3f6df0a625f0a107b84d4198f0a88f669",
-  "externalFeed": "configured"
+  "externalFeed": "configured",
+  "externalChainId": 5042002
 }
 ```
 
@@ -102,10 +103,22 @@ anchor.** The value is whatever the operator's container put in an environment
 variable, so it catches a box that missed a deploy, not a dishonest operator. Anything
 adversarial belongs to `/evidence`, which recomputes against the chain.
 
-`externalFeed` is `configured` or `disabled`, and exists because `externalScore`
-renders 0 in three unrelated situations: `EXTERNAL_*` was never set, the agent is not
-linked to an ERC-8004 id, or it is linked with no feedback in a recognized tag. Those
-need different responses and the score cannot tell them apart.
+`externalFeed` is `disabled`, `configured` or `unreachable`, and exists because
+`externalScore` renders 0 in three unrelated situations: `EXTERNAL_*` was never set, the
+agent is not linked to an ERC-8004 id, or it is linked with no feedback in a recognized
+tag. Those need different responses and the score cannot tell them apart.
+
+`externalChainId` is the chain the feed actually reached, read from the provider rather
+than parsed out of the URL, and `null` when it could not be reached.
+
+Both fields exist because the earlier version of this one could not fail. It was a
+truthiness check on three environment strings, so it reported `configured` for a
+container holding a stale RPC that pointed at an entirely different chain, and would
+report the same for an RPC pointing at nothing. Distinguishing `unreachable` from
+`configured`, and naming the chain, is what makes it evidence rather than decoration.
+
+The RPC URL itself is deliberately not published here: those often carry an API key in
+the path, and this endpoint is public.
 
 ### `GET /metrics`
 

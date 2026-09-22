@@ -92,3 +92,89 @@ test('externalScoreFor: returns 0 and does not throw when unconfigured', () => {
   return external.externalScoreFor(1, '0x0000000000000000000000000000000000000001')
     .then(v => assert.equal(v, 0));
 });
+
+// ---------------------------------------------------------------------------
+// Chain id reporting
+//
+// These exist because `configured()` reported success for four rounds while the
+// container held an RPC for a different chain. A status that cannot fail is not a
+// status, so the point of every test below is that this one can.
+// ---------------------------------------------------------------------------
+
+const CFG = {
+  externalRpc: 'https://example.invalid',
+  externalIdentity: '0x' + '11'.repeat(20),
+  externalReputation: '0x' + '22'.repeat(20),
+};
+
+test('chainState: disabled when the feed is not configured', () => {
+  external.init({ externalRpc: '', externalIdentity: '', externalReputation: '' });
+  assert.deepStrictEqual(external.chainState(), { status: 'disabled', chainId: null });
+});
+
+test('chainState: configured but unreachable is NOT reported as configured', async () => {
+  // The whole point. Three non-empty strings used to read as success.
+  external.init(CFG, {
+    provider: { getNetwork: async () => { throw new Error('ECONNREFUSED'); } },
+    idContract: {}, repContract: {},
+  });
+  await external.refreshChainId();
+
+  const s = external.chainState();
+  assert.strictEqual(s.status, 'unreachable');
+  assert.strictEqual(s.chainId, null);
+  assert.match(s.error, /ECONNREFUSED/);
+});
+
+test('chainState: reports the chain it actually reached', async () => {
+  external.init(CFG, {
+    provider: { getNetwork: async () => ({ chainId: 5042002n }) },
+    idContract: {}, repContract: {},
+  });
+  await external.refreshChainId();
+
+  assert.deepStrictEqual(external.chainState(), { status: 'configured', chainId: 5042002 });
+});
+
+test('chainState: a cached id from the old chain does not survive a re-init', async () => {
+  // Re-init means the feed was repointed. Reporting the previous chain afterwards is
+  // precisely the failure this was written to make visible.
+  external.init(CFG, {
+    provider: { getNetwork: async () => ({ chainId: 84532n }) },
+    idContract: {}, repContract: {},
+  });
+  await external.refreshChainId();
+  assert.strictEqual(external.chainState().chainId, 84532);
+
+  external.init(CFG, {
+    provider: { getNetwork: async () => ({ chainId: 5042002n }) },
+    idContract: {}, repContract: {},
+  });
+  assert.strictEqual(external.chainState().status, 'unreachable', 'stale id must be dropped immediately');
+
+  await external.refreshChainId();
+  assert.strictEqual(external.chainState().chainId, 5042002);
+});
+
+test('refreshChainId: never throws, whatever the provider does', async () => {
+  external.init(CFG, {
+    provider: { getNetwork: async () => { throw new Error('boom'); } },
+    idContract: {}, repContract: {},
+  });
+  assert.strictEqual(await external.refreshChainId(), null);
+
+  external.init({ externalRpc: '', externalIdentity: '', externalReputation: '' });
+  assert.strictEqual(await external.refreshChainId(), null, 'disabled feed resolves to null, not an error');
+});
+
+test('refreshChainId: a hung provider does not hang the caller forever', async () => {
+  external.init(CFG, {
+    provider: { getNetwork: () => new Promise(() => {}) }, // never settles
+    idContract: {}, repContract: {},
+  });
+  const started = Date.now();
+  const id = await external.refreshChainId();
+  assert.strictEqual(id, null);
+  assert.ok(Date.now() - started < 20_000, 'must time out rather than wait on a dead RPC');
+  assert.match(external.chainState().error, /timeout/i);
+});
