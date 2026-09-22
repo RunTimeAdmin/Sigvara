@@ -35,6 +35,10 @@ const counters = {
   badgeRequests: 0,
   badgeCacheHits: 0,
   badgeRpcErrors: 0,
+  // ERC-8183 reader. Observation only today, but a reader that starts failing should
+  // be visible before anyone decides to score from it.
+  jobsReads: 0,
+  jobsErrors: 0,
   rateLimitHits: 0,
   httpRequests: 0,
 
@@ -205,6 +209,16 @@ function toPrometheusText(extra = {}) {
   lines.push('# HELP sigvara_oracle_badge_rpc_errors_total Badge reads that could not reach the chain');
   lines.push('# TYPE sigvara_oracle_badge_rpc_errors_total counter');
   lines.push(`sigvara_oracle_badge_rpc_errors_total ${counters.badgeRpcErrors}`);
+
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_jobs_reads_total ERC-8183 job registry reads served');
+  lines.push('# TYPE sigvara_oracle_jobs_reads_total counter');
+  lines.push(`sigvara_oracle_jobs_reads_total ${counters.jobsReads}`);
+
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_jobs_errors_total ERC-8183 reads that could not reach the registry');
+  lines.push('# TYPE sigvara_oracle_jobs_errors_total counter');
+  lines.push(`sigvara_oracle_jobs_errors_total ${counters.jobsErrors}`);
 
   lines.push('');
   lines.push('# HELP sigvara_oracle_rate_limit_hits_total Rate limit rejections');

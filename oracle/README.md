@@ -86,7 +86,10 @@ Health check with operational signals for production alerting.
   "epochRunning": false,
   "commit": "1f1456e3f6df0a625f0a107b84d4198f0a88f669",
   "externalFeed": "configured",
-  "externalChainId": 5042002
+  "externalChainId": 5042002,
+  "jobsFeed": "disabled",
+  "jobsRegistry": null,
+  "jobsChainId": null
 }
 ```
 
@@ -119,6 +122,10 @@ report the same for an RPC pointing at nothing. Distinguishing `unreachable` fro
 
 The RPC URL itself is deliberately not published here: those often carry an API key in
 the path, and this endpoint is public.
+
+`jobsFeed` is `configured` or `disabled`, with `jobsRegistry` and `jobsChainId` naming
+what it reads. Same reasoning as the external feed: a reader nobody enabled and a reader
+pointed at the wrong chain both produce no jobs, and only one of those is fine.
 
 ### `GET /metrics`
 
@@ -340,6 +347,66 @@ convenience; a verifier should derive it from the payment rather than trust it.
 This detects a dropped or invented payment. It cannot detect a payment nobody ever
 submitted, which is what an independent chain watcher would be for.
 
+### `GET /jobs/:address` (ERC-8183, observation only)
+
+Reports what an [ERC-8183](https://eips.ethereum.org/EIPS/eip-8183) job registry says
+about one provider. **Nothing here feeds a score.** Disabled unless
+`JOBS_REGISTRY_ADDRESS` is set, and answers `501` when disabled rather than an empty
+list, because an empty list reads as "this agent has done no jobs".
+
+An ERC-8183 job is escrow with a verdict: a client funds it, a provider submits work, a
+named evaluator calls `complete()` or `reject()`. That verdict is the one thing this
+oracle has never been able to check for itself. The existing path proves a payment
+settled and takes "it went well" from whoever submitted the attestation; here it is a log
+entry written by a third party, with the money in the same transaction, so an agent
+cannot route around it by shelling out.
+
+```json
+{
+  "provider": "0x…",
+  "registry": "0x…",
+  "chainId": 5042002,
+  "window": { "fromBlock": 63100000, "toBlock": 63150000, "truncated": false },
+  "counts": {
+    "jobsSeen": 12, "usable": 9, "dropped": 3,
+    "successful": 8, "independentlyEvaluated": 7
+  },
+  "dropped": [{ "jobId": "4", "reason": "self_evaluated" }],
+  "evidence": [
+    { "txHash": "0x…", "payer": "0x…", "amount": "450000000",
+      "settledAt": 1790000000000, "success": true,
+      "independentEvaluator": true, "jobId": "7" }
+  ],
+  "scored": false
+}
+```
+
+`evidence` carries exactly the five fields the merkle leaf commits to — `txHash`,
+`payer`, `amount`, `settledAt`, `success` — which is why a job could later be scored
+without a new leaf format or a new evidence version. `independentEvaluator` and `jobId`
+sit alongside as corroboration and would not be part of a leaf.
+
+A job is only usable when the verdict was not written by the party it flatters:
+
+| Dropped | Meaning |
+|---|---|
+| `self_evaluated` | The provider signed its own verdict. The spec permits it; it is the obvious way to farm a perfect record, and it supplies nothing the old attestation path did not already supply on trust. |
+| `self_paid` | Client and provider are the same address. |
+| `not_terminal:expired` | Nobody evaluated in time. Not held against the provider: expiry can as easily be the client failing to act, and counting it would let any client damage an agent by doing nothing. |
+| `not_terminal:open` | Still in flight. |
+
+Refusals are named rather than counted, because a job refused for self-evaluation and one
+that merely expired say different things about the agent. `window` is reported for the
+same reason: without it, "0 jobs" cannot be told from a narrow look.
+
+A rejected job carries `amount: "0"`. The provider was not paid, so it earns no fee
+volume, while still counting against the success rate. Recording the escrowed figure
+would pay an agent, in score, for work that was refused.
+
+`evaluator === client` is kept but marked `independentEvaluator: false`. A buyer
+accepting their own delivery is ordinary commerce and weaker evidence than a third party,
+and the two should not be quietly treated as equal.
+
 ### `POST /epoch` (auth required)
 
 Manually trigger an epoch run. Use for testing; production runs on the configured interval.
@@ -551,6 +618,15 @@ with it off, the largest factor in the score is a count of HTTP requests.
 
 Amounts are base units and handled as BigInt throughout, so an 18-decimal token does not
 lose precision.
+
+### ERC-8183 job registry (read only)
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `JOBS_REGISTRY_ADDRESS` | unset | Enables `GET /jobs/:address`. No default: there is no canonical ERC-8183 deployment, and guessing one would read an unrelated contract's logs as jobs. |
+| `JOBS_RPC` | `RPC_URL` | Set only when the registry is on a different chain. |
+| `JOBS_FROM_BLOCK` | `0` | Earliest block a scan starts from. |
+| `JOBS_MAX_SPAN` | `50000` | Widest range one request may scan. |
 
 ## Production Checklist
 

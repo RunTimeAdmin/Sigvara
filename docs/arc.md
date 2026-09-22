@@ -156,6 +156,48 @@ Two operational notes:
   re-reads the settlement time from the block, so decay and tenure come out
   identical. Everything else — the log scan cursor, the agent set — rebuilds itself.
 
+
+## ERC-8183 (Agentic Commerce) on Arc
+
+Arc pairs ERC-8004 identity with [ERC-8183](https://eips.ethereum.org/EIPS/eip-8183),
+which defines a job as escrow with a verdict: a client funds it, a provider submits work,
+and a **named evaluator** calls `complete()` or `reject()`.
+
+That last part is the one input this protocol has never been able to check for itself.
+The score is computed from payments the oracle verifies against the chain, but whether
+the work was any good arrives inside an attestation, asserted by whoever submitted it.
+Under ERC-8183 the verdict is a log entry written by an address that is neither the agent
+nor, usually, the party paying for it, with the money in the same transaction. Nothing is
+self-reported and an agent cannot route around it by shelling out.
+
+A job maps onto the evidence leaf without changing it. `JobFunded.client` is the payer,
+`PaymentReleased.amount` is the amount, the verdict transaction supplies `txHash` and
+`settledAt`, and `JobCompleted` versus `JobRejected` is `success` — the same five fields
+already committed to by the merkle root.
+
+**The oracle reads it but does not score from it.** `GET /jobs/:address` reports what a
+registry says; `scored: false` is in every response. Two reasons:
+
+- ERC-8183 is a **Draft** ERC, created 25 February 2026. A draft can change an event
+  signature, and an indexer pinned to one that moved matches nothing and reports every
+  agent as having done no work. Silent, not loud.
+- **There is no canonical deployment on Arc.** The ERC-8004 registries are deployed at
+  deterministic addresses and were verified live; the ERC-8183 contracts found on Arc so
+  far are individual demos. One at `0x754893efB1B173694Cd1C2DaDdE136021169ACc6` had no
+  logs in the preceding 9,000 blocks when checked on 22 September 2026.
+
+Observing before scoring is the same order the gating design uses: measure against real
+traffic, then calibrate. Doing it the other way round means calibrating against a
+standard that is still moving.
+
+Two properties the reader enforces, neither of which the spec requires. A job whose
+verdict was written by the provider is refused, because an agent grading its own work
+supplies nothing the attestation path did not already supply on trust. And an expired job
+is not held against the provider, because expiry can as easily be the client failing to
+evaluate as the provider failing to deliver; counting it would hand any client a way to
+damage an agent by doing nothing, which is the same hole that keeps negative attestation
+closed elsewhere.
+
 ## 4. SDK live integration tests
 
 Addresses below are the live Arc testnet deployment, from

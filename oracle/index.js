@@ -16,11 +16,19 @@ const payments = require('./payments');
 const merkle = require('./merkle');
 const { createResponseCache } = require('./response-cache');
 const badge = require('./badge');
+const jobs = require('./jobs');
 const metrics = require('./metrics');
 
 // Verified-payment settings. Read once at startup so a malformed value fails the
 // process rather than silently disabling verification on the first request.
 const paymentCfg = payments.readConfig();
+
+// ERC-8183 job registry, read-only and off unless JOBS_REGISTRY_ADDRESS is set. Parsed
+// at startup so a malformed address stops the process rather than failing on the first
+// request, the same way the payment config does.
+const jobsCfg = jobs.readConfig();
+let jobsProvider = null;
+let jobsChainId = null;
 
 
 // ---- Config ----------------------------------------------------------------
@@ -318,7 +326,10 @@ async function runEpochInner() {
   // agent count instead of linear. See mapChunked for what chunking costs. It preserves
   // input order, so agentInfos stays aligned with agents exactly as the single
   // Promise.all left it and candidate ordering downstream is unchanged.
-  const PHASE_ONE_CHUNK = 32;
+  /** Widest block range one /jobs request may scan. */
+const JOBS_MAX_SPAN = Number(process.env.JOBS_MAX_SPAN || 50_000);
+
+const PHASE_ONE_CHUNK = 32;
   const agentInfos = await mapChunked(agents, PHASE_ONE_CHUNK, async ({ didHash }) => {
     try {
       const [info, pending, covered] = await Promise.all([
@@ -705,6 +716,27 @@ const evidenceCache = createResponseCache({ maxBytes: 32 * 1024 * 1024 });
 const badgeCache = badge.createBadgeCache({ ttlMs: 60_000, maxEntries: 500 });
 
 /**
+ * The job registry's provider, built on first use.
+ *
+ * Separate from the oracle's own provider because the registry may sit on a different
+ * chain, exactly as the ERC-8004 feed may. The chain id is resolved alongside it for the
+ * same reason /health reports one for the external feed: a reader pointed at the wrong
+ * chain finds no jobs, which is indistinguishable from an agent that has done none.
+ */
+async function jobsProviderOrNull() {
+  if (!jobs.enabled(jobsCfg)) return null;
+  if (!jobsProvider) {
+    jobsProvider = jobs.makeProvider(jobsCfg);
+    try {
+      jobsChainId = Number((await jobsProvider.getNetwork()).chainId);
+    } catch {
+      jobsChainId = null;
+    }
+  }
+  return jobsProvider;
+}
+
+/**
  * What an address's badge should say, read from the chain.
  *
  * Reports the FINALIZED score, not this oracle's preview. A badge is shown to strangers
@@ -824,6 +856,12 @@ const server = http.createServer(async (req, res) => {
       // Which chain the feed is really reading. The value that would have caught a
       // stale container holding an RPC for a different chain in one request.
       externalChainId: externalState.chainId,
+      // 'disabled' | 'configured'. Reported for the same reason as the external feed:
+      // a reader nobody enabled and a reader pointed at the wrong chain both produce no
+      // jobs, and only one of those is fine.
+      jobsFeed: jobs.enabled(jobsCfg) ? 'configured' : 'disabled',
+      jobsRegistry: jobsCfg.registry || null,
+      jobsChainId,
     });
   }
 
@@ -1146,6 +1184,68 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { didHash, agentId: String(agentId), operator, linked: true });
     } catch (err) {
       return json(res, 400, { error: err.message });
+    }
+  }
+
+  // GET /jobs/<address> — ERC-8183 jobs for one provider. Observation only.
+  //
+  // Nothing here feeds a score. ERC-8183 is a Draft ERC and has no canonical deployment
+  // on Arc, so this exists to watch real traffic before anything is calibrated against
+  // it, which is the same order the gating roadmap uses: observe, then enforce.
+  const jobsAddress = /^\/jobs\/(0x[0-9a-fA-F]{40})$/.exec(pathname)?.[1];
+  if (readMethod === 'GET' && jobsAddress) {
+    if (!jobs.enabled(jobsCfg)) {
+      // 501, not an empty list. An empty result would read as "this agent has done no
+      // jobs", which is the opposite of "nobody has told this oracle where to look".
+      return json(res, 501, {
+        error: 'jobs reader not configured',
+        code: 'jobs_disabled',
+        hint: 'set JOBS_REGISTRY_ADDRESS (and JOBS_RPC if the registry is on another chain)',
+      });
+    }
+    if (rateLimited(clientKey(req))) {
+      metrics.inc('rateLimitHits');
+      return json(res, 429, { error: 'Rate limited' });
+    }
+    try {
+      const provider = await jobsProviderOrNull();
+      const head = await provider.getBlockNumber();
+      const requested = Number(url.searchParams.get('fromBlock') ?? NaN);
+      const floor = Math.max(0, head - JOBS_MAX_SPAN);
+      // Bounded by default and bounded when asked. An unbounded scan from genesis is the
+      // most expensive thing a stranger could ask this process to do.
+      const from = Number.isFinite(requested)
+        ? Math.max(requested, floor)
+        : Math.max(jobsCfg.fromBlock, floor);
+
+      const all = await jobs.readJobs({ provider, cfg: jobsCfg }, from, head);
+      const { evidence, dropped } = jobs.toEvidence(all, jobsAddress);
+      metrics.inc('jobsReads');
+
+      return json(res, 200, {
+        provider: jobsAddress,
+        registry: jobsCfg.registry,
+        chainId: jobsChainId,
+        // The window actually scanned, so a caller can tell a quiet agent from a narrow
+        // look. Without it "0 jobs" is unreadable.
+        window: { fromBlock: from, toBlock: head, truncated: from > jobsCfg.fromBlock },
+        counts: {
+          jobsSeen: all.length,
+          usable: evidence.length,
+          dropped: dropped.length,
+          successful: evidence.filter((e) => e.success).length,
+          independentlyEvaluated: evidence.filter((e) => e.independentEvaluator).length,
+        },
+        // Named rather than counted, because a job refused for self-evaluation and one
+        // that simply expired mean different things about the agent.
+        dropped,
+        evidence,
+        scored: false,
+      });
+    } catch (err) {
+      metrics.inc('jobsErrors');
+      console.warn(`[oracle] /jobs read failed for ${jobsAddress}: ${err.message}`);
+      return json(res, 502, { error: 'could not read the job registry', code: 'jobs_rpc_error' });
     }
   }
 

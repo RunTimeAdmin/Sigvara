@@ -109,6 +109,8 @@ graph TB
 
 > **Identity layer: ERC-8004.** Sigvara has adopted the [ERC-8004](https://eips.ethereum.org/EIPS/eip-8004) Identity Registry as the canonical agent registry and no longer maintains a competing one. Sigvara is the **computed-reputation and staked-slashing layer on top of the standard** — the parts ERC-8004 deliberately leaves out. See [ADR 0001](docs/adr/0001-erc8004-as-identity-layer.md).
 
+> **Commerce layer: ERC-8183, watched not used.** Arc pairs ERC-8004 identity with [ERC-8183](https://eips.ethereum.org/EIPS/eip-8183), where a job is escrow with a verdict written by a named evaluator. That verdict is the one input this protocol cannot check for itself today: the oracle proves a payment settled and takes "it went well" from whoever submitted the attestation. The oracle can now **read** an ERC-8183 registry (`GET /jobs/:address`) and reports `scored: false` on every response, because the ERC is still a Draft and Arc has no canonical deployment. See [docs/arc.md](docs/arc.md#erc-8183-agentic-commerce-on-arc).
+
 | Contract | Role |
 |---|---|
 | [`SigvaraReputation`](src/SigvaraReputation.sol) | **Computed-score anchor.** Stores the oracle's normalized, capped 6-factor score — the layer *above* ERC-8004's raw feedback. Exposes `getTotalScore()` and `meetsThreshold()` for on-chain consumers. |
