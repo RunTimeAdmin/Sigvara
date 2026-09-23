@@ -347,6 +347,66 @@ convenience; a verifier should derive it from the payment rather than trust it.
 This detects a dropped or invented payment. It cannot detect a payment nobody ever
 submitted, which is what an independent chain watcher would be for.
 
+### `GET /badge/:address.svg`
+
+The embeddable score badge. Takes an **agent address**, not a didHash, because it is
+meant to be pasted into a README by someone holding the former and nothing else:
+
+```
+https://oracle.sigvara.xyz/badge/0x9a940B2e62a2c4a51E3cC38837944296717C4a96.svg
+```
+
+```markdown
+[![Sigvara score](https://oracle.sigvara.xyz/badge/0x<address>.svg)](https://sigvara.xyz/check?a=0x<address>)
+```
+
+A 64-character didHash answers `404`. The derivation from address to didHash is
+deterministic and the oracle does it internally; asking a badge consumer to compute a
+keccak hash before they can show a score defeats the point of the endpoint.
+
+Unauthenticated, and it reports the **finalized on-chain score**, never this oracle's
+pending proposal. A badge is a trust claim shown to strangers, so it carries the number
+that survived a challenge window rather than the one this operator would like to propose.
+
+| State | Renders |
+|---|---|
+| finalized score | `72 / 100`, coloured by band (≥75 green, ≥50 amber, ≥25 orange, below red) |
+| registered, never finalized | `not yet scored`, neutral |
+| no identity at that address | `not registered`, neutral |
+| slashed | `slashed`, red |
+| chain unreadable | `unavailable`, neutral |
+
+**An unscored agent never renders as `0 / 100`.** `getTotalScore` returns 0 both for an
+agent scored zero and for one that has never been finalized. Collapsing those accuses an
+agent nobody has looked at yet, so `lastUpdated` separates them.
+
+Every state that renders answers `200`, including `not registered`. An error status paints
+a broken image on somebody else's page, which reads as "this protocol is broken" rather
+than "this address has no agent". A malformed path is a different matter and 404s.
+
+Response headers:
+
+```
+Content-Type: image/svg+xml; charset=utf-8
+Cache-Control: public, max-age=300, stale-while-revalidate=600   (15s when unavailable)
+Cross-Origin-Resource-Policy: cross-origin
+Access-Control-Allow-Origin: *
+```
+
+`Cross-Origin-Resource-Policy` is the header that decides whether the badge renders on a
+third-party page. A reverse proxy in front of this must not replace it; Caddy's `header`
+directive **adds** rather than replaces, so setting one there produces two of each and an
+invalid CORS response. See `Caddyfile.oracle.example`.
+
+Cached for 60 seconds and bounded at 500 entries, since the key is an address supplied by
+whoever asks. The rate limiter guards the miss path only: one badge read by thousands of
+README viewers is absorbed by the cache, while an address enumerator misses every time.
+
+The SVG defines no element ids. A `clipPath` id collided across badges inlined in one
+document — `url(#id)` resolves to the first match in the DOCUMENT, so every badge after
+the first was clipped to the first one's width and lost the end of its text. It looked
+correct alone and broke on a list of agents, which is the page it exists for.
+
 ### `GET /jobs/:address` (ERC-8183, observation only)
 
 Reports what an [ERC-8183](https://eips.ethereum.org/EIPS/eip-8183) job registry says
