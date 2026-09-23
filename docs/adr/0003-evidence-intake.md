@@ -102,7 +102,31 @@ being useful, not a substitute for having them.
 
 ## Status of the work
 
-Decided, not built. The immediate consequence is that the divergence being left live on
+**Built, not yet enabled** (22 September 2026).
+
+`oracle/payment-scan.js` implements the scan: ERC-20 Transfer logs to registered agent
+addresses, chunked and checkpointed like the registration scan, with its own backoff via
+`chain.readWithBackoff`. Credits are planned purely and every refusal is named —
+`self_payment`, `below_minimum`, `already_credited` — because a silent filter here is
+indistinguishable from an agent nobody paid, which is the ambiguity this ADR exists to
+remove.
+
+`PAYMENT_SCAN_ENABLED` is `0` by default. Enabling it changes scores, since an operator
+that has been missing payments starts counting them, and that should not happen by
+surprise during a slash drill. **It must be enabled on every operator or on none**: two
+scanning and one not is the same delivery asymmetry, pointed the other way.
+
+Consequence 3 required a change to scoring, not just to intake. A pulled payment carries
+no outcome, so it is credited with `success: null` and `payments.hasOutcome` keeps it out
+of **both** sides of the success ratio while still counting it as fee volume. The earlier
+code did `success: !!success`, which would have turned "nobody reported an outcome" into
+"the work failed" and damaged agents nobody had complained about.
+
+**§5.4.6 is not yet closed.** It closes when this is enabled on the live operators, not
+when the code merges. Until then the whitepaper should keep saying unreported work is
+invisible, because on the running deployment it still is.
+
+Originally decided, not built. The immediate consequence is that the divergence being left live on
 20 September should be triaged in public as a delivery failure rather than quietly seeded
 away — see [divergence-log.md](../divergence-log.md). Seeding the checker by hand would
 have hidden the very defect that justifies this decision.

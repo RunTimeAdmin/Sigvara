@@ -173,6 +173,11 @@ async function getRegisteredAgents() {
         knownAgents.set(e.args.didHash, {
           didHash: e.args.didHash,
           agentAddress: e.args.agentAddress,
+          // Already in the event, so keeping it costs nothing and saves a read per
+          // agent. The payment scanner needs it to refuse an operator paying its own
+          // agent, which is the attested path's rule and must not become cheaper to
+          // dodge just because the evidence now arrives by a different door.
+          operator: e.args.operator,
           blockNumber: e.blockNumber,
         });
       }

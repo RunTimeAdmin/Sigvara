@@ -1,0 +1,228 @@
+'use strict';
+
+/**
+ * Payment evidence by pull — ADR 0003.
+ *
+ * A payment settles on chain as an ERC-20 Transfer to the agent's address. Until now it
+ * entered an operator's state only when somebody POSTed the settlement hash to *that*
+ * operator. The verification was always chain-based; only the notification was not, and
+ * with two operators that difference stopped being invisible: six payers paid the demo
+ * agent, every settlement was attested to the primary, and the checker — same chain,
+ * same code, same rules — scored 23 SVR against the primary's 3,023. Nobody misbehaved.
+ * The evidence simply never arrived, because arrival was per-operator and by HTTP.
+ *
+ * So each operator finds payments itself, by scanning the same Transfer logs it could
+ * already verify. Two operators with the same chain view then converge by construction,
+ * and a divergence afterwards means a real disagreement rather than a delivery failure.
+ * It also closes whitepaper §5.4.6 from the other side: work an agent was paid for is no
+ * longer invisible because nobody filled in a form.
+ *
+ * ## What a pulled payment is, and is not
+ *
+ * It is evidence that money moved: fee volume and tenure. It is evidence of nothing at
+ * all about how the work went, so it is credited with `success: null` and payments.js
+ * keeps it out of both sides of the success ratio. Outcomes stay push, because "the job
+ * was good" is not on chain and never will be.
+ *
+ * Recording it as `false` would damage an agent nobody complained about. Recording it as
+ * `true` would invent evidence. Both are worse than the payment remaining invisible,
+ * which is the defect being fixed.
+ *
+ * ## What it does not weaken
+ *
+ * Every existing defence survives unchanged, because none of them depended on the
+ * attestation being the entry point. The payer is read from the transfer log rather than
+ * asserted — that was already true. Self-payments are refused here too. `maxPerPayer`
+ * still caps what one counterparty contributes, and volume still decays.
+ *
+ * The honest way to put it: this changes who notices a payment, not what a payment has
+ * to survive to count.
+ */
+
+const { ethers } = require('ethers');
+
+/** Transfer(address indexed from, address indexed to, uint256 value). */
+const TRANSFER_TOPIC = ethers.id('Transfer(address,address,uint256)');
+
+/**
+ * Recipients per getLogs call.
+ *
+ * A topic filter is an OR-list and nodes cap how long it may be, so the agent set is
+ * queried in batches rather than in one filter that silently fails once the registry
+ * grows. Conservative on purpose: the cost of another round trip is a round trip, and
+ * the cost of an over-long filter is a scan that returns nothing and looks like an
+ * agent with no income.
+ */
+const MAX_RECIPIENTS_PER_CALL = 50;
+
+function readConfig(env = process.env) {
+  return {
+    // Off by default. Turning it on is ADR 0003 landing, and it changes scores: an
+    // operator that has been missing payments starts counting them. That is the point,
+    // and it is not something to have happen by surprise during a slash drill.
+    enabled: env.PAYMENT_SCAN_ENABLED === '1',
+    // Where to begin when there is no checkpoint. Scanning from genesis on a busy chain
+    // is the fastest way to be rate-limited into never finishing.
+    fromBlock: Number(env.PAYMENT_SCAN_FROM_BLOCK || env.FROM_BLOCK || 0),
+    chunkSize: Math.max(1, Number(env.PAYMENT_SCAN_CHUNK || env.LOG_CHUNK_SIZE || 2000)),
+    // Blocks to stay behind the head. A log in the most recent block can still be
+    // reorganised away, and a credit is not something to take back.
+    confirmations: Math.max(0, Number(env.PAYMENT_MIN_CONFIRMATIONS || 1)),
+  };
+}
+
+const pad = (address) => ethers.zeroPadValue(ethers.getAddress(address), 32);
+const lower = (a) => String(a || '').toLowerCase();
+
+/** Split the agent set into filter-sized batches. */
+function recipientBatches(addresses, max = MAX_RECIPIENTS_PER_CALL) {
+  const out = [];
+  for (let i = 0; i < addresses.length; i += max) out.push(addresses.slice(i, i + max));
+  return out;
+}
+
+/** Inclusive [from, to] ranges of at most `chunkSize` blocks. */
+function blockRanges(fromBlock, toBlock, chunkSize) {
+  const out = [];
+  for (let start = fromBlock; start <= toBlock; start += chunkSize) {
+    out.push([start, Math.min(start + chunkSize - 1, toBlock)]);
+  }
+  return out;
+}
+
+/**
+ * Decode one Transfer log, or null when it is not one.
+ *
+ * `from` and `to` come out of the topics, which is the whole reason this is trustworthy:
+ * the payer is read off the chain, never taken from a caller.
+ */
+function decodeTransfer(log) {
+  if (!log || !Array.isArray(log.topics) || log.topics[0] !== TRANSFER_TOPIC) return null;
+  if (log.topics.length < 3) return null; // a non-standard Transfer without indexed parties
+  return {
+    txHash: log.transactionHash,
+    blockNumber: log.blockNumber,
+    logIndex: log.logIndex,
+    from: ethers.getAddress('0x' + log.topics[1].slice(26)),
+    to: ethers.getAddress('0x' + log.topics[2].slice(26)),
+    amount: BigInt(log.data).toString(),
+  };
+}
+
+/**
+ * Decide what to credit, and say what was skipped and why.
+ *
+ * Pure. No provider, no state mutation. Everything it refuses is named rather than
+ * dropped, because a silent filter here is indistinguishable from an agent that was
+ * never paid, and that ambiguity is what this whole change exists to remove.
+ *
+ * Transfers are summed per (transaction, recipient) to match what `verifyPayment`
+ * already does with a receipt: one settlement transaction is one payment, whatever
+ * number of Transfer events it contains.
+ *
+ * @param {Array} decoded from decodeTransfer
+ * @param {object} opts
+ *   @param {(address:string) => string|null} opts.didHashOf recipient address -> didHash
+ *   @param {(address:string) => string|null} opts.operatorOf didHash -> operator address
+ *   @param {(txHash:string) => boolean} opts.isUsed already credited
+ *   @param {bigint} opts.minAmount
+ */
+function planCredits(decoded, opts) {
+  const { didHashOf, operatorOf = () => null, isUsed = () => false, minAmount = 0n } = opts;
+
+  // (txHash, recipient) -> accumulated
+  const grouped = new Map();
+  const skipped = [];
+
+  for (const t of decoded) {
+    if (!t) continue;
+    const didHash = didHashOf(t.to);
+    if (!didHash) {
+      // A transfer to somebody who is not a registered agent. Not a problem, just not
+      // ours; recorded at debug volume only, so it is not reported as a skip.
+      continue;
+    }
+    const key = `${lower(t.txHash)}|${lower(t.to)}`;
+    const cur = grouped.get(key) ?? {
+      didHash, txHash: t.txHash, to: t.to, from: t.from,
+      amount: 0n, blockNumber: t.blockNumber,
+    };
+    cur.amount += BigInt(t.amount);
+    // The earliest log in the transaction names the payer. A transaction that moves
+    // money onward afterwards must not relabel who paid.
+    if (t.logIndex < (cur.logIndex ?? Infinity)) {
+      cur.from = t.from;
+      cur.logIndex = t.logIndex;
+    }
+    grouped.set(key, cur);
+  }
+
+  const credits = [];
+  for (const g of grouped.values()) {
+    const reject = (reason) => skipped.push({
+      txHash: g.txHash, didHash: g.didHash, payer: g.from, amount: g.amount.toString(), reason,
+    });
+
+    if (isUsed(g.txHash)) { reject('already_credited'); continue; }
+    if (g.amount < minAmount) { reject('below_minimum'); continue; }
+    // Same rule as the attested path: an operator paying its own agent costs only gas,
+    // and the money comes straight back.
+    if (lower(g.from) === lower(g.to)) { reject('self_payment'); continue; }
+    const operator = operatorOf(g.didHash);
+    if (operator && lower(g.from) === lower(operator)) { reject('self_payment'); continue; }
+
+    credits.push({
+      didHash: g.didHash,
+      txHash: g.txHash,
+      payer: g.from,
+      amount: g.amount.toString(),
+      blockNumber: g.blockNumber,
+      // The point of ADR 0003. Money moving is on chain; how the work went is not.
+      success: null,
+    });
+  }
+
+  return { credits, skipped };
+}
+
+/**
+ * The highest block safe to credit from.
+ *
+ * Staying behind the head by `confirmations` because a log in the most recent block can
+ * still be reorganised away, and a credited payment is not something this system takes
+ * back: the tx hash is recorded as used, so a reorg would leave a credit for a
+ * transaction that no longer exists.
+ */
+function safeHead(head, confirmations) {
+  return Math.max(0, head - confirmations);
+}
+
+/**
+ * Fetch Transfer logs to a set of recipients over a block range.
+ *
+ * `readLogs` is injected so the caller supplies its own backoff; this module does not
+ * own retry policy and should not grow a second one beside chain.js's.
+ */
+async function scanRange({ readLogs, asset }, recipients, fromBlock, toBlock, chunkSize) {
+  const out = [];
+  for (const batch of recipientBatches(recipients)) {
+    const topics = [TRANSFER_TOPIC, null, batch.map(pad)];
+    for (const [start, end] of blockRanges(fromBlock, toBlock, chunkSize)) {
+      const logs = await readLogs({ address: asset, topics, fromBlock: start, toBlock: end });
+      out.push(...logs);
+    }
+  }
+  return out;
+}
+
+module.exports = {
+  TRANSFER_TOPIC,
+  MAX_RECIPIENTS_PER_CALL,
+  readConfig,
+  recipientBatches,
+  blockRanges,
+  decodeTransfer,
+  planCredits,
+  safeHead,
+  scanRange,
+};

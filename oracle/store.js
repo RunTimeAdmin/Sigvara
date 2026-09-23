@@ -72,6 +72,9 @@ const DIVERGENCE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 // restart resumes instead of replaying the chain from FROM_BLOCK, which grows with
 // every block and eventually trips a public RPC's rate limit.
 let scanState = null;
+// Where the ERC-20 Transfer scan got to. Persisted for the same reason: a restart that
+// replayed from FROM_BLOCK would grow with the chain and eventually never finish.
+let paymentScanState = null;
 
 /**
  * Clear `count` flags from an agent, and report what actually changed.
@@ -190,6 +193,7 @@ function load() {
       if (Array.isArray(v)) divergences.set(k, v.slice(-MAX_DIVERGENCES_PER_AGENT));
     }
     scanState = parsed.scanState || null;
+    paymentScanState = parsed.paymentScanState || null;
     console.log(`[oracle] state loaded from ${STATE_PATH}: ${attestations.size} attestations, ${flags.size} flags, ${links.size} links, ${attestCooldowns.size} cooldowns`);
   } catch (err) {
     if (err.code === 'ENOENT') {
@@ -213,6 +217,7 @@ function persist() {
       usedPaymentTxs: [...usedPaymentTxs],
       divergences: Object.fromEntries(divergences),
       scanState,
+      paymentScanState,
       savedAt: new Date().toISOString(),
     }));
     fs.renameSync(tmp, STATE_PATH);
@@ -264,7 +269,13 @@ function creditPayment(didHash, txHash, amount, payer, success, now = Date.now()
   // verifier fetches that packet from CounterAudit directly, so Sigvara vouching for
   // the identifier adds nothing it could not confirm itself. /evidence says which
   // fields the root covers so this cannot be mistaken for a commitment.
-  const event = { txHash: key, ts: now, amount: BigInt(amount).toString(), payer, success: !!success };
+  // `!!success` would turn null into false, which is precisely the error ADR 0003
+  // exists to avoid: a payment pulled from the chain carries no outcome, and recording
+  // it as a failure would damage an agent nobody complained about. Only a boolean is an
+  // outcome; anything else is recorded as null and payments.hasOutcome keeps it out of
+  // both sides of the success ratio.
+  const outcome = typeof success === 'boolean' ? success : null;
+  const event = { txHash: key, ts: now, amount: BigInt(amount).toString(), payer, success: outcome };
   if (packetId) event.packetId = String(packetId);
   paymentEvents.set(didHash, [...list, event]);
   return true;
@@ -355,6 +366,16 @@ function allDivergences() { return Object.fromEntries(divergences); }
 function getScanState() { return scanState; }
 function setScanState(state) { scanState = state; }
 
+/**
+ * Where the payment scan got to.
+ *
+ * Its own checkpoint, separate from the registration scan, because the two advance at
+ * different rates and share nothing but a chain. Folding them together would mean a
+ * rate-limited payment scan dragging the agent scan backwards with it.
+ */
+function getPaymentScanState() { return paymentScanState; }
+function setPaymentScanState(state) { paymentScanState = state; }
+
 function isStatePathWritable() {
   try {
     fs.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
@@ -395,6 +416,8 @@ module.exports = {
   DIVERGENCE_MAX_AGE_MS,
   getScanState,
   setScanState,
+  getPaymentScanState,
+  setPaymentScanState,
   getPaymentEvents,
   paymentVolume,
   prunePaymentEvents,

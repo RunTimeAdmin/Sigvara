@@ -17,6 +17,7 @@ const merkle = require('./merkle');
 const { createResponseCache } = require('./response-cache');
 const badge = require('./badge');
 const jobs = require('./jobs');
+const paymentScan = require('./payment-scan');
 const metrics = require('./metrics');
 
 // Verified-payment settings. Read once at startup so a malformed value fails the
@@ -26,6 +27,7 @@ const paymentCfg = payments.readConfig();
 // ERC-8183 job registry, read-only and off unless JOBS_REGISTRY_ADDRESS is set. Parsed
 // at startup so a malformed address stops the process rather than failing on the first
 // request, the same way the payment config does.
+const paymentScanCfg = paymentScan.readConfig();
 const jobsCfg = jobs.readConfig();
 let jobsProvider = null;
 let jobsChainId = null;
@@ -138,6 +140,9 @@ const {
   creditPayment,
   getScanState: loadScanState,
   setScanState,
+  getPaymentScanState,
+  setPaymentScanState,
+  usedPaymentTxs,
   getPaymentEvents,
   prunePaymentEvents,
   pruneExpiredCooldowns,
@@ -256,6 +261,93 @@ async function runEpoch() {
   }
 }
 
+/**
+ * Find payments by scanning the chain, rather than waiting to be told about them.
+ *
+ * ADR 0003. Verification was always chain-based; only the notification was not, and with
+ * two operators that difference produced a 29-point divergence where nobody misbehaved:
+ * the evidence simply never arrived at one of them, because arrival was per-operator and
+ * by HTTP.
+ *
+ * Credited with no outcome. Money moving is on chain; whether the work was good is not.
+ *
+ * Returns a summary rather than throwing. A failed payment scan must not lose the epoch:
+ * scoring from the payments already known is strictly better than not scoring, and the
+ * checkpoint is only advanced on success so the range is simply retried next time.
+ */
+async function runPaymentScan(agents) {
+  if (!paymentScanCfg.enabled) return null;
+  if (!paymentCfg.asset) {
+    console.warn('[oracle] payment scan enabled but PAYMENT_ASSET is unset; skipping');
+    return null;
+  }
+
+  const provider = chain.getProvider();
+  const head = await provider.getBlockNumber();
+  const to = paymentScan.safeHead(head, paymentScanCfg.confirmations);
+  const checkpoint = getPaymentScanState();
+  const from = checkpoint && Number.isInteger(checkpoint.lastBlock)
+    ? checkpoint.lastBlock + 1
+    : paymentScanCfg.fromBlock;
+
+  if (from > to) return { from, to, credited: 0, skipped: 0, upToDate: true };
+
+  const byAddress = new Map();
+  const byDid = new Map();
+  for (const a of agents) {
+    if (a.agentAddress) byAddress.set(a.agentAddress.toLowerCase(), a);
+    byDid.set(a.didHash, a);
+  }
+
+  // Backoff belongs to chain.js, which already owns retry policy for this RPC.
+  const readLogs = (filter) =>
+    chain.readWithBackoff('payment-scan getLogs', () => provider.getLogs(filter));
+
+  const logs = await paymentScan.scanRange(
+    { readLogs, asset: paymentCfg.asset },
+    [...byAddress.values()].map((a) => a.agentAddress),
+    from, to, paymentScanCfg.chunkSize,
+  );
+
+  const { credits, skipped } = paymentScan.planCredits(logs.map(paymentScan.decodeTransfer), {
+    didHashOf: (address) => byAddress.get(address.toLowerCase())?.didHash ?? null,
+    operatorOf: (didHash) => byDid.get(didHash)?.operator ?? null,
+    isUsed: (txHash) => usedPaymentTxs.has(String(txHash).toLowerCase()),
+    minAmount: paymentCfg.minAmount,
+  });
+
+  // The settlement time is the block's, not now. Crediting a back-scanned payment with
+  // the current clock would make an old settlement look fresh and defeat the decay that
+  // every volume figure depends on.
+  const times = new Map();
+  for (const n of new Set(credits.map((c) => c.blockNumber))) {
+    const block = await chain.readWithBackoff('payment-scan getBlock', () => provider.getBlock(n));
+    if (block) times.set(n, Number(block.timestamp) * 1000);
+  }
+
+  let credited = 0;
+  for (const c of credits) {
+    const ts = times.get(c.blockNumber);
+    if (ts === undefined) continue; // no timestamp, no decay basis: leave it for next time
+    if (creditPayment(c.didHash, c.txHash, c.amount, c.payer, null, ts)) credited += 1;
+  }
+
+  // Only after the range is fully processed. Advancing it earlier would skip whatever
+  // the failure interrupted, permanently.
+  setPaymentScanState({ lastBlock: to, at: Date.now() });
+  metrics.inc('paymentScans');
+  if (credited) metrics.inc('paymentsPulled', credited);
+
+  const bySkipReason = {};
+  for (const sk of skipped) bySkipReason[sk.reason] = (bySkipReason[sk.reason] || 0) + 1;
+  console.log(
+    `[oracle] payment scan ${from}-${to}: ${credited} credited, ${skipped.length} skipped` +
+    (skipped.length ? ` (${JSON.stringify(bySkipReason)})` : ''),
+  );
+
+  return { from, to, credited, skipped: skipped.length, reasons: bySkipReason };
+}
+
 async function runEpochInner() {
   const start = Date.now();
   payerScoreCache = new Map();
@@ -277,6 +369,16 @@ async function runEpochInner() {
   }
 
   console.log(`[oracle] ${agents.length} agent(s) found`);
+
+  // Before scoring, so this epoch scores what the chain shows rather than what happened
+  // to be posted to this operator. Failure is logged and swallowed: scoring from the
+  // payments already known beats not scoring at all.
+  try {
+    await runPaymentScan(agents);
+  } catch (err) {
+    metrics.inc('paymentScanErrors');
+    console.error('[oracle] payment scan failed:', err.message);
+  }
   let proposed = 0;
   let finalized = 0;
   let diverged = 0;
@@ -859,6 +961,11 @@ const server = http.createServer(async (req, res) => {
       // 'disabled' | 'configured'. Reported for the same reason as the external feed:
       // a reader nobody enabled and a reader pointed at the wrong chain both produce no
       // jobs, and only one of those is fine.
+      // 'enabled' | 'disabled', and how far it has got. Reported for the same reason
+      // the external feed's chain id is: a scanner nobody enabled and a scanner stuck
+      // 200,000 blocks behind both produce no new evidence, and only one is fine.
+      paymentScan: paymentScanCfg.enabled ? 'enabled' : 'disabled',
+      paymentScanBlock: (getPaymentScanState() || {}).lastBlock ?? null,
       jobsFeed: jobs.enabled(jobsCfg) ? 'configured' : 'disabled',
       jobsRegistry: jobsCfg.registry || null,
       jobsChainId,

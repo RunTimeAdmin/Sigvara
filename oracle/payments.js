@@ -251,9 +251,31 @@ function decayedVolume(events, halfLifeMs, now = Date.now()) {
  * successes stops masking recent failures. Returned in the same shape the
  * undecayed path uses so computeScore does not need to care which it got.
  */
+/**
+ * Whether an event says anything about how the work went.
+ *
+ * Money moving is on chain. Whether the job was any good is not, and never will be.
+ * A payment pulled from a Transfer log is therefore evidence of fee volume and of
+ * tenure, and evidence of nothing at all about outcome: nobody reported one.
+ *
+ * `success: null` marks that. It is NOT the same as `false`, and the difference is the
+ * whole point of ADR 0003. A pulled payment recorded as false would damage the success
+ * ratio of an agent nobody complained about, and one recorded as true would inflate it
+ * with evidence that does not exist. Both are worse than the payment being invisible,
+ * which is the problem being fixed.
+ *
+ * Existing stored events carry booleans and are unaffected.
+ */
+function hasOutcome(e) {
+  return typeof e.success === 'boolean';
+}
+
 function decayedAttestations(events, halfLifeMs, now = Date.now()) {
   let successful = 0n, total = 0n;
   for (const e of events) {
+    // Outcome-bearing only, in BOTH the numerator and the denominator. Counting a
+    // pulled payment in `total` alone would read as a job nobody called successful.
+    if (!hasOutcome(e)) continue;
     const w = decayWeight(now - e.ts, halfLifeMs);
     total += w;
     if (e.success) successful += w;
@@ -293,9 +315,16 @@ function byPayer(events, halfLifeMs, now = Date.now()) {
     const w = decayWeight(now - e.ts, halfLifeMs);
     const key = String(e.payer || '').toLowerCase();
     const cur = out.get(key) ?? { volume: 0n, weight: 0n, successWeight: 0n };
+    // Volume counts every payment. A payment that settled is fee activity whether or
+    // not anyone later said how the work went, which is exactly what ADR 0003 makes
+    // possible: fee and tenure stop depending on somebody filling in a form.
     cur.volume += (BigInt(e.amount) * w) / WEIGHT_SCALE;
-    cur.weight += w;
-    if (e.success) cur.successWeight += w;
+    // `weight` is the attestation denominator, so it counts only events that carry an
+    // outcome. It is not a second volume figure and must not become one.
+    if (hasOutcome(e)) {
+      cur.weight += w;
+      if (e.success) cur.successWeight += w;
+    }
     out.set(key, cur);
   }
   return out;
@@ -466,6 +495,7 @@ module.exports = {
   decayedAttestations,
   byPayer,
   isSelfPayment,
+  hasOutcome,
   trustMultiplier,
   propagationScore,
   diversifiedVolume,

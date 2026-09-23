@@ -39,6 +39,12 @@ const counters = {
   // be visible before anyone decides to score from it.
   jobsReads: 0,
   jobsErrors: 0,
+  // ADR 0003 pull scanner. paymentsPulled is the one to watch: it is how much evidence
+  // this operator found for itself rather than being told about, and a checker whose
+  // figure stays at zero while the primary's climbs is not converging.
+  paymentScans: 0,
+  paymentsPulled: 0,
+  paymentScanErrors: 0,
   rateLimitHits: 0,
   httpRequests: 0,
 
@@ -219,6 +225,21 @@ function toPrometheusText(extra = {}) {
   lines.push('# HELP sigvara_oracle_jobs_errors_total ERC-8183 reads that could not reach the registry');
   lines.push('# TYPE sigvara_oracle_jobs_errors_total counter');
   lines.push(`sigvara_oracle_jobs_errors_total ${counters.jobsErrors}`);
+
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_payment_scans_total Payment scans completed');
+  lines.push('# TYPE sigvara_oracle_payment_scans_total counter');
+  lines.push(`sigvara_oracle_payment_scans_total ${counters.paymentScans}`);
+
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_payments_pulled_total Payments credited from the chain rather than reported');
+  lines.push('# TYPE sigvara_oracle_payments_pulled_total counter');
+  lines.push(`sigvara_oracle_payments_pulled_total ${counters.paymentsPulled}`);
+
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_payment_scan_errors_total Payment scans that could not complete');
+  lines.push('# TYPE sigvara_oracle_payment_scan_errors_total counter');
+  lines.push(`sigvara_oracle_payment_scan_errors_total ${counters.paymentScanErrors}`);
 
   lines.push('');
   lines.push('# HELP sigvara_oracle_rate_limit_hits_total Rate limit rejections');

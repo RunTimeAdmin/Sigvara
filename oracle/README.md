@@ -87,6 +87,8 @@ Health check with operational signals for production alerting.
   "commit": "1f1456e3f6df0a625f0a107b84d4198f0a88f669",
   "externalFeed": "configured",
   "externalChainId": 5042002,
+  "paymentScan": "disabled",
+  "paymentScanBlock": null,
   "jobsFeed": "disabled",
   "jobsRegistry": null,
   "jobsChainId": null
@@ -122,6 +124,10 @@ report the same for an RPC pointing at nothing. Distinguishing `unreachable` fro
 
 The RPC URL itself is deliberately not published here: those often carry an API key in
 the path, and this endpoint is public.
+
+`paymentScan` is `enabled` or `disabled`, and `paymentScanBlock` is how far it has got.
+Both are reported because a scanner nobody switched on and a scanner stuck a long way
+behind the head both produce no new evidence, and only one of those is fine.
 
 `jobsFeed` is `configured` or `disabled`, with `jobsRegistry` and `jobsChainId` naming
 what it reads. Same reasoning as the external feed: a reader nobody enabled and a reader
@@ -678,6 +684,28 @@ with it off, the largest factor in the score is a count of HTTP requests.
 
 Amounts are base units and handled as BigInt throughout, so an 18-decimal token does not
 lose precision.
+
+### Payment evidence by pull (ADR 0003)
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `PAYMENT_SCAN_ENABLED` | `0` | `1` enables scanning ERC-20 Transfer logs to agent addresses. Off by default because enabling it changes scores: an operator that has been missing payments starts counting them. |
+| `PAYMENT_SCAN_FROM_BLOCK` | `FROM_BLOCK` | First block when there is no checkpoint. |
+| `PAYMENT_SCAN_CHUNK` | `LOG_CHUNK_SIZE` | Blocks per `getLogs` call. |
+| `PAYMENT_MIN_CONFIRMATIONS` | `1` | Blocks to stay behind the head. A credit records the tx hash as used, so a reorg would strand it. |
+
+**Enable it on every operator or on none.** Two operators scanning and one not is the
+same delivery asymmetry this exists to remove, pointed the other way.
+
+A pulled payment is credited with `success: null` — no outcome. It counts toward fee
+volume and tenure and is excluded from **both** sides of the success ratio. Recording it
+as `false` would damage an agent nobody complained about; as `true` it would invent
+evidence. Outcomes remain push, through `/attest`, and CounterAudit's negative
+attestations remain the only source of failures.
+
+So `/attest` keeps two jobs it alone can do: carrying the success flag, and acting as a
+hint when a caller does not want to wait for the next scan. Attestation becomes optional
+for fee and tenure, and stays required for success.
 
 ### ERC-8183 job registry (read only)
 

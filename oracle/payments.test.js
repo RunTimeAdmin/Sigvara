@@ -515,3 +515,67 @@ test('decayedVolume: the same events and clock give a bit-for-bit identical weig
   assert.equal(decayedVolume(ev, halfLife, now), decayedVolume(ev, halfLife, now));
   assert.notEqual(decayedVolume(ev, halfLife, now), decayedVolume(ev, halfLife, now + 3_600_000));
 });
+
+// ---------------------------------------------------------------------------
+// ADR 0003: a payment pulled from the chain carries no outcome
+//
+// Money moving is on chain; whether the work was good is not, and never will be. A
+// pulled payment is evidence of fee volume and tenure and of nothing about outcome.
+// Recording it as false would damage an agent nobody complained about; recording it as
+// true would invent evidence. Both are worse than the payment staying invisible, which
+// is the problem ADR 0003 exists to fix.
+// ---------------------------------------------------------------------------
+
+const { hasOutcome, byPayer } = require('./payments');
+
+const PULL_HALF = 90 * 24 * 3600 * 1000;
+let pullSeq = 0;
+const pulled = (amount, success, payer = '0xaa', ts = Date.now()) => ({
+  txHash: '0x' + String(pullSeq++).padStart(64, '0'),
+  ts, amount: String(amount), payer, success,
+});
+
+test('hasOutcome: only a boolean is an outcome', () => {
+  assert.equal(hasOutcome({ success: true }), true);
+  assert.equal(hasOutcome({ success: false }), true);
+  assert.equal(hasOutcome({ success: null }), false);
+  assert.equal(hasOutcome({}), false);
+});
+
+test('a pulled payment still counts as fee volume', () => {
+  assert.ok(decayedVolume([pulled(1000n, null)], PULL_HALF) > 0n);
+});
+
+test('a pulled payment is absent from BOTH sides of the success ratio', () => {
+  const only = decayedAttestations([pulled(1000n, null)], PULL_HALF);
+  assert.equal(only.total, 0, 'denominator must ignore it');
+  assert.equal(only.successful, 0, 'numerator must ignore it');
+});
+
+test('a pulled payment does not dilute a reported success', () => {
+  const reported = decayedAttestations([pulled(1000n, true)], PULL_HALF);
+  const mixed = decayedAttestations([pulled(1000n, true), pulled(1000n, null)], PULL_HALF);
+  assert.equal(mixed.total, reported.total);
+  assert.equal(mixed.successful, reported.successful);
+});
+
+test('an explicit failure still lowers the ratio, so pulling launders nothing', () => {
+  const r = decayedAttestations([pulled(1000n, true), pulled(1000n, false)], PULL_HALF);
+  assert.ok(r.successful < r.total);
+});
+
+test('byPayer separates settled volume from outcome weight', () => {
+  const g = byPayer([pulled(1000n, null, '0xa'), pulled(1000n, true, '0xa')], PULL_HALF);
+  const a = g.get('0xa');
+  assert.ok(a.volume > 0n, 'both payments are volume');
+  assert.equal(a.weight, a.successWeight, 'only the reported one carries outcome weight');
+});
+
+test('the capped path agrees with the uncapped one about pulled payments', () => {
+  const cfg = { halfLifeMs: PULL_HALF, feeUnit: 100n, maxPerPayer: 4, trustWeight: 1 };
+  const events = [pulled(1000n, true, '0xa'), pulled(1000n, null, '0xa')];
+  const capped = diversifiedAttestations(events, cfg);
+  const uncapped = decayedAttestations(events, PULL_HALF);
+  assert.equal(capped.total, uncapped.total);
+  assert.equal(capped.successful, uncapped.successful);
+});
