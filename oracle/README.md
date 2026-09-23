@@ -692,7 +692,7 @@ lose precision.
 | `PAYMENT_SCAN_ENABLED` | `0` | `1` enables scanning ERC-20 Transfer logs to agent addresses. Off by default because enabling it changes scores: an operator that has been missing payments starts counting them. |
 | `PAYMENT_SCAN_FROM_BLOCK` | `FROM_BLOCK` | First block when there is no checkpoint. |
 | `PAYMENT_SCAN_CHUNK` | `LOG_CHUNK_SIZE` | Blocks per `getLogs` call. |
-| `PAYMENT_MIN_CONFIRMATIONS` | `1` | Blocks to stay behind the head. A credit records the tx hash as used, so a reorg would strand it. |
+| `PAYMENT_SCAN_CONFIRMATIONS` | `6` (floor) | Blocks to stay behind the head. May be raised, not lowered. Deeper than the attested path because a scan credits unattended; a credit records the tx hash as used, so a reorg would strand it. |
 
 **Enable it on every operator or on none.** Two operators scanning and one not is the
 same delivery asymmetry this exists to remove, pointed the other way.

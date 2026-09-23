@@ -203,5 +203,53 @@ test('config falls back to the existing scan settings', () => {
   const cfg = scan.readConfig({ FROM_BLOCK: '500', LOG_CHUNK_SIZE: '1000' });
   assert.equal(cfg.fromBlock, 500);
   assert.equal(cfg.chunkSize, 1000);
-  assert.equal(cfg.confirmations, 1, 'at least one confirmation by default');
+  assert.equal(cfg.confirmations, scan.MIN_SCAN_CONFIRMATIONS, 'the floor applies when nothing is set');
+});
+
+// ---------------------------------------------------------------------------
+// Confirmations: an unattended scan is more careful than a deliberate attestation
+// ---------------------------------------------------------------------------
+
+test('confirmations cannot be set below the floor', () => {
+  // An attestation is a deliberate act by someone who watched the transaction settle.
+  // A scan credits unattended, every epoch, with nobody looking, so the shallow default
+  // the attested path uses is not good enough for it.
+  assert.equal(scan.readConfig({ PAYMENT_MIN_CONFIRMATIONS: '1' }).confirmations, scan.MIN_SCAN_CONFIRMATIONS);
+  assert.equal(scan.readConfig({ PAYMENT_SCAN_CONFIRMATIONS: '0' }).confirmations, scan.MIN_SCAN_CONFIRMATIONS);
+  assert.ok(scan.MIN_SCAN_CONFIRMATIONS >= 6);
+});
+
+test('confirmations can be raised, and the scan-specific setting wins', () => {
+  assert.equal(scan.readConfig({ PAYMENT_SCAN_CONFIRMATIONS: '24' }).confirmations, 24);
+  assert.equal(scan.readConfig({ PAYMENT_MIN_CONFIRMATIONS: '12' }).confirmations, 12);
+  assert.equal(
+    scan.readConfig({ PAYMENT_SCAN_CONFIRMATIONS: '30', PAYMENT_MIN_CONFIRMATIONS: '12' }).confirmations,
+    30,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// The checkpoint may not step over a block that was not resolved
+// ---------------------------------------------------------------------------
+
+test('a fully resolved range checkpoints at the end of it', () => {
+  assert.equal(scan.checkpointAfter([], 100, 200), 200);
+});
+
+test('the checkpoint stops one block short of the earliest unresolved block', () => {
+  // The scan only moves forward. Advancing past a payment that could not be credited
+  // would lose it for good, which is what the first version of this did while carrying
+  // a comment claiming it was "left for next time".
+  assert.equal(scan.checkpointAfter([{ blockNumber: 150 }], 100, 200), 149);
+  assert.equal(scan.checkpointAfter([{ blockNumber: 180 }, { blockNumber: 150 }], 100, 200), 149,
+    'the earliest one decides, not the last seen');
+});
+
+test('nothing is committed when the first block of the range is unresolved', () => {
+  // from - 1 would move the checkpoint backwards. Null means the whole range is retried.
+  assert.equal(scan.checkpointAfter([{ blockNumber: 100 }], 100, 200), null);
+});
+
+test('an unresolved block below the range does not drag the checkpoint backwards', () => {
+  assert.equal(scan.checkpointAfter([{ blockNumber: 50 }], 100, 200), null);
 });

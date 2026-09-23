@@ -55,6 +55,9 @@ const TRANSFER_TOPIC = ethers.id('Transfer(address,address,uint256)');
  */
 const MAX_RECIPIENTS_PER_CALL = 50;
 
+/** Floor for how far behind the head an unattended scan credits. */
+const MIN_SCAN_CONFIRMATIONS = 6;
+
 function readConfig(env = process.env) {
   return {
     // Off by default. Turning it on is ADR 0003 landing, and it changes scores: an
@@ -66,8 +69,18 @@ function readConfig(env = process.env) {
     fromBlock: Number(env.PAYMENT_SCAN_FROM_BLOCK || env.FROM_BLOCK || 0),
     chunkSize: Math.max(1, Number(env.PAYMENT_SCAN_CHUNK || env.LOG_CHUNK_SIZE || 2000)),
     // Blocks to stay behind the head. A log in the most recent block can still be
-    // reorganised away, and a credit is not something to take back.
-    confirmations: Math.max(0, Number(env.PAYMENT_MIN_CONFIRMATIONS || 1)),
+    // reorganised away, and a credit is not something this system takes back: the tx
+    // hash is recorded as used, so a reorg leaves a credit for a transaction that no
+    // longer exists.
+    //
+    // Deeper than the attested path's default of 1, and deliberately so. An attestation
+    // is a deliberate act by someone who saw the transaction settle; a scan credits
+    // unattended, every epoch, with nobody looking. The floor is 6 and an explicit
+    // setting may raise it but not lower it below what the attested path requires.
+    confirmations: Math.max(
+      MIN_SCAN_CONFIRMATIONS,
+      Number(env.PAYMENT_SCAN_CONFIRMATIONS || env.PAYMENT_MIN_CONFIRMATIONS || 0),
+    ),
   };
 }
 
@@ -198,6 +211,28 @@ function safeHead(head, confirmations) {
 }
 
 /**
+ * How far the checkpoint may advance after processing a range.
+ *
+ * Not simply `to`. A credit whose block timestamp could not be read is left uncredited,
+ * and if the checkpoint moved past it anyway that payment would never be looked at
+ * again: the scan only ever moves forward. The first version of this carried a comment
+ * saying such a credit was "left for next time" while advancing the checkpoint past it,
+ * which is the worst kind of wrong — an asserted safety property that is not there.
+ *
+ * So the checkpoint stops one block short of the earliest block still unresolved, and
+ * the next scan retries from there. Returns null when nothing may be committed at all,
+ * which is the case where the very first block of the range is the unresolved one.
+ *
+ * @param {Array<{blockNumber:number}>} unresolved credits with no usable timestamp
+ */
+function checkpointAfter(unresolved, from, to) {
+  if (!unresolved.length) return to;
+  const earliest = unresolved.reduce((m, c) => Math.min(m, c.blockNumber), Infinity);
+  const candidate = earliest - 1;
+  return candidate >= from ? candidate : null;
+}
+
+/**
  * Fetch Transfer logs to a set of recipients over a block range.
  *
  * `readLogs` is injected so the caller supplies its own backoff; this module does not
@@ -224,5 +259,7 @@ module.exports = {
   decodeTransfer,
   planCredits,
   safeHead,
+  checkpointAfter,
+  MIN_SCAN_CONFIRMATIONS,
   scanRange,
 };

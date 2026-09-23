@@ -326,15 +326,22 @@ async function runPaymentScan(agents) {
   }
 
   let credited = 0;
+  const unresolved = [];
   for (const c of credits) {
     const ts = times.get(c.blockNumber);
-    if (ts === undefined) continue; // no timestamp, no decay basis: leave it for next time
+    if (ts === undefined) {
+      // No block timestamp means no decay basis, so it cannot be credited yet. The
+      // checkpoint below stops short of it so it is retried rather than skipped.
+      unresolved.push(c);
+      continue;
+    }
     if (creditPayment(c.didHash, c.txHash, c.amount, c.payer, null, ts)) credited += 1;
   }
 
-  // Only after the range is fully processed. Advancing it earlier would skip whatever
-  // the failure interrupted, permanently.
-  setPaymentScanState({ lastBlock: to, at: Date.now() });
+  // Never past a block still unresolved. The scan only moves forward, so advancing over
+  // one would lose that payment for good.
+  const nextCheckpoint = paymentScan.checkpointAfter(unresolved, from, to);
+  if (nextCheckpoint !== null) setPaymentScanState({ lastBlock: nextCheckpoint, at: Date.now() });
   metrics.inc('paymentScans');
   if (credited) metrics.inc('paymentsPulled', credited);
 
@@ -345,7 +352,7 @@ async function runPaymentScan(agents) {
     (skipped.length ? ` (${JSON.stringify(bySkipReason)})` : ''),
   );
 
-  return { from, to, credited, skipped: skipped.length, reasons: bySkipReason };
+  return { from, to, credited, skipped: skipped.length, unresolved: unresolved.length, checkpoint: nextCheckpoint, reasons: bySkipReason };
 }
 
 async function runEpochInner() {
