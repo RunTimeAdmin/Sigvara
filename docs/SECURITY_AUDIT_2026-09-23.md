@@ -1,9 +1,32 @@
 # Sigvara Security Audit — 2026-09-23
 
 **Auditor:** Cloud Agent (internal, automated)  
-**Commit:** `231aefe25b4f4cbcaedd1e98e6f78263ff719dba` (HEAD of `main`)  
+**Audited at:** `231aefe25b4f4cbcaedd1e98e6f78263ff719dba`
+
+**Corrected against:** `c98e462` (see the correction note below)  
 **Scope:** Full protocol — contracts, oracle (including ADR 0003 payment-scan), SDK, deployment/ops  
 **Purpose:** Go/No-Go gate for enabling `paymentScan` on live operators and further product push
+
+---
+
+## Correction, 23 September 2026
+
+SEC-01 as originally written was factually wrong, and the error mattered: it reported
+the ADR 0003 pull scanner as unmerged. It was not. `oracle/payment-scan.js` landed in
+`68a871d`, before this audit was published, and the auditor's pin at `231aefe` predated
+it by two commits.
+
+That inverted the finding. SEC-01 described risks to watch for *when* the scanner was
+built. One of them, checkpoint advance past unprocessed events, was not hypothetical.
+It was present in merged code and would have lost payments permanently. It is fixed in
+`c98e462`.
+
+SEC-01 and the Current State section are rewritten below against the code as it stands.
+Nothing else is altered: SEC-02 through SEC-06 were verified against the real deployment
+and stand as written, and the Go / Conditional Go verdict is unchanged.
+
+The auditor's list of predicted risks was good enough that one of them found a live
+defect. Worth recording rather than quietly correcting.
 
 ---
 
@@ -32,24 +55,56 @@ This audit examined the Sigvara protocol at current HEAD, focusing on the recent
 
 ## Findings
 
-### SEC-01: Payment-Scan Topic Filter Has No Explicit Address Check in Scanner (Medium)
+### SEC-01: Pull Scanner, Predicted Risks, Checked Against the Merged Code (Medium)
 
-**Location:** `oracle/index.js` — payment scan not yet implemented at HEAD  
-**Status:** ADR 0003 is documented but the pull scanner is not yet merged
+**Location:** `oracle/payment-scan.js`, `oracle/index.js` (`runPaymentScan`)
+**Status:** Implemented in `68a871d`. Disabled by default (`PAYMENT_SCAN_ENABLED=0`) and
+disabled on both live operators. One of the risks below was found present and is fixed
+in `c98e462`.
 
-**Description:** ADR 0003 describes a pull-based payment scanner that would query `Transfer` logs filtered to agent addresses. At current HEAD (231aefe), this scanner does not exist — payment evidence still enters only through `POST /attest` with a verified `txHash`.
+**Description:** ADR 0003 moves payment evidence from push to pull: each operator scans
+ERC-20 `Transfer` logs to registered agent addresses rather than waiting for a `POST
+/attest`. The scanner is merged with 24 unit tests. `/attest` remains, carrying the
+success flag, which is not on chain, and acting as a hint.
 
-**Impact:** The documented "silent empty log filter" risk in ADR 0003 does not apply yet because the scanner isn't implemented. However, when implemented:
-- Empty log filters that match nothing are indistinguishable from genuinely empty results
-- Topic filter batching across many agents could exceed RPC provider limits
+The original version of this finding assumed the scanner did not exist and listed risks
+to address when it shipped. Each is checked against the code below.
 
-**Recommendation:** When implementing ADR 0003:
-1. Implement progressive address chunking (similar to `queryWithBackoff` pattern in `chain.js`)
-2. Add explicit logging when a scan returns zero events for diagnostic clarity
-3. Consider a sentinel address with known transfers to verify filter correctness
+| Predicted risk | State in merged code |
+|---|---|
+| Silent empty topic filters | **Partly addressed.** Recipients are batched at `MAX_RECIPIENTS_PER_CALL = 50` so a growing registry cannot produce an over-long filter that returns nothing. There is still no canary; see recommendation 1. |
+| Rate-limit exhaustion | **Addressed.** Block ranges are chunked and every `getLogs` goes through `chain.readWithBackoff`, so the scanner does not carry a second retry policy beside the existing one. |
+| Double-credit across push and pull | **Addressed.** `planCredits` consults `usedPaymentTxs` and names the refusal `already_credited`, so a settlement that arrives by both doors is credited once and the second attempt is visible rather than silent. |
+| Reorg handling | **Addressed.** `safeHead` keeps the scan behind the tip, and confirmations now carry a floor of 6 (`MIN_SCAN_CONFIRMATIONS`) rather than inheriting the attested path's default of 1. See SEC-04. |
+| **Checkpoint advance past unprocessed events** | **Was present. Fixed in `c98e462`.** See below. |
 
-**Testnet:** Acceptable — ADR 0003 not yet live  
-**Mainnet:** Blocker — must be addressed when payment-scan ships
+**The checkpoint defect, as found.** A credit whose block timestamp could not be read was
+left uncredited, carrying a source comment saying it was "left for next time", while the
+checkpoint advanced to the end of the scanned range regardless. The scan only moves
+forward, so there was no next time: that payment would never have been examined again.
+
+Worse than a silent bug, because the comment asserted a safety property the code did not
+have, which is the kind of thing that stops a reader looking.
+
+Fixed by `checkpointAfter`, a pure function that stops the checkpoint one block short of
+the earliest unresolved block and returns `null` (commit nothing, retry the whole range)
+when the first block of the range is the unresolved one. Five tests cover it, including
+that an unresolved block below the range cannot drag the checkpoint backwards.
+
+**Impact of the defect had it gone live:** silent, permanent under-crediting of fee
+volume, on the exact path introduced to stop payments being missed. It would have looked
+like an agent that had not been paid, which is the ambiguity ADR 0003 exists to remove.
+
+**Remaining recommendations:**
+1. Add a canary check, a known address with known transfers, so a filter that matches
+   nothing can be told from a genuinely quiet range. Not yet implemented.
+2. The scan logs its block range and credited/skipped counts each epoch, and `/health`
+   reports `paymentScan` and `paymentScanBlock`. A scanner stuck a long way behind the
+   head is therefore visible from outside, but nothing alerts on it. Consider a watcher
+   rule.
+
+**Testnet:** Acceptable. The defect is fixed and the scanner is disabled.
+**Mainnet:** Blocker until recommendation 1 is addressed and the scan has run under load.
 
 ---
 
@@ -387,9 +442,18 @@ This closes the escape where an agent could:
 ## ADR 0003 Payment-Scan Specific Analysis
 
 ### Current State
-ADR 0003 is documented and accepted but **not yet implemented** at HEAD (231aefe). The code still uses the push-based `/attest` model with payment verification.
+ADR 0003 is **implemented and disabled**. `oracle/payment-scan.js` merged in `68a871d`;
+both live operators run it with `PAYMENT_SCAN_ENABLED=0`, so payment evidence still
+enters only through `/attest` on the deployment as it runs today. Whitepaper §5.4.6
+therefore remains open, deliberately: it closes when the scan runs, not when the code
+merges.
 
-### When Implemented — Key Risks to Address
+A pulled payment is credited with `success: null` and is excluded from both sides of the
+success ratio while still counting toward fee volume and tenure. Recording it as `false`
+would damage an agent nobody complained about; as `true` it would invent evidence.
+Attestation is therefore optional for fee and tenure and remains required for success.
+
+### Risks, and where each stands
 
 | Risk | Description | Mitigation |
 |------|-------------|------------|
@@ -397,7 +461,7 @@ ADR 0003 is documented and accepted but **not yet implemented** at HEAD (231aefe
 | **Rate limit exhaustion** | Scanning N agents × M blocks per chunk can exceed RPC quotas | Chunk agents, use existing `queryWithBackoff` pattern |
 | **Double-credit vs HTTP attest** | If both push and pull paths exist, same payment could be credited twice | Use `usedPaymentTxs` set (already present) |
 | **Reorg handling** | Pulled payment later reorged out | Require deeper confirmations for pull path |
-| **Checkpoint advance** | If checkpoint advances past missed events, they're lost forever | Conservative checkpoint updates only after successful processing |
+| **Checkpoint advance** | If checkpoint advances past missed events, they're lost forever | **Was present in merged code; fixed in `c98e462`** via `checkpointAfter`, which stops short of the earliest unresolved block |
 
 ### Recommendation for paymentScan Enablement
 
