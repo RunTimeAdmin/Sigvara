@@ -70,13 +70,16 @@ success flag, which is not on chain, and acting as a hint.
 The original version of this finding assumed the scanner did not exist and listed risks
 to address when it shipped. Each is checked against the code below.
 
-| Predicted risk | State in merged code |
-|---|---|
-| Silent empty topic filters | **Partly addressed.** Recipients are batched at `MAX_RECIPIENTS_PER_CALL = 50` so a growing registry cannot produce an over-long filter that returns nothing. There is still no canary; see recommendation 1. |
-| Rate-limit exhaustion | **Addressed.** Block ranges are chunked and every `getLogs` goes through `chain.readWithBackoff`, so the scanner does not carry a second retry policy beside the existing one. |
-| Double-credit across push and pull | **Addressed.** `planCredits` consults `usedPaymentTxs` and names the refusal `already_credited`, so a settlement that arrives by both doors is credited once and the second attempt is visible rather than silent. |
-| Reorg handling | **Addressed.** `safeHead` keeps the scan behind the tip, and confirmations now carry a floor of 6 (`MIN_SCAN_CONFIRMATIONS`) rather than inheriting the attested path's default of 1. See SEC-04. |
-| **Checkpoint advance past unprocessed events** | **Was present. Fixed in `c98e462`.** See below. |
+| Predicted risk | State in merged code | Location |
+|---|---|---|
+| Silent empty topic filters | **Partly addressed.** Recipients are batched at `MAX_RECIPIENTS_PER_CALL = 50` so a growing registry cannot produce an over-long filter that returns nothing. There is still no canary; see recommendation 1. | `payment-scan.js:47-55` |
+| Rate-limit exhaustion | **Addressed.** Block ranges are chunked and every `getLogs` goes through `chain.readWithBackoff`, so the scanner does not carry a second retry policy beside the existing one. | `index.js:303-304` |
+| Double-credit across push and pull | **Addressed.** `planCredits` consults `usedPaymentTxs` and names the refusal `already_credited`, so a settlement that arrives by both doors is credited once and the second attempt is visible rather than silent. | `payment-scan.js:179`, `index.js:315` |
+| Reorg handling | **Addressed.** `safeHead` keeps the scan behind the tip, and confirmations now carry a floor of 6 (`MIN_SCAN_CONFIRMATIONS`) rather than inheriting the attested path's default of 1. See SEC-04. | `payment-scan.js:57-83, 208-210` |
+| `success: null` / `hasOutcome` | **Addressed.** Pulled payments carry `success: null` and are excluded from both sides of the success ratio via `hasOutcome()`. Recording `false` would damage agents nobody complained about; recording `true` would invent evidence. | `payment-scan.js:193-195`, `payments.js:269-270` |
+| Self-payment bypass | **Addressed.** Both agent address and operator address are checked and refused with named reason `self_payment`. | `payment-scan.js:183-186` |
+| Named refusals | **Addressed.** Every refusal (`already_credited`, `below_minimum`, `self_payment`) is recorded rather than silently dropped, making diagnostics unambiguous. | `payment-scan.js:175-186` |
+| **Checkpoint advance past unprocessed events** | **Was present. Fixed in `c98e462`.** See below. | `payment-scan.js:215-232` |
 
 **The checkpoint defect, as found.** A credit whose block timestamp could not be read was
 left uncredited, carrying a source comment saying it was "left for next time", while the
@@ -170,32 +173,41 @@ The `SplitAuthority.s.sol` script exists but has not been run against production
 
 ---
 
-### SEC-04: Payment Confirmation Depth Is Configurable But Shallow Default (Medium)
+### SEC-04: Payment Confirmation Depth Has Split Defaults (Medium)
 
-**Location:** `oracle/payments.js:60`, `oracle/.env.example:111`
+**Location:** `oracle/payments.js:60`, `oracle/payment-scan.js:57-83`
 
-**Description:** `PAYMENT_MIN_CONFIRMATIONS` defaults to 1. On chains with meaningful reorg probability, a payment could be:
-1. Verified by the oracle at 1 confirmation
-2. Reorged out of the canonical chain
-3. The attestation/credit remains in oracle state
+**Description:** The two payment paths have different confirmation defaults:
 
-**Code:**
+| Path | Default | Floor | Config |
+|------|---------|-------|--------|
+| `/attest` (push) | 1 | None | `PAYMENT_MIN_CONFIRMATIONS` |
+| Scan (pull) | 6 | 6 | `PAYMENT_SCAN_CONFIRMATIONS` or `PAYMENT_MIN_CONFIRMATIONS` |
+
+The scanner enforces a floor of 6 (`MIN_SCAN_CONFIRMATIONS`) and documents why:
+
 ```javascript
-minConfirmations: Number(env.PAYMENT_MIN_CONFIRMATIONS || 1),
+// Deeper than the attested path's default of 1, and deliberately so. An attestation
+// is a deliberate act by someone who saw the transaction settle; a scan credits
+// unattended, every epoch, with nobody looking.
+confirmations: Math.max(MIN_SCAN_CONFIRMATIONS, Number(env.PAYMENT_SCAN_CONFIRMATIONS || ...))
 ```
 
 **Impact:**
-- An attacker could submit a payment, get it attested, then have the payment reorged
-- The agent receives score credit for a payment that ultimately didn't settle
-- On Arc testnet with fast finality this is less concerning; on other chains it matters
+- The `/attest` path still defaults to 1 confirmation, which on chains with meaningful reorg probability allows:
+  1. Payment attested at 1 confirmation
+  2. Payment reorged out
+  3. Credit remains (tx hash marked used, so even rescanning won't help)
+- The scan path is safer by default (floor of 6) and cannot be lowered below that
+- On Arc testnet with fast finality this is acceptable; other chains need configuration
 
 **Recommendation:**
-1. Document recommended confirmation depths per target chain in deployment docs
-2. For chains with meaningful reorg risk, require 12-32 confirmations
-3. Consider implementing a "re-verification" pass for recently credited payments
+1. Consider raising `/attest` default to match the scan floor (6)
+2. Document recommended confirmation depths per target chain
+3. For mainnet on chains with meaningful reorg risk, set `PAYMENT_MIN_CONFIRMATIONS=12` or higher
 
 **Testnet:** Acceptable — Arc has fast finality  
-**Mainnet:** Review per-chain — may need 12+ confirmations
+**Mainnet:** Review per-chain — consider aligning defaults
 
 ---
 
@@ -347,9 +359,9 @@ function verifyEvidence(bytes32 didHash, bytes32 leaf, bytes32[] calldata proof)
 2. Verifier rebuilds each leaf from transaction data on chain
 3. Verifier checks leaf + proof against the committed root
 
-**Gap:** If the oracle omits a payment from its state, that payment never enters the evidence set. ADR 0003 addresses this by making the oracle pull payments itself rather than relying on `/attest` delivery.
+**Gap (closed by ADR 0003):** Previously, if nobody POSTed a payment to `/attest`, that payment never entered the evidence set. ADR 0003 closes this by having the oracle pull payments from Transfer logs itself — a payment that settled on chain will be found by the scanner regardless of whether anyone submitted it via HTTP.
 
-**Status:** Known limitation — ADR 0003 is the fix
+**Status:** **CLOSED** — ADR 0003 implemented at `68a871d`
 
 ---
 
@@ -453,25 +465,52 @@ success ratio while still counting toward fee volume and tenure. Recording it as
 would damage an agent nobody complained about; as `true` it would invent evidence.
 Attestation is therefore optional for fee and tenure and remains required for success.
 
+### Implementation Location
+
+| Component | File | Lines |
+|-----------|------|-------|
+| Core scanner logic | `oracle/payment-scan.js` | 1-265 |
+| Wiring & epoch integration | `oracle/index.js` | 278-350, 383-388 |
+| State persistence | `oracle/store.js` | 59, 77, 189, 217, 376-377 |
+| Outcome filtering | `oracle/payments.js` | 269-270, 278, 324 |
+| Tests | `oracle/payment-scan.test.js` | 1-255 |
+
+### Test Coverage (`payment-scan.test.js`)
+
+The test file covers:
+- Payer read from chain topics, not caller (`decodeTransfer reads both parties`)
+- Non-Transfer events rejected (`decodeTransfer ignores anything that is not a Transfer`)
+- Non-indexed parties rejected (`decodeTransfer refuses a Transfer whose parties are not indexed`)
+- Multiple transfers summed (`several transfers in one transaction are one payment`)
+- Earliest log names payer (`the earliest log in a transaction names the payer`)
+- Self-payment refused (`an agent paying itself is refused`, `the operator paying its own agent is refused`)
+- Below-minimum refused (`a payment below the minimum is refused`)
+- Already-credited refused (`a transaction already credited is refused`)
+- Named refusals (`every refusal is named, because a silent filter reads as an agent nobody paid`)
+- `safeHead` stays behind tip (`safeHead stays behind the tip, so a reorg cannot strand a credit`)
+- Recipient batching (`recipients are batched, so a growing registry cannot overflow the topic filter`)
+- Checkpoint safety (`the checkpoint stops one block short of the earliest unresolved block`)
+
 ### Risks, and where each stands
 
-| Risk | Description | Mitigation |
-|------|-------------|------------|
-| **Silent empty filters** | A misconfigured topic filter returns [] which looks like "no payments" | Add canary check with known transfers |
-| **Rate limit exhaustion** | Scanning N agents × M blocks per chunk can exceed RPC quotas | Chunk agents, use existing `queryWithBackoff` pattern |
-| **Double-credit vs HTTP attest** | If both push and pull paths exist, same payment could be credited twice | Use `usedPaymentTxs` set (already present) |
-| **Reorg handling** | Pulled payment later reorged out | Require deeper confirmations for pull path |
-| **Checkpoint advance** | If checkpoint advances past missed events, they're lost forever | **Was present in merged code; fixed in `c98e462`** via `checkpointAfter`, which stops short of the earliest unresolved block |
+| Risk | Description | Status |
+|------|-------------|--------|
+| **Silent empty filters** | A misconfigured topic filter returns [] which looks like "no payments" | **Partly addressed** via batching; no canary yet |
+| **Rate limit exhaustion** | Scanning N agents × M blocks per chunk can exceed RPC quotas | **Addressed** via `chain.readWithBackoff` |
+| **Double-credit vs HTTP attest** | If both push and pull paths exist, same payment could be credited twice | **Addressed** via shared `usedPaymentTxs` set |
+| **Reorg handling** | Pulled payment later reorged out | **Addressed** via `MIN_SCAN_CONFIRMATIONS = 6` floor |
+| **Checkpoint advance** | If checkpoint advances past missed events, they're lost forever | **Fixed in `c98e462`** via `checkpointAfter` |
 
 ### Recommendation for paymentScan Enablement
 
 **Enable paymentScan on both live oracles: CONDITIONAL GO**
 
 Conditions:
-1. Verify `usedPaymentTxs` dedupe correctly handles both paths
-2. Set `PAYMENT_MIN_CONFIRMATIONS` to at least 6 for initial rollout
-3. Monitor for divergences in the first 24 hours
-4. Ensure checker is running with same payment config
+1. ✅ `usedPaymentTxs` dedupe handles both paths (verified: `payment-scan.js:179`, `index.js:315`)
+2. ✅ `MIN_SCAN_CONFIRMATIONS = 6` floor enforced by default (verified: `payment-scan.js:57-83`)
+3. Verify checker is running with `PAYMENT_SCAN_ENABLED=1` and same config
+4. Monitor `sigvara_oracle_payments_pulled_total` metric for convergence between operators
+5. Watch for divergence alerts in first 24 hours
 
 ---
 
@@ -496,13 +535,16 @@ Conditions:
 
 ## Operational Checklist for paymentScan Rollout
 
-- [ ] Confirm `usedPaymentTxs` persists correctly in state file
-- [ ] Set `PAYMENT_MIN_CONFIRMATIONS=6` on both operators
+- [x] Confirm `usedPaymentTxs` persists correctly in state file (verified: `store.js:59,189,217`)
+- [x] `MIN_SCAN_CONFIRMATIONS=6` floor enforced by scanner (verified: `payment-scan.js:57-83`)
+- [ ] Set `PAYMENT_SCAN_ENABLED=1` on primary operator
+- [ ] Set `PAYMENT_SCAN_ENABLED=1` on checker with same config
 - [ ] Verify checker is in checker mode (`ORACLE_MODE=checker`)
 - [ ] Ensure checker epoch interval < 3 hours (half of 6-hour window)
 - [ ] Test `/evidence/:didHash` endpoint returns correct proofs
+- [ ] Monitor `sigvara_oracle_payments_pulled_total` metric for convergence
 - [ ] Verify watcher webhook is delivering to committee channel
-- [ ] Document rollback procedure (disable paymentScan in env, restart)
+- [ ] Document rollback procedure (set `PAYMENT_SCAN_ENABLED=0`, restart)
 
 ---
 
