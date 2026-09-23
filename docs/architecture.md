@@ -50,6 +50,13 @@ The oracle recomputes every factor each epoch from observable data:
   verifies the transfer on chain and takes the payer from the log rather than
   from the request, which is what makes the attester an identity rather than a
   claim. This drives the success-rate and fee-activity factors.
+- **Payments found on chain** — each operator can also scan `Transfer` logs to
+  registered agent addresses and credit what it finds, so a payment counts because
+  it happened rather than because somebody reported it to that particular operator.
+  See [ADR 0003](adr/0003-evidence-intake.md); implemented and **off by default**.
+  A pulled payment carries no outcome, so it feeds fee activity and tenure and is
+  excluded from both sides of the success ratio. Success stays push, because whether
+  the work was good is not on chain and never will be.
 - **Flags** — watchdog scanners (e.g. rug detectors on the same chain) report
   misbehaving agents. Flags subtract from the community factor.
 - **ERC-8004 feedback** — for an agent linked to an ERC-8004 identity it owns,

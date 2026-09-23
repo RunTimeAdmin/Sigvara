@@ -18,6 +18,12 @@ Live endpoint: [`checker.sigvara.xyz/divergence`](https://checker.sigvara.xyz/di
 **Status: prediction recorded 22:45Z, before the event. Confirmed 23:51:23Z, every
 number as predicted. Outcome below.**
 
+**Still open, 23 September 2026.** The fix is written — [ADR 0003](adr/0003-evidence-intake.md)
+and the pull scanner in `oracle/payment-scan.js` — and is off by default, so the skew is
+still there to look at. Enabling it should close this entry by the checker finding the
+six payments for itself. Seeding the checker by hand would have closed it too, and would
+have hidden the defect that justified the decision, which is why it was not done.
+
 This entry is written before the divergence occurs, on purpose. A triage log whose
 verdicts are all written after the fact proves only that the author can construct an
 explanation. Committing the expectation first makes it falsifiable.

@@ -155,9 +155,16 @@ negative attestation is a free denial-of-service against a competitor. Positive
 payment-backed attestations are open to anyone, since the payment is itself the
 credential and forging it means forging a chain transfer.
 
-What this does not fix: a payment that settled but which nobody submits. Detecting
-unreported work requires an independent watcher of the chain, which Sigvara does not
-have.
+What this does not fix, on the deployment as it runs today: a payment that settled but
+which nobody submits. Detecting unreported work requires an independent watcher of the
+chain.
+
+Each operator can now be that watcher. [ADR 0003](adr/0003-evidence-intake.md) makes
+payment evidence arrive by pull: an operator scans `Transfer` logs to registered agent
+addresses and credits what it finds, so a payment counts because it happened rather than
+because somebody filled in a form. The scanner is implemented and **off by default**, so
+the limitation above is still the accurate description of the live oracles. It stops
+being accurate when the scan is enabled, and not before.
 
 ### 2.4 Reputation
 
@@ -461,7 +468,17 @@ Stated because they are true, not because they are solved.
    side rather than the operator's: a payment enters a score by being reported to a
    specific HTTP endpoint, not by having happened. [ADR 0003](adr/0003-evidence-intake.md)
    decides the fix — operators index `Transfer` logs themselves and `/attest` becomes a
-   hint rather than the only door. Decided, not built, so this entry stays open.
+   hint rather than the only door.
+
+   **Built as of 22 September 2026 and disabled by default** (`PAYMENT_SCAN_ENABLED`).
+   The entry stays open because it closes when the scan runs on the live operators, not
+   when the code merges: on the deployment anyone can query today, a payment still enters
+   a score by being reported.
+
+   One consequence is worth recording here rather than only in the ADR. A pulled payment
+   carries no outcome — money moving is on chain, whether the work was good is not — so
+   it counts toward fee and tenure and is excluded from both sides of the success ratio.
+   Attestation becomes optional for fee and tenure and stays required for success.
 7. **Common ownership in the integration loop.** CounterAudit both consumes the score and
    writes attestations into it, and both are operated by the same party. This is
    disclosed rather than hidden, and a second independent operator is the fix.

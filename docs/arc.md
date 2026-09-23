@@ -157,6 +157,27 @@ Two operational notes:
   identical. Everything else — the log scan cursor, the agent set — rebuilds itself.
 
 
+## Payment evidence by pull
+
+`PAYMENT_SCAN_ENABLED=1` makes an operator find payments itself, by scanning `Transfer`
+logs of `PAYMENT_ASSET` to registered agent addresses, instead of waiting to be told. See
+[ADR 0003](adr/0003-evidence-intake.md).
+
+**Disabled on both operators as of 23 September 2026.** Three things to know before
+turning it on:
+
+- It is an **environment** change, so `docker compose restart` will not pick it up. The
+  container resolves `env_file` at creation, not at start, and a restart re-clones the
+  code while keeping the old environment. Use `up -d --force-recreate`.
+- **Enable it on both operators or neither.** One scanning and one not is the same
+  delivery asymmetry this removes, pointed the other way.
+- **It changes scores.** An operator that has been missing payments starts counting them.
+  On this deployment that should close the 20 September divergence by the checker finding
+  the six payments for itself, which is the intended outcome and not a quiet fix.
+
+`/health` reports `paymentScan` and `paymentScanBlock`, so whether it is on and how far it
+has got are answerable from outside rather than by opening a shell on the host.
+
 ## ERC-8183 (Agentic Commerce) on Arc
 
 Arc pairs ERC-8004 identity with [ERC-8183](https://eips.ethereum.org/EIPS/eip-8183),
