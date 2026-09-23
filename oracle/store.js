@@ -281,6 +281,9 @@ function creditPayment(didHash, txHash, amount, payer, success, now = Date.now()
   return true;
 }
 
+/** Every agent's payment log. Read-only use: the canary picks a known settlement. */
+function allPaymentEvents() { return paymentEvents; }
+
 function getPaymentEvents(didHash) {
   return paymentEvents.get(didHash) ?? [];
 }
@@ -419,6 +422,7 @@ module.exports = {
   getPaymentScanState,
   setPaymentScanState,
   getPaymentEvents,
+  allPaymentEvents,
   paymentVolume,
   prunePaymentEvents,
   load,

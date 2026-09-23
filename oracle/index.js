@@ -144,6 +144,7 @@ const {
   setPaymentScanState,
   usedPaymentTxs,
   getPaymentEvents,
+  allPaymentEvents,
   prunePaymentEvents,
   pruneExpiredCooldowns,
   isStatePathWritable,
@@ -275,6 +276,48 @@ async function runEpoch() {
  * scoring from the payments already known is strictly better than not scoring, and the
  * checkpoint is only advanced on success so the range is simply retried next time.
  */
+/**
+ * Prove the scan's own query still finds something it is known to find.
+ *
+ * Re-runs the same filter shape against one settlement already in this operator's
+ * state: one recipient, one block, one expected transaction. Passing means an empty
+ * scan really was an empty range. Failing means the query is broken, so the range is
+ * unverified, which is a different thing and must not be reported as quiet.
+ *
+ * Returns 'unavailable' when there is no prior payment to point at, rather than
+ * 'passed'. A check that reports success when it did not run is the failure it exists
+ * to prevent.
+ */
+async function runScanCanary(byAddress, provider) {
+  const byDidAddress = new Map();
+  for (const a of byAddress.values()) byDidAddress.set(a.didHash, a.agentAddress);
+
+  const canary = paymentScan.pickCanary(allPaymentEvents(), (did) => byDidAddress.get(did) ?? null);
+  if (!canary) return 'unavailable';
+
+  try {
+    // The stored event keeps no block number, so the receipt supplies it. One extra
+    // call, on a path that only runs when a scan found nothing.
+    const receipt = await chain.readWithBackoff(
+      'canary receipt', () => provider.getTransactionReceipt(canary.txHash),
+    );
+    if (!receipt || receipt.blockNumber === undefined || receipt.blockNumber === null) {
+      return 'unavailable'; // cannot locate the settlement, so this proves nothing
+    }
+    const logs = await chain.readWithBackoff(
+      'canary getLogs',
+      () => provider.getLogs(
+        paymentScan.canaryFilter(paymentCfg.asset, canary.recipient, receipt.blockNumber),
+      ),
+    );
+    return paymentScan.canaryVerdict(logs, canary.txHash);
+  } catch (err) {
+    // An RPC failure is not evidence that the filter is broken.
+    console.warn(`[oracle] payment scan canary could not run: ${err.message}`);
+    return 'unavailable';
+  }
+}
+
 async function runPaymentScan(agents) {
   if (!paymentScanCfg.enabled) return null;
   if (!paymentCfg.asset) {
@@ -338,6 +381,21 @@ async function runPaymentScan(agents) {
     if (creditPayment(c.didHash, c.txHash, c.amount, c.payer, null, ts)) credited += 1;
   }
 
+  // An empty scan is only meaningful once the query is known to work. Run when nothing
+  // was credited, which is the only time the distinction between "nobody was paid" and
+  // "the filter is broken" decides anything.
+  let canary = 'not_run';
+  if (credited === 0) {
+    canary = await runScanCanary(byAddress, provider);
+    if (canary === 'failed') {
+      metrics.inc('paymentScanCanaryFailures');
+      console.error(
+        '[oracle] payment scan canary FAILED: a known settlement was not found by the ' +
+        'same filter the scan uses. Treat this range as unverified, not as quiet.',
+      );
+    }
+  }
+
   // Never past a block still unresolved. The scan only moves forward, so advancing over
   // one would lose that payment for good.
   const nextCheckpoint = paymentScan.checkpointAfter(unresolved, from, to);
@@ -349,10 +407,11 @@ async function runPaymentScan(agents) {
   for (const sk of skipped) bySkipReason[sk.reason] = (bySkipReason[sk.reason] || 0) + 1;
   console.log(
     `[oracle] payment scan ${from}-${to}: ${credited} credited, ${skipped.length} skipped` +
+    (canary === 'not_run' ? '' : `, canary ${canary}`) +
     (skipped.length ? ` (${JSON.stringify(bySkipReason)})` : ''),
   );
 
-  return { from, to, credited, skipped: skipped.length, unresolved: unresolved.length, checkpoint: nextCheckpoint, reasons: bySkipReason };
+  return { from, to, credited, skipped: skipped.length, unresolved: unresolved.length, checkpoint: nextCheckpoint, canary, reasons: bySkipReason };
 }
 
 async function runEpochInner() {

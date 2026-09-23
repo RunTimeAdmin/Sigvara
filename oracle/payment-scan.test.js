@@ -253,3 +253,66 @@ test('nothing is committed when the first block of the range is unresolved', () 
 test('an unresolved block below the range does not drag the checkpoint backwards', () => {
   assert.equal(scan.checkpointAfter([{ blockNumber: 50 }], 100, 200), null);
 });
+
+// ---------------------------------------------------------------------------
+// Canary: an empty scan has to be proved, not believed
+// ---------------------------------------------------------------------------
+
+const eventsFor = (pairs) => new Map(pairs);
+
+test('pickCanary chooses the newest payment of an agent whose address is known', () => {
+  const c = scan.pickCanary(
+    eventsFor([[DID, [{ txHash: '0xaa' }, { txHash: '0xbb' }]]]),
+    () => AGENT,
+  );
+  assert.equal(c.recipient, AGENT);
+  assert.equal(c.txHash, '0xbb', 'newest, because an old settlement may fall outside a pruned node');
+});
+
+test('pickCanary skips an agent whose address is unknown', () => {
+  const c = scan.pickCanary(
+    eventsFor([['0xunknown', [{ txHash: '0xaa' }]], [DID, [{ txHash: '0xbb' }]]]),
+    (d) => (d === DID ? AGENT : null),
+  );
+  assert.equal(c.didHash, DID);
+});
+
+test('pickCanary returns null when there is nothing to point at', () => {
+  // A fresh operator has no prior payment. There is then no canary, and the verdict
+  // must be "unavailable" rather than a pass that never ran.
+  assert.equal(scan.pickCanary(eventsFor([]), () => AGENT), null);
+  assert.equal(scan.pickCanary(eventsFor([[DID, []]]), () => AGENT), null);
+  assert.equal(scan.pickCanary(eventsFor([[DID, [{}]]]), () => AGENT), null);
+});
+
+test('the canary filter has the same shape as the scan filter, narrowed to one block', () => {
+  // Same shape is the whole point. A canary that queried differently would prove the
+  // canary works and say nothing about the scan.
+  const f = scan.canaryFilter(ASSET, AGENT, 500);
+  assert.equal(f.address, ASSET);
+  assert.equal(f.topics[0], scan.TRANSFER_TOPIC);
+  assert.equal(f.topics[1], null);
+  assert.equal(f.topics[2].length, 1);
+  assert.equal(f.fromBlock, 500);
+  assert.equal(f.toBlock, 500, 'one block: the answer is already known');
+});
+
+test('canaryVerdict passes when the known transaction comes back', () => {
+  const tx = '0x' + 'ab'.repeat(32);
+  assert.equal(scan.canaryVerdict([{ transactionHash: tx }], tx), 'passed');
+  assert.equal(scan.canaryVerdict([{ transactionHash: tx.toUpperCase() }], tx), 'passed');
+});
+
+test('canaryVerdict fails when the filter finds nothing', () => {
+  // The loud case. The query mechanism does not work, so an empty scan carries no
+  // information and must not be reported as a quiet range.
+  const tx = '0x' + 'ab'.repeat(32);
+  assert.equal(scan.canaryVerdict([], tx), 'failed');
+  assert.equal(scan.canaryVerdict([{ transactionHash: '0x' + 'cd'.repeat(32) }], tx), 'failed');
+});
+
+test('canaryVerdict treats a non-array response as failure, not as empty', () => {
+  // An RPC that answers with something unexpected has not told us the range was quiet.
+  assert.equal(scan.canaryVerdict(null, '0xaa'), 'failed');
+  assert.equal(scan.canaryVerdict(undefined, '0xaa'), 'failed');
+});

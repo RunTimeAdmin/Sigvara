@@ -198,6 +198,75 @@ function planCredits(decoded, opts) {
   return { credits, skipped };
 }
 
+// ---------------------------------------------------------------------------
+// Canary
+// ---------------------------------------------------------------------------
+
+/**
+ * Why an empty scan needs proving rather than believing.
+ *
+ * A getLogs call that matches nothing returns the same empty array whether nothing
+ * happened or the query was wrong. Wrong asset, wrong chain, a topic filter grown long
+ * enough that the node quietly stops matching: each of those reads as a set of agents
+ * who were never paid, which is exactly the conclusion this scanner exists to stop
+ * anyone drawing by accident.
+ *
+ * A probe with no recipient filter is not enough. It proves the asset and chain are
+ * right, and then leaves the normal case ("this asset moved, but not to any of our
+ * agents") indistinguishable from a broken recipient filter.
+ *
+ * So the canary re-runs the same filter shape against a payment already known to exist:
+ * one recipient, one block, one expected transaction. If that comes back empty, the
+ * mechanism is broken and an empty scan means nothing. It costs one getLogs, and only
+ * when a scan credited nothing, which is the only time the answer matters.
+ *
+ * With no prior payment to point at there is no canary, and the verdict is `unavailable`
+ * rather than `passed`. A check that reports success when it did not run is the failure
+ * it was written to prevent.
+ */
+
+/**
+ * Choose a known payment to re-find. Pure.
+ *
+ * @param {Map<string, Array<{txHash:string}>>} eventsByDid
+ * @param {(didHash:string) => string|null} addressOf recipient address for an agent
+ */
+function pickCanary(eventsByDid, addressOf) {
+  for (const [didHash, events] of eventsByDid) {
+    const recipient = addressOf(didHash);
+    if (!recipient) continue;
+    // The newest, because an old settlement may sit outside whatever block range a
+    // pruned node still serves.
+    for (let i = events.length - 1; i >= 0; i--) {
+      const txHash = events[i] && events[i].txHash;
+      if (txHash) return { didHash, recipient, txHash };
+    }
+  }
+  return null;
+}
+
+/** The same filter shape the scan uses, narrowed to one recipient and one block. */
+function canaryFilter(asset, recipient, blockNumber) {
+  return {
+    address: asset,
+    topics: [TRANSFER_TOPIC, null, [pad(recipient)]],
+    fromBlock: blockNumber,
+    toBlock: blockNumber,
+  };
+}
+
+/**
+ * Did the filter find the transaction it was pointed at?
+ *
+ * `failed` is the loud one: the query mechanism does not work, so an empty scan carries
+ * no information and must not be reported as a quiet range.
+ */
+function canaryVerdict(logs, expectedTxHash) {
+  if (!Array.isArray(logs)) return 'failed';
+  const want = lower(expectedTxHash);
+  return logs.some((l) => lower(l && l.transactionHash) === want) ? 'passed' : 'failed';
+}
+
 /**
  * The highest block safe to credit from.
  *
@@ -260,6 +329,9 @@ module.exports = {
   planCredits,
   safeHead,
   checkpointAfter,
+  pickCanary,
+  canaryFilter,
+  canaryVerdict,
   MIN_SCAN_CONFIRMATIONS,
   scanRange,
 };

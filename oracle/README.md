@@ -694,6 +694,24 @@ lose precision.
 | `PAYMENT_SCAN_CHUNK` | `LOG_CHUNK_SIZE` | Blocks per `getLogs` call. |
 | `PAYMENT_SCAN_CONFIRMATIONS` | `6` (floor) | Blocks to stay behind the head. May be raised, not lowered. Deeper than the attested path because a scan credits unattended; a credit records the tx hash as used, so a reorg would strand it. |
 
+When a scan credits nothing, a **canary** runs before that emptiness is believed. It
+re-issues the same filter shape against a settlement already in this operator's state:
+one recipient, one block, one known transaction. A `getLogs` that matches nothing
+returns the same empty array whether nothing happened or the query is wrong, and wrong
+asset, wrong chain or an over-long topic filter all read as a set of agents nobody paid.
+
+The verdict is logged and counted (`sigvara_oracle_payment_scan_canary_failures_total`):
+
+| Verdict | Meaning |
+|---|---|
+| `passed` | The query works, so the empty range really was empty. |
+| `failed` | The query did not find a settlement known to exist. **The range is unverified, not quiet.** |
+| `unavailable` | No prior payment to point at, or the RPC could not answer. Never reported as `passed`. |
+
+A probe without the recipient filter would not do: it proves the asset and chain are
+right and then leaves the normal case, this asset moved but not to any of our agents,
+indistinguishable from a broken recipient filter.
+
 **Enable it on every operator or on none.** Two operators scanning and one not is the
 same delivery asymmetry this exists to remove, pointed the other way.
 

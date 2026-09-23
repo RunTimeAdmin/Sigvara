@@ -45,6 +45,9 @@ const counters = {
   paymentScans: 0,
   paymentsPulled: 0,
   paymentScanErrors: 0,
+  // A failure here means an empty scan told us nothing. Worth alerting on: it is the
+  // difference between "no agent was paid" and "the query stopped working".
+  paymentScanCanaryFailures: 0,
   rateLimitHits: 0,
   httpRequests: 0,
 
@@ -240,6 +243,11 @@ function toPrometheusText(extra = {}) {
   lines.push('# HELP sigvara_oracle_payment_scan_errors_total Payment scans that could not complete');
   lines.push('# TYPE sigvara_oracle_payment_scan_errors_total counter');
   lines.push(`sigvara_oracle_payment_scan_errors_total ${counters.paymentScanErrors}`);
+
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_payment_scan_canary_failures_total Empty scans whose query could not be proved to work');
+  lines.push('# TYPE sigvara_oracle_payment_scan_canary_failures_total counter');
+  lines.push(`sigvara_oracle_payment_scan_canary_failures_total ${counters.paymentScanCanaryFailures}`);
 
   lines.push('');
   lines.push('# HELP sigvara_oracle_rate_limit_hits_total Rate limit rejections');
