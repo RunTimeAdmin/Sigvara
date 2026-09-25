@@ -370,6 +370,7 @@ async function runPaymentScan(agents) {
   }
 
   let credited = 0;
+  let refused = 0;
   const unresolved = [];
   for (const c of credits) {
     const ts = times.get(c.blockNumber);
@@ -379,8 +380,26 @@ async function runPaymentScan(agents) {
       unresolved.push(c);
       continue;
     }
-    if (creditPayment(c.didHash, c.txHash, c.amount, c.payer, null, ts)) credited += 1;
+    if (creditPayment(c.didHash, c.txHash, c.amount, c.payer, null, ts)) {
+      credited += 1;
+    } else {
+      // planCredits already asked isCredited about this exact pair, so a refusal here
+      // means the scan's pre-check and the store disagree. That should be impossible.
+      //
+      // Counted and said out loud because the silent version of this hid a real bug: the
+      // dedupe key was the transaction hash alone, so a batch payment crediting two
+      // agents dropped the second, and this branch discarded the only evidence of it
+      // while the checkpoint moved past the block. A refused credit is either that class
+      // of disagreement or a legacy bare-hash entry, and both are worth seeing.
+      refused += 1;
+      console.warn(
+        `[oracle] payment scan: ${c.txHash} for ${c.didHash} passed planCredits and was ` +
+        'then refused by the store. Pre-check and store disagree, or a pre-migration ' +
+        'entry blocks it.',
+      );
+    }
   }
+  if (refused) metrics.add('paymentScanRefused', refused);
 
   // An empty scan is only meaningful once the query is known to work. Run when nothing
   // was credited, which is the only time the distinction between "nobody was paid" and
