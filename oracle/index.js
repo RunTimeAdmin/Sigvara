@@ -953,6 +953,11 @@ function buildEvidenceBody(didHash, events) {
     // same work, which a verifier fetches and checks for themselves, and committing
     // to it would have changed the leaf format and made roots already published on
     // chain unreproducible.
+    // `success` is served as true, false or null and enters the leaf as a uint8:
+    // 0 failed, 1 succeeded, 2 not reported. The third state is what a payment found
+    // by scanning the chain carries, since no outcome for it exists anywhere. Encoding
+    // it as a boolean made it collide with a reported failure, which the score counts
+    // very differently, so the root stopped covering the arithmetic it commits to.
     committedFields: ['txHash', 'payer', 'amount', 'settledAt', 'success'],
     // The leaf is derivable from the payment, so a verifier rebuilds it rather than
     // trusting the one served here; it is included to make that comparison easy.

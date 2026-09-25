@@ -202,7 +202,8 @@ contract holds, either locally or through `verifyEvidence(didHash, leaf, proof)`
 in that path requires trusting the oracle.
 
 The leaf is `keccak256(keccak256(abi.encode(bytes32 txHash, address payer, uint256 amount,
-uint256 settledAt, bool success)))`, and **`settledAt` is in seconds**: the block's own
+uint256 settledAt, uint8 outcome)))`, where `outcome` is **0 failed, 1 succeeded, 2 not
+reported**, and **`settledAt` is in seconds**: the block's own
 timestamp, exactly as `eth_getBlockByNumber` reports it. The oracle stores that time in
 milliseconds internally, because the decay arithmetic works in milliseconds, and converts
 on the way into both the leaf and the `/evidence` response. The unit is worth stating
@@ -210,6 +211,17 @@ because it briefly was not: the leaf committed to milliseconds while the documen
 procedure told a verifier to read seconds off the chain, so an honest oracle and an honest
 verifier computed different roots. A commitment that refutes itself under inspection is
 worse than none, since the disagreement looks exactly like the oracle lying.
+
+`outcome` has three states for the same reason, and it was a `bool` until it caught the
+same trap. A payment found by scanning the chain carries no outcome, because whether the
+work was any good is not on chain, and the oracle records that as neither true nor false.
+Encoded as a boolean it came out as `false`, so a payment nobody had judged committed to
+the identical leaf as a payment somebody had failed. The score treats those two
+differently, so the root no longer covered the arithmetic it was published to cover, and
+two operators, one holding "unreported" and one holding "failed", produced matching roots
+while genuinely disagreeing. `uint8` costs nothing to switch to: ABI-encodes a `bool` as a
+32-byte 0 or 1, which is byte-for-byte a `uint8` 0 or 1, so every root published before
+this rebuilds unchanged and only the third state is new.
 
 Leaves are double-hashed so a leaf can never pose as an internal node, and an odd node is
 promoted rather than duplicated, which would otherwise let a tree be extended with the

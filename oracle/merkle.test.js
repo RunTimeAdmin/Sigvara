@@ -195,3 +195,44 @@ test('a tree built with packet ids has the same root as one without', () => {
   const tagged = buildTree(events.map((e, i) => ({ ...e, packetId: `packet-${i}` }))).root;
   assert.equal(tagged, plain, 'the root must not depend on corroboration metadata');
 });
+
+// A pulled payment carries no outcome: nobody reported whether the work was good.
+// The store keeps that as null precisely so it is not mistaken for a failure, and
+// scoring keeps it out of both sides of the success ratio. The leaf has to draw the
+// same distinction, or the root commits to an outcome the score did not use.
+//
+// Fixed inputs, because the point of the second assertion is the exact hash.
+const fixed = {
+  txHash: '0x' + 'ab'.repeat(32),
+  payer: '0x' + '11'.repeat(20),
+  amount: '1000000',
+  ts: 1_700_000_000_000,
+};
+
+test('leafFor: an unreported outcome is not a reported failure', () => {
+  const unreported = leafFor({ ...fixed, success: null });
+  const failed = leafFor({ ...fixed, success: false });
+  const succeeded = leafFor({ ...fixed, success: true });
+
+  assert.notEqual(
+    unreported, failed,
+    'success:null and success:false must not share a leaf: the score treats them differently, ' +
+    'so a root that cannot tell them apart does not commit to the arithmetic it claims to'
+  );
+  assert.notEqual(unreported, succeeded);
+  assert.notEqual(failed, succeeded);
+});
+
+test('leafFor: roots already published on chain stay reproducible', () => {
+  // Captured from the bool encoding that every credited payment has used to date.
+  // Outcomes are booleans on that path, and these two hashes are what the live
+  // operators have already committed to, so they must not move.
+  assert.equal(
+    leafFor({ ...fixed, success: false }),
+    '0x74e48881685673b00e21f176b7b348c6ddbe466547bc5068cf9183f84ad71f4b'
+  );
+  assert.equal(
+    leafFor({ ...fixed, success: true }),
+    '0x93719bf728289b66233e9bb41eeda66eda0fa2cdf553733ef7a659ede8c01d57'
+  );
+});

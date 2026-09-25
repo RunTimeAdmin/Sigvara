@@ -48,6 +48,33 @@ function settledSeconds(event) {
  * identifies it, and the payer, amount and settlement time all come off the receipt
  * and its block.
  */
+/**
+ * How the leaf encodes the reported outcome: 0 failed, 1 succeeded, 2 not reported.
+ *
+ * `Boolean(success)` was wrong here in a way that was invisible from this file. ADR 0003
+ * introduced payments found by scanning the chain, and those carry no outcome at all,
+ * because whether the work was any good is not on chain. The store records that as null
+ * rather than false, deliberately: `!!success` would damage an agent nobody complained
+ * about, and scoring keeps a null out of both sides of the success ratio.
+ *
+ * The leaf collapsed it back to false anyway, so a payment nobody judged committed to
+ * the same hash as a payment somebody failed. Two consequences, both bad. The root no
+ * longer commits to the arithmetic that produced the score, since the two cases are
+ * scored differently. And with two bonded operators, one holding null and one holding
+ * false publish identical roots, so comparing roots cannot see that they disagree.
+ *
+ * uint8 rather than a second field, because ABI-encodes bool as a 32-byte 0 or 1, which
+ * is byte-for-byte what uint8 0 or 1 encodes. Every leaf ever committed carried a
+ * boolean, so all of them reproduce exactly and no published root moves. Only the third
+ * state is new, and nothing has written one yet: the pull scanner is disabled on both
+ * operators, which is the window in which this is free to fix.
+ */
+function outcomeCode(success) {
+  if (success === true) return 1;
+  if (success === false) return 0;
+  return 2;
+}
+
 function leafFor(event) {
   const { txHash, payer, amount, success } = event;
 
@@ -61,13 +88,13 @@ function leafFor(event) {
   }
 
   const inner = ethers.AbiCoder.defaultAbiCoder().encode(
-    ['bytes32', 'address', 'uint256', 'uint256', 'bool'],
+    ['bytes32', 'address', 'uint256', 'uint256', 'uint8'],
     [
       String(txHash).toLowerCase(),
       ethers.getAddress(payer),
       BigInt(amount),
       BigInt(settledSeconds(event)),
-      Boolean(success),
+      outcomeCode(success),
     ]
   );
   return ethers.keccak256(ethers.keccak256(inner));
@@ -128,4 +155,6 @@ function verifyProof(leaf, proof, root) {
   return computed.toLowerCase() === String(root).toLowerCase();
 }
 
-module.exports = { leafFor, buildTree, rootFor, proofFor, verifyProof, hashPair, settledSeconds };
+module.exports = {
+  leafFor, buildTree, rootFor, proofFor, verifyProof, hashPair, settledSeconds, outcomeCode,
+};
