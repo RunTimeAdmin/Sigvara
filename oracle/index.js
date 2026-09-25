@@ -143,6 +143,7 @@ const {
   getPaymentScanState,
   setPaymentScanState,
   isCredited,
+  getLastPersist,
   getPaymentEvents,
   allPaymentEvents,
   prunePaymentEvents,
@@ -1021,8 +1022,15 @@ const server = http.createServer(async (req, res) => {
     const lastEpoch = metrics.get('lastSuccessfulEpochMs');
     const timeSinceLastEpoch = lastEpoch ? Date.now() - lastEpoch : null;
     const storeWritable = isStatePathWritable();
+    // What the last write actually did, beside whether the path looks writable. The
+    // probe writes a handful of bytes and deletes them, so it passes while a real state
+    // file fails to land for want of space. Unhealthy on a failed persist because the
+    // attest path has already answered 200 to somebody on the strength of it.
+    const persisted = getLastPersist();
 
-    const healthy = storeWritable && (!lastEpoch || timeSinceLastEpoch < cfg.epochMs * 2);
+    const healthy = storeWritable
+      && persisted.ok
+      && (!lastEpoch || timeSinceLastEpoch < cfg.epochMs * 2);
 
     return json(res, healthy ? 200 : 503, {
       ok: healthy,
@@ -1031,6 +1039,9 @@ const server = http.createServer(async (req, res) => {
       lastSuccessfulEpochMs: lastEpoch,
       timeSinceLastEpochMs: timeSinceLastEpoch,
       storeWritable,
+      statePersisted: persisted.ok,
+      lastPersistMs: persisted.at,
+      ...(persisted.ok ? {} : { statePersistError: persisted.error }),
       statePath: getStatePath(),
       attestCooldownMs: ATTEST_COOLDOWN_MS,
       epochRunning,

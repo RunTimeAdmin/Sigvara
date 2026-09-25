@@ -14,6 +14,8 @@ const {
   pruneExpiredCooldowns,
   attestCooldowns,
   creditPayment,
+  paymentEventError,
+  getLastPersist,
   getPaymentEvents,
   prunePaymentEvents,
   paymentVolume,
@@ -481,4 +483,111 @@ test('prunePaymentEvents: replaces the array when it drops something, keeps iden
   // Now age it out. Dropping an event must change identity so the cache rebuilds.
   prunePaymentEvents(1, 0.5, now + 1_000_000);
   assert.notEqual(getPaymentEvents(did), fresh, 'a prune that drops must replace the array');
+});
+
+// ---------------------------------------------------------------------------
+// State file durability and validation
+//
+// Driven in a child process because STATE_PATH is read from the environment when the
+// module loads, so the only honest way to exercise load() is a fresh process with its
+// own env and its own temp file. Testing around it would prove nothing about the path
+// that actually runs on the operators.
+// ---------------------------------------------------------------------------
+
+const { execFileSync } = require('node:child_process');
+const os = require('node:os');
+const fsx = require('node:fs');
+const pathx = require('node:path');
+
+function inChildWithState(stateObject, script) {
+  const dir = fsx.mkdtempSync(pathx.join(os.tmpdir(), 'sigvara-store-'));
+  const statePath = pathx.join(dir, 'oracle-state.json');
+  if (stateObject !== null) fsx.writeFileSync(statePath, JSON.stringify(stateObject));
+  try {
+    return execFileSync(process.execPath, ['-e', script], {
+      env: { ...process.env, ORACLE_STATE_PATH: statePath },
+      cwd: __dirname,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } finally {
+    fsx.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const goodEvent = {
+  txHash: '0x' + 'ab'.repeat(32),
+  payer: '0x' + '11'.repeat(20),
+  amount: '1000000',
+  ts: 1_700_000_000_000,
+  success: true,
+};
+
+test('paymentEventError: rejects exactly what the scoring maths cannot convert', () => {
+  assert.equal(paymentEventError(goodEvent), null);
+  // The three shapes a hand-seeded state file actually produces. Each one used to throw
+  // from inside decayWeight or decayedVolume, naming neither the agent nor the field.
+  assert.match(paymentEventError({ ...goodEvent, amount: '1.5' }), /amount/);
+  assert.match(paymentEventError({ ...goodEvent, amount: '1_000_000' }), /amount/);
+  assert.match(paymentEventError({ ...goodEvent, ts: undefined }), /ts/);
+  assert.match(paymentEventError({ ...goodEvent, txHash: '0xnope' }), /txHash/);
+  assert.match(paymentEventError(null), /not an object/);
+  // A missing payer is pre-existing behaviour: it counts as volume under the empty-string
+  // key. Not something to start refusing state over.
+  assert.equal(paymentEventError({ ...goodEvent, payer: undefined }), null);
+});
+
+test('load: drops an unusable payment event and still scores every other agent', () => {
+  const out = inChildWithState({
+    paymentEvents: {
+      'did-poisoned': [{ ...goodEvent, amount: '1.5' }],
+      'did-healthy': [{ ...goodEvent, txHash: '0x' + 'cd'.repeat(32) }],
+    },
+  }, `
+    const s = require('./store');
+    const p = require('./payments');
+    s.load();
+    const poisoned = s.getPaymentEvents('did-poisoned');
+    const healthy = s.getPaymentEvents('did-healthy');
+    // The whole point: the bad event is gone and the good agent is untouched and scorable.
+    console.log(JSON.stringify({
+      poisoned: poisoned.length,
+      healthy: healthy.length,
+      volume: p.decayedVolume(healthy, 7776000000, 1700000001000).toString(),
+    }));
+  `);
+  const r = JSON.parse(out.trim().split('\n').pop());
+  assert.equal(r.poisoned, 0, 'the unusable event is dropped rather than crashing the load');
+  assert.equal(r.healthy, 1, 'the healthy agent keeps its event');
+  assert.equal(r.volume, '1000000', 'and still scores, which it could not do if load threw');
+});
+
+test('persist: a failed write is recorded rather than swallowed', () => {
+  const out = inChildWithState(null, `
+    const fs = require('fs');
+    const real = fs.writeFileSync;
+    const s = require('./store');
+    // Fail only the state write, so mkdir and the rest behave normally.
+    fs.writeFileSync = (p, d) => {
+      if (String(p).includes('oracle-state.json')) {
+        const e = new Error('no space left on device'); e.code = 'ENOSPC'; throw e;
+      }
+      return real(p, d);
+    };
+    s.creditPayment('did-x', '0x' + 'ee'.repeat(32), '5', '0x' + '22'.repeat(20), true, 1);
+    s.persist();
+    console.log(JSON.stringify(s.getLastPersist()));
+  `);
+  const r = JSON.parse(out.trim().split('\n').pop());
+  assert.equal(r.ok, false, 'a failed persist is visible, so /health can turn 503');
+  assert.match(r.error, /no space left on device/);
+  assert.ok(r.at, 'and carries when it happened');
+});
+
+test('creditPayment: the stored event list is frozen, so the cache revision cannot lie', () => {
+  const did = '0x' + 'f7'.repeat(32);
+  creditPayment(did, '0x' + 'f8'.repeat(32), 10n, '0x' + '33'.repeat(20), true, 1);
+  const list = getPaymentEvents(did);
+  assert.ok(Object.isFrozen(list), 'frozen in place: identity is what the cache keys on');
+  assert.throws(() => list.push({ amount: '1' }), TypeError);
 });

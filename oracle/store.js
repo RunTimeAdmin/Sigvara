@@ -188,7 +188,29 @@ function load() {
     }
     for (const [k, v] of Object.entries(parsed.links || {})) links.set(k, v);
     for (const [k, v] of Object.entries(parsed.attestCooldowns || {})) attestCooldowns.set(k, v);
-    for (const [k, v] of Object.entries(parsed.paymentEvents || {})) paymentEvents.set(k, v);
+    // Validated at the boundary, because re-seeding paymentEvents by hand is ordinary
+    // operational practice and the scoring maths converts these straight to BigInt. An
+    // amount of '1.5' or '1_000_000', or a missing ts, throws four frames deep inside
+    // decayWeight or decayedVolume, where the message names neither the agent nor the
+    // field. Dropping the event names both and lets every other agent score.
+    let badEvents = 0;
+    for (const [k, v] of Object.entries(parsed.paymentEvents || {})) {
+      const usable = (Array.isArray(v) ? v : []).filter((e) => {
+        const why = paymentEventError(e);
+        if (why) {
+          badEvents += 1;
+          console.warn(`[oracle] dropping unusable payment event for ${k}: ${why}`);
+        }
+        return !why;
+      });
+      if (usable.length) paymentEvents.set(k, Object.freeze(usable));
+    }
+    if (badEvents) {
+      console.error(
+        `[oracle] ${badEvents} payment event(s) in ${STATE_PATH} were unusable and have ` +
+        'been dropped. Fee volume and tenure for those agents are understated until fixed.',
+      );
+    }
     for (const h of parsed.usedPaymentTxs || []) usedPaymentTxs.add(h);
     for (const [k, v] of Object.entries(parsed.divergences || {})) {
       // Re-applied on load, not just on write: a file that grew under an older build
@@ -207,6 +229,45 @@ function load() {
   }
 }
 
+/**
+ * The outcome of the last persist attempt, so a failure is visible from outside.
+ *
+ * /health already probes the state path on every request, and gates its 503 on the
+ * result. That probe is a proxy for this, not this: it writes a few bytes to a test file
+ * and deletes it, so it passes while a real write of a multi-megabyte state file fails
+ * for want of space, and it says nothing about a serialization error.
+ *
+ * The actual result was discarded. That mattered because the attest path answers 200 on
+ * the strength of having recorded something, and a persist that failed means it did not:
+ * the payment is credited in memory, the payer is told it counted, and a restart loses
+ * it. Scanned payments are found again on the next scan. Attested outcomes are not on
+ * chain anywhere, so those are simply gone.
+ */
+let lastPersist = { ok: true, at: null, error: null };
+
+function getLastPersist() {
+  return { ...lastPersist };
+}
+
+/**
+ * Why a stored payment event cannot be scored, or null when it can.
+ *
+ * Only the fields the arithmetic actually consumes. `payer` is allowed to be missing:
+ * byPayer keys an absent payer as the empty string and the event still counts as volume,
+ * which is the pre-existing behaviour and not something to start rejecting state over.
+ */
+function paymentEventError(e) {
+  if (!e || typeof e !== 'object') return 'not an object';
+  if (!/^0x[0-9a-fA-F]{64}$/.test(String(e.txHash || ''))) {
+    return `txHash is not a 32-byte hex string (${JSON.stringify(e.txHash)})`;
+  }
+  if (!Number.isFinite(Number(e.ts))) return `ts is not a finite number (${JSON.stringify(e.ts)})`;
+  if (!/^\d+$/.test(String(e.amount))) {
+    return `amount is not an integer string (${JSON.stringify(e.amount)})`;
+  }
+  return null;
+}
+
 function persist() {
   try {
     fs.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
@@ -223,8 +284,16 @@ function persist() {
       paymentScanState,
       savedAt: new Date().toISOString(),
     }));
+    // Flush before the rename. The rename is atomic, so a crash can never leave a
+    // half-written state file, but without this it can leave an atomically-renamed
+    // *empty* one: the directory entry is durable while the contents are still in the
+    // page cache. Cheap insurance for the file that holds every attested outcome.
+    const fd = fs.openSync(tmp, 'r+');
+    try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
     fs.renameSync(tmp, STATE_PATH);
+    lastPersist = { ok: true, at: Date.now(), error: null };
   } catch (err) {
+    lastPersist = { ok: false, at: Date.now(), error: err.message };
     console.error(`[oracle] state persist FAILED: ${err.message}`);
   }
 }
@@ -317,7 +386,11 @@ function creditPayment(didHash, txHash, amount, payer, success, now = Date.now()
   const outcome = typeof success === 'boolean' ? success : null;
   const event = { txHash: key, ts: now, amount: BigInt(amount).toString(), payer, success: outcome };
   if (packetId) event.packetId = String(packetId);
-  paymentEvents.set(didHash, [...list, event]);
+  // Frozen, not copied. The evidence cache treats the array's identity as the revision
+  // token, so handing out copies would turn every request into a miss; freezing keeps one
+  // array per version and makes the "never mutated in place" rule the cache depends on
+  // enforced rather than merely documented.
+  paymentEvents.set(didHash, Object.freeze([...list, event]));
   return true;
 }
 
@@ -345,7 +418,7 @@ function prunePaymentEvents(halfLifeMs, minWeight = 0.001, now = Date.now()) {
     const kept = list.filter(e => e.ts >= cutoff);
     dropped += list.length - kept.length;
     if (kept.length === 0) paymentEvents.delete(did);
-    else if (kept.length !== list.length) paymentEvents.set(did, kept);
+    else if (kept.length !== list.length) paymentEvents.set(did, Object.freeze(kept));
   }
   return dropped;
 }
@@ -450,6 +523,8 @@ module.exports = {
   usedPaymentTxs,
   creditKey,
   isCredited,
+  getLastPersist,
+  paymentEventError,
   creditPayment,
   divergences,
   recordDivergence,
