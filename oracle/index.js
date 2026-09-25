@@ -400,7 +400,7 @@ async function runPaymentScan(agents) {
       );
     }
   }
-  if (refused) metrics.add('paymentScanRefused', refused);
+  if (refused) metrics.inc('paymentScanRefused', refused);
 
   // An empty scan is only meaningful once the query is known to work. Run when nothing
   // was credited, which is the only time the distinction between "nobody was paid" and

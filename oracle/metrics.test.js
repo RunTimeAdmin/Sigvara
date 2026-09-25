@@ -254,3 +254,48 @@ test('evidence cache stats are reported when supplied, absent when not', () => {
   assert.match(withCache, /sigvara_oracle_evidence_cache_entries 9/);
   assert.match(withCache, /sigvara_oracle_evidence_cache_bytes 12345/);
 });
+
+// Every metric name the oracle actually increments must exist in the registry.
+//
+// Two ways to record nothing, and neither one is loud. `metrics.add` has never existed,
+// so calling it throws at the moment a counter first moves, which in the payment scan
+// meant the code added to make a silent failure visible would itself abort the scan. And
+// `inc` is guarded by `if (name in counters)`, so an undeclared name is a no-op: the
+// call looks right, the dashboard stays at zero forever, and nothing anywhere complains.
+//
+// CI could not catch either, because a counter that only moves on an unusual path is not
+// exercised by any test. Checking the names statically is the thing that generalises.
+test('every metric name used in the source is declared and exported', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { counters, gauges } = require('./metrics');
+
+  const sources = fs.readdirSync(__dirname)
+    .filter((f) => f.endsWith('.js') && !f.endsWith('.test.js'));
+
+  const problems = [];
+  for (const file of sources) {
+    const src = fs.readFileSync(path.join(__dirname, file), 'utf8');
+
+    // Any metrics.<fn>( ... ) call, so a helper that does not exist is caught by name.
+    for (const m of src.matchAll(/metrics\.([a-zA-Z]+)\(/g)) {
+      if (!['inc', 'set', 'get', 'uptimeSeconds', 'toPrometheusText', 'reset'].includes(m[1])) {
+        problems.push(`${file}: metrics.${m[1]}() is not a function on the metrics module`);
+      }
+    }
+
+    // Literal names passed to inc/set, including both arms of a ternary.
+    for (const call of src.matchAll(/metrics\.(inc|set)\(([^)]*)\)/g)) {
+      const [, fn, args] = call;
+      for (const lit of args.matchAll(/'([A-Za-z][A-Za-z0-9]*)'/g)) {
+        const name = lit[1];
+        const registry = fn === 'inc' ? counters : gauges;
+        if (!(name in registry)) {
+          problems.push(`${file}: metrics.${fn}('${name}') is not declared, so it silently records nothing`);
+        }
+      }
+    }
+  }
+
+  assert.deepEqual(problems, [], problems.join('\n'));
+});
