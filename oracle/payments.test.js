@@ -607,3 +607,61 @@ test('verifyPayment: a NaN block timestamp is refused, not stored', async () => 
     (err) => err.code === 'rpc_error' && /timestamp unavailable/.test(err.message),
   );
 });
+
+// Both intake paths must attribute the same money to the same payer.
+//
+// They used different rules. verifyPayment took the largest contributor as "the
+// meaningful counterparty when a router sits in the middle"; planCredits took the
+// earliest log so that "a transaction that moves money onward afterwards must not
+// relabel who paid". Each defensible, and they disagree whenever two senders pay one
+// agent in one transaction, which is what an aggregator settling several invoices looks
+// like.
+//
+// That mattered because payer identity drives the maxPerPayer cap, distinctPayers,
+// propagationScore and the self-payment check, and because divergence between two
+// operators is evidence for the slashing committee. An attesting operator and a scanning
+// one could disagree about a payment where nobody misbehaved.
+//
+// Grouping both by (tx, agent, payer) removes the rule rather than reconciling it: there
+// is no longer a choice to make, so there is nothing to keep in sync.
+test('both intake paths attribute a multi-sender payment identically', async () => {
+  const scan = require('./payment-scan');
+  const tx = '0x' + '7d'.repeat(32);
+  const T = ethers.id('Transfer(address,address,uint256)');
+  const leg = (from, value, logIndex) => ({
+    address: ASSET,
+    logIndex,
+    blockNumber: 10,
+    transactionHash: tx,
+    topics: [T, ethers.zeroPadValue(from, 32), ethers.zeroPadValue(AGENT, 32)],
+    data: ethers.toBeHex(value, 32),
+  });
+  // Smaller leg first, so "earliest log" and "largest contributor" cannot coincide.
+  const logs = [leg(PAYER, 100n, 0), leg(OTHER, 900n, 1)];
+
+  const provider = {
+    getTransactionReceipt: async () => ({ status: 1, blockNumber: 10, logs }),
+    getBlockNumber: async () => 100,
+    getBlock: async () => ({ timestamp: 1_700_000_000 }),
+  };
+
+  const pushed = await verifyPayment(
+    { provider, cfg: { asset: ASSET, minConfirmations: 1, minAmount: 0n } }, tx, AGENT,
+  );
+  const pulled = scan.planCredits(
+    logs.map((l) => scan.decodeTransfer(l)),
+    { didHashOf: (a) => (a.toLowerCase() === AGENT.toLowerCase() ? 'did-A' : null) },
+  );
+
+  const asMap = (rows) => Object.fromEntries(
+    rows.map((r) => [r.payer.toLowerCase(), String(r.amount)]).sort(),
+  );
+
+  assert.deepEqual(
+    asMap(pushed.legs), asMap(pulled.credits),
+    'the same transaction must credit the same payers with the same amounts by either route',
+  );
+  // And the split is real: two senders, two entries, totals preserved.
+  assert.equal(pushed.legs.length, 2);
+  assert.equal(pushed.legs.reduce((s, l) => s + l.amount, 0n), 1000n);
+});

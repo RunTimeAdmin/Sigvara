@@ -145,7 +145,15 @@ function decodeTransfer(log) {
 function planCredits(decoded, opts) {
   const { didHashOf, operatorOf = () => null, isUsed = () => false, minAmount = 0n } = opts;
 
-  // (txHash, recipient) -> accumulated
+  // (txHash, recipient, sender) -> accumulated
+  //
+  // The sender is part of the key, not something chosen afterwards. Two payers can credit
+  // one agent in a single transaction, and picking one of them to represent both lost who
+  // actually paid, which the per-payer cap, distinct counterparty count, propagation and
+  // the self-payment check all depend on. It also made this path disagree with the
+  // attested one, which chose the largest contributor where this chose the earliest log:
+  // same transaction, same agent, different payer, and a divergence between two honest
+  // operators is evidence for the slashing committee.
   const grouped = new Map();
   const skipped = [];
 
@@ -157,18 +165,12 @@ function planCredits(decoded, opts) {
       // ours; recorded at debug volume only, so it is not reported as a skip.
       continue;
     }
-    const key = `${lower(t.txHash)}|${lower(t.to)}`;
+    const key = `${lower(t.txHash)}|${lower(t.to)}|${lower(t.from)}`;
     const cur = grouped.get(key) ?? {
       didHash, txHash: t.txHash, to: t.to, from: t.from,
       amount: 0n, blockNumber: t.blockNumber,
     };
     cur.amount += BigInt(t.amount);
-    // The earliest log in the transaction names the payer. A transaction that moves
-    // money onward afterwards must not relabel who paid.
-    if (t.logIndex < (cur.logIndex ?? Infinity)) {
-      cur.from = t.from;
-      cur.logIndex = t.logIndex;
-    }
     grouped.set(key, cur);
   }
 
@@ -179,7 +181,7 @@ function planCredits(decoded, opts) {
     });
 
     // Per agent, not per transaction: a batch payout credits each recipient it paid.
-    if (isUsed(g.txHash, g.didHash)) { reject('already_credited'); continue; }
+    if (isUsed(g.txHash, g.didHash, g.from)) { reject('already_credited'); continue; }
     if (g.amount < minAmount) { reject('below_minimum'); continue; }
     // Same rule as the attested path: an operator paying its own agent costs only gas,
     // and the money comes straight back.

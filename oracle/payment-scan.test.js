@@ -89,14 +89,37 @@ test('several transfers in one transaction are one payment', () => {
   assert.equal(credits[0].amount, '500');
 });
 
-test('the earliest log in a transaction names the payer', () => {
-  // A transaction that forwards the money onward afterwards must not relabel who paid.
+// This replaced a test asserting that the earliest log in a transaction named the payer.
+// Choosing one sender to stand for several was the problem, not which one got chosen: the
+// attested path chose the largest contributor instead, so the same transaction credited a
+// different payer depending on which route saw it, and payer identity drives the per-payer
+// cap, the distinct counterparty count, propagation and the self-payment check. Two honest
+// operators could diverge over it, which is evidence for the slashing committee.
+//
+// Grouping by sender removes the choice. Nothing selects a payer any more.
+test('each sender in a transaction is credited separately', () => {
   const tx = '0x' + 'ee'.repeat(32);
   const { credits } = plan([
     transfer(STRANGER, AGENT, 100n, { tx, logIndex: 5 }),
     transfer(PAYER, AGENT, 400n, { tx, logIndex: 1 }),
   ]);
+  assert.equal(credits.length, 2, 'two payers, two credits');
+  const byPayer = Object.fromEntries(credits.map((c) => [c.payer, c.amount]));
+  assert.equal(byPayer[PAYER], '400');
+  assert.equal(byPayer[STRANGER], '100');
+});
+
+test('several logs from one sender are still one credit', () => {
+  // A split settlement from a single counterparty is one payment, so the legs are summed
+  // rather than counted twice against the per-payer cap.
+  const tx = '0x' + 'ef'.repeat(32);
+  const { credits } = plan([
+    transfer(PAYER, AGENT, 100n, { tx, logIndex: 0 }),
+    transfer(PAYER, AGENT, 400n, { tx, logIndex: 3 }),
+  ]);
+  assert.equal(credits.length, 1);
   assert.equal(credits[0].payer, PAYER);
+  assert.equal(credits[0].amount, '500');
 });
 
 // ---------------------------------------------------------------------------

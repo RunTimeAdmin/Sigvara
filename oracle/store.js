@@ -344,8 +344,8 @@ function pruneExpiredCooldowns(now = Date.now()) {
  * be repointed, and planCredits takes the agent from the log's own `to` field. The pair
  * is still refused a second time, so a genuine replay gains nothing.
  */
-function creditKey(txHash, didHash) {
-  return `${String(txHash).toLowerCase()}|${String(didHash).toLowerCase()}`;
+function creditKey(txHash, didHash, payer) {
+  return [txHash, didHash, payer].map((x) => String(x).toLowerCase()).join('|');
 }
 
 /**
@@ -357,15 +357,22 @@ function creditKey(txHash, didHash) {
  * Refusing is the safe direction, and it only affects transactions credited before this
  * change.
  */
-function isCredited(txHash, didHash) {
+function isCredited(txHash, didHash, payer) {
   const tx = String(txHash).toLowerCase();
-  return usedPaymentTxs.has(tx) || usedPaymentTxs.has(creditKey(tx, didHash));
+  // Three generations of key, oldest first. A shorter one blocks everything below it,
+  // because what it omits is not recoverable: prunePaymentEvents drops old records and
+  // deliberately leaves this set alone, so the record naming the agent or the sender may
+  // be long gone. Refusing is the safe direction and only affects settlements credited
+  // before each change.
+  return usedPaymentTxs.has(tx)
+    || usedPaymentTxs.has(`${tx}|${String(didHash).toLowerCase()}`)
+    || usedPaymentTxs.has(creditKey(tx, didHash, payer));
 }
 
 function creditPayment(didHash, txHash, amount, payer, success, now = Date.now(), packetId = null) {
   const key = txHash.toLowerCase();
-  if (isCredited(key, didHash)) return false;
-  usedPaymentTxs.add(creditKey(key, didHash));
+  if (isCredited(key, didHash, payer)) return false;
+  usedPaymentTxs.add(creditKey(key, didHash, payer));
   const list = paymentEvents.get(didHash) ?? [];
   // The settlement hash is kept, not just used for dedupe: it is what lets a third
   // party pull the payment off the chain and check it for themselves, which is the

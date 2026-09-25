@@ -139,14 +139,31 @@ holding contradictory outcomes published matching roots. The outcome is now a `u
 0 failed, 1 succeeded, 2 not reported. ABI-encodes a `bool` as a 32-byte 0 or 1, which is
 byte-for-byte a `uint8` 0 or 1, so no root published before the change moved.
 
-**A settlement is credited once per recipient, not once per transaction.** The dedupe key
-was the transaction hash alone, which was correct while one attestation named one agent.
-The scan reads every agent's transfers out of the same logs, so a transfer batch paying
-several registered agents is ordinary traffic, and all but the first were silently
+**A settlement is credited once per recipient and sender, not once per transaction.** The
+dedupe key was the transaction hash alone, which was correct while one attestation named
+one agent. The scan reads every agent's transfers out of the same logs, so a transfer batch
+paying several registered agents is ordinary traffic, and all but the first were silently
 dropped: not counted as credited, not recorded as skipped, with the checkpoint moving past
-the block regardless. Keyed on `txHash|didHash` now. Nothing is weakened, because what
-stops a receipt being spent on an agent it never paid is the recipient check in both entry
-paths, not the dedupe key.
+the block regardless. Nothing is weakened by narrowing it, because what stops a receipt
+being spent on an agent it never paid is the recipient check in both entry paths, not the
+dedupe key.
+
+The sender joined the key on 25 September, for a reason that only appeared once both paths
+existed. Each collapsed several senders in one transaction down to one payer, and they did
+it differently: the attested path took the largest contributor, the scan the earliest log.
+The same transaction therefore credited a different payer depending on which route saw it,
+and payer identity drives the per-payer cap, the distinct counterparty count, propagation
+and the self-payment refusal. Two honest operators could diverge over a payment nobody
+disputed, which is the delivery asymmetry this ADR removed returning as an interpretation
+asymmetry.
+
+Both now group by `(transaction, agent, sender)`, which deletes the rule rather than
+reconciling two versions of it: there is no payer to select. Totals are unchanged and
+counterparty diversity stops being understated, so the per-payer cap binds where it should
+have. An attested outcome goes on the largest leg alone, because an attestation reports on
+one piece of work and repeating its boolean per sender would count one job several times in
+the success ratio; the other legs are money that moved with nobody reporting on it, which
+is what `success: null` already means.
 
 
 Originally decided, not built. The immediate consequence is that the divergence being left live on

@@ -727,14 +727,31 @@ indistinguishable from a broken recipient filter.
 **Enable it on every operator or on none.** Two operators scanning and one not is the
 same delivery asymmetry this exists to remove, pointed the other way.
 
-A settlement is credited once **per recipient**, not once per transaction. One transfer
-batch can pay several registered agents at a time, which is ordinary traffic for a
-router or a payroll transaction, and each of them is credited for what it actually
-received. Replaying the same transaction for the same agent is still refused. What
-stops a receipt being spent on an agent it never paid is the recipient check rather
+A settlement is credited once **per recipient and sender**, not once per transaction. One
+transfer batch can pay several registered agents, and can carry money from several senders,
+both of which are ordinary traffic for a router, an aggregator or a payroll transaction.
+Each agent is credited for what it actually received, from each counterparty that actually
+paid it. Replaying the same transaction for the same agent from the same sender is still
+refused.
+
+Grouping by sender is deliberate rather than incidental. Collapsing several senders into one
+payer understated how many distinct counterparties an agent has, which is what
+`PAYMENT_MAX_PER_PAYER` and `propagationScore` read, so the cap did not bind where it should
+have. It also required choosing which sender to keep, and the two intake paths chose
+differently, so the same transaction credited a different payer depending on which route saw
+it. Two honest operators could diverge over a payment nobody disputed. There is no longer a
+payer to select.
+
+An attested outcome lands on the largest leg alone. An attestation reports on one piece of
+work, so repeating its boolean per sender would count one job several times in the success
+ratio; the remaining legs carry `success: null`, count toward fee volume and tenure, and stay
+out of both sides of the ratio.
+
+What stops a receipt being spent on an agent it never paid is the recipient check rather
 than the dedupe key: the attested path only counts transfers to the agent’s own
 address, which is part of its DID and cannot be repointed, and the scan reads the
-recipient from the log itself.
+recipient from the log itself. A self-paying sender is refused leg by leg on both paths, so
+an operator cannot slip its own leg into a transaction a real customer also paid into.
 
 `sigvara_oracle_payment_scan_refused_total` counts credits the scan planned and the
 store then refused. It should stay at zero: both consult the same predicate, so a
@@ -798,7 +815,7 @@ The oracle persists the following to `ORACLE_STATE_PATH`:
 - **links**: Agent-to-ERC-8004 identity links
 - **attestCooldowns**: Per-(attester, didHash) last-attestation timestamps
 - **paymentEvents**: Per-agent verified payments, one record each (`txHash`, settlement time, amount, payer, outcome). Stored individually rather than as a running total, because a total cannot be decayed. Records whose weight falls below a thousandth are pruned once per epoch
-- **usedPaymentTxs**: Settlements already credited, as `txHash|didHash`, so the same receipt cannot be counted twice for the same agent. Keyed by the pair rather than the hash alone because one transaction can pay several registered agents. Entries written before this are bare hashes and still block every agent for that transaction, since which agent one belonged to is not recoverable: pruning drops old payment records and deliberately leaves this list alone
+- **usedPaymentTxs**: Settlements already credited, as `txHash|didHash|payer`, so the same receipt cannot be counted twice for the same agent from the same sender. Keyed by all three because one transaction can pay several agents and can carry several senders, and collapsing either loses what the per-payer cap and the distinct counterparty count read. Shorter keys from before each change are still honoured and block everything below them, since what they omit is not recoverable: pruning drops old payment records and deliberately leaves this list alone
 - **scanState**: The `AgentRegistered` log scan cursor, checkpointed per chunk so a rate-limited scan resumes instead of restarting from `FROM_BLOCK`
 
 Writes are atomic (temp file + rename, with an `fsync` before the rename so a crash cannot leave an atomically-renamed empty file). `/health` reports both whether the path is writable and whether the last write actually succeeded, and returns 503 on either. The two are not the same check: the first writes a few bytes to a test file, which passes while a real state file fails for want of space.

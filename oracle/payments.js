@@ -184,7 +184,25 @@ async function verifyPayment({ provider, cfg }, txHash, payTo) {
   if (amount < cfg.minAmount) {
     throw new PaymentError('below_minimum', `paid ${amount}, minimum is ${cfg.minAmount}`);
   }
-  const payer = credits.reduce((a, b) => (b.value > a.value ? b : a)).from;
+  // Per sender, because two payers can credit one agent in a single transaction and
+  // collapsing them loses who actually paid. The scan groups the same way, so the two
+  // intake paths agree by construction rather than by keeping two payer-selection rules
+  // in step: they disagreed before, the attested path taking the largest contributor and
+  // the scan the earliest log, and payer identity drives the per-payer cap, distinct
+  // counterparty counts, propagation and the self-payment check.
+  const bySender = new Map();
+  for (const c of credits) {
+    const key = c.from.toLowerCase();
+    bySender.set(key, (bySender.get(key) ?? 0n) + c.value);
+  }
+  const legs = [...bySender.entries()]
+    .map(([addr, value]) => ({ payer: ethers.getAddress(addr), amount: value }))
+    .sort((a, b) => (b.amount > a.amount ? 1 : b.amount < a.amount ? -1 : 0));
+
+  // The largest contributor still names the attestation: it decides the attester
+  // identity, the cooldown key and the self-payment refusal, all unchanged. For a single
+  // sender, which is nearly every payment, this is the same address as before.
+  const payer = legs[0].payer;
 
   // When the payment settled, not when the receipt was handed in. Decay, tenure and
   // recency all key off this. Using the submission time made a year-old payment count
@@ -210,6 +228,9 @@ async function verifyPayment({ provider, cfg }, txHash, payTo) {
   return {
     payer,
     amount,
+    // Each sender's own contribution. `amount` stays the total, which is what the
+    // response reports and what the minimum was checked against.
+    legs,
     blockNumber: receipt.blockNumber,
     settledAt: block.timestamp * 1000,
     txHash: txHash.toLowerCase(),

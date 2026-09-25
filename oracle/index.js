@@ -357,7 +357,7 @@ async function runPaymentScan(agents) {
     didHashOf: (address) => byAddress.get(address.toLowerCase())?.didHash ?? null,
     operatorOf: (didHash) => byDid.get(didHash)?.operator ?? null,
     // Ask the store, so the scan's pre-check and creditPayment cannot drift apart.
-    isUsed: (txHash, didHash) => isCredited(txHash, didHash),
+    isUsed: (txHash, didHash, payer) => isCredited(txHash, didHash, payer),
     minAmount: paymentCfg.minAmount,
   });
 
@@ -1205,9 +1205,35 @@ const server = http.createServer(async (req, res) => {
         // only — this oracle does not call CounterAudit to confirm it, because an
         // evidence path that depends on someone's SaaS is not evidence.
         const packet = /^[0-9a-fA-F-]{36}$/.test(String(packetId || '')) ? String(packetId) : null;
-        if (!creditPayment(
-          didHash, credited.txHash, credited.amount, credited.payer, success, credited.settledAt, packet
-        )) {
+
+        // One event per sender. Two payers can credit one agent in a single transaction,
+        // and recording that as a single payment from one of them lost who actually paid,
+        // which the per-payer cap, the distinct counterparty count and propagation all
+        // read. The scan groups by sender for the same reason, so the two paths now agree
+        // about a transaction instead of applying different payer rules to it.
+        //
+        // The outcome goes on the largest leg alone. An attestation reports on one piece
+        // of work, so repeating its boolean per sender would count one job several times
+        // in the success ratio. The remaining legs are money that demonstrably moved with
+        // nobody reporting on it, which is exactly what `success: null` already means, so
+        // they count toward fee volume and tenure and stay out of both sides of the
+        // ratio. For a single sender, which is nearly every payment, this is one call
+        // with the outcome, as before.
+        const legs = credited.legs ?? [{ payer: credited.payer, amount: credited.amount }];
+        let anyCredited = false;
+        for (const [i, leg] of legs.entries()) {
+          // Per leg, matching planCredits, which refuses a self-paying sender group and
+          // credits the rest of the transaction. Checking only the largest contributor
+          // would let an operator's own leg ride along inside a transaction a real
+          // customer also paid into, and would put the two intake paths back into
+          // disagreement about the same transaction.
+          if (payments.isSelfPayment(leg.payer, info)) continue;
+          const outcome = i === 0 ? success : null;
+          if (creditPayment(
+            didHash, credited.txHash, leg.amount, leg.payer, outcome, credited.settledAt, packet
+          )) anyCredited = true;
+        }
+        if (!anyCredited) {
           metrics.inc('attestRejectedPayment');
           return json(res, 409, { error: 'this settlement has already been credited', code: 'replayed' });
         }
