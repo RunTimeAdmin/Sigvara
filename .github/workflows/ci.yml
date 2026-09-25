@@ -78,6 +78,14 @@ jobs:
         working-directory: .
         run: node scripts/check-headers.mjs
 
+      # The evidence fixture in the contract tests is the only thing checking that
+      # oracle/merkle.js and the contract agree on leaf encoding, pair ordering and
+      # odd-node handling. A disagreement passes both suites and fails only in
+      # production, so the fixture is regenerated here and compared.
+      - name: Evidence fixture matches the oracle
+        working-directory: .
+        run: node scripts/check-evidence-fixture.mjs
+
   slither:
     name: Static analysis (slither)
     runs-on: ubuntu-latest
