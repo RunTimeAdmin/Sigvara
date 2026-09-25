@@ -579,3 +579,31 @@ test('the capped path agrees with the uncapped one about pulled payments', () =>
   assert.equal(capped.total, uncapped.total);
   assert.equal(capped.successful, uncapped.successful);
 });
+
+test('verifyPayment: a NaN block timestamp is refused, not stored', async () => {
+  // typeof NaN === 'number', so the previous guard admitted it. A NaN settledAt is worse
+  // than a missing one: it stores cleanly and then throws from inside decayWeight on
+  // every future scoring pass for that agent.
+  const provider = {
+    getTransactionReceipt: async () => ({
+      status: 1,
+      blockNumber: 100,
+      logs: [{
+        address: ASSET,
+        topics: [
+          ethers.id('Transfer(address,address,uint256)'),
+          ethers.zeroPadValue(PAYER, 32),
+          ethers.zeroPadValue(AGENT, 32),
+        ],
+        data: ethers.toBeHex(1_000_000n, 32),
+      }],
+    }),
+    getBlockNumber: async () => 200,
+    getBlock: async () => ({ timestamp: NaN }),
+  };
+  await assert.rejects(
+    () => verifyPayment({ provider, cfg: { asset: ASSET, minConfirmations: 1, minAmount: 0n } },
+      '0x' + '5c'.repeat(32), AGENT),
+    (err) => err.code === 'rpc_error' && /timestamp unavailable/.test(err.message),
+  );
+});

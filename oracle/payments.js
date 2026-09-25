@@ -198,7 +198,10 @@ async function verifyPayment({ provider, cfg }, txHash, payTo) {
   } catch (err) {
     throw new PaymentError('rpc_error', `could not read block: ${err.message}`);
   }
-  if (!block || typeof block.timestamp !== 'number') {
+  // Number.isFinite rather than a typeof check: NaN is a number, so the old test let one
+  // through, and a NaN settledAt poisons the stored event. Every later scoring pass then
+  // throws from BigInt(Math.round(NaN)) inside decayWeight, for that agent, forever.
+  if (!block || !Number.isFinite(block.timestamp)) {
     // Never fall back to the current time: that silently reintroduces the bug this
     // exists to fix, and a retry costs nothing.
     throw new PaymentError('rpc_error', 'block timestamp unavailable');
