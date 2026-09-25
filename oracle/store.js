@@ -55,7 +55,10 @@ const attestCooldowns = new Map();
 // payer is kept for the same reason the timestamp is, so that counting distinct
 // counterparties later is a scoring change and not a storage migration.
 const paymentEvents = new Map();
-// Settlement tx hashes already credited, so a receipt cannot be presented twice.
+// Settlements already credited, as `txHash|didHash`, so a receipt cannot be presented
+// twice for the same agent. Keyed by the pair rather than the hash alone because one
+// transaction can pay several agents: a batch payout, a multicall, a router settling a
+// few providers at once. See creditKey.
 const usedPaymentTxs = new Set();
 // didHash -> recent occasions this oracle disagreed with a pending proposal, newest
 // last. Only checker mode writes here. Persisted because a divergence is evidence for
@@ -253,10 +256,47 @@ function pruneExpiredCooldowns(now = Date.now()) {
 /// Records a verified payment against an agent. Returns false when this settlement
 /// has already been credited, which is the replay guard: the same receipt presented
 /// twice must not count twice.
+/**
+ * One settlement, one recipient.
+ *
+ * This was the transaction hash alone, which was right while an attestation was the only
+ * way a payment arrived and named a single agent. The pull scanner reads every agent's
+ * transfers out of the same logs, so a transaction crediting several agents is ordinary
+ * traffic, and the bare hash silently discarded all but the first of them.
+ *
+ * Silently and permanently: creditPayment returns false, the scan counts it as neither
+ * credited nor skipped, and the checkpoint moves past the block regardless, so nothing
+ * ever looks at it again. The agent reads as one that was not paid, which is the exact
+ * conclusion ADR 0003 exists to stop anyone drawing by accident.
+ *
+ * Nothing is weakened by narrowing the key. What stops a receipt being spent on an agent
+ * it never paid is the recipient check, and that lives in both entry paths: verifyPayment
+ * only counts transfers to the agent's own address, which is part of its DID and cannot
+ * be repointed, and planCredits takes the agent from the log's own `to` field. The pair
+ * is still refused a second time, so a genuine replay gains nothing.
+ */
+function creditKey(txHash, didHash) {
+  return `${String(txHash).toLowerCase()}|${String(didHash).toLowerCase()}`;
+}
+
+/**
+ * Whether this settlement has already been credited to this agent.
+ *
+ * A bare hash is an entry written before the key carried a recipient. It blocks every
+ * agent, because which one it belonged to is not recoverable: prunePaymentEvents drops
+ * old events and deliberately leaves this set alone, so the event may be long gone.
+ * Refusing is the safe direction, and it only affects transactions credited before this
+ * change.
+ */
+function isCredited(txHash, didHash) {
+  const tx = String(txHash).toLowerCase();
+  return usedPaymentTxs.has(tx) || usedPaymentTxs.has(creditKey(tx, didHash));
+}
+
 function creditPayment(didHash, txHash, amount, payer, success, now = Date.now(), packetId = null) {
   const key = txHash.toLowerCase();
-  if (usedPaymentTxs.has(key)) return false;
-  usedPaymentTxs.add(key);
+  if (isCredited(key, didHash)) return false;
+  usedPaymentTxs.add(creditKey(key, didHash));
   const list = paymentEvents.get(didHash) ?? [];
   // The settlement hash is kept, not just used for dedupe: it is what lets a third
   // party pull the payment off the chain and check it for themselves, which is the
@@ -408,6 +448,8 @@ module.exports = {
   attestCooldowns,
   paymentEvents,
   usedPaymentTxs,
+  creditKey,
+  isCredited,
   creditPayment,
   divergences,
   recordDivergence,

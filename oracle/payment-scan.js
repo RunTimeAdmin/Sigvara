@@ -137,7 +137,9 @@ function decodeTransfer(log) {
  * @param {object} opts
  *   @param {(address:string) => string|null} opts.didHashOf recipient address -> didHash
  *   @param {(address:string) => string|null} opts.operatorOf didHash -> operator address
- *   @param {(txHash:string) => boolean} opts.isUsed already credited
+ *   @param {(txHash:string, didHash:string) => boolean} opts.isUsed already credited
+ *          for THAT agent. One transaction can pay several, so the hash alone is not
+ *          the question being asked.
  *   @param {bigint} opts.minAmount
  */
 function planCredits(decoded, opts) {
@@ -176,7 +178,8 @@ function planCredits(decoded, opts) {
       txHash: g.txHash, didHash: g.didHash, payer: g.from, amount: g.amount.toString(), reason,
     });
 
-    if (isUsed(g.txHash)) { reject('already_credited'); continue; }
+    // Per agent, not per transaction: a batch payout credits each recipient it paid.
+    if (isUsed(g.txHash, g.didHash)) { reject('already_credited'); continue; }
     if (g.amount < minAmount) { reject('below_minimum'); continue; }
     // Same rule as the attested path: an operator paying its own agent costs only gas,
     // and the money comes straight back.

@@ -142,7 +142,7 @@ const {
   setScanState,
   getPaymentScanState,
   setPaymentScanState,
-  usedPaymentTxs,
+  isCredited,
   getPaymentEvents,
   allPaymentEvents,
   prunePaymentEvents,
@@ -355,7 +355,8 @@ async function runPaymentScan(agents) {
   const { credits, skipped } = paymentScan.planCredits(logs.map(paymentScan.decodeTransfer), {
     didHashOf: (address) => byAddress.get(address.toLowerCase())?.didHash ?? null,
     operatorOf: (didHash) => byDid.get(didHash)?.operator ?? null,
-    isUsed: (txHash) => usedPaymentTxs.has(String(txHash).toLowerCase()),
+    // Ask the store, so the scan's pre-check and creditPayment cannot drift apart.
+    isUsed: (txHash, didHash) => isCredited(txHash, didHash),
     minAmount: paymentCfg.minAmount,
   });
 

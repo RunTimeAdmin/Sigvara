@@ -134,10 +134,35 @@ test('creditPayment: the same settlement cannot be credited twice', () => {
   assert.equal(paymentVolume(did), 1_000_000n, 'volume unchanged by the replay');
 });
 
-test('creditPayment: a receipt spent on one agent cannot be reused on another', () => {
+// This replaced a test asserting that one settlement could credit only one agent, full
+// stop. That held when an attestation was the only way in and named a single agent. The
+// pull scanner reads every agent's transfers from the same logs, so a transaction paying
+// several agents at once is now ordinary traffic rather than a sign of abuse.
+//
+// What stops a receipt being spent on an agent it never paid is the recipient check, in
+// both entry paths and not here: verifyPayment only counts transfers to the agent's own
+// address, and planCredits derives the agent from the log's `to` field. Refusing the
+// second agent here did not add to that. It only discarded money that had demonstrably
+// moved, permanently, because the scan checkpoint moves past the block either way.
+test('creditPayment: one settlement paying two agents credits both', () => {
   const tx = '0x' + 'c1'.repeat(32);
-  assert.equal(creditPayment('0x' + '33'.repeat(32), tx, 500n), true);
-  assert.equal(creditPayment('0x' + '44'.repeat(32), tx, 500n), false);
+  const a = '0x' + '33'.repeat(32);
+  const b = '0x' + '44'.repeat(32);
+  assert.equal(creditPayment(a, tx, 500n), true);
+  assert.equal(
+    creditPayment(b, tx, 700n), true,
+    'a batch payment credits every agent it actually paid, not just the first one seen'
+  );
+  assert.equal(paymentVolume(a), 500n);
+  assert.equal(paymentVolume(b), 700n);
+});
+
+test('creditPayment: the same settlement still cannot be credited twice for one agent', () => {
+  const tx = '0x' + 'c3'.repeat(32);
+  const did = '0x' + '5b'.repeat(32);
+  assert.equal(creditPayment(did, tx, 500n), true);
+  assert.equal(creditPayment(did, tx, 500n), false, 'replay of the same pair refused');
+  assert.equal(paymentVolume(did), 500n, 'volume unchanged by the replay');
 });
 
 test('creditPayment: tx hash matching ignores case', () => {
