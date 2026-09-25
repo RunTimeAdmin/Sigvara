@@ -49,9 +49,9 @@ function successScore(successful, total, prior = SUCCESS_PRIOR) {
 // paying gas and floating capital, which is a real cost, but it is weeks of cost for a
 // factor that claims to represent years. The multiplier now matches the claim.
 //
-// The trade is a slower ramp for honest agents: six months of trading is 14 of 20
-// rather than the full 20. That is the intended shape. A factor that everyone maxes in
-// a month distinguishes nobody.
+// The trade is a slower ramp for honest agents: six months of trading is 22 of 30, and
+// two years is 28. That is the intended shape. A factor that everyone maxes in a month
+// distinguishes nobody.
 function ageCurve(days) {
   if (!(days > 0)) return 0;
   return Math.min(30, Math.floor(Math.log2(days + 1) * 3));
@@ -62,22 +62,22 @@ function ageCurve(days) {
  *
  * Measuring time since registration made this the cheapest factor in the score.
  * Waiting costs nothing, so an attacker could register identities in bulk, leave
- * them a month, and collect the full 20 points having done no work at all. The
+ * them a month, and collect all 30 points having done no work at all. The
  * model doc claimed the logarithm stopped idle old agents dominating; it did not,
  * it only capped them.
  *
  * With `activity` supplied the span runs from the agent's FIRST verified payment
  * to its most recent one, and the result is weighted by how recent that last one
  * is. The span deliberately starts at first activity rather than registration:
- * otherwise waiting a month and then making one payment would unlock the full 20,
+ * otherwise waiting a month and then making one payment would unlock the whole factor,
  * which is the same free-lunch problem in a different shape.
  *
  * So an agent that never worked scores 0 however long ago it signed up. One that
  * has just started scores 0 because it has no span yet, which is correct, it is
  * new. One that traded for two years and stopped a year ago keeps almost nothing.
- * One that has been trading for two years and is working today gets the full 20,
- * because two years of sustained, paid, bonded operation is the part an attacker
- * cannot shortcut.
+ * One that has been trading for two years and is working today gets 28 of the 30, with
+ * the cap another ten months out, because sustained, paid, bonded operation over that
+ * span is the part an attacker cannot shortcut.
  *
  * `activity` is null when payment verification is off, which keeps the old
  * calendar behaviour so existing deployments are unaffected.
