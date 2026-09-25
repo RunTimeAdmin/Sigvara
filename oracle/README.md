@@ -81,6 +81,8 @@ Health check with operational signals for production alerting.
   "lastSuccessfulEpochMs": 1234567890000,
   "timeSinceLastEpochMs": 120000,
   "storeWritable": true,
+  "statePersisted": true,
+  "lastPersistMs": 1234567890000,
   "statePath": "/data/oracle-state.json",
   "attestCooldownMs": 3600000,
   "epochRunning": false,
@@ -97,7 +99,17 @@ Health check with operational signals for production alerting.
 
 Returns 503 when:
 - State file path is not writable (likely volume mount issue)
+- The last state write failed (`statePersisted: false`, with `statePersistError`)
 - No successful epoch in the last 2× epoch interval (stale scoring)
+
+`storeWritable` and `statePersisted` are not the same check and both are reported.
+The first writes a few bytes to a test file and deletes them, so it answers whether the
+path looks usable. The second is what the last real write actually did, which can fail
+while the probe passes: a multi-megabyte state file needs space the probe does not.
+It matters because `/attest` answers 200 on the strength of having recorded something,
+so a failed persist means a payer was told a payment counted when a restart will lose
+it. Pulled payments are found again by the next scan; attested outcomes are on chain
+nowhere, so those do not come back.
 
 `commit` is the git revision the container cloned at start, or `null` when the
 deployment did not report one. It answers "are these two operators running the same
@@ -677,9 +689,9 @@ with it off, the largest factor in the score is a count of HTTP requests.
 | `PAYMENT_ASSET` | (empty) | ERC-20 that payments settle in. **Required** when verification is on — a missing value stops the process at startup rather than silently disabling the check |
 | `PAYMENT_MIN_AMOUNT` | `0` | Smallest payment that counts, in the asset's base units. Stops dust minting attestations |
 | `PAYMENT_MIN_CONFIRMATIONS` | `1` | Confirmations before a settlement is accepted |
-| `PAYMENT_FEE_UNIT` | `100000000` | Base units of volume per point of `feeScore`. With 6-decimal USDC this is one point per $100, so the 30-point cap lands at $3,000 of settled volume |
+| `PAYMENT_FEE_UNIT` | `100000000` | Base units of volume per point of `feeScore`. With 6-decimal USDC this is one point per $100, so the 20-point cap lands at $2,000 of settled volume |
 | `PAYMENT_HALF_LIFE_DAYS` | `90` | Days after which a payment counts half. `0` disables decay, which makes the score answer "was this agent ever busy" instead of "is it busy now" |
-| `PAYMENT_MAX_PER_PAYER` | `5` | Most points of `feeScore`, and attestations of weight, any one payer can contribute. At 5, reaching the 30-point cap needs six distinct payers. `0` disables the cap |
+| `PAYMENT_MAX_PER_PAYER` | `4` | Most points of `feeScore`, and attestations of weight, any one payer can contribute. At 4, reaching the 20-point cap needs five distinct payers. `0` disables the cap |
 | `PAYMENT_TRUST_WEIGHT` | `1` | Raises a counterparty's cap in proportion to its own matured score, and feeds `propagationScore`. `0` weights every payer alike |
 
 Amounts are base units and handled as BigInt throughout, so an 18-decimal token does not
@@ -714,6 +726,20 @@ indistinguishable from a broken recipient filter.
 
 **Enable it on every operator or on none.** Two operators scanning and one not is the
 same delivery asymmetry this exists to remove, pointed the other way.
+
+A settlement is credited once **per recipient**, not once per transaction. One transfer
+batch can pay several registered agents at a time, which is ordinary traffic for a
+router or a payroll transaction, and each of them is credited for what it actually
+received. Replaying the same transaction for the same agent is still refused. What
+stops a receipt being spent on an agent it never paid is the recipient check rather
+than the dedupe key: the attested path only counts transfers to the agent’s own
+address, which is part of its DID and cannot be repointed, and the scan reads the
+recipient from the log itself.
+
+`sigvara_oracle_payment_scan_refused_total` counts credits the scan planned and the
+store then refused. It should stay at zero: both consult the same predicate, so a
+nonzero value means they disagree, or that a settlement credited before the key
+carried a recipient is blocking one. Each is logged with the transaction and the agent.
 
 A pulled payment is credited with `success: null` — no outcome. It counts toward fee
 volume and tenure and is excluded from **both** sides of the success ratio. Recording it
@@ -772,10 +798,12 @@ The oracle persists the following to `ORACLE_STATE_PATH`:
 - **links**: Agent-to-ERC-8004 identity links
 - **attestCooldowns**: Per-(attester, didHash) last-attestation timestamps
 - **paymentEvents**: Per-agent verified payments, one record each (`txHash`, settlement time, amount, payer, outcome). Stored individually rather than as a running total, because a total cannot be decayed. Records whose weight falls below a thousandth are pruned once per epoch
-- **usedPaymentTxs**: Settlement hashes already credited, so the same receipt cannot be counted twice
+- **usedPaymentTxs**: Settlements already credited, as `txHash|didHash`, so the same receipt cannot be counted twice for the same agent. Keyed by the pair rather than the hash alone because one transaction can pay several registered agents. Entries written before this are bare hashes and still block every agent for that transaction, since which agent one belonged to is not recoverable: pruning drops old payment records and deliberately leaves this list alone
 - **scanState**: The `AgentRegistered` log scan cursor, checkpointed per chunk so a rate-limited scan resumes instead of restarting from `FROM_BLOCK`
 
-Writes are atomic (temp file + rename) to prevent corruption. The health endpoint checks writability and returns 503 if the state path is not writable.
+Writes are atomic (temp file + rename, with an `fsync` before the rename so a crash cannot leave an atomically-renamed empty file). `/health` reports both whether the path is writable and whether the last write actually succeeded, and returns 503 on either. The two are not the same check: the first writes a few bytes to a test file, which passes while a real state file fails for want of space.
+
+Payment records are validated as they load. An `amount` that is not an integer string, or a missing settlement time, is dropped with the agent and the field named in the log, rather than throwing from inside the decay arithmetic later. Worth knowing when seeding this file by hand: `1.5` and `1_000_000` are both rejected, and fee volume and tenure for that agent are understated until the record is corrected.
 
 This state is **per-oracle**. A second operator started against the same chain would
 share none of it, which is the first thing that has to change before multiple operators

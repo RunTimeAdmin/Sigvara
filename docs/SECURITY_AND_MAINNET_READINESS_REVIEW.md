@@ -28,6 +28,11 @@
 >   rather than landing at once, and a transfer restarts maturity.
 > - Every proposal commits to a Merkle root over the evidence behind it, servable and
 >   re-verifiable against the chain.
+> - The six factor weights were rebalanced after this review: fee 30 to 20, success 25 to
+>   15, tenure 20 to 30, external 15 to 25. Community and propagation are unchanged at 5.
+>   Section 3.1.1 below quotes the struct as it stood on 17 September, so its caps read
+>   low or high against the code today. The finding itself is unaffected, since the fields
+>   are `uint8` either way and the conclusion was that the packing needs no change.
 >
 > **Still open, and still mainnet blockers.**
 > - No external security audit.

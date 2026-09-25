@@ -126,6 +126,29 @@ code did `success: !!success`, which would have turned "nobody reported an outco
 when the code merges. Until then the whitepaper should keep saying unreported work is
 invisible, because on the running deployment it still is.
 
+Two further consequences surfaced only on audit, on 25 September, and both had the same
+shape: an invariant that held while an attestation was the only way in, and stopped
+holding once the scan existed. Recorded here because the pattern is more useful than
+either instance.
+
+**The third outcome state had to reach the Merkle leaf.** Scoring learned to tell
+`success: null` from `false`; the leaf did not, and encoded `Boolean(success)`. A payment
+nobody had judged therefore hashed identically to a payment somebody had failed, so the
+evidence root no longer committed to the arithmetic behind the score, and two operators
+holding contradictory outcomes published matching roots. The outcome is now a `uint8`:
+0 failed, 1 succeeded, 2 not reported. ABI-encodes a `bool` as a 32-byte 0 or 1, which is
+byte-for-byte a `uint8` 0 or 1, so no root published before the change moved.
+
+**A settlement is credited once per recipient, not once per transaction.** The dedupe key
+was the transaction hash alone, which was correct while one attestation named one agent.
+The scan reads every agent's transfers out of the same logs, so a transfer batch paying
+several registered agents is ordinary traffic, and all but the first were silently
+dropped: not counted as credited, not recorded as skipped, with the checkpoint moving past
+the block regardless. Keyed on `txHash|didHash` now. Nothing is weakened, because what
+stops a receipt being spent on an agent it never paid is the recipient check in both entry
+paths, not the dedupe key.
+
+
 Originally decided, not built. The immediate consequence is that the divergence being left live on
 20 September should be triaged in public as a delivery failure rather than quietly seeded
 away — see [divergence-log.md](../divergence-log.md). Seeding the checker by hand would
