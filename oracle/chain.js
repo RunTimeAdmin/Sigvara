@@ -433,6 +433,33 @@ function isSlotTaken(err) {
   return /ScoreAlreadyPending/.test(String(err.shortMessage || err.message || ''));
 }
 
+/**
+ * True when the node refused the request because we are being throttled, rather than
+ * because anything is wrong with the transaction.
+ *
+ * Reads already treat throttling as transient and retry, in readWithBackoff. Writes
+ * deliberately do not, and that is unchanged here: proposeScore and finalizeScore race
+ * other parties for one slot, and resending something that may already be in the mempool
+ * is how you pay twice for one epoch. This only names the cause.
+ *
+ * Naming it matters because the alternative was counting it as a propose failure.
+ * `proposeErrors` should mean this operator could not do its job; on the live checker it
+ * also meant the provider said slow down, which is a different problem with a different
+ * fix, and the log line was a wall of JSON-RPC payload rather than a sentence.
+ *
+ * -32005 is the JSON-RPC code providers use for this. ethers wraps it in "could not
+ * coalesce error" with the original nested inside, so the string match is doing real work
+ * and is not just belt and braces.
+ */
+function isRateLimited(err) {
+  if (!err) return false;
+  const nested = err.error || err.info?.error || {};
+  if (nested.code === -32005 || err.code === -32005) return true;
+  return /rate limit|429|too many requests/i.test(
+    String(err.shortMessage || err.message || '')
+  );
+}
+
 async function finalizeScore(didHash) {
   const tx = await reputationContract.finalizeReputation(didHash);
   await tx.wait(1);
@@ -524,6 +551,7 @@ async function chargeEpoch(didHash) {
 module.exports = {
   readWithBackoff,
   isSlotTaken,
+  isRateLimited,
   init,
   reset,
   verifyDidHashDerivation,

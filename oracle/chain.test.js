@@ -640,3 +640,37 @@ test('getAgentScore: an unreachable counterparty reads as no standing, never thr
   });
   assert.equal(await chain.getAgentScore('0xUnreachable'), 0);
 });
+
+// Throttling is not a failure to propose, and must not be counted as one.
+//
+// A rate-limited eth_sendRawTransaction arrives as an ethers wrapper whose message is a
+// wall of JSON-RPC payload, and it fell past isSlotTaken into the generic branch. So the
+// counter that should mean "something is wrong with this operator" also counted "the RPC
+// provider said slow down", and the log line was unreadable. The checker's logs show this
+// happening on a live operator, so the distinction is not hypothetical.
+//
+// Writes are deliberately not retried here: proposeScore and finalizeScore race other
+// parties for one slot. This only classifies the error; it does not resend anything.
+test('isRateLimited: recognises a throttled send without matching real failures', () => {
+  // Shape ethers actually produces, from the checker's own logs.
+  const coalesced = new Error(
+    'could not coalesce error (error={ "code": -32005, "message": "rate limit exceeded" }, ' +
+    'payload={ "method": "eth_sendRawTransaction" }, code=UNKNOWN_ERROR, version=6.17.0)'
+  );
+  assert.equal(chain.isRateLimited(coalesced), true, 'the -32005 wall of text is throttling');
+  assert.equal(chain.isRateLimited({ error: { code: -32005 } }), true, 'or a structured code');
+  assert.equal(chain.isRateLimited(new Error('429 Too Many Requests')), true);
+  assert.equal(chain.isRateLimited(new Error('rate limit exceeded')), true);
+
+  // Must not swallow anything meaningful.
+  assert.equal(chain.isRateLimited(null), false);
+  assert.equal(chain.isRateLimited(new Error('execution reverted: ScoreAlreadyPending')), false);
+  assert.equal(chain.isRateLimited(new Error('insufficient funds for gas')), false);
+  assert.equal(chain.isRateLimited(new Error('nonce too low')), false);
+});
+
+test('isRateLimited and isSlotTaken do not overlap', () => {
+  const taken = new Error('execution reverted: ScoreAlreadyPending');
+  assert.equal(chain.isSlotTaken(taken), true);
+  assert.equal(chain.isRateLimited(taken), false);
+});

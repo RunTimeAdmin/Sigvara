@@ -777,6 +777,17 @@ const PHASE_ONE_CHUNK = 32;
               finalized++;
               metrics.inc('finalizeSuccesses');
             } catch (finalizeErr) {
+              // Same distinction as the propose path, and checked before the pending
+              // re-read: a throttled send never reached the chain, so the slot is still
+              // occupied and the code below would otherwise read that as a failure to
+              // finalize and rethrow, inflating both counters for one throttle.
+              if (chain.isRateLimited(finalizeErr)) {
+                console.warn(
+                  `[oracle]   ${didHash.slice(0, 10)}… RPC throttled the finalize; retrying next epoch`,
+                );
+                metrics.inc('finalizeThrottled');
+                continue;
+              }
               // An empty slot after a failed finalize has two very different causes, and
               // counting both as success hides the one that matters most: the slashing
               // committee rejecting a proposal deletes it too. That is the committee
@@ -855,6 +866,18 @@ const PHASE_ONE_CHUNK = 32;
         if (chain.isSlotTaken(err)) {
           console.log(`[oracle]   ${didHash.slice(0, 10)}… primary proposed first, standing down`);
           metrics.inc('proposeSlotTaken');
+          continue;
+        }
+        // Being throttled is the provider's limit, not this operator failing. Counted
+        // apart from proposeErrors so the number that means "something is wrong here"
+        // keeps meaning that, and logged as a sentence rather than the JSON-RPC payload
+        // ethers wraps it in. The epoch will try again; nothing is resent now, because a
+        // write that may already be in the mempool must not be repeated.
+        if (chain.isRateLimited(err)) {
+          console.warn(
+            `[oracle]   ${didHash.slice(0, 10)}… RPC throttled the proposal; retrying next epoch`,
+          );
+          metrics.inc('proposeThrottled');
           continue;
         }
         console.error(`[oracle]   ${didHash.slice(0, 10)}… error: ${err.message}`);

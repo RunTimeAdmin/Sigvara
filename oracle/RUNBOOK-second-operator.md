@@ -67,6 +67,27 @@ cast call 0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171 "bondAmount()(uint256)" --r
   So: **QuickNode**. It is the only endpoint that both serves historical receipts and
   accepts useful log ranges without being the one the primary already uses.
 
+  **It throttles this operator in normal running, and that is visible rather than fatal.**
+  Nearly every epoch logs `getPendingScore failed (CALL_EXCEPTION), retrying in 500ms` and
+  recovers; `readWithBackoff` treats a no-data `CALL_EXCEPTION` as transport rather than a
+  revert, which is exactly this case. Occasionally a write is refused with `-32005 rate
+  limit exceeded`, and that one costs the epoch's work for that agent.
+
+  Writes are **not** retried, deliberately: proposing and finalizing race other parties for
+  one slot, and resending something that may already be in the mempool is how you pay twice.
+  A throttled write is counted as `sigvara_oracle_propose_throttled_total` or
+  `sigvara_oracle_finalize_throttled_total`, apart from `propose_errors` and
+  `finalize_errors`, which should keep meaning that this operator could not do its job. The
+  next epoch retries on its own, so the cost is up to an hour of delay, against a six-hour
+  challenge window.
+
+  If those counters climb, the fix is the provider and not the code. In order of how much
+  they help: lower `LOG_CHUNK_SIZE` on this host, because a wide `eth_getLogs` is what
+  actually spends the budget and the per-agent reads inherit the throttling afterwards;
+  raise the plan; or give this operator its own endpoint. The primary shows none of this on
+  a different provider, so it is this endpoint's limit rather than the oracle's request
+  pattern.
+
   The check that matters is not "do they agree on `getTotalScore`". That is an
   `eth_call` at head and all four pass it, which is exactly how Blockdaemon got
   recommended here in the first place. Test the two calls payment verification actually

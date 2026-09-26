@@ -52,6 +52,11 @@ const counters = {
   // consult the same predicate, so anything here means they disagree, or a
   // pre-migration bare-hash entry is blocking a settlement.
   paymentScanRefused: 0,
+  // The provider throttled a write. Separate from proposeErrors and finalizeErrors,
+  // which should mean this operator could not do its job: throttling is the provider's
+  // limit, with a different fix, and burying it in the same number hides both.
+  proposeThrottled: 0,
+  finalizeThrottled: 0,
   rateLimitHits: 0,
   httpRequests: 0,
 
@@ -257,6 +262,16 @@ function toPrometheusText(extra = {}) {
   lines.push('# HELP sigvara_oracle_payment_scan_refused_total Planned credits the store refused');
   lines.push('# TYPE sigvara_oracle_payment_scan_refused_total counter');
   lines.push(`sigvara_oracle_payment_scan_refused_total ${counters.paymentScanRefused}`);
+
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_propose_throttled_total Proposals the RPC provider throttled');
+  lines.push('# TYPE sigvara_oracle_propose_throttled_total counter');
+  lines.push(`sigvara_oracle_propose_throttled_total ${counters.proposeThrottled}`);
+
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_finalize_throttled_total Finalizations the RPC provider throttled');
+  lines.push('# TYPE sigvara_oracle_finalize_throttled_total counter');
+  lines.push(`sigvara_oracle_finalize_throttled_total ${counters.finalizeThrottled}`);
 
   lines.push('');
   lines.push('# HELP sigvara_oracle_rate_limit_hits_total Rate limit rejections');
