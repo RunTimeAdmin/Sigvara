@@ -39,7 +39,7 @@ of whatever a target holds is burned.
 | Status before filing | `0` (Active) |
 | Stake | 1,000 SVR |
 | `hasMinimumStake` | true |
-| Score at filing | **0** (scored `5` by the oracle at 19:36:48, after filing) |
+| Score at filing | **0** (scored `5` at 19:36:48, after filing; had risen to `12` finalized by 26 Sep as tenure accrued) |
 
 ## Day 0: filed
 
@@ -102,14 +102,24 @@ as documented.
   addresses that operator controls. This demonstrates a mechanism, not a decision. A drill
   presented as proof that a committee will act correctly against a real adversary would be
   precisely the overclaim the rest of these documents exist to avoid.
-- **Very little about reputation being destroyed.** The target scored `0` at filing,
-  because it was registered minutes earlier and had never been through an oracle epoch.
-  It was then scored `5` by the oracle at 19:36:48, the unflagged community baseline for
-  a bonded agent with no trading history, which finalizes well before settlement. So the
-  slash will show a live `5 → 0` rather than nothing at all. Five points is a thin
-  demonstration of a factor that runs to 100, and the interesting case is an agent whose
-  score took months of paid work to build. `test/SlashDrillFork.t.sol` covers that, by
-  forking the live chain and slashing an agent carrying a real score.
+- **Little about reputation being destroyed, but more than expected.** The target scored
+  `0` at filing, because it was registered minutes earlier and had never been through an
+  oracle epoch. It was then scored `5` at 19:36:48, the unflagged community baseline for a
+  bonded agent with no trading history, and this section originally said the slash would
+  show `5 → 0`.
+
+  It has since climbed on its own. By 26 September the finalized score was `12` with `13`
+  pending, and it will be a point or so higher at settlement. The arithmetic is entirely
+  tenure: the agent has no payments, so `ageScore` falls back to calendar age, and
+  `ageCurve` reads 7 at five days and 8 at six, on top of the community 5. Nothing was
+  done to the agent; it simply aged through the challenge window.
+
+  So the slash will show roughly `13 → 0`, which is a better demonstration than `5 → 0`
+  and still a thin one against a factor that runs to 100. It is also a reminder of what
+  this drill does not cover: every point of it is calendar tenure and an unflagged
+  baseline, neither of which cost an attacker anything. The interesting case remains an
+  agent whose score took months of *paid* work to build, and `test/SlashDrillFork.t.sol`
+  covers that by forking the live chain and slashing an agent carrying a real score.
 - **Nothing about the dispute branch.** It was deliberately skipped to keep the drill to
   seven days rather than up to twenty-one. Freeze, uphold and reject are covered by the
   same fork test.
