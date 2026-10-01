@@ -100,7 +100,7 @@ jobs:
 
       # Fails the build on High findings only. Medium/Low are reviewed by hand;
       # the accepted ones are recorded in docs/adr/0002-analyzer-accepted-findings.md.
-      - uses: crytic/slither-action@v0.4.1
+      - uses: crytic/slither-action@v0.4.2
         with:
           fail-on: high
           slither-args: --filter-paths "lib/|test/|script/|archive/" --exclude-dependencies
