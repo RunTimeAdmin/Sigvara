@@ -180,6 +180,65 @@ GET /v1/audit/verify/:packet_id
 
 ---
 
+## Circle's agent marketplace, and the two ways it settles
+
+Circle ships an agent-wallet CLI with a paid-service marketplace: an agent searches for a
+service, inspects its price, and pays it in USDC per call. That is the demand side of
+exactly the market Sigvara scores, and it needs nothing from Circle to be useful here,
+because a payment to a registered agent lands a `Transfer` log on chain and that log is
+already what the oracle reads. Measured 3 Oct 2026 against Circle's published skills and
+the Gateway contracts on Arc.
+
+It settles two ways, and they are not equivalent for reputation.
+
+**Vanilla x402 attributes correctly.** The payer signs an EIP-3009 authorization and a
+facilitator broadcasts it, so the transaction sender is the facilitator while the
+`Transfer` event's `from` is the payer. The oracle reads the log rather than `tx.from`, so
+the counterparty is the paying agent, which is what
+[payment-backed attestations](payment-backed-attestations.md) already assumed.
+
+**Gateway does not attribute at all.** Gateway holds a pooled balance per source chain and
+settles in under 500ms by *minting* on the destination chain: Circle's technical guide says
+the minter "mints USDC to the specified destination". An ERC-20 mint emits
+`Transfer(address(0), recipient, amount)`, so the payer is not merely hidden behind a
+Gateway contract, it is the **zero address**.
+
+What that does to a score, measured against the real scoring code with three different
+agents paying one seller:
+
+| | |
+|---|---|
+| credited | 3 of 3 |
+| distinct payers seen | **1** |
+| payer recorded | `0x0000…0000` |
+| volume after the per-payer cap | 4 of 6 units |
+| `feeScore` | **4 of 20** |
+
+Every Gateway payment that has ever happened collapses into one synthetic counterparty.
+`distinctPayers` reads 1, `propagationScore` has no agent to inherit from and stays 0, and
+`PAYMENT_MAX_PER_PAYER` caps the whole channel at four points however much business flows
+through it. The payments are credited; they carry no identity. The self-payment refusal
+does not fire either, because the zero address is nobody's operator.
+
+**Circle's own guidance prefers the path that does not work.** Its skill says to always
+prefer Gateway when a Gateway balance exists, and to treat the first paid call as wallet
+onboarding whose purpose is making every later call Gateway-backed. Vanilla is the
+documented exception, for when every seller is vanilla-only on a chain the buyer already
+holds. The recommended default also deposits on Base and pays via Gateway on Polygon, so
+the settlement need not touch Arc at all.
+
+**There is a way through, at a price.** The attestation's transfer spec is hashed into the
+mint transaction for traceability, so the depositor is recoverable from the Gateway mint
+event even though it is absent from the `Transfer` log. Reading it would make marketplace
+volume usable evidence. It would also couple this protocol to one payment provider's event
+format, which is the kind of dependency the oracle has so far refused: it verifies settled
+transfers precisely so it does not have to trust or track anyone's scheme. That trade is
+not yet decided.
+
+Until it is, the honest position is narrow. Marketplace demand is real and it is on the
+chain Sigvara watches, but only its vanilla half produces reputation evidence, and that
+half is the one Circle steers agents away from.
+
 ## Related
 
 - [Quickstart: Register your first agent](quickstart.md)
