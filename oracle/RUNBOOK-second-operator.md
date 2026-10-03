@@ -49,10 +49,16 @@ cast call 0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171 "bondAmount()(uint256)" --r
 
   | Provider | Historical `eth_getTransactionReceipt` | `eth_getLogs` max range | Usable |
   |---|---|---|---|
-  | `rpc.testnet.arc.io` (Circle) | yes | 9,999 | yes, but it is the primary's |
-  | `rpc.quicknode.testnet.arc.io` | yes | 9,999 | **yes** |
-  | `rpc.blockdaemon.testnet.arc.io` | **returns null** | 9,999 | no |
+  | `rpc.testnet.arc.io` (Circle) | yes | 10,000 | yes, but it is the primary's |
+  | `rpc.quicknode.testnet.arc.io` | yes | 10,000 | **yes** |
+  | `rpc.blockdaemon.testnet.arc.io` | **returns null** | 10,000 | no |
   | `rpc.drpc.testnet.arc.io` | yes | **~100** | no |
+
+  The max range read 9,999 here until it was measured again on 3 Oct 2026. It is 10,000
+  *inclusive*: a span of 10,000 blocks is accepted and 10,001 returns `-32012 requested
+  range too large`. The difference matters because `LOG_CHUNK_SIZE=10000` asks for exactly
+  10,000 and therefore sits on the ceiling rather than one block over it. Nothing to fix,
+  but the off-by-one in the old figure looked like a live misconfiguration.
 
   **Blockdaemon serves blocks and logs but has a truncated transaction index.** Old
   transactions resolve to `null` by hash and by receipt while their blocks resolve fine.
@@ -66,6 +72,20 @@ cast call 0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171 "bondAmount()(uint256)" --r
 
   So: **QuickNode**. It is the only endpoint that both serves historical receipts and
   accepts useful log ranges without being the one the primary already uses.
+
+  **Both providers throttle sustained `eth_getLogs` bursts, and neither is worse than the
+  other.** Measured 3 Oct 2026 by issuing thirty 10,000-block scans back to back: QuickNode
+  refused 19 of 30 with `-32005`, Circle's endpoint refused 20 of 30. Individual calls are
+  cheap, about 120ms for a 10,000-block window, so the limit is on request *rate* and not
+  on per-call cost. The scanner has no pacing between chunks, which is what makes a long
+  catch-up fragile: `scanRange` wraps each call in `readWithBackoff` with four attempts, so
+  a few hundred consecutive chunks will probably exhaust one of them, throw, and leave the
+  checkpoint unadvanced for a full retry next epoch.
+
+  Two consequences worth knowing before debugging from error codes. A range of 20,000
+  returns `-32005 rate limit exceeded` rather than a range error, so that code does not
+  reliably mean throttling. And the checker's extra read noise is checker mode doing more
+  work per epoch, not a worse endpoint, which is where this runbook previously pointed.
 
   **It throttles this operator in normal running, and that is visible rather than fatal.**
   Nearly every epoch logs `getPendingScore failed (CALL_EXCEPTION), retrying in 500ms` and
@@ -81,12 +101,18 @@ cast call 0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171 "bondAmount()(uint256)" --r
   next epoch retries on its own, so the cost is up to an hour of delay, against a six-hour
   challenge window.
 
-  If those counters climb, the fix is the provider and not the code. In order of how much
-  they help: lower `LOG_CHUNK_SIZE` on this host, because a wide `eth_getLogs` is what
-  actually spends the budget and the per-agent reads inherit the throttling afterwards;
-  raise the plan; or give this operator its own endpoint. The primary shows none of this on
-  a different provider, so it is this endpoint's limit rather than the oracle's request
-  pattern.
+  If those counters climb, **do not lower `LOG_CHUNK_SIZE`.** An earlier version of this
+  runbook said to, on the theory that a wide `eth_getLogs` spends the budget. Measurement
+  on 3 Oct 2026 says the opposite: a 10,000-block window costs about 120ms and the limit is
+  on request rate, so a smaller chunk means more calls over the same span and makes
+  throttling worse rather than better. 10,000 is also the provider ceiling, so there is no
+  headroom upward either.
+
+  What does help, in order: pace the requests, which is a code change in `scanRange` rather
+  than configuration; raise the plan; or accept it, since reads recover through backoff and
+  a throttled write costs at most an hour's delay against a six-hour challenge window. The
+  primary is on a different provider and throttles the same way under burst, so this is not
+  something a change of endpoint fixes.
 
   The check that matters is not "do they agree on `getTotalScore`". That is an
   `eth_call` at head and all four pass it, which is exactly how Blockdaemon got
