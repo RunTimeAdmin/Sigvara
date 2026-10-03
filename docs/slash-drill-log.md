@@ -156,9 +156,16 @@ documented, to the wei; and that a live, nonzero reputation is destroyed with it
 
   It climbed on its own instead. `12` on 26 September, and `15` when the slash executed on
   3 October. The arithmetic is entirely tenure: the agent has no payments, so `ageScore`
-  falls back to calendar age. The 15 is the community 5 plus an `ageScore` of 10, and
-  `ageCurve` reaches 10 between days nine and twelve, so that figure was computed a couple
-  of days before the slash rather than at the moment of it: a score is proposed, waits out
+  falls back to calendar age. Worth being exact about why, because the deployment runs
+  `PAYMENT_VERIFICATION=required` and the calendar path looks like it should be
+  unreachable. `activityWindow` returns `null` for an agent with no payment events at all,
+  and `ageScore` reads a null activity window as "measure from registration". The target
+  never received a payment, so it took that branch for its whole life. Checked against the
+  live state file: the only agent with payment events is the demo agent.
+
+  The 15 is therefore the community 5 plus an `ageScore` of 10, and `ageCurve` returns
+  exactly 10 on days ten and eleven. The slash landed on day twelve, where the curve reads
+  11, so the finalized 15 was computed a day or two earlier: a score is proposed, waits out
   its challenge window, and only then finalizes. Nothing was done to the agent; it aged
   through its own proposal.
 
