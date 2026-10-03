@@ -9,8 +9,10 @@ contracts implement that and the test suite covers it, but until this ran, nobod
 watched a bond actually get taken on a live deployment. The procedure is in
 [slash-drill.md](slash-drill.md); this is what happened when it was followed.
 
-**Status: in the challenge window.** Filed 20 September 2026, settles 27 September 2026.
-Sections below marked *pending* will be filled in on settlement.
+**Status: settled.** Filed 20 September 2026, window closed 27 September, executed
+3 October 2026 01:14:19 UTC. The delay between the window closing and execution was five
+days of nobody running it, which is itself worth recording: execution is permissionless
+precisely so it does not depend on one party's attention, and it still waited on mine.
 
 ## Addresses
 
@@ -80,20 +82,46 @@ Reverted with `0x7dcc88ac` — `ChallengePeriodActive(bytes32,uint256)` — carr
 second. The deadline is snapshotted at filing, so an admin changing `challengePeriod`
 afterwards cannot move an in-flight window.
 
-## Day 7: settlement
+## Day 13: settlement
 
-*Pending. Executes on or after 2026-09-27 19:28:04 UTC.*
+Executed **2026-10-03 01:14:19 UTC**, in tx
+[`0xf854e16389b68117523059f42788445e6cd12f0f7cc4de66590b1fbca7fa16df`](https://explorer.testnet.arc.io/tx/0xf854e16389b68117523059f42788445e6cd12f0f7cc4de66590b1fbca7fa16df)
+at block `65205976`, by the committee address. 5.24 days after the window closed, and
+permissionlessly: any funded address could have sent the same call.
 
-Expected, from a stake of 1,000 SVR: 500 burned to `0xdead`, 250 credited to the victim,
-250 to the reporter, summing to the stake. Status `2` (Slashed), terminal. Proceeds are
-credited rather than pushed, so claiming is a separate step and part of the demonstration.
+Measured before and after, against the same RPC:
+
+| | before | after |
+|---|---|---|
+| `slashProposals.state` | `1` Pending | `2` Executed |
+| `stakes.amount` / `unbondingAmount` | 1,000 SVR / 0 | 0 / 0 |
+| `getTotalScore` | **15** | **0** |
+| `getIdentity.status` | `0` Active | `2` Slashed |
+| SVR at `0xdead` | 0 | **500** |
+| `claimable[victim]` | 0 | **250** |
+| `claimable[reporter]` | 0 | **250** |
+
+`SlashExecuted` carries the split directly: `500000000000000000000`,
+`250000000000000000000`, `250000000000000000000`. Those sum to `1000000000000000000000`,
+exactly the stake, which is the remainder term in `_settleSlash` absorbing the rounding
+rather than leaving dust behind in the contract.
+
+The score went `15 → 0`, not the `5 → 0` this document predicted in September. Twelve days
+of tenure accrued while the proposal sat, and `zeroReputation` took all of it. That makes
+the demonstration better than designed, and the caveat below sharper rather than weaker:
+every one of those 15 points was calendar tenure and an unflagged baseline.
+
+Proceeds are credited rather than pushed, so they are still in `claimable` and claiming is
+a separate step. That is deliberate — a recipient that cannot receive the token must not be
+able to make settlement revert, because this is the only path that clears the proposal and
+unfreezes a bond.
 
 ## What this proves, and what it does not
 
 **Does.** That the slashing path executes on a live deployment; that filing suspends
 immediately while leaving the bond in place; that the challenge window is enforced to the
-second against a deadline fixed at filing; and *(pending)* that the bond is taken and split
-as documented.
+second against a deadline fixed at filing; that the bond is taken and split exactly as
+documented, to the wei; and that a live, nonzero reputation is destroyed with it.
 
 **Does not, and these are not quibbles:**
 
@@ -108,15 +136,17 @@ as documented.
   bonded agent with no trading history, and this section originally said the slash would
   show `5 → 0`.
 
-  It has since climbed on its own. By 26 September the finalized score was `12` with `13`
-  pending, and it will be a point or so higher at settlement. The arithmetic is entirely
-  tenure: the agent has no payments, so `ageScore` falls back to calendar age, and
-  `ageCurve` reads 7 at five days and 8 at six, on top of the community 5. Nothing was
-  done to the agent; it simply aged through the challenge window.
+  It climbed on its own instead. `12` on 26 September, and `15` when the slash executed on
+  3 October. The arithmetic is entirely tenure: the agent has no payments, so `ageScore`
+  falls back to calendar age. The 15 is the community 5 plus an `ageScore` of 10, and
+  `ageCurve` reaches 10 between days nine and twelve, so that figure was computed a couple
+  of days before the slash rather than at the moment of it: a score is proposed, waits out
+  its challenge window, and only then finalizes. Nothing was done to the agent; it aged
+  through its own proposal.
 
-  So the slash will show roughly `13 → 0`, which is a better demonstration than `5 → 0`
-  and still a thin one against a factor that runs to 100. It is also a reminder of what
-  this drill does not cover: every point of it is calendar tenure and an unflagged
+  So the slash showed `15 → 0`, three times the `5 → 0` this document first predicted, and
+  still thin against a factor that runs to 100. It is also a reminder of what this drill
+  does not cover: every one of those 15 points is calendar tenure and an unflagged
   baseline, neither of which cost an attacker anything. The interesting case remains an
   agent whose score took months of *paid* work to build, and `test/SlashDrillFork.t.sol`
   covers that by forking the live chain and slashing an agent carrying a real score.
