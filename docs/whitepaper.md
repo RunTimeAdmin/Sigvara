@@ -162,9 +162,10 @@ chain.
 Each operator can now be that watcher. [ADR 0003](adr/0003-evidence-intake.md) makes
 payment evidence arrive by pull: an operator scans `Transfer` logs to registered agent
 addresses and credits what it finds, so a payment counts because it happened rather than
-because somebody filled in a form. The scanner is implemented and **off by default**, so
-the limitation above is still the accurate description of the live oracles. It stops
-being accurate when the scan is enabled, and not before.
+because somebody filled in a form. **Enabled on both operators since 3 October 2026**, so
+the limitation above describes how these oracles used to work rather than how they work
+now. It is kept because the shape of the defect is the point: evidence that arrives by
+being told is evidence an operator can simply not be told.
 
 ### 2.4 Reputation
 
@@ -470,10 +471,16 @@ Stated because they are true, not because they are solved.
    decides the fix — operators index `Transfer` logs themselves and `/attest` becomes a
    hint rather than the only door.
 
-   **Built as of 22 September 2026 and disabled by default** (`PAYMENT_SCAN_ENABLED`).
-   The entry stays open because it closes when the scan runs on the live operators, not
-   when the code merges: on the deployment anyone can query today, a payment still enters
-   a score by being reported.
+   **Enabled on both operators since 3 October 2026.** A payment to a registered agent now
+   enters a score by having happened, which closes this entry for work paid for from that
+   point on. Two qualifications keep it from being a clean close. The scan started
+   forward-only, from a recent block rather than from the registry's first, because a cold
+   scan of the whole chain is hundreds of consecutive `getLogs` calls against a rate limit
+   that refuses most of a burst; nothing was lost, since the only settlement a full rescan
+   would newly surface is an operator paying its own agent, which is refused as a
+   self-payment either way. And only the *payment* becomes visible. Whether the work was
+   any good is not on chain and never will be, so outcome still arrives by attestation and
+   a pulled payment is credited with none.
 
    One consequence is worth recording here rather than only in the ADR. A pulled payment
    carries no outcome — money moving is on chain, whether the work was good is not — so

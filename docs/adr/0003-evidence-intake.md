@@ -87,8 +87,9 @@ It also buys nothing toward the end state. Relay work is thrown away when pull l
 - **Attestation becomes optional for fee and tenure, and required for success.** That
   asymmetry is worth stating plainly in the docs, because "do I need to attest?" now has
   two different answers depending on which factor you care about.
-- **§5.4.6 closes when this ships**, and not before. Until then the whitepaper should keep
-  saying unreported work is invisible, because it is.
+- **§5.4.6 closed when this was enabled**, 3 October 2026, and not when the code merged.
+  The whitepaper entry said unreported work was invisible for as long as that was true of
+  the running deployment, which is the only thing that counts.
 
 ## What this does not change
 
@@ -102,7 +103,7 @@ being useful, not a substitute for having them.
 
 ## Status of the work
 
-**Built, not yet enabled** (22 September 2026).
+**Enabled on both operators** (3 October 2026). Built 22 September, run for the first time eleven days later, once the slash drill had settled and there was no scheduled demonstration left for a score change to land in the middle of.
 
 `oracle/payment-scan.js` implements the scan: ERC-20 Transfer logs to registered agent
 addresses, chunked and checkpointed like the registration scan, with its own backoff via
@@ -122,9 +123,22 @@ of **both** sides of the success ratio while still counting it as fee volume. Th
 code did `success: !!success`, which would have turned "nobody reported an outcome" into
 "the work failed" and damaged agents nobody had complained about.
 
-**§5.4.6 is not yet closed.** It closes when this is enabled on the live operators, not
-when the code merges. Until then the whitepaper should keep saying unreported work is
-invisible, because on the running deployment it still is.
+**§5.4.6 is closed, forward-only.** A payment to a registered agent now enters a score by
+having happened rather than by being reported. Two qualifications, both in the whitepaper
+entry as well.
+
+The scan started from a recent block, not from the registry's first. A cold scan of the
+whole chain is hundreds of consecutive `getLogs` calls, and both Arc endpoints refuse most
+of a sustained burst, so the opening run would most likely have thrown, left the checkpoint
+unadvanced and retried every hour. `PAYMENT_SCAN_PACE_MS` now spaces the calls, which makes
+a catch-up finish rather than loop, but the history was checked instead of pulled: a
+read-only probe of the full range found nine settlements to the demo agent against eight
+credited, and the ninth is its own operator paying it 3 SVR, refused as a self-payment. So
+nothing was lost by starting forward.
+
+And only the payment becomes visible. Outcome is not on chain, so it still arrives by
+attestation and a pulled payment carries none, which is the whole reason `success: null`
+exists.
 
 Two further consequences surfaced only on audit, on 25 September, and both had the same
 shape: an invariant that held while an attestation was the only way in, and stopped

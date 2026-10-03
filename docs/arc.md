@@ -163,8 +163,10 @@ Two operational notes:
 logs of `PAYMENT_ASSET` to registered agent addresses, instead of waiting to be told. See
 [ADR 0003](adr/0003-evidence-intake.md).
 
-**Disabled on both operators as of 23 September 2026.** Three things to know before
-turning it on:
+**Enabled on both operators since 3 October 2026**, forward-only from block 65199000 and
+with `PAYMENT_SCAN_PACE_MS` at its default 500ms. The canary passes on both, so an empty
+scan is provable rather than merely reported. Three things that mattered when turning it
+on, kept because they apply to any operator doing it later:
 
 - It is an **environment** change, so `docker compose restart` will not pick it up. The
   container resolves `env_file` at creation, not at start, and a restart re-clones the
@@ -172,8 +174,15 @@ turning it on:
 - **Enable it on both operators or neither.** One scanning and one not is the same
   delivery asymmetry this removes, pointed the other way.
 - **It changes scores.** An operator that has been missing payments starts counting them.
-  On this deployment that should close the 20 September divergence by the checker finding
-  the six payments for itself, which is the intended outcome and not a quiet fix.
+  On this deployment it did not, and the reason is worth recording: both operators already
+  held the same eight settlements, because the checker's state was seeded by hand after the
+  20 September divergence. A full rescan finds a ninth, the demo agent's operator paying its
+  own agent 3 SVR, which is refused as a self-payment. So the pull path and the attestation
+  history agree exactly on real data, which is a better check of the scanner than the canary.
+- **The checkpoint beats the configured start block.** `PAYMENT_SCAN_FROM_BLOCK` only
+  applies when there is no checkpoint, so changing it on an operator that has already
+  scanned does nothing. Rewinding means editing `paymentScanState`, with the oracle stopped,
+  since it holds state in memory and rewrites the file on every persist.
 
 `/health` reports `paymentScan` and `paymentScanBlock`, so whether it is on and how far it
 has got are answerable from outside rather than by opening a shell on the host.

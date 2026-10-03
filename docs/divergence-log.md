@@ -18,11 +18,22 @@ Live endpoint: [`checker.sigvara.xyz/divergence`](https://checker.sigvara.xyz/di
 **Status: prediction recorded 22:45Z, before the event. Confirmed 23:51:23Z, every
 number as predicted. Outcome below.**
 
-**Still open, 23 September 2026.** The fix is written — [ADR 0003](adr/0003-evidence-intake.md)
-and the pull scanner in `oracle/payment-scan.js` — and is off by default, so the skew is
-still there to look at. Enabling it should close this entry by the checker finding the
-six payments for itself. Seeding the checker by hand would have closed it too, and would
-have hidden the defect that justified the decision, which is why it was not done.
+**Closed 3 October 2026.** The skew itself was resolved at 00:14Z on 24 September by
+seeding the checker, which is recorded under Resolution below along with what that cost.
+What stayed open was the cause: evidence still arrived by being told, so the same thing
+could happen again to any operator nobody told. The pull scanner is now enabled on both
+operators, which closes that, and whitepaper §5.4.6 with it.
+
+Worth recording that enabling it found nothing. A read-only probe of the full range turned
+up nine settlements to the demo agent against the eight both operators already held, and
+the ninth is the agent's own operator paying it 3 SVR, refused as a self-payment. So the
+scan and the attestation history agree exactly on real data. The entry closes because the
+defect is fixed, not because the scan discovered the missing payments: hand-seeding got
+there first, nine days earlier.
+
+The paragraph below is left as written on 23 September, when the scanner was off and the
+skew was still live. It says seeding by hand was not done; it was, the following night, for
+the reasons under Resolution.
 
 This entry is written before the divergence occurs, on purpose. A triage log whose
 verdicts are all written after the fact proves only that the author can construct an
