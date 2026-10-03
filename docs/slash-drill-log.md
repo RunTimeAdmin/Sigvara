@@ -111,10 +111,28 @@ of tenure accrued while the proposal sat, and `zeroReputation` took all of it. T
 the demonstration better than designed, and the caveat below sharper rather than weaker:
 every one of those 15 points was calendar tenure and an unflagged baseline.
 
-Proceeds are credited rather than pushed, so they are still in `claimable` and claiming is
-a separate step. That is deliberate — a recipient that cannot receive the token must not be
-able to make settlement revert, because this is the only path that clears the proposal and
-unfreezes a bond.
+Proceeds are credited rather than pushed, so claiming was a separate step. That is
+deliberate: a recipient that cannot receive the token must not be able to make settlement
+revert, because this is the only path that clears the proposal and unfreezes a bond.
+
+**Both claims were made the same day.** `claimSlashProceeds()` from each recipient, which
+takes no argument and pays `msg.sender` whatever it is owed, so there is no way to claim on
+another party's behalf and no single transaction that could do both.
+
+| | `claimable` | SVR before | SVR after |
+|---|---|---|---|
+| victim `0x18CBcE50…` | 250 → 0 | 1,000 | **1,250** |
+| reporter `0x045D6C1d…` | 250 → 0 | 0 | **250** |
+
+The staking contract went 5,500 → 5,000 SVR, exactly the 500 paid out: nothing leaked and
+nothing was stranded. A second claim from either address now reverts
+`NothingClaimable(address)` (selector `0x9837a149`, with the caller as the argument), so it
+refuses for the documented reason rather than failing incidentally. The reporter is the
+cleaner of the two to check: an address holding no SVR at all now holds exactly its quarter
+of a bond taken from someone else.
+
+So the full path is on chain and checkable end to end: register, bond, file, suspend, wait
+out the window, execute, split, claim.
 
 ## What this proves, and what it does not
 
