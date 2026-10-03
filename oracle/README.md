@@ -725,7 +725,7 @@ A probe without the recipient filter would not do: it proves the asset and chain
 right and then leaves the normal case, this asset moved but not to any of our agents,
 indistinguishable from a broken recipient filter.
 
-A long catch-up is what the pace is for. A cold scan from `FROM_BLOCK` on a chain this fast is hundreds of consecutive calls, and without spacing them the run is a coin flip rather than a wait: `readWithBackoff` allows four attempts, one chunk exhausting them throws out of the scan, the checkpoint is left unadvanced, and the whole range is retried next epoch. At the default pace, 255 calls take a little over two minutes.
+A long catch-up is what the pace is for. A cold scan from `FROM_BLOCK` on a chain this fast is hundreds of consecutive calls, and without spacing them the run is a coin flip rather than a wait: `readWithBackoff` allows four attempts, one chunk exhausting them throws out of the scan, the checkpoint is left unadvanced, and the whole range is retried next epoch. At the default pace a 255-call run takes a little over two minutes if nothing is refused, and longer in practice: a read-only probe of exactly that range on 3 Oct 2026 still had 27% of chunks refused at 500ms, because the bucket drains over a run that long even though 72 consecutive calls do not. The scan survives it where that probe would not, since every call goes through `readWithBackoff`. Pacing makes a catch-up finish; it does not make it refusal-free.
 
 **Enable it on every operator or on none.** Two operators scanning and one not is the
 same delivery asymmetry this exists to remove, pointed the other way.
