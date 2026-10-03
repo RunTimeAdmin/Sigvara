@@ -244,7 +244,12 @@ function pickCanary(eventsByDid, addressOf) {
     // pruned node still serves.
     for (let i = events.length - 1; i >= 0; i--) {
       const txHash = events[i] && events[i].txHash;
-      if (txHash) return { didHash, recipient, txHash };
+      // The block comes back too when the event has it, so the caller can skip a receipt
+      // lookup against an index that prunes. Null for events stored before it was kept.
+      if (txHash) {
+        const blockNumber = Number.isInteger(events[i].blockNumber) ? events[i].blockNumber : null;
+        return { didHash, recipient, txHash, blockNumber };
+      }
     }
   }
   return null;

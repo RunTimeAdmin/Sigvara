@@ -47,12 +47,32 @@ cast call 0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171 "bondAmount()(uint256)" --r
 - **A different RPC provider, but only one of them actually works.** Arc testnet has
   four endpoints and they are *not* interchangeable. Measured 20 Sep 2026:
 
-  | Provider | Historical `eth_getTransactionReceipt` | `eth_getLogs` max range | Usable |
+  | Provider | `eth_getTransactionReceipt` horizon | `eth_getLogs` max range | Usable |
   |---|---|---|---|
-  | `rpc.testnet.arc.io` (Circle) | yes | 10,000 | yes, but it is the primary's |
-  | `rpc.quicknode.testnet.arc.io` | yes | 10,000 | **yes** |
-  | `rpc.blockdaemon.testnet.arc.io` | **returns null** | 10,000 | no |
-  | `rpc.drpc.testnet.arc.io` | yes | **~100** | no |
+  | `rpc.testnet.arc.io` (Circle) | **~6.3 days** | 10,000 | yes, but it is the primary's |
+  | `rpc.quicknode.testnet.arc.io` | **~12.9 days** | 10,000 | **yes** |
+  | `rpc.blockdaemon.testnet.arc.io` | **immediate null** | 10,000 | no |
+  | `rpc.drpc.testnet.arc.io` | not re-measured | **~100** | no |
+
+  **Every endpoint prunes the transaction index; they differ only in how long.** This column
+  said "yes" for the top two until it was measured properly on 3 Oct 2026, by bisecting
+  block depth until receipts stopped resolving. Circle's gives up at about 1,206,000 blocks
+  and QuickNode's at about 2,443,000, which at roughly 190,000 blocks a day is 6.3 and 12.9
+  days. Blocks and logs keep resolving far past both: it is specifically the hash-to-receipt
+  index that ages out. Blockdaemon is the same failure with a horizon short enough to notice.
+
+  Two things follow, and the second is the uncomfortable one.
+
+  `/attest` has an age limit nobody wrote down. `verifyPayment` fetches the receipt to read
+  the transfer log, so a settlement older than the horizon is refused `not_found` even
+  though the money genuinely moved. On the primary that is about six days.
+
+  And the two operators disagree about history by a factor of two. A payment between 6.3 and
+  12.9 days old is verifiable by the checker and invisible to the primary. ADR 0003 exists
+  to remove asymmetry in what each operator can see, and provider retention reintroduces it
+  below the code. It does not bite the pull path, which reads logs rather than receipts, and
+  logs retain longer. It bites the attested path and anything that re-verifies old
+  settlements, which is why payment events now store their own `blockNumber`.
 
   The max range read 9,999 here until it was measured again on 3 Oct 2026. It is 10,000
   *inclusive*: a span of 10,000 blocks is accepted and 10,001 returns `-32012 requested

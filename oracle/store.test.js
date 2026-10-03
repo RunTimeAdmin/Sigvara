@@ -591,3 +591,31 @@ test('creditPayment: the stored event list is frozen, so the cache revision cann
   assert.ok(Object.isFrozen(list), 'frozen in place: identity is what the cache keys on');
   assert.throws(() => list.push({ amount: '1' }), TypeError);
 });
+
+// The settlement's block, stored rather than re-derived.
+//
+// The canary proves an empty scan was really empty by re-issuing the scan's own filter
+// against a settlement known to exist. It needs that settlement's block number, the event
+// did not carry one, so it refetched the receipt — and both live endpoints prune the
+// transaction index: about 6 days on Circle's, about 13 on QuickNode's. Measured 3 Oct
+// 2026. So the lookup returned null, the canary reported `unavailable`, and no empty scan
+// could be believed.
+//
+// Both entry paths already know the block: verifyPayment returns it and planCredits
+// carries it. Neither stored it. Storing it removes the dependency on an index that is
+// guaranteed to age out.
+test('creditPayment: records the settlement block when the caller knows it', () => {
+  const did = '0x' + '7a'.repeat(32);
+  const tx = '0x' + '7b'.repeat(32);
+  assert.equal(creditPayment(did, tx, 500n, '0x' + '01'.repeat(20), true, 1000, null, 64100000), true);
+  const [e] = getPaymentEvents(did);
+  assert.equal(e.blockNumber, 64100000);
+});
+
+test('creditPayment: an event stays valid without a block, as every stored one is', () => {
+  const did = '0x' + '9c'.repeat(32);
+  const tx = '0x' + '9d'.repeat(32);
+  assert.equal(creditPayment(did, tx, 500n, '0x' + '02'.repeat(20), true, 1000), true);
+  const [e] = getPaymentEvents(did);
+  assert.ok(!('blockNumber' in e), 'absent rather than null, so the stored shape is unchanged');
+});

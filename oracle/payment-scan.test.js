@@ -339,3 +339,23 @@ test('canaryVerdict treats a non-array response as failure, not as empty', () =>
   assert.equal(scan.canaryVerdict(null, '0xaa'), 'failed');
   assert.equal(scan.canaryVerdict(undefined, '0xaa'), 'failed');
 });
+
+test('pickCanary: hands back the stored block so no receipt lookup is needed', () => {
+  // The reason this exists: both live endpoints prune eth_getTransactionReceipt, so
+  // locating a settlement by hash stops working while locating it by block never does.
+  const did = '0x' + 'c7'.repeat(32);
+  const events = eventsFor([[did, [
+    { txHash: '0x' + 'd1'.repeat(32), blockNumber: 64100000 },
+    { txHash: '0x' + 'd2'.repeat(32), blockNumber: 64200000 },
+  ]]]);
+  const c = scan.pickCanary(events, () => AGENT);
+  assert.equal(c.txHash, '0x' + 'd2'.repeat(32), 'newest settlement');
+  assert.equal(c.blockNumber, 64200000);
+});
+
+test('pickCanary: reports a null block for events stored before it was kept', () => {
+  const did = '0x' + 'c8'.repeat(32);
+  const events = eventsFor([[did, [{ txHash: '0x' + 'd3'.repeat(32) }]]]);
+  const c = scan.pickCanary(events, () => AGENT);
+  assert.equal(c.blockNumber, null, 'so the caller knows to fall back to the receipt');
+});

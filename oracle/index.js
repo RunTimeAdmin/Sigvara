@@ -297,18 +297,28 @@ async function runScanCanary(byAddress, provider) {
   if (!canary) return 'unavailable';
 
   try {
-    // The stored event keeps no block number, so the receipt supplies it. One extra
-    // call, on a path that only runs when a scan found nothing.
-    const receipt = await chain.readWithBackoff(
-      'canary receipt', () => provider.getTransactionReceipt(canary.txHash),
-    );
-    if (!receipt || receipt.blockNumber === undefined || receipt.blockNumber === null) {
-      return 'unavailable'; // cannot locate the settlement, so this proves nothing
+    // The event's own block when it has one, which is every settlement credited since
+    // this was stored. Otherwise the receipt, which is how this used to work and still
+    // has to, for events written before then.
+    //
+    // That fallback is the part that fails in practice: both live endpoints prune the
+    // transaction index, around 6 days on Circle's and 13 on QuickNode's, so a receipt
+    // lookup for anything older returns null and the canary could prove nothing. One
+    // extra call, on a path that only runs when a scan found nothing.
+    let blockNumber = canary.blockNumber;
+    if (!Number.isInteger(blockNumber)) {
+      const receipt = await chain.readWithBackoff(
+        'canary receipt', () => provider.getTransactionReceipt(canary.txHash),
+      );
+      if (!receipt || !Number.isInteger(receipt.blockNumber)) {
+        return 'unavailable'; // cannot locate the settlement, so this proves nothing
+      }
+      blockNumber = receipt.blockNumber;
     }
     const logs = await chain.readWithBackoff(
       'canary getLogs',
       () => provider.getLogs(
-        paymentScan.canaryFilter(paymentCfg.asset, canary.recipient, receipt.blockNumber),
+        paymentScan.canaryFilter(paymentCfg.asset, canary.recipient, blockNumber),
       ),
     );
     return paymentScan.canaryVerdict(logs, canary.txHash);
@@ -381,7 +391,7 @@ async function runPaymentScan(agents) {
       unresolved.push(c);
       continue;
     }
-    if (creditPayment(c.didHash, c.txHash, c.amount, c.payer, null, ts)) {
+    if (creditPayment(c.didHash, c.txHash, c.amount, c.payer, null, ts, null, c.blockNumber)) {
       credited += 1;
     } else {
       // planCredits already asked isCredited about this exact pair, so a refusal here
@@ -1253,7 +1263,8 @@ const server = http.createServer(async (req, res) => {
           if (payments.isSelfPayment(leg.payer, info)) continue;
           const outcome = i === 0 ? success : null;
           if (creditPayment(
-            didHash, credited.txHash, leg.amount, leg.payer, outcome, credited.settledAt, packet
+            didHash, credited.txHash, leg.amount, leg.payer, outcome, credited.settledAt, packet,
+            credited.blockNumber,
           )) anyCredited = true;
         }
         if (!anyCredited) {

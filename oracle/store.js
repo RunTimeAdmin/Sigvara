@@ -369,7 +369,9 @@ function isCredited(txHash, didHash, payer) {
     || usedPaymentTxs.has(creditKey(tx, didHash, payer));
 }
 
-function creditPayment(didHash, txHash, amount, payer, success, now = Date.now(), packetId = null) {
+function creditPayment(
+  didHash, txHash, amount, payer, success, now = Date.now(), packetId = null, blockNumber = null,
+) {
   const key = txHash.toLowerCase();
   if (isCredited(key, didHash, payer)) return false;
   usedPaymentTxs.add(creditKey(key, didHash, payer));
@@ -393,6 +395,20 @@ function creditPayment(didHash, txHash, amount, payer, success, now = Date.now()
   const outcome = typeof success === 'boolean' ? success : null;
   const event = { txHash: key, ts: now, amount: BigInt(amount).toString(), payer, success: outcome };
   if (packetId) event.packetId = String(packetId);
+  // Where the settlement sits on the chain, when the caller knows it. Both entry paths
+  // do: verifyPayment returns it and planCredits carries it, and neither used to keep it.
+  //
+  // Kept because the only other way to find it is eth_getTransactionReceipt, and both
+  // live endpoints prune that index — measured 3 Oct 2026 at roughly 6 days on Circle's
+  // and 13 on QuickNode's. The scan canary needs the block to re-issue its filter, so
+  // without this it reported `unavailable` for every settlement older than the horizon,
+  // which is to say for every settlement that matters.
+  //
+  // Corroboration, not evidence: it is absent from the Merkle leaf deliberately, since
+  // committing to it would change the leaf format and make published roots
+  // unreproducible. A verifier reads it off the chain anyway. Omitted rather than stored
+  // as null when unknown, so the shape of an already-stored event does not change.
+  if (Number.isInteger(blockNumber)) event.blockNumber = blockNumber;
   // Frozen, not copied. The evidence cache treats the array's identity as the revision
   // token, so handing out copies would turn every request into a miss; freezing keeps one
   // array per version and makes the "never mutated in place" rule the cache depends on

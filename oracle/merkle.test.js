@@ -236,3 +236,35 @@ test('leafFor: roots already published on chain stay reproducible', () => {
     '0x93719bf728289b66233e9bb41eeda66eda0fa2cdf553733ef7a659ede8c01d57'
   );
 });
+
+// The evidence root must not notice a stored block number.
+//
+// blockNumber was added to the payment event so the canary could stop refetching receipts
+// from an index that prunes. It is corroboration, not evidence: a verifier reads the block
+// off the chain, and committing to it would change the leaf format and make every root
+// already published unreproducible. leafFor takes named fields, so this holds by
+// construction — pinned here because "by construction" is what the ms-versus-seconds bug
+// and the null-outcome bug both looked like beforehand.
+test('leafFor: a stored block number does not enter the leaf', () => {
+  const base = {
+    txHash: '0x' + 'ab'.repeat(32),
+    payer: '0x' + '11'.repeat(20),
+    amount: '1000000',
+    ts: 1_700_000_000_000,
+    success: true,
+  };
+  assert.equal(
+    leafFor(base),
+    leafFor({ ...base, blockNumber: 64100000 }),
+    'adding a block number must leave the leaf byte-identical'
+  );
+  assert.equal(
+    rootFor([base]),
+    rootFor([{ ...base, blockNumber: 64100000 }]),
+  );
+  // And still the hash the live operators have committed to.
+  assert.equal(
+    leafFor({ ...base, blockNumber: 64100000 }),
+    '0x93719bf728289b66233e9bb41eeda66eda0fa2cdf553733ef7a659ede8c01d57'
+  );
+});
