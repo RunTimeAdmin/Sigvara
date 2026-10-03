@@ -359,3 +359,63 @@ test('pickCanary: reports a null block for events stored before it was kept', ()
   const c = scan.pickCanary(events, () => AGENT);
   assert.equal(c.blockNumber, null, 'so the caller knows to fall back to the receipt');
 });
+
+// ---------------------------------------------------------------------------
+// Pacing
+//
+// Measured against both live endpoints on 3 Oct 2026. The limiter is a bucket of about
+// 60 requests, not a simple rate: back-to-back calls are refused ~60% of the time, 250ms
+// apart clears the first 60 calls and then fails every one after, and 500ms apart
+// sustains 72 of 72. So a long catch-up needs a pace, and the pace has to hold for the
+// whole run rather than just the opening burst.
+//
+// Without one, a cold scan of 2.5M blocks is ~255 consecutive calls. readWithBackoff
+// allows four attempts, so one chunk exhausting them throws out of the scan, leaves the
+// checkpoint unadvanced, and retries the entire run next epoch: a standing hot loop.
+// ---------------------------------------------------------------------------
+
+test('scanRange: waits between calls, but not before the first or after the last', async () => {
+  const waits = [];
+  const calls = [];
+  await scan.scanRange(
+    {
+      readLogs: (f) => { calls.push(f.fromBlock); return []; },
+      asset: ASSET,
+      paceMs: 500,
+      sleep: (ms) => { waits.push(ms); },
+    },
+    [AGENT], 1000, 4000, 1000,
+  );
+  assert.deepEqual(calls, [1000, 2000, 3000, 4000], 'four chunks');
+  assert.deepEqual(waits, [500, 500, 500], 'three gaps, one fewer than the calls');
+});
+
+test('scanRange: a single call never waits', async () => {
+  const waits = [];
+  await scan.scanRange(
+    { readLogs: () => [], asset: ASSET, paceMs: 500, sleep: (ms) => waits.push(ms) },
+    [AGENT], 1000, 1500, 10000,
+  );
+  assert.deepEqual(waits, [], 'steady state is one chunk an epoch, so pacing must cost nothing');
+});
+
+test('scanRange: paces across recipient batches too, since the limiter counts calls', async () => {
+  // More than MAX_RECIPIENTS_PER_CALL forces a second batch, and that second batch is
+  // another request against the same bucket.
+  const many = Array.from({ length: 60 }, (_, i) => `0x${String(i + 1).padStart(40, '0')}`);
+  const waits = [];
+  let n = 0;
+  await scan.scanRange(
+    { readLogs: () => { n += 1; return []; }, asset: ASSET, paceMs: 500, sleep: (ms) => waits.push(ms) },
+    many, 1000, 1500, 10000,
+  );
+  assert.equal(n, 2, 'two recipient batches');
+  assert.equal(waits.length, 1, 'and one gap between them');
+});
+
+test('readConfig: pace defaults to the measured sustainable rate', () => {
+  assert.equal(scan.readConfig({}).paceMs, 500);
+  assert.equal(scan.readConfig({ PAYMENT_SCAN_PACE_MS: '0' }).paceMs, 0, 'opt out explicitly');
+  assert.equal(scan.readConfig({ PAYMENT_SCAN_PACE_MS: '1500' }).paceMs, 1500);
+  assert.equal(scan.readConfig({ PAYMENT_SCAN_PACE_MS: 'nonsense' }).paceMs, 500, 'unparseable falls back');
+});

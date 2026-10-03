@@ -58,6 +58,28 @@ const MAX_RECIPIENTS_PER_CALL = 50;
 /** Floor for how far behind the head an unattended scan credits. */
 const MIN_SCAN_CONFIRMATIONS = 6;
 
+/**
+ * Milliseconds between `getLogs` calls during a scan.
+ *
+ * Measured against both Arc endpoints on 3 Oct 2026, and the limiter turned out to be a
+ * bucket of roughly 60 requests rather than a simple rate. Back-to-back calls are refused
+ * about 60% of the time. At 250ms the first 60 succeed and then every one after fails. At
+ * 500ms, 72 of 72 succeed, and so do 72 at 1000ms.
+ *
+ * 500 is therefore the measured sustainable figure rather than a guess, and it costs
+ * nothing in normal running: a steady scan covers an hour of blocks in one call, and this
+ * only applies *between* calls. It matters for a catch-up, where a cold 2.5M-block scan is
+ * about 255 consecutive calls. Without a pace that run is a coin flip: readWithBackoff
+ * allows four attempts, one chunk exhausting them throws out of the scan, the checkpoint
+ * is left unadvanced, and the whole run repeats next epoch. 255 calls at this pace is a
+ * little over two minutes.
+ *
+ * Set PAYMENT_SCAN_PACE_MS=0 to opt out.
+ */
+const DEFAULT_SCAN_PACE_MS = 500;
+
+const wait = (ms) => (ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve());
+
 function readConfig(env = process.env) {
   return {
     // Off by default. Turning it on is ADR 0003 landing, and it changes scores: an
@@ -68,6 +90,13 @@ function readConfig(env = process.env) {
     // is the fastest way to be rate-limited into never finishing.
     fromBlock: Number(env.PAYMENT_SCAN_FROM_BLOCK || env.FROM_BLOCK || 0),
     chunkSize: Math.max(1, Number(env.PAYMENT_SCAN_CHUNK || env.LOG_CHUNK_SIZE || 2000)),
+    // Between getLogs calls. See DEFAULT_SCAN_PACE_MS: the figure is measured, and an
+    // unparseable value falls back rather than becoming NaN, which would make every
+    // comparison false and silently remove the pace.
+    paceMs: Number.isFinite(Number(env.PAYMENT_SCAN_PACE_MS))
+      && env.PAYMENT_SCAN_PACE_MS !== undefined && env.PAYMENT_SCAN_PACE_MS !== ''
+      ? Math.max(0, Number(env.PAYMENT_SCAN_PACE_MS))
+      : DEFAULT_SCAN_PACE_MS,
     // Blocks to stay behind the head. A log in the most recent block can still be
     // reorganised away, and a credit is not something this system takes back: the tx
     // hash is recorded as used, so a reorg leaves a credit for a transaction that no
@@ -316,12 +345,27 @@ function checkpointAfter(unresolved, from, to) {
  *
  * `readLogs` is injected so the caller supplies its own backoff; this module does not
  * own retry policy and should not grow a second one beside chain.js's.
+ *
+ * `paceMs` is not retry policy, which is why it lives here: it is how fast this scan is
+ * allowed to ask, and the loop that does the asking is the only thing that can space it
+ * out. Backoff reacts to a refusal; pacing avoids provoking one. `sleep` is injected so
+ * the tests do not have to spend real seconds proving it.
  */
-async function scanRange({ readLogs, asset }, recipients, fromBlock, toBlock, chunkSize) {
+async function scanRange(
+  { readLogs, asset, paceMs = DEFAULT_SCAN_PACE_MS, sleep = wait },
+  recipients, fromBlock, toBlock, chunkSize,
+) {
   const out = [];
+  let first = true;
   for (const batch of recipientBatches(recipients)) {
     const topics = [TRANSFER_TOPIC, null, batch.map(pad)];
     for (const [start, end] of blockRanges(fromBlock, toBlock, chunkSize)) {
+      // Between calls, never before the first or after the last: a steady scan is a single
+      // call an epoch and must not pay for a limit it cannot reach. Counted across
+      // recipient batches too, because the limiter counts requests and does not care why
+      // there are several.
+      if (!first) await sleep(paceMs);
+      first = false;
       const logs = await readLogs({ address: asset, topics, fromBlock: start, toBlock: end });
       out.push(...logs);
     }
@@ -343,5 +387,6 @@ module.exports = {
   canaryFilter,
   canaryVerdict,
   MIN_SCAN_CONFIRMATIONS,
+  DEFAULT_SCAN_PACE_MS,
   scanRange,
 };

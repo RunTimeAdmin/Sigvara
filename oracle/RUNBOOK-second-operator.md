@@ -128,9 +128,15 @@ cast call 0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171 "bondAmount()(uint256)" --r
   throttling worse rather than better. 10,000 is also the provider ceiling, so there is no
   headroom upward either.
 
-  What does help, in order: pace the requests, which is a code change in `scanRange` rather
-  than configuration; raise the plan; or accept it, since reads recover through backoff and
-  a throttled write costs at most an hour's delay against a six-hour challenge window. The
+  What helps is pacing, and `scanRange` now does it: `PAYMENT_SCAN_PACE_MS`, default 500ms
+  between `getLogs` calls, which is the measured sustainable rate rather than a guess. The
+  limiter is a bucket of roughly 60 requests, so 250ms clears the first 60 calls and then
+  fails every one after it, while 500ms sustained 72 of 72 on both endpoints. It costs
+  nothing in steady running, where an epoch is a single call, and it is what makes a long
+  catch-up a two-minute wait instead of a coin flip.
+
+  Beyond that: raise the plan, or accept it, since reads recover through backoff and a
+  throttled write costs at most an hour's delay against a six-hour challenge window. The
   primary is on a different provider and throttles the same way under burst, so this is not
   something a change of endpoint fixes.
 

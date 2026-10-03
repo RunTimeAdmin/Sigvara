@@ -705,6 +705,7 @@ lose precision.
 | `PAYMENT_SCAN_FROM_BLOCK` | `FROM_BLOCK` | First block when there is no checkpoint. |
 | `PAYMENT_SCAN_CHUNK` | `LOG_CHUNK_SIZE` | Blocks per `getLogs` call. |
 | `PAYMENT_SCAN_CONFIRMATIONS` | `6` (floor) | Blocks to stay behind the head. May be raised, not lowered. Deeper than the attested path because a scan credits unattended; a credit records the tx hash as used, so a reorg would strand it. |
+| `PAYMENT_SCAN_PACE_MS` | `500` | Milliseconds between `getLogs` calls. Measured, not guessed: both Arc endpoints limit with a bucket of about 60 requests, so back-to-back calls are refused ~60% of the time, 250ms clears the first 60 and then fails every one after, and 500ms sustains 72 of 72. Costs nothing in steady running, where an epoch is one call. `0` opts out. |
 
 When a scan credits nothing, a **canary** runs before that emptiness is believed. It
 re-issues the same filter shape against a settlement already in this operator's state:
@@ -723,6 +724,8 @@ The verdict is logged and counted (`sigvara_oracle_payment_scan_canary_failures_
 A probe without the recipient filter would not do: it proves the asset and chain are
 right and then leaves the normal case, this asset moved but not to any of our agents,
 indistinguishable from a broken recipient filter.
+
+A long catch-up is what the pace is for. A cold scan from `FROM_BLOCK` on a chain this fast is hundreds of consecutive calls, and without spacing them the run is a coin flip rather than a wait: `readWithBackoff` allows four attempts, one chunk exhausting them throws out of the scan, the checkpoint is left unadvanced, and the whole range is retried next epoch. At the default pace, 255 calls take a little over two minutes.
 
 **Enable it on every operator or on none.** Two operators scanning and one not is the
 same delivery asymmetry this exists to remove, pointed the other way.

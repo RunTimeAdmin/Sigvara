@@ -358,7 +358,11 @@ async function runPaymentScan(agents) {
     chain.readWithBackoff('payment-scan getLogs', () => provider.getLogs(filter));
 
   const logs = await paymentScan.scanRange(
-    { readLogs, asset: paymentCfg.asset },
+    // paceMs is how fast this scan may ask, which is a different thing from how it
+    // reacts to being refused. Backoff is in readLogs above; this stops provoking the
+    // refusal in the first place, and only applies between calls, so a steady one-chunk
+    // epoch pays nothing for it.
+    { readLogs, asset: paymentCfg.asset, paceMs: paymentScanCfg.paceMs },
     [...byAddress.values()].map((a) => a.agentAddress),
     from, to, paymentScanCfg.chunkSize,
   );
