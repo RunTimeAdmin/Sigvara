@@ -20,6 +20,15 @@ If you're looking for a hosted MCP server or React trust-badge components, those
 
 ## Documentation
 
+The [**wiki**](https://github.com/RunTimeAdmin/Sigvara/wiki) is the browsable reference: 73
+pages covering the contracts, the oracle, the scoring model, the SDK and operations, with
+every claim linked to the line of source it was derived from. It is generated from the tree
+and edited for publication, so where it disagrees with the code or the tables below, the
+code wins.
+
+The documents below are written by hand and are the authority on intent, trade-offs and
+what is not yet true.
+
 | Guide | Audience |
 |---|---|
 | [White paper](docs/whitepaper.md) | Everyone — the single document: design, trust model, known weaknesses, token, and commands to check every claim against the chain |
