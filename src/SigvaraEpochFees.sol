@@ -194,10 +194,10 @@ contract SigvaraEpochFees is
 
     /**
      * @notice Charge one epochFee for including the agent in the scoring run.
-     * @dev    Oracle-only. Returns false (does NOT revert) when the agent is
-     *         uncovered, so the oracle can treat it as best-effort and skip. When
+     * @dev    Oracle-only. Reverts InsufficientBalance when the agent is uncovered;
+     *         see the comment in the body for why it no longer returns false. When
      *         epochFee == 0 gating is disabled: always returns true, charges nothing.
-     * @return charged True if the agent was covered and the fee was taken.
+     * @return charged Always true; an uncovered agent reverts instead.
      */
     function chargeEpoch(bytes32 didHash) external onlyRole(ORACLE_ROLE) returns (bool charged) {
         uint256 fee = epochFee;
