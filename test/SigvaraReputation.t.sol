@@ -1155,7 +1155,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
     }
 
     function test_finalize_succeedsAtExactWindowEnd() public {
-        uint256 t0 = block.timestamp;
+        uint256 t0 = vm.getBlockTimestamp();
         vm.prank(oracle);
         rep.proposeReputation(DID, maxScore, bytes32(0));
 
@@ -1165,7 +1165,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
     }
 
     function test_reject_succeedsOneSecondBeforeWindowEnd() public {
-        uint256 t0 = block.timestamp;
+        uint256 t0 = vm.getBlockTimestamp();
         vm.prank(oracle);
         rep.proposeReputation(DID, maxScore, bytes32(0));
 
@@ -1191,7 +1191,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
             communityScore: 1, propagationScore: 4, lastUpdated: 12345
         });
         bytes32 root = keccak256("evidence");
-        uint256 t0 = block.timestamp;
+        uint256 t0 = vm.getBlockTimestamp();
         vm.prank(oracle);
         rep.proposeReputation(DID, data, root);
 
@@ -1234,11 +1234,12 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
         _proposeAndFinalize(DID, maxScore);
         vm.expectEmit(address(rep));
         emit SigvaraReputation.ReputationZeroed(DID);
+        uint256 t = vm.getBlockTimestamp();
         vm.prank(staking);
         rep.zeroReputation(DID);
-        assertEq(rep.getReputation(DID).lastUpdated, block.timestamp);
+        assertEq(rep.getReputation(DID).lastUpdated, t);
         assertEq(rep.maturedScore(DID), 0);
-        assertEq(rep.maturedAt(DID), block.timestamp);
+        assertEq(rep.maturedAt(DID), t);
     }
 
     function testFuzz_meetsThreshold_matchesTotalScore(uint8 fee, uint8 threshold) public {

@@ -13,7 +13,7 @@ Sigvara reputation is a deterministic 6-factor score between 0 and 100. It is co
 | Tenure | 30 | Span of verified trading, faded by how long since the last of it | `min(30, floor(log₂(spanDays+1) × 3)) × recency` |
 | External Trust | 25 | Normalized ERC-8004 feedback for a linked agent | mean of recognized rating tags × 25 |
 | Community | 5 | Unresolved flags | `max(0, 5 − flags × 2)` |
-| Trust Propagation | 5 | Standing of the counterparties that paid the agent | 1 pt per fully-trusted counterparty, pro-rated by its score |
+| Trust Propagation | 5 | Standing of the counterparties that paid the agent | 1 pt per fully-trusted counterparty, pro-rated by its external standing |
 
 All six are live. Only a **bonded** agent is scored at all: a newly registered agent is
 `PendingBond` and `proposeReputation` refuses it.
@@ -40,9 +40,9 @@ on it:
   half-life, 2,000 USDC of trade a year ago is worth about a sixteenth of that today.
   The cap is a running rate, not a lifetime total.
 - **One counterparty can only carry so much.** `PAYMENT_MAX_PER_PAYER` limits any single
-  payer to that many points. At the default of 5, reaching 20 needs at least four
+  payer to that many points. At the default of 4, reaching 20 needs at least five
   distinct, separately funded payers. A trusted counterparty's cap is raised in
-  proportion to its own score, so who pays matters as well as how much.
+  proportion to its own external standing, so who pays matters as well as how much.
 
 This is the hardest factor to fake, because faking it means genuinely moving money to
 an address you do not control, repeatedly, from wallets that each had to be funded.
@@ -140,7 +140,7 @@ weight released by cutting fee and success. It is the only factor in the score t
 attacker cannot manufacture from wallets it controls, because the standing lives in a
 registry this protocol does not operate. It is not, however, unbuyable: an attacker
 willing to build genuine ERC-8004 reputation can carry it here, and the measurements in
-the whitepaper's section 5.4 say what that costs.
+the whitepaper's section 5.3 say what that costs.
 
 This is 0 unless the link is configured and the linked agent has feedback. Feedback
 CounterAudit wrote is deliberately excluded from the normalizer, because CounterAudit
@@ -177,12 +177,12 @@ An attestation is only as good as whoever made it. A payment from an agent that 
 itself scored, bonded and slashable is better evidence than one from a wallet nobody
 has heard of, so counterparty standing now weighs on the score in two places.
 
-A counterparty's evidence cap rises with its own score. At the default weight, a
-perfectly scored counterparty contributes twice what an anonymous wallet can, while
+A counterparty's evidence cap rises with its own external standing. At the default weight, a
+counterparty with full external standing contributes twice what an anonymous wallet can, while
 the cap on any single payer still holds.
 
 The propagation factor is one point per fully trusted counterparty, pro-rated by
-score, capped at five. Five counterparties with perfect scores reach the cap, and so
+external standing, capped at five. Five counterparties with full standing reach the cap, and so
 do ten with half. Each counterparty counts once however much it pays: this factor
 measures the breadth of who will vouch for an agent, not the size of the cheques.
 
@@ -291,8 +291,8 @@ Once bonded, the first epoch gives it:
 spendable: `getTotalScore` matures toward the earned figure at a fixed rate per day.
 
 Climbing from there is deliberately slow, and each factor is slow for its own reason.
-Fee Activity needs volume from at least four separately funded payers to reach its cap.
-Success Rate approaches 25 only as observations accumulate against the `+5` prior.
+Fee Activity needs volume from at least five separately funded payers to reach its cap.
+Success Rate approaches 15 only as observations accumulate against the `+5` prior.
 Tenure needs a span of paid work that cannot be manufactured in one transaction, since
 the clock starts at the first payment rather than at registration. None of the three
 can be bought at once, and all three decay if the work stops.
@@ -398,6 +398,54 @@ first, and the design deliberately aims at the third rather than at consensus:
    Operators never have to agree; they have to be able to prove a proposer wrong.
 
 The on-chain storage format does not change for any of this. Only the writer does.
+
+---
+
+## Recomputing a score
+
+A score cannot be recomputed from raw ERC-8004 feedback and the weights alone. ERC-8004
+feedback drives one factor, External Trust, worth at most 25 of the 100 points. The other
+five factors are computed from inputs ERC-8004 does not hold:
+
+| Factor | Computed from | Where a third party can read it |
+|---|---|---|
+| Fee Activity (20) | ERC-20 payments to the agent's address, decayed and capped per payer | On chain. The payments the oracle counted are listed at `GET /evidence/:didHash` and committed to by the on-chain evidence root (`verifyEvidence`). |
+| Tenure (30) | First and last paid activity in the same payment log | Same as above: `settledAt` is a committed field. |
+| Success Rate (15) | Outcomes reported with `POST /attest` | Oracle state. The `success` field is committed in each evidence leaf, so it cannot be changed after the root is on chain, but the outcome itself is not on chain anywhere. A payment found by the chain scan carries `null` and is kept out of the ratio. |
+| External Trust (25) | ERC-8004 feedback for the linked agent | The feedback is on chain. The link from Sigvara agent to ERC-8004 agent id is oracle state, set with `POST /link` and returned as `erc8004AgentId` by `GET /score/:didHash`. |
+| Community (5) | Flags raised with `POST /flag`, decayed | Oracle state only. |
+| Trust Propagation (5) | Payers' own external standing, capped by their matured totals | On chain, through `SigvaraReputation`, for payers that are Sigvara agents. |
+
+The External Trust factor on its own is recomputable from public reads, given the linked
+agent id. `oracle/external.js` does exactly this:
+
+1. Score 0 unless `ownerOf(agentId)` on the ERC-8004 Identity Registry is the Sigvara
+   agent's operator. Ownership is re-checked every time the score is computed.
+2. For each client in `getClients(agentId)`, read feedback indexes 1 to
+   `getLastIndex(agentId, client)` with `readFeedback`, skipping revoked entries.
+3. Take `value / 10^valueDecimals` and the lowercased `tag1`. Keep only recognized tags:
+   `quality`, `trustscore`, `reliability`, `accuracy` and `credit` are divided by 100,
+   `win-rate` is used as is, and `rating`, `e2e-test` and `stars` are divided by 5. Each
+   is clamped to 0..1. Every other tag is ignored.
+4. The factor is the mean of the kept ratings times 25, rounded. No recognized feedback
+   gives 0.
+
+The weights and decay parameters are in `oracle/scoring.js` and `oracle/payments.js`. When
+payment verification is on, `GET /score/:didHash` also returns the half-life, per-payer cap
+and trust weight the operator is running with.
+
+So the trust model is not "recompute it yourself". The oracle proposes, and
+`proposeReputation` opens a challenge window during which the slashing committee can
+reject the proposal; when `operatorBond` is set the proposer must be a bonded, admitted
+operator. A checker operator recomputes each pending score independently and records any
+disagreement (see [Oracle Epochs](#oracle-epochs)).
+
+Slashes are on-chain records. `SigvaraStaking` stores each proposal (reporter, victim,
+evidence hash, challenge deadline, state), readable with `getSlashProposal`, and emits
+`SlashInitiated`, `SlashDisputed`, `SlashCancelled` and `SlashExecuted` (amounts burned,
+to the victim and to the reporter). An executed slash also marks the identity `Slashed`
+and zeroes its score, emitting `ReputationZeroed`. A slash of an oracle operator's bond
+emits `OperatorSlashed` from `SigvaraOracleBond`.
 
 ---
 

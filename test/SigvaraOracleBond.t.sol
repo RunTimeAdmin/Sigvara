@@ -387,7 +387,7 @@ contract SigvaraOracleBondTest is Test {
 
     function test_withdrawBond_atExactCooldown_succeeds() public {
         _bondAndAdmit(op1, BOND);
-        uint256 t0 = block.timestamp;
+        uint256 t0 = vm.getBlockTimestamp();
         vm.prank(op1);
         bond.initiateUnbond();
 
@@ -404,7 +404,7 @@ contract SigvaraOracleBondTest is Test {
 
     function test_withdrawBond_paysWhatSurvivedTheSlash() public {
         _bondAndAdmit(op1, 2000e18);
-        uint256 t0 = block.timestamp;
+        uint256 t0 = vm.getBlockTimestamp();
         vm.prank(op1);
         bond.initiateUnbond();
         vm.prank(slasher);

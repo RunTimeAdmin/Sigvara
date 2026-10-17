@@ -95,7 +95,7 @@ An agent has four states:
 
 | Status | Meaning |
 |---|---|
-| `PendingBond` | Registered and visible, below `minimumStake`. Not scoreable, not slashable. |
+| `PendingBond` | Registered and visible, below `minimumStake`. Not scoreable. |
 | `Active` | Bonded at or above the minimum. Scoreable and slashable. |
 | `Suspended` | Withdrew below the minimum, or frozen by a pending slash. |
 | `Slashed` | Terminal. Score zeroed, cannot be topped back up. |
@@ -372,13 +372,13 @@ a ring active over roughly six weeks:
 
 | Sybil wallets | Fee | Success | Tenure | Community | **Total** |
 |---|---|---|---|---|---|
-| 1 | 5 | 7 | 16 | 5 | **33** |
-| 3 | 15 | 11 | 16 | 5 | **47** |
+| 1 | 4 | 6 | 16 | 5 | **31** |
+| 3 | 12 | 10 | 16 | 5 | **43** |
 | 6 | 20 | 12 | 16 | 5 | **53** |
 | 20 | 20 | 14 | 16 | 5 | **55** |
 
-Four wallets now saturate the fee factor, because `maxPerPayer` caps any single
-counterparty at 5 points and the factor is worth 20. Beyond that, more wallets buy
+Five wallets now saturate the fee factor, because `maxPerPayer` caps any single
+counterparty at 4 points and the factor is worth 20. Beyond that, more wallets buy
 almost nothing. If the sybils are themselves scored agents this changes nothing: the
 web-of-trust weighting reads their **hard** standing, meaning ERC-8004 reputation capped
 by the matured total, so a counterparty that farmed its own score to 100 is worth exactly
@@ -459,8 +459,9 @@ Stated because they are true, not because they are solved.
    proposal that won so the loser needs no second call. The checker uses it; the primary
    keeps the replacing entry point, because overwriting its own stale proposal with a
    fresher one is intended rather than a race.
-4. **No slash has been executed in public.** The mechanism is tested; it has not been
-   exercised against a real agent where anyone could watch.
+4. **One slash has been executed in public, as a drill.** It ran against a throwaway agent
+   registered for the purpose, not against a real agent; see
+   [slash-drill-log.md](slash-drill-log.md).
 5. **No external audit.** A precondition for mainnet.
 6. **Unreported work is invisible.** Payment verification detects a fabricated or altered
    payment. It cannot detect a real payment nobody submitted.
@@ -595,20 +596,19 @@ Ordered by what unblocks what, not by difficulty.
    four was agreement on `getTotalScore`, an `eth_call` at head that every provider
    passes including the ones that cannot serve a receipt. See
    [RUNBOOK-second-operator.md](../oracle/RUNBOOK-second-operator.md).
-2. **A public slash.** *In progress.* Filed on Arc testnet on 20 September 2026 against a
-   throwaway agent registered for the purpose, and now sitting in its seven-day challenge
-   window; it settles on 27 September. Filing suspended the agent and froze its bond
+2. **A public slash.** *Done.* Filed on Arc testnet on 20 September 2026 against a
+   throwaway agent registered for the purpose; its seven-day challenge window closed on
+   27 September and it was executed on 3 October 2026. Filing suspended the agent and froze its bond
    without moving anything, and early execution was refused with `ChallengePeriodActive`
    carrying the deadline snapshotted at filing. The running account is
    [slash-drill-log.md](slash-drill-log.md); the procedure is
    [slash-drill.md](slash-drill.md); the rehearsal is `test/SlashDrillFork.t.sol` (6 cases
    against a fork of the live deployment).
 
-   The log states its own limits and they are worth repeating here: the target scored 0,
-   so this cannot demonstrate reputation being destroyed; reporter, operator and victim
+   The log states its own limits and they are worth repeating here: the target's score of 15
+   came from tenure alone, so this demonstrates little about reputation being destroyed; reporter, operator and victim
    are all addresses one party controls, so it demonstrates a mechanism and not a
-   governance decision. Until it settles, the consequence side of the protocol is still
-   theory. After it settles, it is a demonstration, not a proof.
+   governance decision. It is a demonstration, not a proof.
 3. ~~**A divergence watcher.**~~ Running since 20 September 2026, on a third host that is
    neither the primary nor the checker. Every disagreement it surfaces is triaged in
    public in [divergence-log.md](divergence-log.md), verdicts included when the checker

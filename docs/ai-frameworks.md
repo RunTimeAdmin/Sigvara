@@ -270,7 +270,7 @@ async function trustAgent(did: string, payload: string, signature: string): Prom
 
 Whatever framework you use, the integration is three things:
 
-1. **Identity at startup** — create a `SigvaraAgent` from a stored Ed25519 seed. The DID is deterministic from the seed + address + chainId.
+1. **Identity at startup** — create a `SigvaraAgent` from a stored Ed25519 seed. The DID is deterministic from the agent address + chainId; the seed supplies the Ed25519 key registered against it.
 
 2. **Audit on action** — include `agent_did` in every `POST /v1/audit/ingest` call. This can be fire-and-forget if you don't want it on the critical path.
 

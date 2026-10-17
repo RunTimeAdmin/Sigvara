@@ -53,12 +53,13 @@
 >   host clocks.
 > - Every privileged role on testnet is a single EOA, including the slashing committee.
 >   Admin and upgrade rights are not on a timelock or Safe.
-> - No slash has been run end to end on a live network.
+> - ~~No slash has been run end to end on a live network.~~ Executed 3 October 2026 as a
+>   scheduled drill; see `docs/slash-drill-log.md`.
 > - ~~No public challenge watcher.~~ Running since 20 September 2026 on a third host,
 >   polling the checker's `/divergence`, re-reading each disputed slot on chain and
 >   alerting while rejection is still possible. It holds no key, mounts no state and
 >   signs nothing. The checker's read-only surface is public at `checker.sigvara.xyz`
->   (`/health` and `/divergence` only; every write path 404s). Procedure in
+>   (`/health`, `/divergence` and `/evidence/` only; every write path 404s). Procedure in
 >   `oracle/RUNBOOK-second-operator.md` section 11.
 
 ---
@@ -305,7 +306,7 @@ if (stakes[didHash].amount + stakes[didHash].unbondingAmount == 0) revert NoStak
 if (block.timestamp < finalizableAt) revert ChallengeWindowActive(didHash, finalizableAt);
 ```
 
-**Assessment:** Documented in ADR-0002 as acceptable. Minimum window is 6 hours (score challenge), making validator timestamp manipulation (~15 seconds) irrelevant.
+**Assessment:** Documented in ADR-0002 as acceptable. The default window is 6 hours (score challenge; no minimum is enforced on chain), making validator timestamp manipulation (~15 seconds) irrelevant.
 
 ---
 

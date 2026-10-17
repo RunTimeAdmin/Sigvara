@@ -870,7 +870,7 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
 
     function test_initiateSlash_recordsProposalAndSnapshotsDeadline() public {
         _deposit();
-        uint256 t0 = block.timestamp;
+        uint256 t0 = vm.getBlockTimestamp();
         vm.prank(committee);
         staking.initiateSlash(didHash, victim, "evidence");
 
@@ -894,7 +894,7 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
 
     function test_disputeSlash_allowedAtExactDeadline() public {
         _deposit();
-        uint256 t0 = block.timestamp;
+        uint256 t0 = vm.getBlockTimestamp();
         vm.prank(committee);
         staking.initiateSlash(didHash, victim, "");
 
@@ -906,7 +906,7 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
 
     function test_executeSlash_reverts_atExactDeadline() public {
         _deposit();
-        uint256 t0 = block.timestamp;
+        uint256 t0 = vm.getBlockTimestamp();
         vm.prank(committee);
         staking.initiateSlash(didHash, victim, "");
 
@@ -919,7 +919,7 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
 
     function test_executeSlash_reverts_onDisputedProposal() public {
         _deposit();
-        uint256 t0 = block.timestamp;
+        uint256 t0 = vm.getBlockTimestamp();
         vm.prank(committee);
         staking.initiateSlash(didHash, victim, "");
         vm.prank(operator);
@@ -1040,7 +1040,7 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
         _deposit();
         vm.prank(committee);
         staking.initiateSlash(didHash, victim, "");
-        uint256 disputedAt = block.timestamp;
+        uint256 disputedAt = vm.getBlockTimestamp();
         vm.prank(operator);
         staking.disputeSlash(didHash);
 
@@ -1093,7 +1093,7 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
         vm.prank(operator);
         staking.depositStake(didHash, total);
 
-        uint256 t0 = block.timestamp;
+        uint256 t0 = vm.getBlockTimestamp();
         vm.prank(committee);
         staking.initiateSlash(didHash, victim, "");
         vm.warp(t0 + CHALLENGE + 1);

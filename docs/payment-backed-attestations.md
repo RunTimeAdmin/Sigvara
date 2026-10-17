@@ -137,7 +137,7 @@ Decaying a ratio is not enough on its own. A ratio is scale invariant, so ten
 successes decayed to 0.44 successes out of 0.44 is still 1.0, and an agent that
 went silent would hold full marks forever. The success rate therefore divides by
 `total + 5` rather than `total`. Evidence has to accumulate to approach the cap,
-a single observation is worth about four points instead of twenty-five, and as
+a single observation is worth about two points instead of fifteen, and as
 decayed weight tends to zero so does the score. That is what stops a farmed score
 sitting indefinitely.
 
@@ -167,7 +167,7 @@ a second wallet, but it raises the floor from free to deliberate.
 ten times is worth exactly as much as ten wallets paying once, so a small ring is
 as good as a customer base. `PAYMENT_MAX_PER_PAYER` limits any one payer to that
 many points of `feeScore` and that many attestations of weight. At the default of
-5, reaching the 20-point cap needs at least four distinct payers.
+4, reaching the 20-point cap needs at least five distinct payers.
 
 Capping scales a payer's successes by the same factor as its weight, so the cap
 changes how much an opinion counts without changing what the opinion was. A payer
@@ -250,7 +250,7 @@ agent's price; it does not make attestations honest.
 Self-dealing is the sharper of the two, and the counterparty checks above blunt it
 rather than close it. Refusing the operator and agent addresses catches the lazy
 version; funding a separate wallet still works. The per-payer cap then forces that
-into at least six wallets to max the factor, each with its own funding trail, but
+into at least five wallets to max the factor, each with its own funding trail, but
 a determined attacker with capital can still build one.
 
 Attestation state also still lives in the oracle's JSON file rather than on chain,

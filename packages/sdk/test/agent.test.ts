@@ -154,7 +154,7 @@ describe('SigvaraAgent.generate() — static factory', () => {
   });
 });
 
-describe('SigvaraAgent — accessors and generate()', () => {
+describe('SigvaraAgent: accessors and generate()', () => {
   it('agentAddress returns the address it was built with', () => {
     expect(makeAgent().agentAddress).toBe(AGENT_ADDR);
   });

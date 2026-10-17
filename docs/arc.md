@@ -25,10 +25,10 @@ ERC-20 view of USDC are the same balance, not two.
 
 **What this means for the bond token.** The staking, oracle-bond and epoch-fee
 contracts take the bond token by address at initialization. On Arc the obvious
-"established asset" is USDC itself, but whether the ERC-20 interface to the
-native balance is usable as an `IERC20` bond, and at which address and decimals,
-is something to verify on testnet before you design around it. Until then the
-testnet uses the faucet `SVRToken`.
+"established asset" is USDC itself, and the ERC-20 interface to the native
+balance was confirmed usable on testnet on 21 September 2026 (see the checklist at the
+end of this page for the address and decimals). The testnet bond still uses the faucet
+`SVRToken`.
 
 **Fee estimation.** Arc is EIP-1559 style in practice, but if `forge script`
 fails at the fee-estimation step, retry with `--legacy`.
@@ -69,9 +69,8 @@ forge script script/Deploy.s.sol --rpc-url arc_testnet -vvvv
 forge script script/Deploy.s.sol --rpc-url arc_testnet --broadcast -vvvv
 ```
 
-Note: the simulate step also writes `deployments/5042002.json`, with addresses that
-were never broadcast. Delete it before the real run, and only commit the file
-produced by `--broadcast`.
+Note: the simulate step writes nothing. Only `--broadcast` writes
+`deployments/5042002.json`; commit the file it produces.
 
 Optional role overrides (`ORACLE_ADDRESS`, `COMMITTEE_ADDRESS`, `MINIMUM_STAKE`,
 `CHALLENGE_PERIOD`, `SCORE_CHALLENGE_WINDOW`, `UNBONDING_PERIOD`) are documented
@@ -95,8 +94,8 @@ ORACLE_PRIVATE_KEY=0x...             # must hold ORACLE_ROLE on Reputation; fund
 ```
 
 The ERC-8004 external-score feed (`EXTERNAL_RPC`, `EXTERNAL_IDENTITY_ADDRESS`,
-`EXTERNAL_REPUTATION_ADDRESS`) is a separate read against Base Sepolia and does
-not depend on Arc. Leave it as-is.
+`EXTERNAL_REPUTATION_ADDRESS`) is a read against the ERC-8004 registries on Arc
+testnet. Leave it as-is.
 
 Both operators have had it configured since 21 September 2026 and were repointed from
 Base Sepolia to Arc on 22 September. `/health` reports `externalFeed` and
@@ -106,8 +105,8 @@ aimed at a dead host, and did not. It changes no score
 today: `externalScore` needs an agent linked to an ERC-8004 id whose NFT is held by
 the same wallet, and none is. `propagationScore` inherits only a counterparty's
 external standing, so it is 0 for the same reason, which puts the reachable ceiling at
-70 of 100 until linked agents exist. The reads are fail-safe: an unreachable Base
-Sepolia costs the factor, never the epoch.
+70 of 100 until linked agents exist. The reads are fail-safe: an unreachable external
+RPC costs the factor, never the epoch.
 
 ### Where it runs
 
@@ -119,18 +118,19 @@ reader to know which machine it is.
 
 The read and write halves of the service are reachable differently, on purpose. The
 process publishes its port on host loopback only, and the host firewall drops it, so
-nothing reaches the service directly. A reverse proxy then republishes three paths at
-`oracle.sigvara.xyz`: `/health`, `/score/:didHash` and `/evidence/:didHash`. Those are
-unauthenticated by design — evidence nobody can fetch is evidence nobody can audit, and
-the point of publishing a Merkle root is that a third party can re-derive it. Every
-other path, including `/attest`, `/flag`, `/link`, `/epoch` and `/metrics`, is not
-proxied and answers 404, so the write surface is still reachable only from a shell on
-the box. The read paths are rate-limited per caller, not because they are sensitive but
+nothing reaches the service directly. A reverse proxy then republishes the read paths at
+`oracle.sigvara.xyz`: `/health`, `/score/:didHash`, `/evidence/:didHash` and `/badge/*`.
+Those are unauthenticated by design — evidence nobody can fetch is evidence nobody can audit, and
+the point of publishing a Merkle root is that a third party can re-derive it. It also publishes `POST /attest`,
+where the oracle decides per request whether a token is required (see
+`oracle/Caddyfile.oracle.example`). Every other path, including `/flag`, `/link`, `/epoch`
+and `/metrics`, is not proxied and answers 404, so the rest of the write surface is
+reachable only from a shell on the box. The read paths are rate-limited per caller, not because they are sensitive but
 because `/score` costs several chain reads and `/evidence` rebuilds a Merkle tree.
 
 The checking operator that joined the set on 20 September 2026 is published the same way
-and more narrowly: `checker.sigvara.xyz` serves `/health`, `/divergence` and
-`/divergence/:didHash`, and 404s everything else including every write path. It is public
+and more narrowly: `checker.sigvara.xyz` serves `/health`, `/divergence`,
+`/divergence/:didHash` and `/evidence/:didHash`, and 404s everything else including every write path. It is public
 for the same reason the evidence root is. The protocol already lets anyone recompute a
 score; letting anyone see whether two independent operators agree on it is that argument
 one step further, and the payload carries nothing that is not already derivable from
@@ -512,9 +512,9 @@ days to become fully spendable. Regenerate for another rate with
 cast call <reputation proxy> "maturityRatePerDay()(uint256)" --rpc-url arc_testnet
 ```
 
-Expect every existing agent to read 0 immediately after the rate is set, then climb.
-The anchor starts from what was spendable at the last finalize, which is zero for an
-agent that has never had one since the upgrade.
+Existing agents keep reading their earned score until their next finalize. From then
+on, a rise is released at the set rate, starting from what was spendable at that
+finalize.
 
 Run `forge test --match-contract UpgradeTest` before broadcasting. Those tests
 cover the half the slot-pinning tests do not: that the upgrade executes, that
@@ -594,14 +594,17 @@ Proxy addresses never change; these are the implementations behind them, newest 
 
 | Proxy | Implementation | Released |
 |---|---|---|
-| `identity` | `0xb2616f4a449726b195951b6a576aba6847e174ef` | 19 Sep, operator index |
+| `identity` | `0xb2616f4a449726b195951b6a576aba6847e174ef` | 19 Sep, operator index (current) |
 | | `0x95d8592e7681550bee0c3e06c275ac1b94c873c6` | 19 Sep, proof of control + PendingBond |
 | | `0x486b1c2230c80a77dbec68835ff5b58eccd164ab` | 18 Sep, operator transfer |
-| `staking` | `0x3501f936f629dbc2e97ae0717c501456ca8215e0` | 19 Sep, narrowed coupling |
+| `staking` | `0x169f1ada8a3568e229d24e74515b4ef889b8a6bd` | 21 Sep (current) |
+| | `0x3501f936f629dbc2e97ae0717c501456ca8215e0` | 19 Sep, narrowed coupling |
 | | `0x28c23b766c2dabb5f2930905a5eeb660919b71ef` | 19 Sep, PendingBond activation |
-| `reputation` | `0x0dc80134817e6fea978c06497f48391371a8413d` | 19 Sep, evidence roots |
+| `reputation` | `0x87492399e34e5247740d0280c329e7553403404c` | current as recorded 21 Sep |
+| | `0x0dc80134817e6fea978c06497f48391371a8413d` | 19 Sep, evidence roots |
 | | `0xea5940bc23d7bf82113316dd03a3b1bb1bc2f084` | 18 Sep, maturity |
-| `oracleBond` | `0xf8464144726850d222a06b85a230c8030673b933` | 19 Sep, bond binds on read |
+| `oracleBond` | `0x9ed31f024e0c3e7df853c411744babb53f5aaffa` | 21 Sep (current) |
+| | `0xf8464144726850d222a06b85a230c8030673b933` | 19 Sep, bond binds on read |
 | | `0x826fc09041a8a678b06336a253c55bd84f1fdc50` | 18 Sep, initial |
 
 Read the current one straight from the proxy rather than trusting this table:

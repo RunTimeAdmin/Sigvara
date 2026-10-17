@@ -5,7 +5,10 @@
 > SaaS, and is kept for that context. Several specifics have since been superseded —
 > notably the scoring formulas in §5, which describe a fee factor keyed to USD volume,
 > external trust sourced from SAID / Gitcoin, and propagation stubbed to zero. None of
-> those match what runs today.
+> those match what runs today. The same holds for the interfaces, flows and SDK examples
+> in §3, §4, §7, §8 and §9: function signatures, events, the status enum, the challenge
+> payload format and the order of registration and staking have all changed. For those,
+> [`src/`](src/) and [`packages/sdk/`](packages/sdk/) are the reference.
 >
 > For current behaviour see [README](README.md),
 > [docs/reputation-model.md](docs/reputation-model.md),
@@ -153,8 +156,6 @@ The Sigvara reputation system computes a deterministic score (0-100) using a 6-f
    - *Scoring:* `max(0, 5 - (activeFlags * 2))`
 6. **Trust Propagation (5%):** Inherited trust from high-reputation agents that vouch for or delegate to this agent.
    - *Scoring:* oracle-computed from the attestation/vouch graph.
-
-> **Phase note:** External Trust (4) and Trust Propagation (6) are stubbed to 0 until the Phase 2 oracle network is live; the on-chain caps and the other four factors are active today. This matches `docs/reputation-model.md`, `SigvaraReputation.sol`, and `oracle/scoring.js`.
 
 ### On-Chain Scoring Mechanics
 To optimize gas, the Reputation Registry does not compute the score on every transaction. Instead, an off-chain decentralized oracle network aggregates the raw data, computes the score, and submits a state update to the registry periodically (e.g., every 24 hours) or upon a significant deviation threshold.
