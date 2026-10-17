@@ -194,6 +194,7 @@ function load() {
     // decayWeight or decayedVolume, where the message names neither the agent nor the
     // field. Dropping the event names both and lets every other agent score.
     let badEvents = 0;
+    let refiled = 0;
     for (const [k, v] of Object.entries(parsed.paymentEvents || {})) {
       const usable = (Array.isArray(v) ? v : []).filter((e) => {
         const why = paymentEventError(e);
@@ -203,7 +204,16 @@ function load() {
         }
         return !why;
       });
-      if (usable.length) paymentEvents.set(k, Object.freeze(usable));
+      if (!usable.length) continue;
+      // Keys are lowercase. A mixed-case key holds credits /attest filed before it
+      // normalised the hash, where scoring never looked; folding them back in returns
+      // those payments to the agent they paid.
+      const key = k.toLowerCase();
+      if (key !== k) refiled += usable.length;
+      paymentEvents.set(key, Object.freeze([...(paymentEvents.get(key) ?? []), ...usable]));
+    }
+    if (refiled) {
+      console.warn(`[oracle] refiled ${refiled} payment event(s) stored under a mixed-case didHash`);
     }
     if (badEvents) {
       console.error(
@@ -373,9 +383,13 @@ function creditPayment(
   didHash, txHash, amount, payer, success, now = Date.now(), packetId = null, blockNumber = null,
 ) {
   const key = txHash.toLowerCase();
-  if (isCredited(key, didHash, payer)) return false;
-  usedPaymentTxs.add(creditKey(key, didHash, payer));
-  const list = paymentEvents.get(didHash) ?? [];
+  // The same spelling isCredited uses. Filing under the caller's spelling while marking
+  // the receipt used in lowercase let a mixed-case hash spend a payment where no score
+  // would ever read it.
+  const did = String(didHash).toLowerCase();
+  if (isCredited(key, did, payer)) return false;
+  usedPaymentTxs.add(creditKey(key, did, payer));
+  const list = paymentEvents.get(did) ?? [];
   // The settlement hash is kept, not just used for dedupe: it is what lets a third
   // party pull the payment off the chain and check it for themselves, which is the
   // whole point of committing to the evidence.
@@ -413,7 +427,7 @@ function creditPayment(
   // token, so handing out copies would turn every request into a miss; freezing keeps one
   // array per version and makes the "never mutated in place" rule the cache depends on
   // enforced rather than merely documented.
-  paymentEvents.set(didHash, Object.freeze([...list, event]));
+  paymentEvents.set(did, Object.freeze([...list, event]));
   return true;
 }
 
@@ -421,7 +435,7 @@ function creditPayment(
 function allPaymentEvents() { return paymentEvents; }
 
 function getPaymentEvents(didHash) {
-  return paymentEvents.get(didHash) ?? [];
+  return paymentEvents.get(String(didHash).toLowerCase()) ?? [];
 }
 
 /// Undecayed lifetime volume. Reported, not scored: scoring uses the decayed sum.

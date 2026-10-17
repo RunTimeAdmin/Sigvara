@@ -11,7 +11,7 @@ const {
   epochIntervalError, divergenceToleranceError, DEFAULT_DIVERGENCE_TOLERANCE,
   mapChunked,
 } = require('./epoch-policy');
-const { json, readBody, readCredentials, identifyCaller, mayAttestUnauthenticated, parseScorePath, rateLimited, clientKey, adminTokenPolicyError, runningCommit } = require('./http-helpers');
+const { json, readBody, readCredentials, identifyCaller, mayAttestUnauthenticated, parseScorePath, parseDidHash, rateLimited, clientKey, adminTokenPolicyError, runningCommit } = require('./http-helpers');
 const payments = require('./payments');
 const merkle = require('./merkle');
 const { createResponseCache } = require('./response-cache');
@@ -1142,7 +1142,7 @@ const server = http.createServer(async (req, res) => {
     }
     try {
       const body = await readBody(req);
-      const { didHash, success, packetId } = body;
+      const { success, packetId } = body;
 
       /* Authorisation depends on what is being claimed, so it is decided after the
        * body is read rather than before.
@@ -1165,9 +1165,14 @@ const server = http.createServer(async (req, res) => {
       }
 
       let attester = body.attester;
-      if (!didHash) {
+      if (!body.didHash) {
         metrics.inc('attestRejectedOther');
         return json(res, 400, { error: 'didHash required' });
+      }
+      const didHash = parseDidHash(body.didHash);
+      if (!didHash) {
+        metrics.inc('attestRejectedOther');
+        return json(res, 400, { error: 'didHash must be a 32-byte hex string' });
       }
       // Only needed when payments are off; otherwise it comes from the transfer.
       if (!attester && !payments.required(paymentCfg)) {
@@ -1185,8 +1190,11 @@ const server = http.createServer(async (req, res) => {
         try {
           info = await chain.getAgentInfo(didHash);
         } catch (err) {
+          // The provider's message can carry the RPC URL, key and all, so it is logged
+          // here and never sent to a caller who needed no token to get this far.
           metrics.inc('attestRejectedOther');
-          return json(res, 502, { error: `could not read agent: ${err.message}` });
+          console.warn(`[oracle] /attest chain read failed for ${didHash}: ${err.message}`);
+          return json(res, 502, { error: 'could not read the chain', code: 'rpc_error' });
         }
         if (!info || Number(info.registeredAt) === 0) {
           metrics.inc('attestRejectedOther');
@@ -1203,7 +1211,13 @@ const server = http.createServer(async (req, res) => {
           // rejected attestation, or a flaky node would look like abuse.
           const rpc = err.code === 'rpc_error';
           metrics.inc(rpc ? 'paymentRpcErrors' : 'attestRejectedPayment');
-          return json(res, rpc ? 502 : 402, { error: err.message, code: err.code || 'payment_invalid' });
+          // Only an rpc_error quotes the provider (payments.js wraps its message), so it
+          // is the one kept off the wire. The others are this oracle's own words.
+          if (rpc) {
+            console.warn(`[oracle] /attest payment check failed for ${didHash}: ${err.message}`);
+            return json(res, 502, { error: 'could not read the chain', code: 'rpc_error' });
+          }
+          return json(res, 402, { error: err.message, code: err.code || 'payment_invalid' });
         }
         if (payments.isSelfPayment(credited.payer, info)) {
           metrics.inc('attestRejectedPayment');
@@ -1446,7 +1460,13 @@ const server = http.createServer(async (req, res) => {
         return json(res, 400, { error: 'didHash and agentId required' });
       }
       if (!external.configured()) return json(res, 400, { error: 'external (ERC-8004) registry not configured' });
-      const { operator } = await chain.getAgentInfo(didHash);
+      let operator;
+      try {
+        ({ operator } = await chain.getAgentInfo(didHash));
+      } catch (err) {
+        console.warn(`[oracle] /link chain read failed for ${didHash}: ${err.message}`);
+        return json(res, 502, { error: 'could not read the chain', code: 'rpc_error' });
+      }
       const owns = await external.verifyOwnership(String(agentId), operator);
       if (!owns) {
         return json(res, 403, { error: 'ERC-8004 agent is not owned by this agent\'s Sigvara operator; refusing to link' });

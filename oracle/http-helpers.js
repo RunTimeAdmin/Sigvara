@@ -236,8 +236,21 @@ function runningCommit(env = process.env) {
   return /^[0-9a-f]{40}$/.test(raw) ? raw : null;
 }
 
+/**
+ * A didHash in its one stored spelling, or null when it is not a 32-byte hex string.
+ *
+ * Every store key is lowercase, while the chain reads a hash case-insensitively. A
+ * mixed-case hash therefore passed the agent and payment checks and was then filed
+ * under a key that nothing scores, and the receipt it spent was marked used.
+ */
+function parseDidHash(value) {
+  if (typeof value !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(value)) return null;
+  return value.toLowerCase();
+}
+
 module.exports = {
   adminTokenPolicyError,
+  parseDidHash,
   clientKey,
   MAX_BODY_SIZE,
   RATE_WINDOW_MS,

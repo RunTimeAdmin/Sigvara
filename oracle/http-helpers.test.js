@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
-const { readBody, readCredentials, identifyCaller, mayAttestUnauthenticated, parseScorePath, rateLimited, RATE_MAX, RATE_WINDOW_MS, clientKey, adminTokenPolicyError, rateBucketCount, runningCommit } = require('./http-helpers');
+const { readBody, readCredentials, identifyCaller, mayAttestUnauthenticated, parseScorePath, parseDidHash, rateLimited, RATE_MAX, RATE_WINDOW_MS, clientKey, adminTokenPolicyError, rateBucketCount, runningCommit } = require('./http-helpers');
 
 // Minimal fake matching the subset of http.IncomingMessage that readBody uses:
 // an EventEmitter with data/end/error events plus a destroy() method.
@@ -394,4 +394,22 @@ test('runningCommit: refuses anything that is not a sha', () => {
 test('runningCommit: tolerates surrounding whitespace from a captured command', () => {
   const sha = '0123456789abcdef0123456789abcdef01234567';
   assert.equal(runningCommit({ SIGVARA_COMMIT: `\n${sha}\n` }), sha);
+});
+
+test('parseDidHash: returns the one stored spelling of a 32-byte hex hash', () => {
+  const lower = '0x' + 'ab'.repeat(32);
+  assert.equal(parseDidHash(lower), lower);
+  // The case that mattered: the chain accepts this spelling, the store must not keep it.
+  assert.equal(parseDidHash('0x' + 'AB'.repeat(32)), lower);
+  assert.equal(parseDidHash('0x' + 'aB'.repeat(32)), lower);
+});
+
+test('parseDidHash: refuses anything that is not a 32-byte hex string', () => {
+  for (const bad of [
+    undefined, null, 42, {}, ['0x' + 'ab'.repeat(32)],
+    '', '0x', 'ab'.repeat(32), '0x' + 'ab'.repeat(31), '0x' + 'ab'.repeat(33),
+    '0x' + 'zz'.repeat(32), ' 0x' + 'ab'.repeat(32), '0X' + 'ab'.repeat(32),
+  ]) {
+    assert.equal(parseDidHash(bad), null, `accepted ${JSON.stringify(bad)}`);
+  }
 });
