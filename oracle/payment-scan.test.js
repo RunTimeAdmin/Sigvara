@@ -452,3 +452,292 @@ test('readConfig: pace defaults to the measured sustainable rate', () => {
   assert.equal(scan.readConfig({ PAYMENT_SCAN_PACE_MS: '1500' }).paceMs, 1500);
   assert.equal(scan.readConfig({ PAYMENT_SCAN_PACE_MS: 'nonsense' }).paceMs, 500, 'unparseable falls back');
 });
+
+// ---------------------------------------------------------------------------
+// Edges of the pure helpers
+// ---------------------------------------------------------------------------
+
+test('decodeTransfer: topics that are not an array are not a Transfer', () => {
+  assert.equal(scan.decodeTransfer({ topics: 'nope' }), null);
+  assert.equal(scan.decodeTransfer({}), null);
+});
+
+test('decodeTransfer: carries the position on chain and checksums both parties', () => {
+  const log = transfer(PAYER, AGENT, 7n, { tx: '0x' + 'dd'.repeat(32), block: 42, logIndex: 3 });
+  log.topics = [log.topics[0], log.topics[1].toLowerCase(), log.topics[2].toLowerCase()];
+  const t = scan.decodeTransfer(log);
+  assert.equal(t.txHash, '0x' + 'dd'.repeat(32));
+  assert.equal(t.blockNumber, 42);
+  assert.equal(t.logIndex, 3);
+  assert.equal(t.from, PAYER, 'checksummed');
+  assert.equal(t.to, AGENT, 'checksummed');
+});
+
+test('decodeTransfer: amounts beyond 2^53 survive as exact strings', () => {
+  const big = 10n ** 30n + 1n;
+  assert.equal(scan.decodeTransfer(transfer(PAYER, AGENT, big)).amount, big.toString());
+});
+
+test('planCredits: null entries from decodeTransfer are ignored', () => {
+  const { credits, skipped } = plan([
+    { topics: [] },
+    transfer(PAYER, AGENT, 500n),
+  ]);
+  assert.equal(credits.length, 1);
+  assert.equal(skipped.length, 0);
+});
+
+test('planCredits: defaults credit everything to a known agent', () => {
+  // No operatorOf, isUsed or minAmount: nothing is refused but self-payment.
+  const decoded = [transfer(PAYER, AGENT, 1n), transfer(AGENT, AGENT, 1n, { tx: '0x' + 'ee'.repeat(32) })]
+    .map(scan.decodeTransfer);
+  const { credits, skipped } = scan.planCredits(decoded, {
+    didHashOf: (a) => (a === AGENT ? DID : null),
+  });
+  assert.equal(credits.length, 1);
+  assert.equal(credits[0].amount, '1');
+  assert.deepEqual(skipped.map((s) => s.reason), ['self_payment']);
+});
+
+test('planCredits: exactly the minimum is credited', () => {
+  const { credits } = plan([transfer(PAYER, AGENT, 100n)]);
+  assert.equal(credits.length, 1);
+  assert.equal(credits[0].amount, '100');
+});
+
+test('planCredits: the minimum applies to the summed payment, not each log', () => {
+  const tx = '0x' + 'f1'.repeat(32);
+  const { credits, skipped } = plan([
+    transfer(PAYER, AGENT, 60n, { tx, logIndex: 0 }),
+    transfer(PAYER, AGENT, 40n, { tx, logIndex: 1 }),
+  ]);
+  assert.equal(skipped.length, 0);
+  assert.equal(credits[0].amount, '100');
+});
+
+test('planCredits: grouping ignores the case of the transaction hash', () => {
+  const tx = '0x' + 'ab'.repeat(32);
+  const a = scan.decodeTransfer(transfer(PAYER, AGENT, 60n, { tx }));
+  const b = { ...scan.decodeTransfer(transfer(PAYER, AGENT, 40n, { tx })), txHash: tx.toUpperCase().replace('0X', '0x') };
+  const { credits } = scan.planCredits([a, b], {
+    didHashOf: (x) => (x === AGENT ? DID : null),
+  });
+  assert.equal(credits.length, 1);
+  assert.equal(credits[0].amount, '100');
+});
+
+test('planCredits: isUsed is asked about the exact (tx, agent, payer) triple', () => {
+  const seen = [];
+  plan([transfer(PAYER, AGENT, 500n, { tx: '0x' + '12'.repeat(32) })], {
+    isUsed: (...args) => { seen.push(args); return false; },
+  });
+  assert.deepEqual(seen, [['0x' + '12'.repeat(32), DID, PAYER]]);
+});
+
+test('planCredits: the operator check ignores address case', () => {
+  const { credits, skipped } = plan([transfer(OPERATOR, AGENT, 500n)], {
+    operatorOf: () => OPERATOR.toLowerCase(),
+  });
+  assert.equal(credits.length, 0);
+  assert.equal(skipped[0].reason, 'self_payment');
+});
+
+test('planCredits: an agent with no known operator is still checked for paying itself', () => {
+  const { credits, skipped } = plan([transfer(PAYER, AGENT, 500n), transfer(AGENT, AGENT, 500n, { tx: '0x' + '34'.repeat(32) })], {
+    operatorOf: () => null,
+  });
+  assert.equal(credits.length, 1);
+  assert.equal(credits[0].payer, PAYER);
+  assert.deepEqual(skipped.map((s) => s.reason), ['self_payment']);
+});
+
+test('planCredits: the refusal checks run in a fixed order', () => {
+  // Already credited wins over below-minimum and self-payment, so a replay is always
+  // reported as a replay.
+  const { skipped } = plan([transfer(AGENT, AGENT, 1n)], { isUsed: () => true });
+  assert.equal(skipped[0].reason, 'already_credited');
+  const r2 = plan([transfer(AGENT, AGENT, 1n)]);
+  assert.equal(r2.skipped[0].reason, 'below_minimum');
+});
+
+test('planCredits: a skip names the transaction, agent, payer and amount', () => {
+  const tx = '0x' + '56'.repeat(32);
+  const { skipped } = plan([transfer(PAYER, AGENT, 5n, { tx })]);
+  assert.deepEqual(skipped, [{ txHash: tx, didHash: DID, payer: PAYER, amount: '5', reason: 'below_minimum' }]);
+});
+
+test('planCredits: one transaction paying two agents credits each', () => {
+  const OTHER = addr('6');
+  const DID2 = '0x' + 'cd'.repeat(32);
+  const tx = '0x' + '78'.repeat(32);
+  const { credits } = scan.planCredits(
+    [transfer(PAYER, AGENT, 200n, { tx }), transfer(PAYER, OTHER, 300n, { tx, logIndex: 1 })].map(scan.decodeTransfer),
+    { didHashOf: (a) => (a === AGENT ? DID : a === OTHER ? DID2 : null) },
+  );
+  assert.deepEqual(credits.map((c) => [c.didHash, c.amount]).sort(), [[DID, '200'], [DID2, '300']].sort());
+});
+
+test('planCredits: the credited block is the first log seen for the group', () => {
+  const tx = '0x' + '9a'.repeat(32);
+  const { credits } = plan([
+    transfer(PAYER, AGENT, 100n, { tx, block: 7 }),
+    transfer(PAYER, AGENT, 100n, { tx, block: 7, logIndex: 1 }),
+  ]);
+  assert.equal(credits[0].blockNumber, 7);
+});
+
+test('blockRanges: an empty span yields no ranges, a one-block chunk yields one per block', () => {
+  assert.deepEqual(scan.blockRanges(10, 9, 100), []);
+  assert.deepEqual(scan.blockRanges(5, 7, 1), [[5, 5], [6, 6], [7, 7]]);
+  assert.deepEqual(scan.blockRanges(5, 5, 1000), [[5, 5]]);
+});
+
+test('recipientBatches: no agents is no batches, and the cap is exact', () => {
+  assert.deepEqual(scan.recipientBatches([]), []);
+  const fifty = Array.from({ length: scan.MAX_RECIPIENTS_PER_CALL }, (_, i) => i);
+  assert.equal(scan.recipientBatches(fifty).length, 1);
+  assert.equal(scan.recipientBatches([...fifty, 50]).length, 2);
+  assert.deepEqual(scan.recipientBatches([1, 2, 3], 2), [[1, 2], [3]]);
+});
+
+test('safeHead never goes below zero on a young chain', () => {
+  assert.equal(scan.safeHead(3, 6), 0);
+  assert.equal(scan.safeHead(6, 6), 0);
+  assert.equal(scan.safeHead(7, 6), 1);
+});
+
+test('checkpointAfter: several unresolved credits stop short of the earliest', () => {
+  assert.equal(scan.checkpointAfter([{ blockNumber: 180 }, { blockNumber: 150 }, { blockNumber: 199 }], 100, 200), 149);
+});
+
+test('readConfig: the scan-specific settings win over the shared ones', () => {
+  const cfg = scan.readConfig({
+    PAYMENT_SCAN_FROM_BLOCK: '900', FROM_BLOCK: '500',
+    PAYMENT_SCAN_CHUNK: '250', LOG_CHUNK_SIZE: '1000',
+  });
+  assert.equal(cfg.fromBlock, 900);
+  assert.equal(cfg.chunkSize, 250);
+});
+
+test('readConfig: defaults with nothing set', () => {
+  const cfg = scan.readConfig({});
+  assert.equal(cfg.fromBlock, 0);
+  assert.equal(cfg.chunkSize, 2000);
+});
+
+test('readConfig: chunk size is at least one block', () => {
+  assert.equal(scan.readConfig({ PAYMENT_SCAN_CHUNK: '0' }).chunkSize, 1);
+  assert.equal(scan.readConfig({ PAYMENT_SCAN_CHUNK: '-5' }).chunkSize, 1);
+});
+
+test('readConfig: an empty or negative pace does not remove pacing by accident', () => {
+  assert.equal(scan.readConfig({ PAYMENT_SCAN_PACE_MS: '' }).paceMs, scan.DEFAULT_SCAN_PACE_MS, 'empty falls back');
+  assert.equal(scan.readConfig({ PAYMENT_SCAN_PACE_MS: '-100' }).paceMs, 0, 'negative clamps to zero');
+});
+
+test('pickCanary: skips empty and hashless events and moves on to the next agent', () => {
+  const OTHER = addr('7');
+  const events = new Map([
+    ['0x01', []],
+    ['0x02', [null, { amount: '1' }]],
+    ['0x03', [{ txHash: '0xfeed', blockNumber: 12 }]],
+  ]);
+  const got = scan.pickCanary(events, () => OTHER);
+  assert.deepEqual(got, { didHash: '0x03', recipient: OTHER, txHash: '0xfeed', blockNumber: 12 });
+});
+
+test('pickCanary: a non-integer block is reported as null', () => {
+  const events = new Map([['0x01', [{ txHash: '0xfeed', blockNumber: '12' }]]]);
+  assert.equal(scan.pickCanary(events, () => AGENT).blockNumber, null);
+});
+
+test('canaryFilter: accepts a lowercase recipient and pads it like the scan does', () => {
+  const f = scan.canaryFilter(ASSET, AGENT.toLowerCase(), 9);
+  assert.deepEqual(f.topics[2], [wa(AGENT)]);
+});
+
+test('canaryVerdict: matching ignores case and tolerates null entries', () => {
+  const tx = '0x' + 'ab'.repeat(32);
+  assert.equal(scan.canaryVerdict([null, { transactionHash: tx.toUpperCase().replace('0X', '0x') }], tx), 'passed');
+  assert.equal(scan.canaryVerdict([{ transactionHash: '0x01' }], tx), 'failed', 'a different transaction is not the canary');
+});
+
+test('scanRange: no recipients or an empty span makes no calls', async () => {
+  let n = 0;
+  const readLogs = () => { n += 1; return []; };
+  await scan.scanRange({ readLogs, asset: ASSET, sleep: () => {} }, [], 0, 100, 10);
+  await scan.scanRange({ readLogs, asset: ASSET, sleep: () => {} }, [AGENT], 101, 100, 10);
+  assert.equal(n, 0);
+});
+
+test('scanRange: uses the default pace when none is given, and returns every log in order', async () => {
+  const waits = [];
+  const logs = await scan.scanRange(
+    { readLogs: (f) => [{ from: f.fromBlock }], asset: ASSET, sleep: (ms) => waits.push(ms) },
+    [AGENT], 0, 29, 10,
+  );
+  assert.deepEqual(logs.map((l) => l.from), [0, 10, 20]);
+  assert.deepEqual(waits, [scan.DEFAULT_SCAN_PACE_MS, scan.DEFAULT_SCAN_PACE_MS]);
+});
+
+test('scanRange: each filter is padded and inclusive at both ends', async () => {
+  const calls = [];
+  await scan.scanRange(
+    { readLogs: (f) => { calls.push(f); return []; }, asset: ASSET, paceMs: 0, sleep: () => {} },
+    [AGENT], 5, 12, 4,
+  );
+  assert.deepEqual(calls.map((c) => [c.fromBlock, c.toBlock]), [[5, 8], [9, 12]]);
+  assert.deepEqual(calls[0].topics[2], [wa(AGENT)]);
+});
+
+test('scanRange: a failing read propagates rather than returning a partial scan', async () => {
+  await assert.rejects(
+    scan.scanRange(
+      { readLogs: (f) => { if (f.fromBlock > 0) throw new Error('rate limited'); return []; }, asset: ASSET, paceMs: 0 },
+      [AGENT], 0, 19, 10,
+    ),
+    /rate limited/,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// The scan's pre-check and the store agree
+// ---------------------------------------------------------------------------
+
+test('planCredits with the store as isUsed: a credited payment is refused the next time', () => {
+  const store = require('./store');
+  const tx = '0x' + 'a7'.repeat(32);
+  const opts = {
+    didHashOf: (a) => (a === AGENT ? DID : null),
+    isUsed: store.isCredited,
+  };
+  const decoded = [transfer(PAYER, AGENT, 500n, { tx, block: 77 })].map(scan.decodeTransfer);
+
+  const first = scan.planCredits(decoded, opts);
+  assert.equal(first.credits.length, 1);
+  const c = first.credits[0];
+  assert.equal(store.creditPayment(c.didHash, c.txHash, c.amount, c.payer, c.success, 1_000, null, c.blockNumber), true);
+
+  const stored = store.getPaymentEvents(DID).find((e) => e.txHash === tx);
+  assert.equal(stored.success, null, 'a pulled payment carries no outcome');
+  assert.equal(stored.blockNumber, 77);
+  assert.equal(stored.payer, PAYER);
+
+  const second = scan.planCredits(decoded, opts);
+  assert.equal(second.credits.length, 0);
+  assert.equal(second.skipped[0].reason, 'already_credited');
+});
+
+test('planCredits with the store as isUsed: a second payer in the same transaction is still new', () => {
+  const store = require('./store');
+  const tx = '0x' + 'b8'.repeat(32);
+  const OTHER_PAYER = addr('8');
+  assert.equal(store.creditPayment(DID, tx, '500', PAYER, null, 1_000), true);
+
+  const { credits, skipped } = scan.planCredits(
+    [transfer(PAYER, AGENT, 500n, { tx }), transfer(OTHER_PAYER, AGENT, 600n, { tx, logIndex: 1 })].map(scan.decodeTransfer),
+    { didHashOf: (a) => (a === AGENT ? DID : null), isUsed: store.isCredited },
+  );
+  assert.deepEqual(credits.map((x) => x.payer), [OTHER_PAYER]);
+  assert.deepEqual(skipped.map((x) => [x.payer, x.reason]), [[PAYER, 'already_credited']]);
+});

@@ -172,3 +172,85 @@ describe('audience binding (the relay attack v2 closes)', () => {
     expect(isChallengeExpired('SIGVARA-VERIFY-V2\nnope')).toBe(true);
   });
 });
+
+describe('parseChallengePayload rejects malformed v2 payloads', () => {
+  const lines = (over: Partial<Record<'did' | 'aud' | 'nonce' | 'ts', string>> = {}) => [
+    'SIGVARA-VERIFY-V2',
+    `did: ${over.did ?? PEER_DID}`,
+    `aud: ${over.aud ?? AUDIENCE}`,
+    `nonce: ${over.nonce ?? 'abc123'}`,
+    `ts: ${over.ts ?? '1700000000'}`,
+  ];
+
+  it('parses a well-formed payload', () => {
+    expect(parseChallengePayload(lines().join('\n'))).toEqual({
+      did: PEER_DID, audience: AUDIENCE, nonce: 'abc123', timestamp: 1700000000, version: 2,
+    });
+  });
+
+  it('refuses the wrong number of lines', () => {
+    expect(() => parseChallengePayload(lines().slice(0, 4).join('\n'))).toThrow(/Malformed/);
+    expect(() => parseChallengePayload([...lines(), 'extra: 1'].join('\n'))).toThrow(/Malformed/);
+  });
+
+  it('refuses fields out of order or misnamed', () => {
+    const l = lines();
+    [l[1], l[2]] = [l[2], l[1]];
+    expect(() => parseChallengePayload(l.join('\n'))).toThrow(/expected did/);
+    const m = lines();
+    m[3] = 'nunce: abc';
+    expect(() => parseChallengePayload(m.join('\n'))).toThrow(/expected nonce/);
+  });
+
+  it('refuses empty did, audience or nonce', () => {
+    expect(() => parseChallengePayload(lines({ did: '' }).join('\n'))).toThrow(/empty did/);
+    expect(() => parseChallengePayload(lines({ aud: '' }).join('\n'))).toThrow(/empty audience/);
+    expect(() => parseChallengePayload(lines({ nonce: '' }).join('\n'))).toThrow(/empty nonce/);
+  });
+
+  it('refuses a non-numeric timestamp', () => {
+    expect(() => parseChallengePayload(lines({ ts: 'soon' }).join('\n'))).toThrow(/invalid timestamp/);
+  });
+
+  it('a header without the newline is not a v2 payload', () => {
+    expect(() => parseChallengePayload('SIGVARA-VERIFY-V2')).toThrow(/Invalid challenge prefix/);
+  });
+});
+
+describe('parseChallengePayload rejects malformed v1 payloads', () => {
+  it('refuses a body with no separators', () => {
+    expect(() => parseChallengePayload('SIGVARA-VERIFY:nothing')).toThrow(/Malformed/);
+  });
+
+  it('refuses a non-numeric timestamp', () => {
+    expect(() => parseChallengePayload(`SIGVARA-VERIFY:${PEER_DID}:abc:later`)).toThrow(/invalid timestamp/);
+  });
+
+  it('refuses a body with a timestamp but no nonce separator', () => {
+    expect(() => parseChallengePayload('SIGVARA-VERIFY:abc:1700000000')).toThrow(/Malformed/);
+  });
+
+  it('keeps the colons inside the DID', () => {
+    const p = parseChallengePayload(`SIGVARA-VERIFY:${PEER_DID}:n0nce:1700000000`);
+    expect(p).toEqual({ did: PEER_DID, nonce: 'n0nce', timestamp: 1700000000, version: 1 });
+  });
+});
+
+describe('verifyChallenge signature length', () => {
+  it('a decoded signature that is not 64 bytes is false, not an exception', () => {
+    const kp = seedToKeyPair(new Uint8Array(32).fill(1));
+    expect(verifyChallenge('anything', '1'.repeat(10), kp.publicKey)).toBe(false);
+  });
+});
+
+describe('generateChallenge input checks', () => {
+  it('refuses a prover DID with a newline', () => {
+    expect(() => generateChallenge(`${PEER_DID}\naud: x`, AUDIENCE)).toThrow(/newline/);
+  });
+
+  it('expiresAt is the timestamp plus the TTL', () => {
+    const c = generateChallenge(PEER_DID, AUDIENCE, 42);
+    expect(c.expiresAt - c.timestamp).toBe(42);
+    expect(c.audience).toBe(AUDIENCE);
+  });
+});

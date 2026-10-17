@@ -311,3 +311,124 @@ test('computeScore: without a clock it falls back to wall time rather than throw
   assert.ok(Number.isFinite(s.total));
   assert.ok(s.ageScore > 0);
 });
+
+// ---- caps agree with the contract ------------------------------------------
+
+// computeScore clamps each factor so proposeReputation cannot revert on it. A clamp
+// above the contract's cap would make the proposal revert; one below would throw away
+// points the contract allows. Read from the contract source so the two cannot drift.
+test('computeScore: every factor ceiling equals the contract cap', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const sol = fs.readFileSync(path.join(__dirname, '..', 'src', 'SigvaraReputation.sol'), 'utf8');
+  const caps = {};
+  for (const m of sol.matchAll(/uint8 public constant MAX_(\w+)_SCORE = (\d+);/g)) {
+    caps[m[1].toLowerCase()] = Number(m[2]);
+  }
+  assert.equal(Object.keys(caps).length, 6, 'six factor caps in the contract');
+
+  const SEC = 2_000_000_000;
+  const s = computeScore({
+    registeredAt: 0,
+    attestations: { successful: 1e9, total: 1e9 },
+    flags: 0,
+    externalScore: 1e6,
+    measuredFeeScore: 1e6,
+    propagation: 1e6,
+    activity: { firstActivitySec: SEC - 100_000 * 86400, lastActivitySec: SEC, recency: 1 },
+    now: SEC * 1000,
+  });
+  assert.equal(s.feeScore, caps.fee);
+  assert.equal(s.successScore, caps.success - 1, 'the prior keeps success one short of its cap');
+  assert.equal(s.ageScore, caps.age);
+  assert.equal(s.externalScore, caps.external);
+  assert.equal(s.communityScore, caps.community);
+  assert.equal(s.propagationScore, caps.propagation);
+  assert.equal(Object.values(caps).reduce((a, b) => a + b, 0), 100);
+  assert.equal(feeScore(1e9), caps.fee, 'the attestation proxy shares the fee cap');
+  assert.equal(ageCurve(1e9), caps.age);
+  assert.equal(communityScore(0), caps.community);
+});
+
+// ---- computeScore input handling ------------------------------------------
+
+test('computeScore: measuredFeeScore replaces the attestation proxy and is clamped', () => {
+  const base = { registeredAt: 0, attestations: { successful: 0, total: 500 }, flags: 0, now: 0 };
+  assert.equal(computeScore(base).feeScore, 20, 'proxy: 500 attestations');
+  assert.equal(computeScore({ ...base, measuredFeeScore: 3 }).feeScore, 3, 'measured wins, even when lower');
+  assert.equal(computeScore({ ...base, measuredFeeScore: 0 }).feeScore, 0, 'zero is a measurement, not "unset"');
+  assert.equal(computeScore({ ...base, measuredFeeScore: -4 }).feeScore, 0);
+  assert.equal(computeScore({ ...base, measuredFeeScore: 99 }).feeScore, 20);
+});
+
+test('computeScore: propagation is truncated and clamped to 0-5', () => {
+  const base = { registeredAt: 0, attestations: {}, flags: 0, now: 0 };
+  assert.equal(computeScore({ ...base, propagation: 3.9 }).propagationScore, 3);
+  assert.equal(computeScore({ ...base, propagation: 12 }).propagationScore, 5);
+  assert.equal(computeScore({ ...base, propagation: -2 }).propagationScore, 0);
+  assert.equal(computeScore({ ...base, propagation: NaN }).propagationScore, 0);
+  assert.equal(computeScore({ ...base, propagation: 'x' }).propagationScore, 0);
+});
+
+test('computeScore: a non-numeric externalScore counts as zero rather than NaN', () => {
+  const base = { registeredAt: 0, attestations: {}, flags: 0, now: 0 };
+  assert.equal(computeScore({ ...base, externalScore: NaN }).externalScore, 0);
+  assert.equal(computeScore({ ...base, externalScore: undefined }).externalScore, 0);
+  assert.equal(computeScore({ ...base, externalScore: 7.8 }).externalScore, 7);
+});
+
+test('computeScore: missing attestation fields and missing flags default to zero', () => {
+  const s = computeScore({ registeredAt: 0, attestations: {}, flags: undefined, now: 0 });
+  assert.equal(s.successScore, 0);
+  assert.equal(s.feeScore, 0);
+  assert.equal(s.communityScore, 5, 'no flags is a clean record');
+  assert.ok(Number.isInteger(s.total));
+});
+
+test('computeScore: successPrior is passed through to the success factor', () => {
+  const base = { registeredAt: 0, attestations: { successful: 10, total: 10 }, flags: 0, now: 0 };
+  assert.equal(computeScore({ ...base, successPrior: 0 }).successScore, 15);
+  assert.equal(computeScore(base).successScore, successScore(10, 10));
+});
+
+test('computeScore: total is the sum of the six factors', () => {
+  const s = computeScore({
+    registeredAt: 0, attestations: { successful: 30, total: 40 }, flags: 1,
+    externalScore: 9, measuredFeeScore: 11, propagation: 2,
+    activity: { firstActivitySec: 0, lastActivitySec: 90 * 86400, recency: 0.5 }, now: 0,
+  });
+  assert.equal(s.total, s.feeScore + s.successScore + s.ageScore + s.externalScore + s.communityScore + s.propagationScore);
+});
+
+test('computeScore: fractional decayed flags still give an integer total', () => {
+  const s = computeScore({ registeredAt: 0, attestations: {}, flags: 0.5, now: 0 });
+  assert.equal(s.communityScore, 4);
+  assert.ok(Number.isInteger(s.total));
+});
+
+// ---- ageScore edges ---------------------------------------------------------
+
+test('ageScore: missing recency counts as fully stale', () => {
+  assert.equal(ageScore(0, { firstActivitySec: 1, lastActivitySec: 1 + 365 * 86400 }), 0);
+});
+
+test('ageScore: a calendar date in the future scores 0 rather than NaN', () => {
+  assert.equal(ageScore(2_000_000_000, null, 1_000_000_000_000), 0);
+});
+
+test('ageCurve: non-numbers and non-positive spans score 0', () => {
+  assert.equal(ageCurve(NaN), 0);
+  assert.equal(ageCurve(0), 0);
+  assert.equal(ageCurve(-1), 0);
+  assert.equal(ageCurve(1023), 30);
+  assert.equal(ageCurve(1022), 29);
+});
+
+test('successScore: a negative total is treated as no evidence', () => {
+  assert.equal(successScore(0, -1), 0);
+});
+
+test('communityScore: decayed fractional counts round the penalty down', () => {
+  assert.equal(communityScore(0.4), 4);
+  assert.equal(communityScore(2.4), 0);
+});

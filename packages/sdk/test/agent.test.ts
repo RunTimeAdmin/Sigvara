@@ -153,3 +153,27 @@ describe('SigvaraAgent.generate() — static factory', () => {
     expect(verifyChallenge(selfPayload, signature, pubKey)).toBe(true);
   });
 });
+
+describe('SigvaraAgent — accessors and generate()', () => {
+  it('agentAddress returns the address it was built with', () => {
+    expect(makeAgent().agentAddress).toBe(AGENT_ADDR);
+  });
+
+  it('generate() returns a 32-byte hex seed that rebuilds the same agent', () => {
+    const { agent, privateKey } = SigvaraAgent.generate({ agentAddress: AGENT_ADDR, chainId: CHAIN_ID });
+    expect(privateKey).toMatch(/^0x[0-9a-f]{64}$/);
+    const again = new SigvaraAgent({ privateKey, agentAddress: AGENT_ADDR, chainId: CHAIN_ID });
+    expect(again.publicKeyBytes32).toBe(agent.publicKeyBytes32);
+    expect(again.did).toBe(formatDid(AGENT_ADDR, CHAIN_ID));
+  });
+
+  it('issueChallenge names the peer as prover and this agent as audience', () => {
+    const me = makeAgent();
+    const peerDid = formatDid(PEER_ADDR, CHAIN_ID);
+    const c = me.issueChallenge(peerDid, 30);
+    const p = parseChallengePayload(c.payload);
+    expect(p.did).toBe(peerDid);
+    expect(p.audience).toBe(me.did);
+    expect(c.expiresAt - c.timestamp).toBe(30);
+  });
+});
