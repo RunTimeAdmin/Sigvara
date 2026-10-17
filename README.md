@@ -233,7 +233,7 @@ All six factors are live. Four things shape what the number actually means:
 
 **Testnet:** `SLASHING_COMMITTEE_ROLE` is held by a single EOA. **Mainnet path:** a 3-of-5 multisig, then UMA OptimisticOracleV3 or Kleros (isolated in the `initiateSlash` / `disputeSlash` interface, replaceable without storage migration).
 
-No slash has been executed end to end on Arc testnet yet. The lifecycle below is covered by the E2E suite, not by a documented live run.
+One slash has been executed end to end on Arc testnet, as a scheduled drill; see [the drill log](docs/slash-drill-log.md). The lifecycle below is also covered by the E2E suite.
 
 ### Slash Lifecycle
 
@@ -260,8 +260,8 @@ sequenceDiagram
         ST->>ID: updateStatus(didHash, Slashed)
         ST->>REP: zeroReputation(didHash)
         ST-->>0xdead: 50% burned
-        ST-->>V: 25% to victim
-        ST-->>CM: 25% to reporter
+        ST-->>V: 25% credited to victim (claimSlashProceeds)
+        ST-->>CM: 25% credited to reporter (claimSlashProceeds)
     end
 ```
 
@@ -270,8 +270,8 @@ sequenceDiagram
 | Recipient | Share | Mechanism |
 |---|---|---|
 | `address(0xdead)` | 50% | Deflationary burn |
-| Victim | 25% | Recourse for the harmed party |
-| Committee reporter | 25% | Incentivizes accurate reporting |
+| Victim | 25% | Recourse for the harmed party, credited and withdrawn with `claimSlashProceeds()` |
+| Committee reporter | 25% | Incentivizes accurate reporting, credited and withdrawn with `claimSlashProceeds()` |
 
 ---
 
@@ -293,7 +293,7 @@ sequenceDiagram
     ID->>ID: didHash = keccak256("did:sigvara:" + chainId + ":" + agentAddress)
     ID->>ID: verify signature over the digest
     ID-->>Op: AgentRegistered(didHash, operator, agentAddress, pubKey)
-    Note over ID: Status = PendingBond. Resolvable, but not Active,<br/>not scoreable, not slashable.
+    Note over ID: Status = PendingBond. Resolvable, but not Active,<br/>not scoreable.
     Op->>ST: depositStake(didHash, minimumStake)
     ST->>ID: updateStatus(didHash, Active)
     ST-->>Op: bond recorded, agent Active
@@ -316,7 +316,7 @@ sequenceDiagram
     participant REP as SigvaraReputation
 
     A->>B: request action
-    B->>A: challenge payload\n"SIGVARA-VERIFY:{DID}:{nonce}:{timestamp}"
+    B->>A: challenge payload\n"SIGVARA-VERIFY-V2\ndid: {DID}\naud: {audience}\nnonce: {nonce}\nts: {timestamp}"
     A->>A: sign payload with Ed25519 private key
     A->>B: { did, signature }
     B->>ID: getIdentity(didHash)
@@ -348,16 +348,16 @@ sequenceDiagram
     OR->>OR: compute 6-factor scores + Merkle root over the evidence used
     OR->>REP: proposeReputation(didHash, ReputationData, evidenceRoot)
     REP->>REP: validate per-factor caps, require a bonded agent
-    REP-->>OR: ScoreProposed(didHash, proposedAt)
+    REP-->>OR: ScoreProposed(didHash, proposedAt, evidenceRoot)
     Note over REP: Challenge window open (e.g. 1-6 hours)
 
     alt Committee rejects during the window
         CM->>REP: rejectReputation(didHash)
-        REP-->>CM: ScoreRejected(didHash)
+        REP-->>CM: ScoreRejected(didHash, committee)
         Note over REP: Previous finalized score is untouched
     else Window elapses unchallenged
         UC->>REP: finalizeReputation(didHash) — permissionless
-        REP-->>UC: ReputationUpdated(didHash, totalScore)
+        REP-->>UC: ReputationUpdated(didHash, totalScore, timestamp, evidenceRoot)
         Note over REP: Score now live for A2A threshold checks
     end
 ```
@@ -378,7 +378,7 @@ trace to be missing from.
 
 If an Ed25519 private key is compromised:
 
-1. Operator calls `updateStatus(didHash, Suspended)` immediately — invalidates the DID for authentication within one block.
+1. Operator calls `updateStatus(didHash, Suspended)` immediately. Within one block the agent is no longer Active, so verifiers that check status (`isActive`, `SigvaraGate`) refuse it. `SigvaraVerifier.verifySignature` alone does not check status.
 2. Operator generates a new Ed25519 keypair off-chain.
 3. Operator calls `rotatePublicKey(didHash, newEd25519PubKey)`.
 4. Operator reinstates: `updateStatus(didHash, Active)`.
@@ -517,13 +517,13 @@ FOUNDRY_PROFILE=ci forge test
 
 ## Testing
 
-Everything below runs offline, with no network access and no deployed contracts.
+Everything below runs offline, with no network access and no deployed contracts, except `test/SlashDrillFork.t.sol` and `test/SplitAuthorityFork.t.sol`, which fork Arc testnet.
 
 | Suite | Count | Command |
 |---|---|---|
-| Contracts — unit, fuzz, E2E, upgrade and 6 invariants | 246 | `forge test` |
-| Oracle | 207 | `cd oracle && node --test` |
-| SDK | 58 | `cd packages/sdk && npx vitest run` |
+| Contracts — unit, fuzz, E2E, upgrade and 6 invariants | 340 | `forge test` |
+| Oracle | 501 | `cd oracle && node --test` |
+| SDK | 140 | `cd packages/sdk && npx vitest run` |
 
 ### Unit Tests (default)
 
@@ -643,10 +643,10 @@ require(rep.meetsThreshold(didHash, 60), "insufficient reputation");
 |---|---|---|
 | Core Protocol | Q3 2026 | contracts, reputation oracle and `@sigvara/protocol-sdk` v1.0 built and tested · CounterAudit attestation + HoodScan flag feeds |
 | Arc Port | Q4 2026 | ~~Arc testnet deployment (`5042002`, USDC gas)~~ **done** · ~~oracle epochs against Arc~~ **done** · SVR launch on Arc mainnet ([docs/token.md](docs/token.md)) |
-| External Trust | Q4 2026 | externalScore from ERC-8004 feedback — **built and tested**, reading the ERC-8004 registries on Base Sepolia; it contributes **0 until an agent is linked** to an 8004 id whose NFT is held by the same wallet and which carries feedback in a tag the oracle normalizes. No agent is linked today, so this factor is 0 for everyone · agent-vouching graph (propagationScore) — **built and live**, computed every epoch; it inherits only a counterparty's *external* standing, so like externalScore it reads 0 network-wide until ERC-8004 standing exists. Reachable ceiling today is 70/100 · deeper ERC-8004 interop (publish CounterAudit validations to the Validation Registry) |
+| External Trust | Q4 2026 | externalScore from ERC-8004 feedback — **built and tested**, reading the ERC-8004 registries on Arc testnet; it contributes **0 until an agent is linked** to an 8004 id whose NFT is held by the same wallet and which carries feedback in a tag the oracle normalizes. No agent is linked today, so this factor is 0 for everyone · agent-vouching graph (propagationScore) — **built and live**, computed every epoch; it inherits only a counterparty's *external* standing, so like externalScore it reads 0 network-wide until ERC-8004 standing exists. Reachable ceiling today is 70/100 · deeper ERC-8004 interop (publish CounterAudit validations to the Validation Registry) |
 | Sybil resistance | Q4 2026 | ~~payment-backed attestations~~ · ~~half-life decay + shrinkage prior~~ · ~~bond required before scoring~~ · ~~self-payment and per-payer diversity caps~~ · ~~tenure in place of calendar age~~ · ~~maturity time-lock~~ · ~~two-step operator transfer~~ · ~~on-chain evidence roots~~ — all **done**, see [payment-backed attestations](docs/payment-backed-attestations.md) |
 | Oracle decentralization | Q1 2027 | ~~oracle operator bonds deployed and wired~~ **done** · ~~a second bonded operator with challenge-based disagreement~~ **done** (checker mode, `activeCount` 2, separate host and RPC provider) · ~~public challenge watcher~~ **done** (third host, holds no key) · deterministic scoring off the chain clock · operators run by *independent parties*, which is the part that still matters |
-| Mainnet Registries | Q1 2027 | Tier-1 security audit · admin and upgrade roles onto a timelock or Safe · one documented end-to-end testnet slash · registry deployment on Arc mainnet (`5042`) with bonds and scoring fees in SVR |
+| Mainnet Registries | Q1 2027 | Tier-1 security audit · admin and upgrade roles onto a timelock or Safe · ~~one documented end-to-end testnet slash~~ **done** · registry deployment on Arc mainnet (`5042`) with bonds and scoring fees in SVR |
 | Cross-Chain | Q2 2027 | Solana + Base state mirroring via LayerZero |
 
 The token-launch contract set (fixed-supply `SVR`, vesting, public sale) and the earlier tokenomics and oracle-first direction docs live under [`archive/token-launch/`](archive/token-launch/). They are out of the build; SVR will launch through Tolly rather than these contracts.

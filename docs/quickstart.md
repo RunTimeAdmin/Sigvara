@@ -82,7 +82,7 @@ Registration comes first, then the bond activates the agent.
 Two things to know. The agent address has to sign for its own registration, which is
 what stops anyone claiming an address they do not control and choosing the key
 verifiers will check against it. And registration alone leaves the agent
-`PendingBond`: it is not Active, not scoreable and not slashable until a deposit
+`PendingBond`: it is not Active and not scoreable until a deposit
 carries it over `minimumStake`. That deposit is what activates it.
 
 ```typescript

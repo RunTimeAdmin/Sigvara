@@ -3,12 +3,12 @@
 Executing one slash in public, end to end, on Arc testnet, and publishing what happened.
 
 Sigvara's claim is that reputation carries weight because misbehaviour costs capital. The
-contracts implement that and the contract suite covers it, but nobody has ever watched a bond
-actually get taken. Until they have, the consequence half of the protocol is an assertion.
-This closes that.
+contracts implement that and the contract suite covers it, but before this drill nobody had
+watched a bond actually get taken. What happened is in [slash-drill-log.md](slash-drill-log.md).
 
-Budget **seven days**. `challengePeriod()` is 604800 seconds, and there is no way to
-shorten it. That makes this the long pole in front of anything that depends on the
+Budget **seven days**. `challengePeriod()` is 604800 seconds. An admin can lower it to no
+less than `MIN_CHALLENGE_PERIOD` (3 days), but not for a proposal already filed, whose
+deadline is snapshotted at filing. That makes this the long pole in front of anything that depends on the
 protocol looking finished.
 
 > **On the placeholders below.** `<THING>` marks a value you substitute. In bash the
@@ -31,8 +31,9 @@ worked rather than a first attempt:
 forge test --match-contract SlashDrillFork -vv
 ```
 
-Six cases pass: the full path, the too-early guard, dispute-freezes, dispute-upheld,
-dispute-rejected, and the queued-withdrawal escape attempt. It forks rather than deploying
+Six cases pass: the full path (including the too-early guard), dispute-freezes,
+dispute-upheld, dispute-rejected, the queued-withdrawal escape attempt, and
+reporter-cannot-be-victim. It forks rather than deploying
 fresh on purpose, so it exercises the roles actually granted on Arc and the real
 `challengePeriod`, not a clean-room copy.
 
@@ -288,8 +289,7 @@ The point is the write-up, not the transaction. Include:
   refused.
 - That it was a drill, stated first rather than in a footnote.
 
-Put it in `docs/` and link it from the whitepaper's roadmap, where item 2 currently says a
-public slash does not exist yet.
+Put it in `docs/` and link it from the whitepaper's roadmap, item 2.
 
 ## What this does and does not prove
 

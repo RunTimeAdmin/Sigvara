@@ -10,7 +10,7 @@ The deployed website has additional guidance at [site/SECURITY.md](site/SECURITY
 
 ## Scope
 
-In scope are the Sigvara smart contracts, SDK, oracle, static website, client-side wallet flows, deployment configuration, and publicly served configuration maintained in this repository. Issues in Arc, wallet providers, RPC providers, or third-party CounterAudit services should also be reported to the relevant provider.
+In scope are the Sigvara smart contracts, SDK, oracle, static website, client-side wallet flows, deployment configuration, and publicly served configuration maintained in this repository. Issues in Arc, wallet providers, RPC providers, or CounterAudit services should also be reported to the relevant provider.
 
 The current website and contract configuration target Arc Testnet. Testnet assets have no economic value. Do not test with valuable assets or accounts you do not own.
 

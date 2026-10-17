@@ -159,7 +159,7 @@ The decrypted `packet` object contains:
 ```json
 {
   "agent_did": "did:sigvara:5042002:0xbCB531B68A87F4BcC3a0394ccD2DB95C52bB4E08",
-  "agent_did_hash": "0x2d657d1d166f5c7ed90bebc6808f50d07d7e70cba897d91e7f7d918629d4b0be",
+  "agent_did_hash": "0xef55a65a321380b8e74bb38087a4d3ddfcb5789f86b456317a2a47950dcceca9",
   "agent_chain_id": 5042002,
   "agent_reputation_score": 47,
   "agent_identity_status": "Active",
