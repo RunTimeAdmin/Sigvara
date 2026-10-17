@@ -75,6 +75,13 @@ test('readConfig: rejects an unknown mode rather than guessing', () => {
   assert.throws(() => readConfig({ PAYMENT_VERIFICATION: 'maybe' }), /must be/);
 });
 
+test('readConfig: an unparseable confirmation count falls back to 1, not NaN', () => {
+  // `confirmations < NaN` is always false, so a typo used to switch the check off.
+  assert.equal(readConfig({ PAYMENT_MIN_CONFIRMATIONS: 'one' }).minConfirmations, 1);
+  assert.equal(readConfig({}).minConfirmations, 1);
+  assert.equal(readConfig({ PAYMENT_MIN_CONFIRMATIONS: '12' }).minConfirmations, 12);
+});
+
 test('readConfig: amounts stay BigInt so an 18-decimal token does not lose precision', () => {
   const cfg = readConfig({
     PAYMENT_VERIFICATION: 'required',
