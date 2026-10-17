@@ -1086,4 +1086,217 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
         vm.prank(stranger);
         rep.initializeV2(stranger, 0);
     }
+
+    // -------------------------------------------------------------------------
+    // Scoring path: wiring guards, boundaries and events
+    // -------------------------------------------------------------------------
+
+    function _freshRep(address identityRegistry_) internal returns (SigvaraReputation fresh) {
+        fresh = SigvaraReputation(address(new ERC1967Proxy(
+            address(new SigvaraReputation()),
+            abi.encodeCall(
+                SigvaraReputation.initialize,
+                (admin, oracle, staking, committee, CHALLENGE_WINDOW)
+            )
+        )));
+        if (identityRegistry_ != address(0)) {
+            vm.prank(admin);
+            fresh.initializeV3(identityRegistry_);
+        }
+    }
+
+    /// Fail-closed until initializeV3 has wired the identity registry.
+    function test_propose_reverts_identityRegistryNotSet() public {
+        SigvaraReputation fresh = _freshRep(address(0));
+        vm.expectRevert(SigvaraReputation.IdentityRegistryNotSet.selector);
+        vm.prank(oracle);
+        fresh.proposeReputation(DID, maxScore, bytes32(0));
+
+        vm.expectRevert(SigvaraReputation.IdentityRegistryNotSet.selector);
+        fresh.finalizeReputation(DID);
+    }
+
+    /// An identity registry with no stake view cannot vouch for a bond, so nothing is scorable.
+    function test_propose_reverts_stakeViewNotSet() public {
+        SigvaraIdentity bare = SigvaraIdentity(address(new ERC1967Proxy(
+            address(new SigvaraIdentity()),
+            abi.encodeCall(SigvaraIdentity.initialize, (admin, address(0)))
+        )));
+        (, uint256 pk) = makeAddrAndKey("bare-agent");
+        bytes32 did = registerSigned(bare, operator, pk, bytes32(uint256(0xbeef)));
+        SigvaraReputation fresh = _freshRep(address(bare));
+
+        vm.expectRevert(SigvaraReputation.StakeViewNotSet.selector);
+        vm.prank(oracle);
+        fresh.proposeReputation(did, maxScore, bytes32(0));
+    }
+
+    function test_proposeIfEmpty_reverts_whenAgentIsNotBonded() public {
+        stakeView.set(false);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraReputation.AgentNotBonded.selector, DID));
+        vm.prank(oracle);
+        rep.proposeIfEmpty(DID, maxScore, bytes32(0));
+    }
+
+    function test_propose_emitsScoreProposedWithRoot() public {
+        bytes32 root = keccak256("root");
+        vm.expectEmit(address(rep));
+        emit SigvaraReputation.ScoreProposed(DID, block.timestamp, root);
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, root);
+        assertEq(rep.getPendingScore(DID).evidenceRoot, root);
+    }
+
+    /// Every factor exactly at its cap is accepted; the caps are inclusive.
+    function test_propose_acceptsEveryFactorAtItsCap() public {
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
+        assertEq(rep.getPendingScore(DID).data.propagationScore, rep.MAX_PROPAGATION_SCORE());
+    }
+
+    function test_finalize_succeedsAtExactWindowEnd() public {
+        uint256 t0 = block.timestamp;
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
+
+        vm.warp(t0 + CHALLENGE_WINDOW);
+        rep.finalizeReputation(DID);
+        assertEq(rep.getEarnedScore(DID), 100);
+    }
+
+    function test_reject_succeedsOneSecondBeforeWindowEnd() public {
+        uint256 t0 = block.timestamp;
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
+
+        vm.warp(t0 + CHALLENGE_WINDOW - 1);
+        vm.prank(committee);
+        rep.rejectReputation(DID);
+        assertFalse(rep.getPendingScore(DID).exists);
+    }
+
+    function test_reject_emitsScoreRejected() public {
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
+        vm.expectEmit(address(rep));
+        emit SigvaraReputation.ScoreRejected(DID, committee);
+        vm.prank(committee);
+        rep.rejectReputation(DID);
+    }
+
+    /// Finalize copies the proposal, stamps lastUpdated, moves the root and emits the total.
+    function test_finalize_writesDataRootAndEvent() public {
+        SigvaraReputation.ReputationData memory data = SigvaraReputation.ReputationData({
+            feeScore: 3, successScore: 7, ageScore: 11, externalScore: 2,
+            communityScore: 1, propagationScore: 4, lastUpdated: 12345
+        });
+        bytes32 root = keccak256("evidence");
+        uint256 t0 = block.timestamp;
+        vm.prank(oracle);
+        rep.proposeReputation(DID, data, root);
+
+        uint256 t1 = t0 + CHALLENGE_WINDOW + 1;
+        vm.warp(t1);
+        vm.expectEmit(address(rep));
+        emit SigvaraReputation.ReputationUpdated(DID, 28, t1, root);
+        rep.finalizeReputation(DID);
+
+        SigvaraReputation.ReputationData memory stored = rep.getReputation(DID);
+        assertEq(stored.feeScore, 3);
+        assertEq(stored.successScore, 7);
+        assertEq(stored.ageScore, 11);
+        assertEq(stored.externalScore, 2);
+        assertEq(stored.communityScore, 1);
+        assertEq(stored.propagationScore, 4);
+        assertEq(stored.lastUpdated, t1, "oracle-supplied lastUpdated is overwritten");
+        assertEq(rep.evidenceRoots(DID), root);
+        assertEq(rep.getEarnedScore(DID), 28);
+        assertEq(rep.getTotalScore(DID), 28, "no maturity rate: spendable equals earned");
+        assertFalse(rep.getPendingScore(DID).exists);
+    }
+
+    /// A later finalize replaces the evidence root, including with zero.
+    function test_finalize_replacesTheEvidenceRoot() public {
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, keccak256("first"));
+        vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
+        rep.finalizeReputation(DID);
+        assertEq(rep.evidenceRoots(DID), keccak256("first"));
+
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
+        vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
+        rep.finalizeReputation(DID);
+        assertEq(rep.evidenceRoots(DID), bytes32(0));
+    }
+
+    function test_zeroReputation_emitsAndStampsTime() public {
+        _proposeAndFinalize(DID, maxScore);
+        vm.expectEmit(address(rep));
+        emit SigvaraReputation.ReputationZeroed(DID);
+        vm.prank(staking);
+        rep.zeroReputation(DID);
+        assertEq(rep.getReputation(DID).lastUpdated, block.timestamp);
+        assertEq(rep.maturedScore(DID), 0);
+        assertEq(rep.maturedAt(DID), block.timestamp);
+    }
+
+    function testFuzz_meetsThreshold_matchesTotalScore(uint8 fee, uint8 threshold) public {
+        fee = uint8(bound(fee, 0, rep.MAX_FEE_SCORE()));
+        SigvaraReputation.ReputationData memory data;
+        data.feeScore = fee;
+        _proposeAndFinalize(DID, data);
+        assertEq(rep.meetsThreshold(DID, threshold), fee >= threshold);
+    }
+
+    // -------------------------------------------------------------------------
+    // initializeV4 and upgrade authorization
+    // -------------------------------------------------------------------------
+
+    function test_initializeV4_setsRate_onceOnly() public {
+        vm.expectEmit(address(rep));
+        emit SigvaraReputation.MaturityRateUpdated(7);
+        vm.prank(admin);
+        rep.initializeV4(7);
+        assertEq(rep.maturityRatePerDay(), 7);
+
+        vm.expectRevert(abi.encodeWithSignature("InvalidInitialization()"));
+        vm.prank(admin);
+        rep.initializeV4(8);
+    }
+
+    function test_initializeV4_reverts_notAdmin() public {
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, bytes32(0)
+        ));
+        vm.prank(stranger);
+        rep.initializeV4(4);
+    }
+
+    function test_setMaturityRate_updatesRate() public {
+        vm.prank(admin);
+        rep.setMaturityRate(9);
+        assertEq(rep.maturityRatePerDay(), 9);
+    }
+
+    function test_upgrade_notUpgrader_reverts() public {
+        address newImpl = address(new SigvaraReputation());
+        bytes32 role = rep.UPGRADER_ROLE();
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, role
+        ));
+        vm.prank(stranger);
+        rep.upgradeToAndCall(newImpl, "");
+    }
+
+    function test_initialize_zeroRoleHolders_grantNothing() public {
+        SigvaraReputation fresh = SigvaraReputation(address(new ERC1967Proxy(
+            address(new SigvaraReputation()),
+            abi.encodeCall(SigvaraReputation.initialize, (admin, address(0), address(0), address(0), 0))
+        )));
+        assertFalse(fresh.hasRole(fresh.ORACLE_ROLE(), address(0)));
+        assertFalse(fresh.hasRole(fresh.STAKING_CORE_ROLE(), address(0)));
+        assertFalse(fresh.hasRole(fresh.SLASHING_COMMITTEE_ROLE(), address(0)));
+        assertTrue(fresh.hasRole(fresh.UPGRADER_ROLE(), admin));
+    }
 }

@@ -300,6 +300,267 @@ contract SigvaraOracleBondTest is Test {
     }
 
     // -------------------------------------------------------------------------
+    // Initialize guards
+    // -------------------------------------------------------------------------
+
+    function _expectInitZeroAddress(address a, address token, address ben) internal {
+        address impl = address(new SigvaraOracleBond());
+        vm.expectRevert(SigvaraOracleBond.ZeroAddress.selector);
+        new ERC1967Proxy(impl, abi.encodeCall(
+            SigvaraOracleBond.initialize, (a, slasher, token, BOND, UNBOND, ben)
+        ));
+    }
+
+    function test_initialize_reverts_zeroAddresses() public {
+        _expectInitZeroAddress(address(0), address(svr), beneficiary);
+        _expectInitZeroAddress(admin, address(0), beneficiary);
+        _expectInitZeroAddress(admin, address(svr), address(0));
+    }
+
+    /// A zero slasher is allowed and simply leaves SLASHER_ROLE ungranted.
+    function test_initialize_zeroSlasher_grantsNoSlasher() public {
+        SigvaraOracleBond b = SigvaraOracleBond(address(new ERC1967Proxy(
+            address(new SigvaraOracleBond()),
+            abi.encodeCall(SigvaraOracleBond.initialize, (admin, address(0), address(svr), BOND, UNBOND, beneficiary))
+        )));
+        assertFalse(b.hasRole(b.SLASHER_ROLE(), address(0)));
+        assertFalse(b.hasRole(b.SLASHER_ROLE(), admin));
+        assertTrue(b.hasRole(b.DEFAULT_ADMIN_ROLE(), admin));
+        assertTrue(b.hasRole(b.UPGRADER_ROLE(), admin));
+    }
+
+    // -------------------------------------------------------------------------
+    // Status guards
+    // -------------------------------------------------------------------------
+
+    function test_depositBond_whileExiting_reverts() public {
+        _bondAndAdmit(op1, BOND);
+        vm.prank(op1);
+        bond.initiateUnbond();
+
+        vm.expectRevert(abi.encodeWithSelector(
+            SigvaraOracleBond.WrongStatus.selector, op1, SigvaraOracleBond.Status.Exiting
+        ));
+        vm.prank(op1);
+        bond.depositBond(1e18);
+    }
+
+    function test_depositBond_topUpKeepsActiveStatus() public {
+        _bondAndAdmit(op1, BOND);
+        vm.prank(op1);
+        bond.depositBond(500e18);
+        assertEq(bond.bondOf(op1), BOND + 500e18);
+        (, SigvaraOracleBond.Status status,) = bond.operators(op1);
+        assertEq(uint8(status), uint8(SigvaraOracleBond.Status.Active));
+        assertEq(bond.activeCount(), 1);
+    }
+
+    function test_initiateUnbond_fromBonded_doesNotTouchActiveCount() public {
+        _bondAndAdmit(op2, BOND);
+        vm.prank(op1);
+        bond.depositBond(BOND);
+
+        vm.prank(op1);
+        bond.initiateUnbond();
+        (, SigvaraOracleBond.Status status, uint256 unbondingAt) = bond.operators(op1);
+        assertEq(uint8(status), uint8(SigvaraOracleBond.Status.Exiting));
+        assertEq(unbondingAt, block.timestamp);
+        assertEq(bond.activeCount(), 1, "only op2 was active");
+    }
+
+    function test_initiateUnbond_wrongStatus_reverts() public {
+        vm.expectRevert(abi.encodeWithSelector(
+            SigvaraOracleBond.WrongStatus.selector, op1, SigvaraOracleBond.Status.None
+        ));
+        vm.prank(op1);
+        bond.initiateUnbond();
+
+        _bondAndAdmit(op1, BOND);
+        vm.prank(op1);
+        bond.initiateUnbond();
+        vm.expectRevert(abi.encodeWithSelector(
+            SigvaraOracleBond.WrongStatus.selector, op1, SigvaraOracleBond.Status.Exiting
+        ));
+        vm.prank(op1);
+        bond.initiateUnbond();
+    }
+
+    function test_withdrawBond_atExactCooldown_succeeds() public {
+        _bondAndAdmit(op1, BOND);
+        uint256 t0 = block.timestamp;
+        vm.prank(op1);
+        bond.initiateUnbond();
+
+        vm.warp(t0 + UNBOND - 1);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraOracleBond.UnbondingActive.selector, op1, t0 + UNBOND));
+        vm.prank(op1);
+        bond.withdrawBond();
+
+        vm.warp(t0 + UNBOND);
+        vm.prank(op1);
+        bond.withdrawBond();
+        assertEq(bond.bondOf(op1), 0);
+    }
+
+    function test_withdrawBond_paysWhatSurvivedTheSlash() public {
+        _bondAndAdmit(op1, 2000e18);
+        uint256 t0 = block.timestamp;
+        vm.prank(op1);
+        bond.initiateUnbond();
+        vm.prank(slasher);
+        bond.slash(op1, 300e18);
+
+        vm.warp(t0 + UNBOND);
+        uint256 before = svr.balanceOf(op1);
+        vm.prank(op1);
+        bond.withdrawBond();
+        assertEq(svr.balanceOf(op1), before + 1700e18);
+        assertEq(svr.balanceOf(address(bond)), 0);
+    }
+
+    function test_removeOperator_bonded_forcesExit() public {
+        _bondAndAdmit(op2, BOND);
+        vm.prank(op1);
+        bond.depositBond(BOND);
+
+        vm.prank(admin);
+        bond.removeOperator(op1);
+        (, SigvaraOracleBond.Status status,) = bond.operators(op1);
+        assertEq(uint8(status), uint8(SigvaraOracleBond.Status.Exiting));
+        assertEq(bond.activeCount(), 1);
+    }
+
+    function test_removeOperator_wrongStatus_reverts() public {
+        vm.expectRevert(abi.encodeWithSelector(
+            SigvaraOracleBond.WrongStatus.selector, op1, SigvaraOracleBond.Status.None
+        ));
+        vm.prank(admin);
+        bond.removeOperator(op1);
+    }
+
+    function test_removeOperator_notAdmin_reverts() public {
+        _bondAndAdmit(op1, BOND);
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, bytes32(0)
+        ));
+        vm.prank(stranger);
+        bond.removeOperator(op1);
+    }
+
+    // -------------------------------------------------------------------------
+    // Slash guards
+    // -------------------------------------------------------------------------
+
+    function test_slash_noBond_reverts() public {
+        vm.expectRevert(abi.encodeWithSelector(SigvaraOracleBond.NoBond.selector, op1));
+        vm.prank(slasher);
+        bond.slash(op1, 1);
+    }
+
+    function test_slash_zeroAmount_reverts() public {
+        _bondAndAdmit(op1, BOND);
+        vm.expectRevert(SigvaraOracleBond.ZeroAmount.selector);
+        vm.prank(slasher);
+        bond.slash(op1, 0);
+    }
+
+    /// A Bonded (not yet admitted) applicant can be slashed; there is nothing to demote.
+    function test_slash_bondedApplicant_noDemotion() public {
+        vm.prank(op1);
+        bond.depositBond(BOND);
+
+        vm.expectEmit(address(bond));
+        emit SigvaraOracleBond.OperatorSlashed(op1, 400e18, BOND - 400e18, false);
+        vm.prank(slasher);
+        bond.slash(op1, 400e18);
+
+        (, SigvaraOracleBond.Status status,) = bond.operators(op1);
+        assertEq(uint8(status), uint8(SigvaraOracleBond.Status.Bonded));
+        assertEq(bond.activeCount(), 0);
+    }
+
+    function test_slash_demotion_emitsDemotedTrue() public {
+        _bondAndAdmit(op1, BOND);
+        vm.expectEmit(address(bond));
+        emit SigvaraOracleBond.OperatorSlashed(op1, 1, BOND - 1, true);
+        vm.prank(slasher);
+        bond.slash(op1, 1);
+    }
+
+    /// A slash that empties an Exiting bond clears the record, so the cooldown is reset.
+    function test_slash_toZeroWhileExiting_clearsRecord() public {
+        _bondAndAdmit(op1, BOND);
+        vm.prank(op1);
+        bond.initiateUnbond();
+
+        vm.prank(slasher);
+        bond.slash(op1, BOND);
+
+        (uint256 b, SigvaraOracleBond.Status status, uint256 unbondingAt) = bond.operators(op1);
+        assertEq(b, 0);
+        assertEq(uint8(status), uint8(SigvaraOracleBond.Status.None));
+        assertEq(unbondingAt, 0);
+        assertEq(svr.balanceOf(beneficiary), BOND);
+
+        vm.expectRevert(abi.encodeWithSelector(
+            SigvaraOracleBond.WrongStatus.selector, op1, SigvaraOracleBond.Status.None
+        ));
+        vm.prank(op1);
+        bond.withdrawBond();
+    }
+
+    function test_slash_goesToUpdatedBeneficiary() public {
+        _bondAndAdmit(op1, 2000e18);
+        vm.prank(admin);
+        bond.setSlashBeneficiary(stranger);
+        vm.prank(slasher);
+        bond.slash(op1, 100e18);
+        assertEq(svr.balanceOf(stranger), 100e18);
+        assertEq(svr.balanceOf(beneficiary), 0);
+    }
+
+    function testFuzz_slash_conservesTokens(uint256 deposit, uint256 cut) public {
+        deposit = bound(deposit, 1, 10_000e18);
+        cut = bound(cut, 1, deposit);
+        vm.prank(op1);
+        bond.depositBond(deposit);
+        vm.prank(slasher);
+        bond.slash(op1, cut);
+        assertEq(bond.bondOf(op1), deposit - cut);
+        assertEq(svr.balanceOf(beneficiary), cut);
+        assertEq(svr.balanceOf(address(bond)), deposit - cut);
+    }
+
+    // -------------------------------------------------------------------------
+    // Upgrade authorization
+    // -------------------------------------------------------------------------
+
+    function test_upgrade_notUpgrader_reverts() public {
+        address newImpl = address(new SigvaraOracleBond());
+        bytes32 role = bond.UPGRADER_ROLE();
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, role
+        ));
+        vm.prank(stranger);
+        bond.upgradeToAndCall(newImpl, "");
+    }
+
+    function test_upgrade_byAdmin_keepsState() public {
+        _bondAndAdmit(op1, BOND);
+        address newImpl = address(new SigvaraOracleBond());
+        vm.prank(admin);
+        bond.upgradeToAndCall(newImpl, "");
+        assertTrue(bond.isActiveOperator(op1));
+        assertEq(bond.bondOf(op1), BOND);
+    }
+
+    function test_implementation_cannotBeInitialized() public {
+        SigvaraOracleBond impl = new SigvaraOracleBond();
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        impl.initialize(admin, slasher, address(svr), BOND, UNBOND, beneficiary);
+    }
+
+    // -------------------------------------------------------------------------
     // Storage layout — pins operators mapping to slot 5
     // -------------------------------------------------------------------------
 

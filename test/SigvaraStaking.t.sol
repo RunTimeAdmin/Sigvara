@@ -795,6 +795,344 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
     }
 
     // -------------------------------------------------------------------------
+    // initialize guards
+    // -------------------------------------------------------------------------
+
+    function _expectInitZeroAddress(address a, address idReg, address repReg, address token) internal {
+        address impl = address(new SigvaraStaking());
+        vm.expectRevert(SigvaraStaking.ZeroAddress.selector);
+        new ERC1967Proxy(
+            impl,
+            abi.encodeCall(SigvaraStaking.initialize, (
+                a, idReg, repReg, token, MIN_STAKE, CHALLENGE, UNBONDING
+            ))
+        );
+    }
+
+    function test_initialize_reverts_zeroAddresses() public {
+        _expectInitZeroAddress(address(0), address(identity), address(rep), address(svr));
+        _expectInitZeroAddress(admin, address(0), address(rep), address(svr));
+        _expectInitZeroAddress(admin, address(identity), address(0), address(svr));
+        _expectInitZeroAddress(admin, address(identity), address(rep), address(0));
+    }
+
+    function test_implementation_cannotBeInitialized() public {
+        SigvaraStaking impl = new SigvaraStaking();
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        impl.initialize(admin, address(identity), address(rep), address(svr), MIN_STAKE, CHALLENGE, UNBONDING);
+    }
+
+    // -------------------------------------------------------------------------
+    // Withdrawal guards
+    // -------------------------------------------------------------------------
+
+    function test_initiateWithdrawal_reverts_noStake() public {
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.NoStake.selector, didHash));
+        vm.prank(operator);
+        staking.initiateWithdrawal(didHash, 1);
+    }
+
+    function test_initiateWithdrawal_reverts_notOperator() public {
+        _deposit();
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.NotOperator.selector, didHash, stranger));
+        vm.prank(stranger);
+        staking.initiateWithdrawal(didHash, MIN_STAKE);
+    }
+
+    function test_claimWithdrawal_reverts_notOperator() public {
+        _deposit();
+        vm.prank(operator);
+        staking.initiateWithdrawal(didHash, MIN_STAKE);
+        vm.warp(block.timestamp + UNBONDING + 1);
+
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.NotOperator.selector, didHash, stranger));
+        vm.prank(stranger);
+        staking.claimWithdrawal(didHash);
+    }
+
+    function test_getPendingWithdrawal_zeroWhenNoneQueued() public {
+        _deposit();
+        (uint256 amount, uint256 claimableAt) = staking.getPendingWithdrawal(didHash);
+        assertEq(amount, 0);
+        assertEq(claimableAt, 0);
+    }
+
+    // -------------------------------------------------------------------------
+    // Slash guards and settlement
+    // -------------------------------------------------------------------------
+
+    function test_initiateSlash_reverts_zeroVictim() public {
+        _deposit();
+        vm.expectRevert(SigvaraStaking.ZeroAddress.selector);
+        vm.prank(committee);
+        staking.initiateSlash(didHash, address(0), "");
+    }
+
+    function test_initiateSlash_recordsProposalAndSnapshotsDeadline() public {
+        _deposit();
+        uint256 t0 = block.timestamp;
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "evidence");
+
+        SigvaraStaking.SlashProposal memory p = staking.getSlashProposal(didHash);
+        assertEq(p.didHash, didHash);
+        assertEq(p.reporter, committee);
+        assertEq(p.victim, victim);
+        assertEq(p.initiatedAt, t0);
+        assertEq(p.challengeDeadline, t0 + CHALLENGE);
+        assertEq(p.disputedAt, 0);
+        assertEq(p.evidenceHash, bytes("evidence"));
+        assertTrue(identity.slashSuspended(didHash));
+    }
+
+    function test_disputeSlash_reverts_noPendingProposal() public {
+        _deposit();
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.NoActivePendingSlash.selector, didHash));
+        vm.prank(operator);
+        staking.disputeSlash(didHash);
+    }
+
+    function test_disputeSlash_allowedAtExactDeadline() public {
+        _deposit();
+        uint256 t0 = block.timestamp;
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "");
+
+        vm.warp(t0 + CHALLENGE);
+        vm.prank(operator);
+        staking.disputeSlash(didHash);
+        assertEq(uint8(staking.getSlashProposal(didHash).state), uint8(SigvaraStaking.SlashState.Disputed));
+    }
+
+    function test_executeSlash_reverts_atExactDeadline() public {
+        _deposit();
+        uint256 t0 = block.timestamp;
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "");
+
+        vm.warp(t0 + CHALLENGE);
+        vm.expectRevert(
+            abi.encodeWithSelector(SigvaraStaking.ChallengePeriodActive.selector, didHash, t0 + CHALLENGE)
+        );
+        staking.executeSlash(didHash);
+    }
+
+    function test_executeSlash_reverts_onDisputedProposal() public {
+        _deposit();
+        uint256 t0 = block.timestamp;
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "");
+        vm.prank(operator);
+        staking.disputeSlash(didHash);
+
+        vm.warp(t0 + CHALLENGE + 1);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.NoActivePendingSlash.selector, didHash));
+        staking.executeSlash(didHash);
+    }
+
+    function test_executeSlash_cannotRunTwice() public {
+        _setupPendingSlash();
+        staking.executeSlash(didHash);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.NoActivePendingSlash.selector, didHash));
+        staking.executeSlash(didHash);
+    }
+
+    function test_cancelSlash_reverts_noPendingProposal() public {
+        _deposit();
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.NoActivePendingSlash.selector, didHash));
+        vm.prank(committee);
+        staking.cancelSlash(didHash);
+    }
+
+    function test_cancelSlash_reverts_notCommittee() public {
+        _deposit();
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "");
+
+        bytes32 role = staking.SLASHING_COMMITTEE_ROLE();
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControl.AccessControlUnauthorizedAccount.selector, operator, role
+        ));
+        vm.prank(operator);
+        staking.cancelSlash(didHash);
+    }
+
+    function test_cancelSlash_reverts_onDisputedProposal() public {
+        _deposit();
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "");
+        vm.prank(operator);
+        staking.disputeSlash(didHash);
+
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.NoActivePendingSlash.selector, didHash));
+        vm.prank(committee);
+        staking.cancelSlash(didHash);
+    }
+
+    /// Dropping a proposal against an agent whose active stake is below the minimum
+    /// lifts the slash lock but leaves the agent Suspended.
+    function test_cancelSlash_belowMinimum_leavesSuspendedAndUnlocked() public {
+        _deposit();
+        vm.startPrank(operator);
+        identity.updateStatus(didHash, SigvaraIdentity.AgentStatus.Suspended);
+        staking.initiateWithdrawal(didHash, MIN_STAKE * 2);
+        vm.stopPrank();
+
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "");
+        assertTrue(identity.slashSuspended(didHash));
+
+        vm.prank(committee);
+        staking.cancelSlash(didHash);
+
+        assertEq(uint8(staking.getSlashProposal(didHash).state), uint8(SigvaraStaking.SlashState.Cancelled));
+        assertFalse(identity.slashSuspended(didHash), "slash lock lifted");
+        assertEq(
+            uint8(identity.getIdentity(didHash).status),
+            uint8(SigvaraIdentity.AgentStatus.Suspended),
+            "not reinstated without a bond"
+        );
+    }
+
+    function test_cancelSlash_atMinimum_reinstatesActive() public {
+        _deposit();
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "");
+        vm.prank(committee);
+        staking.cancelSlash(didHash);
+
+        assertTrue(identity.isActive(didHash));
+        assertFalse(identity.slashSuspended(didHash));
+    }
+
+    function test_resolveDispute_reverts_notDisputed() public {
+        _deposit();
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "");
+
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.SlashNotDisputed.selector, didHash));
+        vm.prank(committee);
+        staking.resolveDispute(didHash, true);
+    }
+
+    function test_resolveDispute_reverts_notCommittee() public {
+        _deposit();
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "");
+        vm.prank(operator);
+        staking.disputeSlash(didHash);
+
+        bytes32 role = staking.SLASHING_COMMITTEE_ROLE();
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, role
+        ));
+        vm.prank(stranger);
+        staking.resolveDispute(didHash, true);
+    }
+
+    function test_expireDispute_reverts_notDisputed() public {
+        _deposit();
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.SlashNotDisputed.selector, didHash));
+        staking.expireDispute(didHash);
+    }
+
+    function test_expireDispute_reverts_atExactExpiry() public {
+        _deposit();
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "");
+        uint256 disputedAt = block.timestamp;
+        vm.prank(operator);
+        staking.disputeSlash(didHash);
+
+        uint256 expiresAt = disputedAt + staking.DISPUTE_RESOLUTION_PERIOD();
+        vm.warp(expiresAt);
+        vm.expectRevert(
+            abi.encodeWithSelector(SigvaraStaking.DisputeResolutionActive.selector, didHash, expiresAt)
+        );
+        staking.expireDispute(didHash);
+    }
+
+    function test_claimSlashProceeds_paysVictimAndReporter_once() public {
+        _setupPendingSlash();
+        staking.executeSlash(didHash);
+
+        uint256 total = MIN_STAKE * 2;
+        assertEq(staking.claimable(victim), total / 4);
+        assertEq(staking.claimable(committee), total - total / 2 - total / 4);
+
+        vm.prank(victim);
+        uint256 paid = staking.claimSlashProceeds();
+        assertEq(paid, total / 4);
+        assertEq(svr.balanceOf(victim), total / 4);
+        assertEq(staking.claimable(victim), 0);
+
+        vm.prank(committee);
+        staking.claimSlashProceeds();
+        assertEq(svr.balanceOf(committee), total - total / 2 - total / 4);
+
+        // Everything the stake held has left the contract: burn plus both claims.
+        assertEq(svr.balanceOf(address(staking)), 0);
+
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.NothingClaimable.selector, victim));
+        vm.prank(victim);
+        staking.claimSlashProceeds();
+    }
+
+    function test_claimSlashProceeds_reverts_nothingClaimable() public {
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.NothingClaimable.selector, stranger));
+        vm.prank(stranger);
+        staking.claimSlashProceeds();
+    }
+
+    /// The three shares always add up to the whole slashed amount, with the reporter
+    /// absorbing the rounding dust.
+    function testFuzz_executeSlash_sharesSumToTotal(uint256 extra) public {
+        extra = bound(extra, 0, 9_000e18);
+        uint256 total = MIN_STAKE + extra;
+        svr.mint(operator, total);
+        vm.prank(operator);
+        staking.depositStake(didHash, total);
+
+        uint256 t0 = block.timestamp;
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "");
+        vm.warp(t0 + CHALLENGE + 1);
+        staking.executeSlash(didHash);
+
+        uint256 burned = svr.balanceOf(address(0xdead));
+        assertEq(burned, total / 2);
+        assertEq(staking.claimable(victim), total / 4);
+        assertEq(burned + staking.claimable(victim) + staking.claimable(committee), total);
+        assertEq(svr.balanceOf(address(staking)), total - burned);
+    }
+
+    // -------------------------------------------------------------------------
+    // setMinimumStake
+    // -------------------------------------------------------------------------
+
+    function test_setMinimumStake_updatesAndGatesHasMinimumStake() public {
+        _deposit(); // 2 * MIN_STAKE
+        assertTrue(staking.hasMinimumStake(didHash));
+
+        vm.expectEmit(address(staking));
+        emit SigvaraStaking.MinimumStakeUpdated(MIN_STAKE * 3);
+        vm.prank(admin);
+        staking.setMinimumStake(MIN_STAKE * 3);
+
+        assertEq(staking.minimumStake(), MIN_STAKE * 3);
+        assertFalse(staking.hasMinimumStake(didHash));
+    }
+
+    function test_setMinimumStake_reverts_notAdmin() public {
+        bytes32 role = staking.DEFAULT_ADMIN_ROLE();
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, role
+        ));
+        vm.prank(stranger);
+        staking.setMinimumStake(1);
+    }
+
+    // -------------------------------------------------------------------------
     // Fuzz: stake roundtrip
     // -------------------------------------------------------------------------
 

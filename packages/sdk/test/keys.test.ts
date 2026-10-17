@@ -144,3 +144,19 @@ describe('hex validation reaches the callers that matter', () => {
     expect(() => bytes32ToPubKey('0x' + 'q'.repeat(64))).toThrow(/non-hex character/);
   });
 });
+
+describe('public key length checks', () => {
+  it('pubKeyToBytes32 refuses anything but 32 bytes', () => {
+    expect(() => pubKeyToBytes32(new Uint8Array(31))).toThrow(/32 bytes/);
+    expect(() => pubKeyToBytes32(new Uint8Array(33))).toThrow(/32 bytes/);
+  });
+
+  it('pubKeyToMultibase refuses anything but 32 bytes', () => {
+    expect(() => pubKeyToMultibase(new Uint8Array(31))).toThrow(/32 bytes/);
+  });
+
+  it('bytes32ToPubKey accepts with or without 0x', () => {
+    const hex = '11'.repeat(32);
+    expect(bytes32ToPubKey(hex)).toEqual(bytes32ToPubKey('0x' + hex));
+  });
+});
