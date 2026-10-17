@@ -57,7 +57,9 @@ function readConfig(env = process.env) {
     // 10000 is one cent. Kept as BigInt throughout; a float would lose precision
     // on an 18-decimal token.
     minAmount: BigInt(env.PAYMENT_MIN_AMOUNT || '0'),
-    minConfirmations: Number(env.PAYMENT_MIN_CONFIRMATIONS || 1),
+    // An unparseable value falls back to 1 rather than becoming NaN: `confirmations <
+    // NaN` is always false, so a typo here used to switch the check off entirely.
+    minConfirmations: Number(env.PAYMENT_MIN_CONFIRMATIONS || 1) || 1,
     // Base units of volume per point of feeScore. The default is 100 USDC per
     // point, so the 20-point cap lands at 2,000 USDC of settled volume. It said
     // 3,000 and a 30-point cap until 21 Sep 2026: the reweight the day before took

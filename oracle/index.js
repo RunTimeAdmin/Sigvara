@@ -367,7 +367,7 @@ async function runPaymentScan(agents) {
     from, to, paymentScanCfg.chunkSize,
   );
 
-  const { credits, skipped } = paymentScan.planCredits(logs.map(paymentScan.decodeTransfer), {
+  const { credits, skipped } = paymentScan.planCredits(logs.map((log) => paymentScan.decodeTransfer(log, paymentCfg.asset)), {
     didHashOf: (address) => byAddress.get(address.toLowerCase())?.didHash ?? null,
     operatorOf: (didHash) => byDid.get(didHash)?.operator ?? null,
     // Ask the store, so the scan's pre-check and creditPayment cannot drift apart.

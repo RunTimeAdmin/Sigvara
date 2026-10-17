@@ -56,6 +56,31 @@ test('decodeTransfer refuses a Transfer whose parties are not indexed', () => {
   assert.equal(scan.decodeTransfer(odd), null);
 });
 
+test('decodeTransfer refuses a log the asset did not emit', () => {
+  // The getLogs filter names the asset, but that is the RPC's promise. A provider that
+  // returned another token's Transfer would otherwise be credited as a payment.
+  const log = { ...transfer(PAYER, AGENT, 500n), address: ASSET };
+  assert.equal(scan.decodeTransfer(log, ASSET).from, PAYER);
+  assert.equal(scan.decodeTransfer(log, ASSET.toLowerCase()).from, PAYER, 'case does not matter');
+  assert.equal(scan.decodeTransfer({ ...log, address: STRANGER }, ASSET), null);
+  assert.equal(scan.decodeTransfer({ ...log, address: undefined }, ASSET), null);
+  // Array.prototype.map passes an index as the second argument; it is not an asset.
+  assert.equal([log].map(scan.decodeTransfer)[0].from, PAYER);
+});
+
+test('decodeTransfer refuses an ERC-721 Transfer, a removed log and a malformed amount', () => {
+  const log = transfer(PAYER, AGENT, 500n);
+  // Four topics is ERC-721: the third indexed topic is a token id, not a recipient.
+  assert.equal(scan.decodeTransfer({ ...log, topics: [...log.topics, w(7n)] }), null);
+  // Reorganised away after the RPC served it.
+  assert.equal(scan.decodeTransfer({ ...log, removed: true }), null);
+  assert.equal(scan.decodeTransfer({ ...log, removed: false }).amount, '500');
+  // BigInt('0x') throws, which used to take the whole scan down at that range.
+  assert.equal(scan.decodeTransfer({ ...log, data: '0x' }), null);
+  assert.equal(scan.decodeTransfer({ ...log, data: undefined }), null);
+  assert.equal(scan.decodeTransfer({ ...log, data: '0x' + '00'.repeat(64) }), null, 'more than one word');
+});
+
 // ---------------------------------------------------------------------------
 // What gets credited
 // ---------------------------------------------------------------------------
@@ -232,6 +257,14 @@ test('config falls back to the existing scan settings', () => {
 // ---------------------------------------------------------------------------
 // Confirmations: an unattended scan is more careful than a deliberate attestation
 // ---------------------------------------------------------------------------
+
+test('an unparseable confirmation setting falls back to the floor', () => {
+  // Math.max(6, NaN) is NaN, which made safeHead NaN and the scan silently a no-op.
+  assert.equal(scan.readConfig({ PAYMENT_SCAN_CONFIRMATIONS: 'six' }).confirmations, scan.MIN_SCAN_CONFIRMATIONS);
+  assert.equal(scan.readConfig({ PAYMENT_MIN_CONFIRMATIONS: '12x' }).confirmations, scan.MIN_SCAN_CONFIRMATIONS);
+  assert.equal(scan.safeHead(100, scan.readConfig({ PAYMENT_SCAN_CONFIRMATIONS: 'six' }).confirmations), 94);
+  assert.equal(scan.readConfig({ PAYMENT_SCAN_CONFIRMATIONS: '12' }).confirmations, 12, 'a valid value still raises it');
+});
 
 test('confirmations cannot be set below the floor', () => {
   // An attestation is a deliberate act by someone who watched the transaction settle.

@@ -106,9 +106,12 @@ function readConfig(env = process.env) {
     // is a deliberate act by someone who saw the transaction settle; a scan credits
     // unattended, every epoch, with nobody looking. The floor is 6 and an explicit
     // setting may raise it but not lower it below what the attested path requires.
+    //
+    // An unparseable value falls back to the floor. Math.max(6, NaN) is NaN, which made
+    // safeHead NaN and the scan silently do nothing, every epoch.
     confirmations: Math.max(
       MIN_SCAN_CONFIRMATIONS,
-      Number(env.PAYMENT_SCAN_CONFIRMATIONS || env.PAYMENT_MIN_CONFIRMATIONS || 0),
+      Number(env.PAYMENT_SCAN_CONFIRMATIONS || env.PAYMENT_MIN_CONFIRMATIONS || 0) || 0,
     ),
   };
 }
@@ -137,10 +140,23 @@ function blockRanges(fromBlock, toBlock, chunkSize) {
  *
  * `from` and `to` come out of the topics, which is the whole reason this is trustworthy:
  * the payer is read off the chain, never taken from a caller.
+ *
+ * `asset`, when given, is checked against the log's own address. The getLogs filter
+ * already names it, but that is the RPC's promise rather than the chain's, and the
+ * attested path (payments.transfersTo) checks the emitter for the same reason. Exactly
+ * three topics, as there: four is an ERC-721 Transfer, whose third topic is a token id
+ * and not a recipient. A log flagged `removed` was reorganised away, and data that is
+ * not a word cannot be an amount; either one used to throw out of the scan or credit
+ * something that is not a payment.
  */
-function decodeTransfer(log) {
+function decodeTransfer(log, asset) {
   if (!log || !Array.isArray(log.topics) || log.topics[0] !== TRANSFER_TOPIC) return null;
-  if (log.topics.length < 3) return null; // a non-standard Transfer without indexed parties
+  if (log.topics.length !== 3) return null; // not an indexed ERC-20 Transfer
+  if (log.removed === true) return null;
+  // Only a string is an asset. Array.prototype.map passes an index here, which must not
+  // be mistaken for one.
+  if (typeof asset === 'string' && lower(log.address) !== lower(asset)) return null;
+  if (typeof log.data !== 'string' || !/^0x[0-9a-fA-F]{1,64}$/.test(log.data)) return null;
   return {
     txHash: log.transactionHash,
     blockNumber: log.blockNumber,
