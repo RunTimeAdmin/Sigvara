@@ -619,3 +619,38 @@ test('creditPayment: an event stays valid without a block, as every stored one i
   const [e] = getPaymentEvents(did);
   assert.ok(!('blockNumber' in e), 'absent rather than null, so the stored shape is unchanged');
 });
+
+test('creditPayment: a mixed-case didHash is filed where scoring reads it', () => {
+  const lower = '0x' + '5e'.repeat(32);
+  const upper = '0x' + '5E'.repeat(32);
+  const tx = '0x' + '7e'.repeat(32);
+  const payer = '0x' + '33'.repeat(20);
+  assert.equal(creditPayment(upper, tx, 1_000_000n, payer, true, 1_700_000_000_000), true);
+  // Under the lowercase key the epoch and /evidence use, from either spelling.
+  assert.equal(getPaymentEvents(lower).length, 1);
+  assert.equal(getPaymentEvents(upper).length, 1);
+  // And the receipt is still spent once: the same payment in lowercase is a replay.
+  assert.equal(creditPayment(lower, tx, 1_000_000n, payer, true, 1_700_000_000_001), false);
+  assert.equal(getPaymentEvents(lower).length, 1);
+});
+
+test('load: credits stored under a mixed-case didHash are folded back into the agent', () => {
+  const lower = '0x' + '6f'.repeat(32);
+  const out = inChildWithState({
+    paymentEvents: {
+      [lower]: [goodEvent],
+      ['0x' + '6F'.repeat(32)]: [{ ...goodEvent, txHash: '0x' + 'ef'.repeat(32) }],
+      'did-healthy': [{ ...goodEvent, txHash: '0x' + 'cd'.repeat(32) }],
+    },
+  }, `
+    const s = require('./store');
+    s.load();
+    console.log(JSON.stringify({
+      merged: s.getPaymentEvents('${lower}').map((e) => e.txHash),
+      keys: [...s.allPaymentEvents().keys()].sort(),
+    }));
+  `);
+  const r = JSON.parse(out.trim().split('\n').pop());
+  assert.deepEqual(r.merged, [goodEvent.txHash, '0x' + 'ef'.repeat(32)], 'both credits, existing one first');
+  assert.deepEqual(r.keys, [lower, 'did-healthy'].sort(), 'no mixed-case key survives');
+});
