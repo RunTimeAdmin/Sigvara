@@ -670,7 +670,11 @@ cast call <oracleBond proxy> "isActiveOperator(address)(bool)" <operator> --rpc-
 - [x] verify whether native USDC exposes a usable `IERC20` for bonds (address, decimals)
       — **it does.** `0x3600000000000000000000000000000000000000`, symbol USDC,
       **6 decimals**, real code, standard Transfer events. Confirmed on testnet
-      21 Sep 2026. Note the decimals: every amount in the deployed contracts is
+      21 Sep 2026. Those events cover only transfers made through the ERC-20: every
+      balance change also emits `Transfer` from `0xffff…fffe` in **18** decimals,
+      and a plain native send emits nothing else, on mainnet and testnet alike
+      (measured 3 Oct 2026; see
+      [ecosystem.md](ecosystem.md#what-it-means-for-the-oracle)). Note the decimals: every amount in the deployed contracts is
       sized for an 18-decimal token (`minimumStake` is `1e21`, `bondAmount`
       `25000e18`), so pointing a bond at USDC without resizing makes the minimum
       stake a quadrillion dollars and nobody can ever bond. The bond token is set
