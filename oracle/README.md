@@ -840,7 +840,7 @@ cd oracle
 node --test
 ```
 
-356 tests covering scoring formulas, payment verification and decay, per-payer caps and
+509 tests covering scoring formulas, payment verification and decay, per-payer caps and
 the trust weighting, Merkle evidence trees, HTTP helpers, store persistence, chain
 access with backoff and scan checkpointing, metrics, and cooldown logic. No network
 access required.

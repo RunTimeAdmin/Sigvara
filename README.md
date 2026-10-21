@@ -526,8 +526,10 @@ Everything below runs offline, with no network access and no deployed contracts,
 | Suite | Count | Command |
 |---|---|---|
 | Contracts — unit, fuzz, E2E, upgrade and 6 invariants | 379 | `forge test` |
-| Oracle | 501 | `cd oracle && node --test` |
+| Oracle | 509 | `cd oracle && node --test` |
 | SDK | 140 | `cd packages/sdk && npx vitest run` |
+
+Counts are test functions, so each of the 6 invariants counts once. CI's Foundry runs those 6 as a single campaign, so its summary reads 374 total tests: 368 run and 6 skipped, the six in `test/SplitAuthorityFork.t.sol`. The SDK's 140 includes 8 integration tests that skip without a live deployment.
 
 ### Unit Tests (default)
 
