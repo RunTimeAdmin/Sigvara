@@ -318,24 +318,30 @@ The slashed DID cannot be reactivated. The operator must register a new agent ad
 
 ## On-Chain Consumption
 
-Any smart contract can gate on reputation:
+Any smart contract can gate on reputation. The interfaces are in
+[`src/interfaces/ISigvara.sol`](../src/interfaces/ISigvara.sol):
 
 ```solidity
 // Inside your contract
-ISigvaraReputation reputation = ISigvaraReputation(REPUTATION_ADDRESS);
+import {ISigvaraReader} from "sigvara/src/interfaces/ISigvara.sol";
 
-function onlyTrustedAgent(bytes32 didHash) internal view {
+function requireTrusted(address agent) internal view {
     require(
-        reputation.meetsThreshold(didHash, 50),
-        "Agent does not meet minimum reputation threshold"
+        ISigvaraReader(READER).isTrusted(agent, 50),
+        "Agent is not in good standing at the minimum score"
     );
 }
 ```
 
-Or query directly:
+`SigvaraReputation.meetsThreshold(didHash, n)` compares the spendable score with `n` and
+nothing else. It does not look at the agent's status, so a suspended agent passes it, and at
+`n = 0` so does an address that was never registered. `isTrusted` adds the status check. The
+[integration guide](integration.md) has the rest.
+
+To read the score itself:
 
 ```solidity
-uint8 score = reputation.getTotalScore(didHash);
+uint8 score = ISigvaraReputation(REPUTATION_ADDRESS).getTotalScore(didHash);
 ```
 
 ---
