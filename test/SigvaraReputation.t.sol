@@ -1175,6 +1175,31 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
         assertFalse(rep.getPendingScore(DID).exists);
     }
 
+    /// At every instant exactly one of reject and finalize is open. Finalize opens at the
+    /// last second of the window, so reject has to close there. If both were open at once,
+    /// a committee rejection and a finalization would both be valid in the same block and
+    /// the outcome would depend on transaction order.
+    function test_reject_revertsAtTheExactMomentFinalizeOpens() public {
+        uint256 t0 = vm.getBlockTimestamp();
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
+
+        vm.warp(t0 + CHALLENGE_WINDOW);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                SigvaraReputation.ChallengeWindowExpired.selector,
+                DID,
+                t0 + CHALLENGE_WINDOW
+            )
+        );
+        vm.prank(committee);
+        rep.rejectReputation(DID);
+
+        rep.finalizeReputation(DID); // open at this same instant
+        assertEq(rep.getEarnedScore(DID), 100);
+    }
+
     function test_reject_emitsScoreRejected() public {
         vm.prank(oracle);
         rep.proposeReputation(DID, maxScore, bytes32(0));
@@ -1278,6 +1303,19 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
         vm.prank(admin);
         rep.setMaturityRate(9);
         assertEq(rep.maturityRatePerDay(), 9);
+    }
+
+    /// A rate of zero freezes every score at its anchor for good, and the initializer
+    /// already refuses it. The setter is the other way in, so it has to refuse it too.
+    function test_setMaturityRate_rejectsZero() public {
+        vm.prank(admin);
+        rep.initializeV4(4);
+
+        vm.expectRevert(SigvaraReputation.MaturityRateZero.selector);
+        vm.prank(admin);
+        rep.setMaturityRate(0);
+
+        assertEq(rep.maturityRatePerDay(), 4, "the rate is unchanged");
     }
 
     function test_upgrade_notUpgrader_reverts() public {

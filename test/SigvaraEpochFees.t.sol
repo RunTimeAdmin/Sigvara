@@ -148,6 +148,18 @@ contract SigvaraEpochFeesTest is Test, RegistrationHelper {
         assertEq(fees.collected(), EPOCH_FEE);
     }
 
+    /// Anyone following an agent's coverage from the chain learns what was charged and
+    /// what is left from this event, so both amounts are part of the contract's interface.
+    function test_chargeEpoch_emitsWhatWasChargedAndWhatIsLeft() public {
+        vm.prank(operator);
+        fees.depositFor(didHash, 25e18);
+
+        vm.expectEmit(address(fees));
+        emit SigvaraEpochFees.EpochCharged(didHash, EPOCH_FEE, 15e18);
+        vm.prank(oracle);
+        fees.chargeEpoch(didHash);
+    }
+
     /// An uncovered agent must make the charge revert, not return false. A bool the
     /// oracle forgets to inspect turns a missed payment into a free scoring run with
     /// no error recorded anywhere; a revert forces the caller to skip the agent.
