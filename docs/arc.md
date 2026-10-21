@@ -618,8 +618,7 @@ cast storage <proxy> 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505
 Not before: an external audit and a real slashing
 committee multisig in `COMMITTEE_ADDRESS`. It is not the testnet command with a different
 `--rpc-url`: several scripts do something on mainnet that is safe on testnet and wrong
-here. The sequence, with a check after each step and the condition that stops it, is in
-[mainnet-runbook.md](mainnet-runbook.md).
+here, so read each one before running it.
 
 ### Parameters at initialization
 

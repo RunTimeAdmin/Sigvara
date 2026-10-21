@@ -38,7 +38,6 @@ what is not yet true.
 | [Smart-wallet agents](docs/smart-wallet-agents.md) | Developers: register an ERC-6551 token-bound account or another contract wallet |
 | [Arc](docs/arc.md) | Developers — deploy / test on Arc (5042002 / 5042), USDC gas |
 | [Deploy to Arc testnet](docs/deploy-testnet.md) | Developers — the first-deployment runbook, step by step |
-| [Arc mainnet runbook](docs/mainnet-runbook.md) | Operators: the mainnet deployment and authority handover, with the check after each step, the condition that stops it, and what can be undone |
 | [SVR token](docs/token.md) | Everyone — the bond and fee token: contract, distribution, treasury policy, when utility starts |
 | [Brand](docs/brand.md) | Designers / frontend — colors, type, layout and component rules for every Sigvara surface |
 | [CounterAudit Integration](docs/counteraudit-integration.md) | Enterprise — embed agent identity in your audit trail |
