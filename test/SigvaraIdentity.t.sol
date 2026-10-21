@@ -300,6 +300,62 @@ contract SigvaraIdentityTest is Test, RegistrationHelper {
         identity.offerOperatorTransfer(didHash, buyer);
     }
 
+    /// An offer can be made while the agent is clean and a slash can start afterwards, so
+    /// the accept has to look again. Otherwise an offer made before the accusation hands the
+    /// accused agent, and its liability, to a buyer who accepts during the challenge window.
+    function test_transfer_reverts_acceptDuringASlashThatStartedAfterTheOffer() public {
+        bytes32 didHash = _register();
+        address buyer = makeAddr("buyer");
+
+        vm.prank(operator);
+        identity.offerOperatorTransfer(didHash, buyer);
+
+        vm.prank(staking);
+        identity.updateStatus(didHash, SigvaraIdentity.AgentStatus.Suspended);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(SigvaraIdentity.TransferWhileSlashPending.selector, didHash)
+        );
+        vm.prank(buyer);
+        identity.acceptOperatorTransfer(didHash);
+
+        assertEq(identity.getIdentity(didHash).operator, operator, "the agent stays with the accused");
+    }
+
+    /// Slashed is terminal. A slashed identity cannot be put up for sale.
+    function test_transfer_reverts_offerOnASlashedAgent() public {
+        bytes32 didHash = _register();
+
+        vm.prank(staking);
+        identity.updateStatus(didHash, SigvaraIdentity.AgentStatus.Slashed);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(SigvaraIdentity.SlashedAgentImmutable.selector, didHash)
+        );
+        vm.prank(operator);
+        identity.offerOperatorTransfer(didHash, makeAddr("buyer"));
+    }
+
+    /// Nor can an offer made before the slash be accepted after it.
+    function test_transfer_reverts_acceptOnAnAgentSlashedAfterTheOffer() public {
+        bytes32 didHash = _register();
+        address buyer = makeAddr("buyer");
+
+        vm.prank(operator);
+        identity.offerOperatorTransfer(didHash, buyer);
+
+        vm.prank(staking);
+        identity.updateStatus(didHash, SigvaraIdentity.AgentStatus.Slashed);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(SigvaraIdentity.SlashedAgentImmutable.selector, didHash)
+        );
+        vm.prank(buyer);
+        identity.acceptOperatorTransfer(didHash);
+
+        assertEq(identity.getIdentity(didHash).operator, operator);
+    }
+
     /// What changes hands must carry collateral, not just a reputation.
     function test_transfer_reverts_whenTheAgentIsNotBonded() public {
         bytes32 didHash = _register();
@@ -594,6 +650,18 @@ contract SigvaraIdentityTest is Test, RegistrationHelper {
         identity.rotatePublicKey(didHash, PUB_KEY_2);
     }
 
+    /// A zero key would leave the identity with nothing for verifiers to check a
+    /// signature against, and registration already refuses one for the same reason.
+    function test_rotatePublicKey_reverts_zeroKey() public {
+        bytes32 didHash = _register();
+
+        vm.expectRevert(SigvaraIdentity.ZeroPubKey.selector);
+        vm.prank(operator);
+        identity.rotatePublicKey(didHash, bytes32(0));
+
+        assertEq(identity.getIdentity(didHash).ed25519PubKey, PUB_KEY, "the existing key stays");
+    }
+
     function test_rotatePublicKey_allowedWhileSuspended() public {
         bytes32 didHash = _register();
 
@@ -618,6 +686,22 @@ contract SigvaraIdentityTest is Test, RegistrationHelper {
 
         assertEq(uint8(identity.getIdentity(didHash).status), uint8(SigvaraIdentity.AgentStatus.Suspended));
         assertFalse(identity.isActive(didHash));
+    }
+
+    /// Verifiers and watchers learn that an agent was suspended or reinstated from this
+    /// event, so it has to fire on every change and carry the new status.
+    function test_updateStatus_emitsTheNewStatus() public {
+        bytes32 didHash = _register();
+
+        vm.expectEmit(address(identity));
+        emit SigvaraIdentity.AgentStatusUpdated(didHash, SigvaraIdentity.AgentStatus.Suspended);
+        vm.prank(operator);
+        identity.updateStatus(didHash, SigvaraIdentity.AgentStatus.Suspended);
+
+        vm.expectEmit(address(identity));
+        emit SigvaraIdentity.AgentStatusUpdated(didHash, SigvaraIdentity.AgentStatus.Active);
+        vm.prank(operator);
+        identity.updateStatus(didHash, SigvaraIdentity.AgentStatus.Active);
     }
 
     function test_updateStatus_operatorCanReinstate() public {

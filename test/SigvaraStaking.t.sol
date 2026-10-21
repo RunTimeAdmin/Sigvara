@@ -238,6 +238,17 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
         assertEq(claimableAt, block.timestamp + UNBONDING);
     }
 
+    /// Off-chain readers learn when an exit becomes claimable from this event, so the
+    /// time it carries is part of the contract's interface.
+    function test_initiateWithdrawal_emitsWhenItBecomesClaimable() public {
+        _deposit();
+
+        vm.expectEmit(address(staking));
+        emit SigvaraStaking.WithdrawalInitiated(didHash, operator, MIN_STAKE, block.timestamp + UNBONDING);
+        vm.prank(operator);
+        staking.initiateWithdrawal(didHash, MIN_STAKE);
+    }
+
     function test_claimWithdrawal_afterUnbondingPeriod() public {
         _deposit();
 
@@ -573,6 +584,22 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
         staking.claimSlashProceeds();
         assertEq(svr.balanceOf(victim), expectedVictim);
         assertEq(staking.claimable(victim), 0);
+    }
+
+    /// The event is how anyone watching the chain learns the split without replaying the
+    /// transfers, so the three amounts are part of the contract's interface.
+    function test_executeSlash_emitsTheSplit() public {
+        _setupPendingSlash();
+
+        uint256 slashable        = MIN_STAKE * 2;
+        uint256 expectedBurned   = slashable / 2;
+        uint256 expectedVictim   = slashable / 4;
+        uint256 expectedReporter = slashable - expectedBurned - expectedVictim;
+
+        vm.expectEmit(address(staking));
+        emit SigvaraStaking.SlashExecuted(didHash, expectedBurned, expectedVictim, expectedReporter);
+        vm.prank(stranger);
+        staking.executeSlash(didHash);
     }
 
     function test_executeSlash_marksAgentSlashed() public {
