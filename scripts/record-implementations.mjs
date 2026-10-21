@@ -18,7 +18,9 @@
  *   node scripts/record-implementations.mjs          # update the artifact
  *   node scripts/record-implementations.mjs --check  # fail if it disagrees with chain
  *
- * RPC_URL overrides the default endpoint.
+ * Arc testnet unless told otherwise. CHAIN_ID=5042 reads deployments/5042.json against
+ * Arc mainnet. RPC_URL overrides the default endpoint, and is required for any chain
+ * that has none. Whatever the endpoint, it must report the chain the artifact is for.
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -30,20 +32,38 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(join(root, 'oracle', 'index.js'));
 const { ethers } = require('ethers');
 
-const CHAIN_ID = 5042002;
-const RPC = process.env.RPC_URL || 'https://rpc.testnet.arc.io';
+const CHAIN_ID = Number(process.env.CHAIN_ID || 5042002);
+const DEFAULT_RPC = {
+  5042002: 'https://rpc.testnet.arc.io',
+  5042: 'https://rpc.mainnet.arc.io',
+};
+const RPC = process.env.RPC_URL || DEFAULT_RPC[CHAIN_ID];
 const ARTIFACT = join(root, 'deployments', `${CHAIN_ID}.json`);
+
+if (!RPC) {
+  console.error(`chain ${CHAIN_ID} has no default endpoint: set RPC_URL`);
+  process.exit(1);
+}
 
 /** keccak256("eip1967.proxy.implementation") - 1 */
 const IMPL_SLOT = '0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc';
 
 // svrToken is a plain ERC-20, not a proxy, and has no implementation slot to read.
-const PROXIES = ['identity', 'reputation', 'staking', 'oracleBond'];
+// A name missing from the artifact is skipped, so epochFees counts once it is recorded.
+const PROXIES = ['identity', 'reputation', 'staking', 'oracleBond', 'epochFees'];
 
 const checkOnly = process.argv.includes('--check');
 
 const artifact = JSON.parse(readFileSync(ARTIFACT, 'utf8'));
 const provider = new ethers.JsonRpcProvider(RPC);
+
+// The artifact's addresses mean nothing on another chain, and a mainnet endpoint behind a
+// testnet artifact reads as "not a proxy" for every name. Say which side is wrong.
+const reported = Number((await provider.getNetwork()).chainId);
+if (reported !== CHAIN_ID) {
+  console.error(`${RPC} reports chain ${reported}, but this artifact is for chain ${CHAIN_ID}`);
+  process.exit(1);
+}
 
 async function implementationOf(proxy) {
   const raw = await provider.getStorage(proxy, IMPL_SLOT);
@@ -90,12 +110,15 @@ for (const name of PROXIES) {
 
 if (checkOnly) {
   if (drift.length === 0) {
+    // A name with no implementation slot has already set exitCode. Do not overwrite it.
+    if (process.exitCode) process.exit(process.exitCode);
     console.log('implementations: artifact matches chain');
     process.exit(0);
   }
   console.error('implementations: artifact disagrees with chain\n');
   for (const d of drift) console.error(`  ${d}`);
-  console.error('\nRun: node scripts/record-implementations.mjs');
+  const prefix = CHAIN_ID === 5042002 ? '' : `CHAIN_ID=${CHAIN_ID} `;
+  console.error(`\nRun: ${prefix}node scripts/record-implementations.mjs`);
   process.exit(1);
 }
 

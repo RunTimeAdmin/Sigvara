@@ -25,7 +25,7 @@ Sequenced against the Q4 2026 SVR mainnet milestone. Dates are targets, not comm
 
 ## Phase 4 — Mainnet registry deployment (gated on Phase 2)
 
-- [ ] **Deploy registries to Arc mainnet** (chain ID 5042) initialized with the SVR address, `minimumStake` = 10,000 SVR, `bondAmount` = 2,500,000 SVR, `epochFee` = 0 (Bootstrap stage).
+- [ ] **Deploy registries to Arc mainnet** (chain ID 5042) initialized with the SVR address, `minimumStake` = 10,000 SVR, `bondAmount` = 2,500,000 SVR, `epochFee` = 0 (Bootstrap stage). The sequence, its checks and its abort conditions are in [mainnet-runbook.md](mainnet-runbook.md), which also covers moving admin and upgrade rights to the Safe and the timelock.
 - [ ] **Initialize oracle bonds** for admitted operators. `admit()` is governance-gated — nobody buys their way in. The bond is what a corrupt oracle can lose.
 - [ ] **Verify impersonation guidance**: only the published address is genuine SVR. `countersig.network` redirects to sigvara.xyz and serves nothing.
 
