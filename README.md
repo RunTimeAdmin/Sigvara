@@ -34,6 +34,8 @@ what is not yet true.
 | [White paper](docs/whitepaper.md) | Everyone — the single document: design, trust model, known weaknesses, token, and commands to check every claim against the chain |
 | [Ecosystem Overview](docs/ecosystem.md) | Everyone — start here to understand the full picture |
 | [Quickstart](docs/quickstart.md) | Developers — register your first agent in 10 minutes |
+| [Integration guide](docs/integration.md) | Developers: read an agent's standing from a contract or a service, and show it honestly |
+| [Smart-wallet agents](docs/smart-wallet-agents.md) | Developers: register an ERC-6551 token-bound account or another contract wallet |
 | [Arc](docs/arc.md) | Developers — deploy / test on Arc (5042002 / 5042), USDC gas |
 | [Deploy to Arc testnet](docs/deploy-testnet.md) | Developers — the first-deployment runbook, step by step |
 | [SVR token](docs/token.md) | Everyone — the bond and fee token: contract, distribution, treasury policy, when utility starts |
@@ -128,6 +130,8 @@ graph TB
 | [`SigvaraOracleBond`](src/SigvaraOracleBond.sol) | **Oracle accountability.** Performance bonds for oracle operators. When wired into `SigvaraReputation.operatorBond`, only an admitted, bonded operator can propose a score. Deployed on Arc testnet and wired. |
 
 The retained contracts use UUPS upgradeable proxies (OpenZeppelin v5), controlled by a governance timelock on mainnet.
+
+[`SigvaraReader`](src/SigvaraReader.sol) is separate: a stateless, non-upgradeable convenience for contracts that read an agent's standing. It is not a registry, holds nothing and is not read by the protocol. Its interfaces, and those of the three registries, are in [`src/interfaces/ISigvara.sol`](src/interfaces/ISigvara.sol). See the [integration guide](docs/integration.md).
 
 ---
 
@@ -521,7 +525,7 @@ Everything below runs offline, with no network access and no deployed contracts,
 
 | Suite | Count | Command |
 |---|---|---|
-| Contracts — unit, fuzz, E2E, upgrade and 6 invariants | 340 | `forge test` |
+| Contracts — unit, fuzz, E2E, upgrade and 6 invariants | 358 | `forge test` |
 | Oracle | 501 | `cd oracle && node --test` |
 | SDK | 140 | `cd packages/sdk && npx vitest run` |
 
@@ -628,12 +632,15 @@ HoodScan is a rug-risk scanner for Robinhood Chain tokens. When a scan returns a
 
 ### On-chain consumers
 
-Any smart contract can gate operations on an agent's reputation:
+Any smart contract can gate operations on an agent's standing:
 
 ```solidity
-ISigvaraReputation rep = ISigvaraReputation(REPUTATION_ADDRESS);
-require(rep.meetsThreshold(didHash, 60), "insufficient reputation");
+import {ISigvaraReader} from "sigvara/src/interfaces/ISigvara.sol";
+
+require(ISigvaraReader(READER).isTrusted(agent, 60), "agent not in good standing");
 ```
+
+`isTrusted` checks that the agent is Active and that its spendable score is at least the threshold. `SigvaraReputation.meetsThreshold` compares the score alone, so a suspended agent passes it. The [integration guide](docs/integration.md) covers the full read, the registry interfaces and a worked example.
 
 ---
 

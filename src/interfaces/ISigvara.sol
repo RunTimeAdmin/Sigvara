@@ -1,0 +1,165 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+/**
+ * @title Sigvara read interfaces
+ * @notice The slice of each registry that another contract needs in order to decide
+ *         whether to deal with an agent. Read-only: nothing declared here changes state.
+ *
+ * @dev    Standalone on purpose. This file imports nothing, so a consumer can copy it
+ *         into their own tree, or install this repository and import it, without
+ *         pulling in the registries or their upgradeable dependencies.
+ *
+ *         The types are declared here rather than imported, so they have to match the
+ *         registries field for field and in the same order. The registries return them
+ *         ABI-encoded, and a mismatch reverts or decodes as garbage. test/SigvaraReader.t.sol
+ *         calls every function below on real deployments and compares each result with
+ *         the registry's own, which is what keeps the two from drifting.
+ *
+ *         Point these at the registry PROXY addresses in deployments/<chainId>.json.
+ *         The proxies never move; the implementations behind them do.
+ */
+
+interface ISigvaraIdentity {
+    /// @dev Same order as SigvaraIdentity.AgentStatus, whose values are persisted.
+    ///      Active is zero, so an address that was never registered reads as Active
+    ///      with registeredAt == 0. Check registeredAt, or call isActive, before
+    ///      reading anything into a status.
+    enum AgentStatus { Active, Suspended, Slashed, PendingBond }
+
+    struct AgentIdentity {
+        address operator;
+        address agentAddress;
+        bytes32 ed25519PubKey;
+        AgentStatus status;
+        uint256 registeredAt;
+    }
+
+    /// @notice keccak256("did:sigvara:", chainId, ":", agentAddress). The key every
+    ///         other read below is indexed by.
+    function computeDidHash(address agentAddress) external view returns (bytes32);
+
+    function getIdentity(bytes32 didHash) external view returns (AgentIdentity memory);
+
+    /// @notice True when the agent is registered and its status is Active. An agent
+    ///         becomes Active when its bond first reaches minimumStake.
+    function isActive(bytes32 didHash) external view returns (bool);
+
+    /// @notice When the operator last changed, or zero if it never has.
+    function operatorChangedAt(bytes32 didHash) external view returns (uint256);
+
+    /// @notice How many times the agent has changed hands.
+    function operatorTransferCount(bytes32 didHash) external view returns (uint32);
+}
+
+interface ISigvaraReputation {
+    struct ReputationData {
+        uint8 feeScore;
+        uint8 successScore;
+        uint8 ageScore;
+        uint8 externalScore;
+        uint8 communityScore;
+        uint8 propagationScore;
+        uint256 lastUpdated;
+    }
+
+    /// @notice The spendable score, 0 to 100. This is the number to gate on.
+    function getTotalScore(bytes32 didHash) external view returns (uint8);
+
+    /// @notice The score as computed, before maturity is applied.
+    function getEarnedScore(bytes32 didHash) external view returns (uint8);
+
+    /// @notice getTotalScore(didHash) >= threshold. It does not look at the agent's
+    ///         status: a Suspended agent keeps its score, and a threshold of zero is
+    ///         met by an address that was never registered. SigvaraReader.isTrusted
+    ///         adds the status check.
+    function meetsThreshold(bytes32 didHash, uint8 threshold) external view returns (bool);
+
+    /// @notice The six factors behind the earned score.
+    function getReputation(bytes32 didHash) external view returns (ReputationData memory);
+
+    /// @notice Points of earned score released per day.
+    function maturityRatePerDay() external view returns (uint256);
+
+    /// @notice Seconds a proposed score stays open to challenge before it can finalize.
+    function challengeWindow() external view returns (uint256);
+}
+
+interface ISigvaraStaking {
+    /// @dev Same order as SigvaraStaking.SlashState.
+    enum SlashState { None, Pending, Executed, Cancelled, Disputed }
+
+    struct SlashProposal {
+        bytes32 didHash;
+        address reporter;
+        address victim;
+        uint256 initiatedAt;
+        SlashState state;
+        bytes evidenceHash;
+        uint256 challengeDeadline;
+        uint256 disputedAt;
+    }
+
+    /// @notice Bond held for the agent. Excludes any amount queued for withdrawal.
+    function getStake(bytes32 didHash) external view returns (uint256);
+
+    function hasMinimumStake(bytes32 didHash) external view returns (bool);
+
+    /// @notice An amount the operator has queued for withdrawal, and when it becomes
+    ///         claimable. It stays slashable until it is claimed.
+    function getPendingWithdrawal(bytes32 didHash)
+        external
+        view
+        returns (uint256 amount, uint256 claimableAt);
+
+    /// @notice The latest slash proposal for the agent. state is None if there never
+    ///         was one.
+    function getSlashProposal(bytes32 didHash) external view returns (SlashProposal memory);
+
+    function minimumStake() external view returns (uint256);
+
+    /// @notice Seconds an operator has to dispute a slash before it can be executed.
+    function challengePeriod() external view returns (uint256);
+
+    /// @notice Seconds a queued withdrawal waits before it can be claimed.
+    function unbondingPeriod() external view returns (uint256);
+}
+
+/**
+ * @notice One-call standing of an agent. Implemented by SigvaraReader.
+ */
+interface ISigvaraReader {
+    struct Trust {
+        /// False for an address that was never registered. Every other field is then
+        /// zero, and `status` carries no information.
+        bool registered;
+        ISigvaraIdentity.AgentStatus status;
+        /// status == Active. The same answer as ISigvaraIdentity.isActive.
+        bool active;
+        /// The spendable score, 0 to 100: what meetsThreshold compares. After an
+        /// increase it rises toward `earned` over time; a fall applies at once.
+        uint8 score;
+        /// The score as computed, before maturity. The spendable score never exceeds it.
+        uint8 earned;
+        /// Bond held for the agent, in the bond token's units. Excludes any amount the
+        /// operator has queued for withdrawal, which stays slashable until it is claimed.
+        uint256 stake;
+        /// Where the latest slash proposal stands. Pending and Disputed mean one is open
+        /// now, Executed means the agent was slashed, and Cancelled means one was dropped.
+        ISigvaraStaking.SlashState slash;
+    }
+
+    /// @notice The didHash for an agent address on this chain.
+    function didHashOf(address agent) external view returns (bytes32);
+
+    /// @notice The agent's standing. Never reverts for an unknown address.
+    function trust(address agent) external view returns (Trust memory);
+
+    /// @notice Same as trust, for a caller that already holds the didHash.
+    function trustByDid(bytes32 didHash) external view returns (Trust memory);
+
+    /// @notice True when the agent is Active and its spendable score is at least
+    ///         `minScore`. False for an address that was never registered, whatever
+    ///         the threshold.
+    function isTrusted(address agent, uint8 minScore) external view returns (bool);
+}
