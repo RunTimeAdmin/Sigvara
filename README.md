@@ -525,7 +525,7 @@ Everything below runs offline, with no network access and no deployed contracts,
 
 | Suite | Count | Command |
 |---|---|---|
-| Contracts — unit, fuzz, E2E, upgrade and 6 invariants | 358 | `forge test` |
+| Contracts — unit, fuzz, E2E, upgrade and 6 invariants | 379 | `forge test` |
 | Oracle | 501 | `cd oracle && node --test` |
 | SDK | 140 | `cd packages/sdk && npx vitest run` |
 
