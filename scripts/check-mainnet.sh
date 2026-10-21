@@ -1,7 +1,7 @@
-# Post-deploy assertions for the Arc mainnet deployment (docs/mainnet-runbook.md).
+# Post-deploy assertions for the Arc mainnet deployment.
 #
-# Source it, then call the checks in the order the runbook gives. Every line prints ok
-# or FAIL, and a read that cannot reach the chain counts as a FAIL, not a skip.
+# Source it, then call the checks that match the step you have just finished. Every line
+# prints ok or FAIL, and a read that cannot reach the chain counts as a FAIL, not a skip.
 #
 #   source scripts/check-mainnet.sh
 #   check_core
@@ -21,7 +21,9 @@
 # copied from what the signers see on their own devices (see that function).
 # RPC defaults to the arc_mainnet alias in foundry.toml.
 #
-# The expected parameters are the table in docs/mainnet-runbook.md. Change both together.
+# The expected parameters are the mainnet values in docs/token.md and the periods that
+# script/Deploy.s.sol and script/DeployOracleBond.s.sol default to. Change them here if
+# you deploy with different ones.
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   echo "source this file, do not run it: source scripts/check-mainnet.sh" >&2
