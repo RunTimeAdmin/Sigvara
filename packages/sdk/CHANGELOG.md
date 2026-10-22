@@ -15,8 +15,23 @@ its far-off expiry, which stalled its pruning behind it.
 A payload dated more than 60 seconds (`MAX_FUTURE_SKEW_SECONDS`) ahead is now refused as
 not fresh. Challenges a gate issues itself are dated by its own clock and are unaffected.
 
-Still open: the agent signs whatever it is handed, and a gate admits a challenge it did not
-issue. Both need a decision on the API and are not changed here.
+### New: `SigvaraAgent.signChallengeFor(payload, audience)`
+
+`signChallenge` signs whatever it is handed, so the audience in a challenge protected an agent
+from relay only if the verifier was honest: any verifier could pass it a payload naming a
+different verifier, collect the signature, and present it there as the agent. The audience
+binding is only as strong as the signer's check of it, and the signer had none.
+
+`signChallengeFor` is that check, added beside `signChallenge` so existing callers keep
+working. It signs only a v2 challenge that names this agent as the prover and names exactly
+the audience the caller passes (what it knows about who it is talking to, such as the origin
+it connected to or the peer's DID), and otherwise throws and signs nothing. `signChallenge`
+is documented as signing blind. Prefer `signChallengeFor`.
+
+Not changed, on purpose: a gate still admits a challenge it did not issue. A self-issued,
+fresh, audience-correct, unused challenge proves possession of the key as well as an issued
+one, and requiring issuance would break stateless gates. With the signer checking the
+audience, what a relayed challenge could do is already refused at both ends.
 
 ## 1.0.0-alpha.9
 

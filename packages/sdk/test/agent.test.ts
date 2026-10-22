@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import nacl from 'tweetnacl';
 import { SigvaraAgent } from '../src/agent';
 import {
+  generateChallenge,
   parseChallengePayload,
   verifyChallenge,
   isChallengeExpired,
@@ -54,6 +55,61 @@ describe('SigvaraAgent — issueChallenge', () => {
     const c1 = agentB.issueChallenge(peerDid);
     const c2 = agentB.issueChallenge(peerDid);
     expect(c1.nonce).not.toBe(c2.nonce);
+  });
+});
+
+describe('SigvaraAgent — signChallengeFor', () => {
+  const VERIFIER = 'https://verifier.example';
+  const OTHER = 'https://elsewhere.example';
+
+  it('signs a v2 challenge addressed to the audience it expects, and the signature verifies', () => {
+    const agent = makeAgent();
+    const challenge = generateChallenge(agent.did, VERIFIER);
+
+    const signature = agent.signChallengeFor(challenge.payload, VERIFIER);
+
+    const pubKey = bytes32ToPubKey(agent.publicKeyBytes32);
+    expect(verifyChallenge(challenge.payload, signature, pubKey)).toBe(true);
+  });
+
+  it('refuses a challenge addressed to a different audience, and signs nothing', () => {
+    // The relay: verifier B gets a challenge from verifier C and asks the agent to sign it as though it
+    // were B's. The agent knows it is talking to B.
+    const agent = makeAgent();
+    const forC = generateChallenge(agent.did, OTHER);
+    expect(() => agent.signChallengeFor(forC.payload, VERIFIER)).toThrow(/different audience/);
+  });
+
+  it('an audience that differs only by case or a trailing slash is a different audience', () => {
+    const agent = makeAgent();
+    const challenge = generateChallenge(agent.did, VERIFIER);
+    expect(() => agent.signChallengeFor(challenge.payload, VERIFIER.toUpperCase())).toThrow(/different audience/);
+    expect(() => agent.signChallengeFor(challenge.payload, `${VERIFIER}/`)).toThrow(/different audience/);
+  });
+
+  it('refuses a challenge that names a different prover', () => {
+    const agent = makeAgent();
+    const forSomeoneElse = generateChallenge(formatDid(PEER_ADDR, CHAIN_ID), VERIFIER);
+    expect(() => agent.signChallengeFor(forSomeoneElse.payload, VERIFIER)).toThrow(/different prover/);
+  });
+
+  it('accepts the prover DID however its address is cased', () => {
+    const agent = makeAgent();
+    const upper = agent.did.replace(/0x([0-9a-f]+)$/, (_m, hex: string) => `0x${hex.toUpperCase()}`);
+    const challenge = generateChallenge(upper, VERIFIER);
+    expect(() => agent.signChallengeFor(challenge.payload, VERIFIER)).not.toThrow();
+  });
+
+  it('refuses a v1 challenge, which names no audience to check', () => {
+    const agent = makeAgent();
+    const v1 = `SIGVARA-VERIFY:${agent.did}:abc123:${Math.floor(Date.now() / 1000)}`;
+    expect(() => agent.signChallengeFor(v1, VERIFIER)).toThrow(/v1 challenge/);
+  });
+
+  it('refuses something that is not a challenge at all', () => {
+    const agent = makeAgent();
+    expect(() => agent.signChallengeFor('transfer all funds', VERIFIER)).toThrow(/not a Sigvara challenge/);
+    expect(() => agent.signChallengeFor('', VERIFIER)).toThrow(/not a Sigvara challenge/);
   });
 });
 

@@ -1,7 +1,7 @@
 import nacl from 'tweetnacl';
 import { seedToKeyPair, pubKeyToBytes32, bytesToHex } from './keys';
 import { formatDid, computeDidHash } from './did';
-import { generateChallenge, signChallenge } from './challenge';
+import { generateChallenge, parseChallengePayload, signChallenge } from './challenge';
 import type { Challenge } from './types';
 
 export class SigvaraAgent {
@@ -74,8 +74,43 @@ export class SigvaraAgent {
     return generateChallenge(peerDid, this.did, ttlSeconds ?? this._challengeTtl);
   }
 
+  // Sign a challenge payload received from a peer, but only if it is addressed to the verifier the
+  // caller means to prove itself to. Returns a base58-encoded signature.
+  //
+  // `audience` is what the caller knows about who it is talking to: the origin it connected to, or
+  // the other agent's DID. The payload must be a v2 challenge (v1 names no audience), must name this
+  // agent as the prover, and must name exactly that audience. Anything else throws and nothing is
+  // signed.
+  //
+  // This is the half of the audience binding that only the signer can enforce. The audience in a
+  // challenge protects an agent from relay only if the agent checks it before signing; otherwise a
+  // verifier can hand it a payload naming a different verifier, collect the signature, and present
+  // it there as this agent. The verifier's own check (verifySignature's expectedAudience) catches
+  // a relayed response after the fact, and cannot catch a signature the agent was talked into.
+  signChallengeFor(payload: string, audience: string): string {
+    let parsed;
+    try {
+      parsed = parseChallengePayload(payload);
+    } catch {
+      throw new Error('signChallengeFor: not a Sigvara challenge, nothing signed');
+    }
+    if (parsed.version !== 2) {
+      throw new Error('signChallengeFor: a v1 challenge names no audience, so it cannot be checked, nothing signed');
+    }
+    if (parsed.did.toLowerCase() !== this.did) {
+      throw new Error('signChallengeFor: the challenge names a different prover, nothing signed');
+    }
+    if (parsed.audience !== audience) {
+      throw new Error('signChallengeFor: the challenge is addressed to a different audience, nothing signed');
+    }
+    return signChallenge(payload, this.keyPair.secretKey);
+  }
+
   // Sign a challenge payload received from a peer. Returns a base58-encoded signature.
-  // The payload must contain this agent's DID as the prover.
+  //
+  // Signs whatever it is handed, with no check on who the challenge is addressed to. Use
+  // signChallengeFor, which refuses a payload that is not addressed to the verifier you mean. This
+  // is for code that built the payload itself.
   signChallenge(payload: string): string {
     return signChallenge(payload, this.keyPair.secretKey);
   }

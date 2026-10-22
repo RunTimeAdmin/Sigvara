@@ -154,8 +154,10 @@ const myAgent = new SigvaraAgent({
 // relayed on to a third agent.
 const challenge = peerAgent.issueChallenge(myAgent.did);
 
-// Sign the challenge payload with your Ed25519 key
-const signature = myAgent.signChallenge(challenge.payload);
+// Sign the challenge payload with your Ed25519 key, saying who you mean to prove yourself to. It
+// refuses a challenge addressed to anyone else, so a verifier cannot hand you one meant for a third party
+// and collect a signature it can present there.
+const signature = myAgent.signChallengeFor(challenge.payload, peerAgent.did);
 
 // Peer verifies: resolves pubkey from chain, checks signature + reputation.
 // Passing the expected audience is what makes a relayed response fail.
