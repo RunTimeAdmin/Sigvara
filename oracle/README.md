@@ -54,11 +54,26 @@ ORACLE_TOKEN_COUNTERAUDIT=...     # named `counteraudit`
 ORACLE_TOKEN_HOODSCAN=...         # named `hoodscan`
 ```
 
-Any of them authorises any write; the names exist for **revocation and attribution**, not
-for different permissions. Deleting one variable revokes exactly that caller and leaves
-the rest working, which a single shared token cannot do — revoking one integration would
+By default any of them authorises any write; the names exist for **revocation and
+attribution**. Deleting one variable revokes exactly that caller and leaves the rest
+working, which a single shared token cannot do — revoking one integration would
 mean rotating all of them. The name is logged on every write, so `flag raised on 0x… by
 counteraudit` is answerable where "someone with the token" was not.
+
+To give a service less than everything, restrict it. `ORACLE_SCOPES_<NAME>` takes a
+comma-separated list of `attest` (record outcomes), `flag` (`/flag` and `/flag/resolve`),
+`link` and `epoch` (run an epoch, a chain write paid from the oracle wallet):
+
+```
+ORACLE_SCOPES_COUNTERAUDIT=attest   # CounterAudit records outcomes and can do nothing else
+```
+
+A restricted credential gets `403` on the other writes. With no variable a credential keeps
+every scope, so nothing changes until you set one, and `admin` is never restricted. An
+unknown scope, or a restriction naming a credential that does not exist, stops the process
+at startup: a typo would otherwise leave a credential with more power than you meant to give
+it. A token shorter than 32 characters still works but is named in a startup warning;
+generate them with `openssl rand -hex 32`.
 
 Credentials are read once at startup and the banner lists the names it loaded, never the
 values. Revoking means editing the environment and restarting, and that line is where you
@@ -338,13 +353,35 @@ the writes use. Unauthenticated is not unmetered: `/score` costs several RPC rou
 and `/evidence` rebuilds a Merkle tree, so these are the most expensive things a stranger
 can ask for once the read paths are proxied to the internet.
 
-The caller is identified by socket address, or by the last `X-Forwarded-For` entry when
-the connection arrives over loopback. Behind a reverse proxy the socket address is always
-`127.0.0.1`, so keying on it alone would put every visitor in one bucket and let a single
-abuser lock out everyone. Caddy sets that header itself, and the **last** entry is read
-because a proxy appends to whatever the client sent, so a forged one cannot buy a fresh
-bucket. Verify that if the proxy is ever replaced: trip the limit, then retry with a
+The caller is identified by socket address, or by the `X-Forwarded-For` header when the
+connection arrives from loopback or from a proxy listed in `TRUSTED_PROXIES`. Behind a
+reverse proxy the socket address is the proxy's, so keying on it alone would put every
+visitor in one bucket and let a single abuser lock out everyone, the watcher included.
+
+`TRUSTED_PROXIES` is a comma-separated list of addresses or CIDR ranges whose header may be
+believed. Loopback is always trusted, which covers a proxy on the same host. A proxy in a
+container reaches the oracle from a Docker bridge address, and nginx on the host reaches a
+published port from the bridge gateway, so list the proxy network, for example
+`TRUSTED_PROXIES=172.16.0.0/12`. Do not list a range that includes untrusted clients: whoever
+is in it can choose the address it is limited as. An entry that is not an address stops the
+process at startup, and starting without the setting on a non-loopback listener logs a warning.
+
+The header is read from the right. Each proxy appends the address it received the request
+from, so trusted hops are skipped and the first address that is not one is the client; a
+client that sends a forged prefix gains nothing. An entry that is not an IP address is never
+used as a key. Verify this if the proxy is ever replaced: trip the limit, then retry with a
 forged `X-Forwarded-For`. A 200 means the limiter is bypassable.
+
+Buckets are per kind of route as well as per caller: writes, `/evidence`, `/divergence`, and
+the other reads each have their own 60 a minute. `/divergence` is polled by the watcher, and
+sharing a bucket with the expensive reads let anyone make that poll fail. The write routes
+are metered before they are authorised, so guessing at a token is throttled too.
+
+A request target must be a path in canonical form. `//evidence/metrics`, `/evidence/../metrics`,
+absolute-form targets and anything the URL parser would rewrite get `400 bad request target`.
+A proxy that matches on a normalised path and forwards the raw one cannot be used to reach a
+route it did not allow, and a malformed target cannot end the process. Any error a route does
+not handle itself is logged with the request line quoted and answered `500 internal error`.
 
 **Response (200):**
 ```json
@@ -644,8 +681,17 @@ component worth running. The watcher raises an alarm when the checker is unreach
 when it is up but has not completed an epoch within `MAX_SILENCE_MINUTES`, when the URL
 turns out to be a primary rather than a checker, or when the checker reports
 `seesProposals: false` because its epoch is too long to catch proposals before they
-expire. Any of those make an empty divergence list meaningless, and a watcher that
-reported them as "no divergences" would manufacture confidence out of an outage.
+expire, or when `/health` answers but `/divergence` cannot be read, which is what a spent
+rate-limit bucket looks like. Any of those make an empty divergence list meaningless, and a
+watcher that reported them as "no divergences" would manufacture confidence out of an outage.
+
+**It says so when it is the one failing.** A poll that throws, its own RPC being down for
+one, used to be logged and forgotten. After three in a row the watcher alerts, and it says so
+again when it recovers. It does not follow redirects from the checker, and what it puts in an
+alert is built from fields it can check: the agent must be a 32-byte hash, factor names come
+from a fixed list, and every figure is rendered from a number. Discord alerts switch
+mentions off and Slack alerts are escaped, so text that arrives from the checker cannot ping
+a channel.
 
 **It holds no private key.** Every action is a read or a notification, so a compromised
 watcher can lie to you but cannot touch the protocol. Set `WEBHOOK_URL` to send alerts
@@ -681,6 +727,8 @@ and then its silence means nothing.
 | `EPOCH_HOURS` | `24` | Hours between automatic epoch runs |
 | `HOST` | `127.0.0.1` | HTTP bind address. Use `0.0.0.0` in Docker. |
 | `PORT` | `3030` | HTTP port |
+| `TRUSTED_PROXIES` | (empty) | Addresses or CIDR ranges, comma-separated, whose `X-Forwarded-For` is believed besides loopback. Behind a reverse proxy in a container set the proxy network, for example `172.16.0.0/12`; otherwise every visitor shares one rate-limit bucket |
+| `ORACLE_SCOPES_<NAME>` | (all) | Restricts the credential `ORACLE_TOKEN_<NAME>` to a list of `attest`, `flag`, `link`, `epoch` |
 | `FROM_BLOCK` | `0` | Block to start scanning AgentRegistered events from |
 | `LOG_CHUNK_SIZE` | `2000` | Max blocks per eth_getLogs call |
 | `FEE_REGISTRY_ADDRESS` | (empty) | SigvaraEpochFees address for fee-gated scoring |

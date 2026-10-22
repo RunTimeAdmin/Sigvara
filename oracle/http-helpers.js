@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('crypto');
+const net = require('net');
 
 // Pure-ish HTTP helpers extracted from index.js so the auth gate, body-size
 // limit, and route parsing can be unit tested without a live server.
@@ -170,29 +171,171 @@ function rateLimited(key, now = Date.now(), max = RATE_MAX, windowMs = RATE_WIND
 
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 
+/** An address in one spelling: an IPv4-mapped IPv6 address is the IPv4 address. */
+function normalizeAddress(address) {
+  const a = String(address || '');
+  return a.toLowerCase().startsWith('::ffff:') && net.isIPv4(a.slice(7)) ? a.slice(7) : a;
+}
+
+function isLoopback(address) {
+  return LOOPBACK.has(String(address || '')) || LOOPBACK.has(normalizeAddress(address));
+}
+
+/**
+ * The peers whose X-Forwarded-For may be believed: loopback always, plus whatever the
+ * operator lists in TRUSTED_PROXIES (comma-separated addresses or CIDR ranges, for
+ * example "172.16.0.0/12"). Returns a function from an address to a boolean.
+ *
+ * Loopback alone was right for a proxy on the same host reaching a loopback bind, and
+ * wrong for both deployments that exist. Caddy runs in a container and reaches the
+ * oracle over a Docker network, so its address is a bridge address. nginx on the host
+ * reaches the published port through Docker's proxy, so it arrives from the bridge
+ * gateway. In both, the header was ignored and every visitor shared one bucket, so a
+ * single client sending a few dozen requests a minute refused everyone else, including
+ * the watcher that polls /divergence.
+ *
+ * Throws on an entry it cannot read, so a typo stops the process instead of quietly
+ * trusting nothing. Do not list a range that includes untrusted clients: whoever is in it
+ * can pick the address they are rate-limited as.
+ */
+function parseTrustedProxies(spec = '') {
+  const ranges = new net.BlockList();
+  for (const raw of String(spec).split(',').map((s) => s.trim()).filter(Boolean)) {
+    const [address, bits, extra] = raw.split('/');
+    const family = net.isIPv4(address) ? 'ipv4' : net.isIPv6(address) ? 'ipv6' : null;
+    if (!family || extra !== undefined) {
+      throw new Error(`TRUSTED_PROXIES: "${raw}" is not an IP address or a CIDR range`);
+    }
+    if (bits === undefined) {
+      ranges.addAddress(address, family);
+    } else {
+      const n = Number(bits);
+      if (!/^\d{1,3}$/.test(bits) || n > (family === 'ipv4' ? 32 : 128)) {
+        throw new Error(`TRUSTED_PROXIES: "${raw}" has an invalid prefix length`);
+      }
+      ranges.addSubnet(address, n, family);
+    }
+  }
+  return (address) => {
+    if (isLoopback(address)) return true;
+    const a = normalizeAddress(address);
+    const family = net.isIPv4(a) ? 'ipv4' : net.isIPv6(a) ? 'ipv6' : null;
+    return family !== null && ranges.check(a, family);
+  };
+}
+
 /**
  * The rate-limiter key for a request: the caller's address, as best it can be known.
  *
- * The socket address alone is wrong once a reverse proxy is in front. The oracle binds
- * loopback, so every proxied request reports 127.0.0.1 and the whole internet shares a
- * single bucket: one abuser locks out everybody, which is worse than no limit at all.
+ * The socket address alone is wrong once a reverse proxy is in front: every proxied
+ * request reports the proxy's address and the whole internet shares a single bucket, so
+ * one abuser locks out everybody, which is worse than no limit at all.
  *
- * X-Forwarded-For carries the real address, but only the hop that wrote it can vouch
- * for it, so it is read only when the connection itself arrived over loopback. A
- * request from anywhere else keeps its socket address and cannot win a fresh bucket by
- * sending the header itself.
+ * X-Forwarded-For carries the real address, but only a hop the operator trusts can vouch
+ * for it, so it is read only when the connection itself arrived from loopback or from a
+ * listed proxy (parseTrustedProxies). A request from anywhere else keeps its socket
+ * address and cannot win a fresh bucket by sending the header itself.
  *
- * The LAST entry is the caller. A proxy appends to any header the client supplied, so
- * the leading entries are attacker-controlled; the final one was written by the nearest
- * hop. Reading the first entry instead would let anyone mint unlimited buckets.
+ * Read from the right. Each proxy appends the address it received the request from, so
+ * the leading entries are whatever the client wrote and only the trailing ones were put
+ * there by hops we control. Hops that are trusted proxies are skipped, and the first
+ * address that is not one is the client. Reading the first entry instead would let anyone
+ * mint unlimited buckets. An entry that is not an IP address is never used as a key: it
+ * would let a client choose arbitrary strings to fill the table with.
  */
-function clientKey(req) {
+function clientKey(req, isTrusted = isLoopback) {
   const socketAddr = req?.socket?.remoteAddress || 'unknown';
-  if (!LOOPBACK.has(socketAddr)) return socketAddr;
+  if (!isTrusted(socketAddr)) return socketAddr;
   const fwd = req?.headers?.['x-forwarded-for'];
   if (!fwd) return socketAddr;
-  const parts = String(fwd).split(',');
-  return parts[parts.length - 1].trim() || socketAddr;
+  const hops = String(fwd).split(',').map((h) => h.trim()).filter(Boolean);
+  for (let i = hops.length - 1; i >= 0; i--) {
+    if (isTrusted(hops[i])) continue;
+    return net.isIP(hops[i]) ? normalizeAddress(hops[i]) : socketAddr;
+  }
+  return socketAddr;
+}
+
+/**
+ * The URL for a request target, or null when this service should not answer it.
+ *
+ * Only a path-form target passes, and only one whose path is already in canonical form.
+ *
+ * `new URL(target, base)` is not safe to feed a raw request line. A target that starts
+ * with two slashes is read as a scheme-relative URL whose first segment is a host, so
+ * "//evidence/metrics" yields the path "/metrics" on the host "evidence". A reverse proxy
+ * that merges slashes before matching its allowlist sees "/evidence/metrics", allows it,
+ * and forwards the raw "//evidence/metrics", which then reached /metrics here. The same
+ * parser also collapses "/evidence/../metrics", and it throws on a target like "http://[",
+ * which with no handler for the error ended the process.
+ *
+ * So the host must come out as ours, and the path the parser produces must equal the path
+ * that was sent. Anything the parser had to rewrite is refused rather than answered under
+ * a different name than the one the proxy checked.
+ *
+ * @param {string} target the raw request target (req.url)
+ * @param {string} origin e.g. "http://localhost:3030"
+ */
+function parseRequestTarget(target, origin) {
+  if (typeof target !== 'string' || target[0] !== '/') return null;
+  let url;
+  try {
+    url = new URL(target, origin);
+  } catch {
+    return null;
+  }
+  if (url.origin !== new URL(origin).origin) return null;
+  return url.pathname === target.split(/[?#]/, 1)[0] ? url : null;
+}
+
+/**
+ * What each credential may do.
+ *
+ * Every credential used to be able to do everything a credential can: run an epoch (a
+ * chain write paid from the oracle wallet), raise or clear flags, link an identity, record
+ * outcomes. CounterAudit needs one of those. A leaked CounterAudit token should not be
+ * able to run the other three.
+ *
+ * Set ORACLE_SCOPES_<NAME>=attest,flag to restrict the credential ORACLE_TOKEN_<NAME>. A
+ * credential with no such variable may do everything, as before, so nothing changes until
+ * this is used. `admin` is never restricted. Unset or blank means unrestricted, so to cut a
+ * credential off, delete its token.
+ *
+ * Throws on a scope it does not know and on a restriction naming a credential that does not
+ * exist: a typo in either would otherwise leave a credential with more power than the
+ * operator meant to give it, and a startup failure is the only place that shows.
+ */
+const SCOPES = ['attest', 'flag', 'link', 'epoch'];
+
+function readScopes(env = process.env, credentials = new Map()) {
+  const scopes = new Map();
+  for (const [key, value] of Object.entries(env)) {
+    if (!key.startsWith('ORACLE_SCOPES_') || !value || !value.trim()) continue;
+    const name = key.slice('ORACLE_SCOPES_'.length).toLowerCase();
+    const list = value.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+    const unknown = list.filter((s) => !SCOPES.includes(s));
+    if (unknown.length) {
+      throw new Error(`${key}: unknown scope ${unknown.join(', ')} (known: ${SCOPES.join(', ')})`);
+    }
+    if (name === 'admin') continue;
+    if (!credentials.has(name)) {
+      throw new Error(`${key} restricts a credential that does not exist (check the spelling of ORACLE_TOKEN_${name.toUpperCase()})`);
+    }
+    scopes.set(name, new Set(list));
+  }
+  return scopes;
+}
+
+/** Whether the named caller may use a scope. Callers with no restriction may use all. */
+function mayUse(scopes, caller, scope) {
+  const allowed = scopes && scopes.get(caller);
+  return !allowed || allowed.has(scope);
+}
+
+/** Names of credentials whose token is shorter than a random 128-bit value written in hex. */
+const MIN_TOKEN_LENGTH = 32;
+function weakCredentials(credentials) {
+  return [...credentials].filter(([, token]) => token.length < MIN_TOKEN_LENGTH).map(([name]) => name);
 }
 
 // Loopback binds may run with no credentials at all (local testing). Anything else
@@ -252,6 +395,13 @@ module.exports = {
   adminTokenPolicyError,
   parseDidHash,
   clientKey,
+  parseTrustedProxies,
+  parseRequestTarget,
+  readScopes,
+  mayUse,
+  weakCredentials,
+  SCOPES,
+  MIN_TOKEN_LENGTH,
   MAX_BODY_SIZE,
   RATE_WINDOW_MS,
   RATE_MAX,

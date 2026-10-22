@@ -114,6 +114,14 @@ oracle.sigvara.xyz {
 		# the real address to whatever the client sent, and the oracle reads the LAST
 		# entry for exactly that reason, so a forged header cannot win a fresh bucket.
 		#
+		# The oracle believes the header only from loopback or from a peer listed in
+		# TRUSTED_PROXIES. Caddy reaches it over the Docker network, from a bridge
+		# address that is not loopback, so set TRUSTED_PROXIES on the oracle to that
+		# network's subnet:
+		#   docker network inspect sigvara-web --format '{{(index .IPAM.Config 0).Subnet}}'
+		# Without it the header is ignored and every visitor shares one bucket, whatever
+		# Caddy sends. That was the state of this deployment until the setting existed.
+		#
 		# If this proxy is ever replaced, verify that behaviour rather than assuming it:
 		# trip the limit, then retry with a forged X-Forwarded-For. A 200 means the
 		# limiter is bypassable.

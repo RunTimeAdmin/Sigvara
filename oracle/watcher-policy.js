@@ -61,7 +61,7 @@ function alertKey(divergence) {
  * this checker, and a checker that is down, stalled, or running on a cadence too slow
  * to see proposals before they expire is providing false assurance rather than none.
  */
-function checkerStatus(health, divergencePayload, nowMs, maxSilenceMs) {
+function checkerStatus(health, divergencePayload, nowMs, maxSilenceMs, payloadError = null) {
   if (!health) {
     return { ok: false, reason: 'checker unreachable' };
   }
@@ -74,15 +74,22 @@ function checkerStatus(health, divergencePayload, nowMs, maxSilenceMs) {
   if (Number.isFinite(since) && since > maxSilenceMs) {
     return { ok: false, reason: `checker has not completed an epoch in ${Math.round(since / 60000)} minutes` };
   }
-  if (divergencePayload) {
-    if (divergencePayload.mode !== 'checker') {
-      return { ok: false, reason: 'endpoint is not a checker' };
-    }
-    // The checker publishes whether its own cadence is short enough to see proposals
-    // before their window closes. false means an empty divergence list proves nothing.
-    if (divergencePayload.seesProposals === false) {
-      return { ok: false, reason: 'checker epoch is too long to see proposals before they expire' };
-    }
+  // Up but not readable. /health answers whatever the rate limiter is doing, while
+  // /divergence is metered, so a /health that works beside a /divergence that does not is
+  // the signature of exactly the failure this watcher must not sleep through. It used to
+  // count as ok and then fail on the missing list, where only the console heard it, so one
+  // client filling the shared rate-limit bucket silenced every alert.
+  if (!divergencePayload) {
+    const why = payloadError ? ` (${String(payloadError).slice(0, 120)})` : '';
+    return { ok: false, reason: `the checker is up but its divergence list could not be read${why}` };
+  }
+  if (divergencePayload.mode !== 'checker') {
+    return { ok: false, reason: 'endpoint is not a checker' };
+  }
+  // The checker publishes whether its own cadence is short enough to see proposals
+  // before their window closes. false means an empty divergence list proves nothing.
+  if (divergencePayload.seesProposals === false) {
+    return { ok: false, reason: 'checker epoch is too long to see proposals before they expire' };
   }
   return { ok: true, reason: null };
 }
@@ -150,12 +157,63 @@ function webhookPayload(url, alert, chatId = '') {
     return { chat_id: chatId, text: clip(text, 4096), disable_web_page_preview: true };
   }
   if (host === 'discord.com' || host === 'discordapp.com' || host.endsWith('.discord.com')) {
-    return { content: clip(text, 2000) };
+    // parse: [] turns every mention off. Without it an alert containing @everyone pings the
+    // channel, and some of what an alert quotes arrives from the checker.
+    return { content: clip(text, 2000), allowed_mentions: { parse: [] } };
   }
   if (host === 'hooks.slack.com') {
-    return { text: clip(text, 3000) };
+    // Slack reads <!channel>, <!here> and <@U123> out of message text. Its own rule is to
+    // escape these three characters, which makes them inert.
+    const inert = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return { text: clip(inert, 3000) };
   }
   return { ...alert };
 }
 
 module.exports.webhookPayload = webhookPayload;
+
+const SCORE_FACTORS = [
+  'feeScore', 'successScore', 'ageScore', 'externalScore', 'communityScore', 'propagationScore',
+];
+
+/**
+ * One divergence as a line of alert text, built only from fields that can be checked.
+ *
+ * The record comes from the checker over HTTP. The watcher re-reads the proposal on chain
+ * before it alerts, which makes the agent real, but it does not make the rest of the record
+ * honest: factor names and numbers went straight into the alert text, so a checker that was
+ * compromised, or simply wrong, could put @everyone, a link, or a newline-delimited
+ * instruction in front of the committee at the moment they are least able to judge it.
+ *
+ * So nothing is quoted. The agent must be a 32-byte hash, the factor names come from a fixed
+ * list, and every figure is rendered from a number, or as ? when it is not one.
+ */
+function describeDivergence(d) {
+  const num = (v) => (Number.isFinite(Number(v)) ? String(Number(v)) : '?');
+  const did = typeof d?.didHash === 'string' && /^0x[0-9a-fA-F]{64}$/.test(d.didHash)
+    ? d.didHash
+    : '(not a valid agent hash)';
+  const factors = SCORE_FACTORS
+    .filter((f) => d?.factors && d.factors[f])
+    .map((f) => `${f} proposed=${num(d.factors[f].pending)} checker=${num(d.factors[f].own)}`)
+    .join(', ');
+  return `${did} proposed total ${num(d?.pendingTotal)}, checker computes ${num(d?.ownTotal)}${factors ? ` (${factors})` : ''}`;
+}
+
+/**
+ * Whether the watcher itself is failing, as opposed to the checker.
+ *
+ * A poll that throws (the watcher's own RPC down, an unexpected response) was logged and
+ * forgotten, so a watcher that could no longer do its job looked the same from outside as
+ * one with nothing to report. After `threshold` failures in a row it alerts once, and says
+ * so once when it recovers. `state` is { failures, alerted }; the new state is returned.
+ */
+function trackPollOutcome(state, ok, threshold = 3) {
+  if (ok) return { state: { failures: 0, alerted: false }, action: state.alerted ? 'recovered' : null };
+  const failures = state.failures + 1;
+  const alert = failures >= threshold && !state.alerted;
+  return { state: { failures, alerted: state.alerted || alert }, action: alert ? 'alert' : null };
+}
+
+module.exports.describeDivergence = describeDivergence;
+module.exports.trackPollOutcome = trackPollOutcome;

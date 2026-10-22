@@ -11,7 +11,11 @@ const {
   epochIntervalError, divergenceToleranceError, DEFAULT_DIVERGENCE_TOLERANCE,
   mapChunked,
 } = require('./epoch-policy');
-const { json, readBody, readCredentials, identifyCaller, mayAttestUnauthenticated, parseScorePath, parseDidHash, rateLimited, clientKey, adminTokenPolicyError, runningCommit } = require('./http-helpers');
+const {
+  json, readBody, readCredentials, identifyCaller, mayAttestUnauthenticated, parseScorePath, parseDidHash,
+  rateLimited, clientKey, adminTokenPolicyError, runningCommit,
+  parseTrustedProxies, parseRequestTarget, readScopes, mayUse, weakCredentials, MIN_TOKEN_LENGTH,
+} = require('./http-helpers');
 const payments = require('./payments');
 const merkle = require('./merkle');
 const { createResponseCache } = require('./response-cache');
@@ -128,6 +132,27 @@ if (cfg.checkerMode) {
     );
     process.exit(1);
   }
+}
+
+// Which peers may vouch for X-Forwarded-For, besides loopback. Behind a reverse proxy in a
+// container the peer is a bridge address, and without this every visitor shares one
+// rate-limit bucket. A typo stops the process rather than quietly trusting nothing.
+let isTrustedProxy;
+try {
+  isTrustedProxy = parseTrustedProxies(process.env.TRUSTED_PROXIES);
+} catch (err) {
+  console.error(`[oracle] ${err.message}`);
+  process.exit(1);
+}
+
+// What each credential may do. A restriction that names a credential that does not exist, or
+// a scope that does not exist, stops the process: either typo would leave a credential with
+// more power than the operator meant it to have.
+try {
+  cfg.scopes = readScopes(process.env, cfg.credentials);
+} catch (err) {
+  console.error(`[oracle] ${err.message}`);
+  process.exit(1);
 }
 
 chain.init(cfg);
@@ -1058,10 +1083,23 @@ function buildEvidenceBody(didHash, events) {
   });
 }
 
-const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, `http://localhost:${cfg.port}`);
-  const { pathname } = url;
+// The rate-limit bucket for a request: who is asking, and which kind of route. One bucket
+// for every route let a client flood a cheap or expensive read and use up the allowance of
+// the one that mattered. /divergence is the case: the watcher polls it, and a bucket shared
+// with /evidence and /score meant anyone could make the watcher's poll fail with a 429.
+const rateKey = (req, cls) => `${cls}|${clientKey(req, isTrustedProxy)}`;
+
+async function handleRequest(req, res) {
   metrics.inc('httpRequests');
+  // Only a path-form target whose path is already canonical is answered. See
+  // parseRequestTarget for the three ways a raw request line used to get past a proxy's
+  // allowlist or end the process.
+  const url = parseRequestTarget(req.url, `http://localhost:${cfg.port}`);
+  if (!url) {
+    metrics.inc('httpBadTargets');
+    return json(res, 400, { error: 'bad request target' });
+  }
+  const { pathname } = url;
 
   /* HEAD is routed as GET.
    *
@@ -1144,14 +1182,16 @@ const server = http.createServer(async (req, res) => {
 
   // POST /epoch  — trigger a manual run (useful for testing)
   if (req.method === 'POST' && pathname === '/epoch') {
+    // Metered before it is authorised, so that guessing at a token is throttled as well.
+    if (rateLimited(rateKey(req, 'write'))) {
+      metrics.inc('rateLimitHits');
+      return json(res, 429, { error: 'Rate limited' });
+    }
     // Gated: a manual epoch submits on-chain tx's paid from the oracle wallet, so
     // it must not be triggerable by anyone who can reach the port.
     const caller = identifyCaller(req.headers, cfg.credentials);
     if (!caller) return json(res, 401, { error: 'Unauthorized' });
-    if (rateLimited(clientKey(req))) {
-      metrics.inc('rateLimitHits');
-      return json(res, 429, { error: 'Rate limited' });
-    }
+    if (!mayUse(cfg.scopes, caller, 'epoch')) return json(res, 403, { error: 'Forbidden' });
     if (epochRunning) return json(res, 409, { error: 'Epoch already running' });
     runEpoch().catch(err => console.error('[oracle] manual epoch error:', err.message));
     return json(res, 202, { message: 'Epoch started' });
@@ -1161,7 +1201,7 @@ const server = http.createServer(async (req, res) => {
   // attester: unique ID for the party submitting the attestation (e.g. client address, API key hash).
   // Used for dedupe/cooldown: the same attester cannot attest the same agent within ATTEST_COOLDOWN_MS.
   if (req.method === 'POST' && pathname === '/attest') {
-    if (rateLimited(clientKey(req))) {
+    if (rateLimited(rateKey(req, 'write'))) {
       metrics.inc('rateLimitHits');
       return json(res, 429, { error: 'Rate limited' });
     }
@@ -1182,6 +1222,11 @@ const server = http.createServer(async (req, res) => {
        * 1 MB JSON parse, which the rate limit above already bounds.
        */
       const caller = identifyCaller(req.headers, cfg.credentials);
+      // A credential restricted to other scopes is refused outright, not treated as a
+      // stranger: it presented a token, and what it may do with it is the operator's rule.
+      if (caller && !mayUse(cfg.scopes, caller, 'attest')) {
+        return json(res, 403, { error: 'Forbidden' });
+      }
       if (!mayAttestUnauthenticated(success, payments.required(paymentCfg)) && !caller) {
         return json(res, 401, {
           error: 'Unauthorized',
@@ -1403,7 +1448,9 @@ const server = http.createServer(async (req, res) => {
   // someone other than its own operator. An alert only its author can read is not a
   // check on anything.
   if (readMethod === 'GET' && (pathname === '/divergence' || pathname.startsWith('/divergence/'))) {
-    if (rateLimited(clientKey(req))) {
+    // Its own class: the watcher polls this, and sharing a bucket with the expensive reads
+    // let anyone make that poll fail.
+    if (rateLimited(rateKey(req, 'divergence'))) {
       metrics.inc('rateLimitHits');
       return json(res, 429, { error: 'Rate limited' });
     }
@@ -1461,12 +1508,15 @@ const server = http.createServer(async (req, res) => {
     // the agent's payment history, so this is the most expensive thing a stranger can
     // ask for once the read paths are proxied to the public internet. The cache below
     // bounds repeat cost, not first-request cost, and the limiter still matters.
-    if (rateLimited(clientKey(req))) {
+    if (rateLimited(rateKey(req, 'evidence'))) {
       metrics.inc('rateLimitHits');
       return json(res, 429, { error: 'Rate limited' });
     }
-    const didHash = pathname.slice('/evidence/'.length);
-    if (!/^0x[0-9a-fA-F]{64}$/.test(didHash)) {
+    // The one stored spelling. The cache is keyed on this, and it used to be keyed on
+    // whatever casing the caller sent, so one agent's hash had millions of spellings, each
+    // its own cache entry and each a full Merkle rebuild.
+    const didHash = parseDidHash(pathname.slice('/evidence/'.length));
+    if (!didHash) {
       return json(res, 400, { error: 'didHash must be a 32-byte hex string' });
     }
     const events = getPaymentEvents(didHash);
@@ -1480,15 +1530,20 @@ const server = http.createServer(async (req, res) => {
 
   // POST /flag  — body: { didHash }
   if (req.method === 'POST' && pathname === '/flag') {
-    const caller = identifyCaller(req.headers, cfg.credentials);
-    if (!caller) return json(res, 401, { error: 'Unauthorized' });
-    if (rateLimited(clientKey(req))) {
+    if (rateLimited(rateKey(req, 'write'))) {
       metrics.inc('rateLimitHits');
       return json(res, 429, { error: 'Rate limited' });
     }
+    const caller = identifyCaller(req.headers, cfg.credentials);
+    if (!caller) return json(res, 401, { error: 'Unauthorized' });
+    if (!mayUse(cfg.scopes, caller, 'flag')) return json(res, 403, { error: 'Forbidden' });
     try {
-      const { didHash } = await readBody(req);
-      if (!didHash) return json(res, 400, { error: 'didHash required' });
+      // Validated and lower-cased like every other route that writes. A flag keyed on any
+      // value at all, an object included, broke every later save of the state file until
+      // the process was restarted, and a flag filed under a mixed-case spelling was one
+      // no score ever read.
+      const didHash = parseDidHash((await readBody(req)).didHash);
+      if (!didHash) return json(res, 400, { error: 'didHash must be a 32-byte hex string' });
       const raised = addFlag(didHash);
       persistState();
       metrics.inc('flagsReceived');
@@ -1511,15 +1566,18 @@ const server = http.createServer(async (req, res) => {
   // Token-gated like /flag, and for a stronger reason: this one raises a score. It
   // stays off the public proxy entirely.
   if (req.method === 'POST' && pathname === '/flag/resolve') {
-    const caller = identifyCaller(req.headers, cfg.credentials);
-    if (!caller) return json(res, 401, { error: 'Unauthorized' });
-    if (rateLimited(clientKey(req))) {
+    if (rateLimited(rateKey(req, 'write'))) {
       metrics.inc('rateLimitHits');
       return json(res, 429, { error: 'Rate limited' });
     }
+    const caller = identifyCaller(req.headers, cfg.credentials);
+    if (!caller) return json(res, 401, { error: 'Unauthorized' });
+    if (!mayUse(cfg.scopes, caller, 'flag')) return json(res, 403, { error: 'Forbidden' });
     try {
-      const { didHash, count } = await readBody(req);
-      if (!didHash) return json(res, 400, { error: 'didHash required' });
+      const body = await readBody(req);
+      const didHash = parseDidHash(body.didHash);
+      const { count } = body;
+      if (!didHash) return json(res, 400, { error: 'didHash must be a 32-byte hex string' });
 
       const result = resolveFlags(didHash, count ?? 1);
       // Persist only on a real change, so a no-op call does not rewrite the state file.
@@ -1538,15 +1596,19 @@ const server = http.createServer(async (req, res) => {
   // ERC-8004 identity so its 8004 feedback drives externalScore. Accepted only
   // if the 8004 agent NFT is owned by the same wallet as the Sigvara operator.
   if (req.method === 'POST' && pathname === '/link') {
-    const caller = identifyCaller(req.headers, cfg.credentials);
-    if (!caller) return json(res, 401, { error: 'Unauthorized' });
-    if (rateLimited(clientKey(req))) {
+    if (rateLimited(rateKey(req, 'write'))) {
       metrics.inc('rateLimitHits');
       return json(res, 429, { error: 'Rate limited' });
     }
+    const caller = identifyCaller(req.headers, cfg.credentials);
+    if (!caller) return json(res, 401, { error: 'Unauthorized' });
+    if (!mayUse(cfg.scopes, caller, 'link')) return json(res, 403, { error: 'Forbidden' });
     try {
-      const { didHash, agentId } = await readBody(req);
-      if (!didHash || agentId === undefined || agentId === null) {
+      const body = await readBody(req);
+      const didHash = parseDidHash(body.didHash);
+      const { agentId } = body;
+      if (!didHash) return json(res, 400, { error: 'didHash must be a 32-byte hex string' });
+      if (agentId === undefined || agentId === null) {
         return json(res, 400, { error: 'didHash and agentId required' });
       }
       if (!external.configured()) return json(res, 400, { error: 'external (ERC-8004) registry not configured' });
@@ -1586,7 +1648,7 @@ const server = http.createServer(async (req, res) => {
         hint: 'set JOBS_REGISTRY_ADDRESS (and JOBS_RPC if the registry is on another chain)',
       });
     }
-    if (rateLimited(clientKey(req))) {
+    if (rateLimited(rateKey(req, 'read'))) {
       metrics.inc('rateLimitHits');
       return json(res, 429, { error: 'Rate limited' });
     }
@@ -1641,7 +1703,7 @@ const server = http.createServer(async (req, res) => {
 
     if (state) {
       metrics.inc('badgeCacheHits');
-    } else if (rateLimited(clientKey(req))) {
+    } else if (rateLimited(rateKey(req, 'read'))) {
       // The limiter guards the miss path only. One badge in a popular README is a
       // single address fetched by thousands of readers, which the cache absorbs
       // entirely; somebody walking the address space is thousands of addresses that
@@ -1677,7 +1739,7 @@ const server = http.createServer(async (req, res) => {
     // Each call costs several RPC round trips (agent info, payer standing, and the
     // external score when one is linked), so it is metered like the writes despite
     // needing no token.
-    if (rateLimited(clientKey(req))) {
+    if (rateLimited(rateKey(req, 'read'))) {
       metrics.inc('rateLimitHits');
       return json(res, 429, { error: 'Rate limited' });
     }
@@ -1757,6 +1819,30 @@ const server = http.createServer(async (req, res) => {
   }
 
   return json(res, 404, { error: 'Not found' });
+}
+
+/* A handler that throws must cost one request, not the process.
+ *
+ * handleRequest is async, and Node ends the process on a rejection nothing handles, so any
+ * throw outside a route's own try block was a remote shutdown for anyone who could reach
+ * the port; the request-target parser was one, and a single request line was enough. The
+ * restart policy brought the container back, and the compose files re-cloned `main` each
+ * time. The error is logged with the request line quoted, so a hostile target cannot forge
+ * a log line, and the caller is told nothing about it.
+ */
+const server = http.createServer((req, res) => {
+  handleRequest(req, res).catch((err) => {
+    metrics.inc('httpHandlerErrors');
+    console.error(
+      `[oracle] request failed: ${req.method} ${JSON.stringify(String(req.url).slice(0, 200))}: ` +
+      `${(err && err.message) || err}`,
+    );
+    if (res.headersSent) {
+      res.destroy();
+    } else {
+      json(res, 500, { error: 'internal error' });
+    }
+  });
 });
 
 {
@@ -1775,6 +1861,23 @@ server.listen(cfg.port, cfg.host, () => {
   // Names only, never the tokens. Revoking a credential means deleting its variable and
   // restarting, so the startup line is where you confirm it actually went.
   console.log(`[oracle] write credentials: ${cfg.credentials.size ? [...cfg.credentials.keys()].join(', ') : 'NONE (writes are unauthenticated)'}`);
+  if (cfg.scopes.size) {
+    console.log(`[oracle] restricted credentials: ${[...cfg.scopes].map(([n, s]) => `${n}=${[...s].join('+')}`).join(', ')}`);
+  }
+  // Names only. A short token is a warning, not a refusal: a running deployment may hold
+  // one, and refusing at startup would turn a restart into an outage. A new token should
+  // be generated, not shortened.
+  const weak = weakCredentials(cfg.credentials);
+  if (weak.length) {
+    console.warn(`[oracle] WARNING: credential(s) ${weak.join(', ')} shorter than ${MIN_TOKEN_LENGTH} characters. Generate a token with: openssl rand -hex 32`);
+  }
+  if (!process.env.TRUSTED_PROXIES && !['127.0.0.1', 'localhost', '::1'].includes(cfg.host)) {
+    console.warn(
+      '[oracle] WARNING: TRUSTED_PROXIES is unset and the listener is not loopback-only. Behind a reverse ' +
+      'proxy in a container every visitor then shares one rate-limit bucket. Set TRUSTED_PROXIES to the ' +
+      'proxy network, for example 172.16.0.0/12.',
+    );
+  }
   console.log(`[oracle] state path: ${getStatePath()}`);
   loadState();
 

@@ -413,3 +413,168 @@ test('parseDidHash: refuses anything that is not a 32-byte hex string', () => {
     assert.equal(parseDidHash(bad), null, `accepted ${JSON.stringify(bad)}`);
   }
 });
+
+// ---- trusted proxies -------------------------------------------------------------------
+//
+// Loopback alone was right for a proxy on the same host and wrong for both real
+// deployments: Caddy in a container reaches the oracle from a bridge address, and nginx on
+// the host reaches the published port from the bridge gateway. The header was ignored in
+// both, and every visitor shared one bucket.
+
+const {
+  parseTrustedProxies, parseRequestTarget, readScopes, mayUse, weakCredentials, SCOPES,
+} = require('./http-helpers');
+
+test('parseTrustedProxies: loopback is always trusted, anything else only when listed', () => {
+  const none = parseTrustedProxies('');
+  assert.equal(none('127.0.0.1'), true);
+  assert.equal(none('::1'), true);
+  assert.equal(none('::ffff:127.0.0.1'), true);
+  assert.equal(none('172.18.0.5'), false);
+
+  const some = parseTrustedProxies('172.16.0.0/12, 10.1.2.3, fd00::/8');
+  assert.equal(some('172.18.0.5'), true);
+  assert.equal(some('172.32.0.1'), false, 'just outside the /12');
+  assert.equal(some('10.1.2.3'), true);
+  assert.equal(some('10.1.2.4'), false, 'a single address is only itself');
+  assert.equal(some('fd12::1'), true);
+  assert.equal(some('::ffff:172.18.0.5'), true, 'an IPv4-mapped peer is the IPv4 address');
+  assert.equal(some('not an address'), false);
+  assert.equal(some(undefined), false);
+});
+
+test('parseTrustedProxies: an entry it cannot read stops the process instead of trusting nothing', () => {
+  for (const bad of ['banana', '10.0.0.0/33', '::1/129', '10.0.0.0/8/1', '10.0.0.0/-1', '10.0.0.0/x', '300.1.1.1']) {
+    assert.throws(() => parseTrustedProxies(bad), /TRUSTED_PROXIES/, bad);
+  }
+});
+
+test('clientKey: behind a listed proxy the forwarded address is the key', () => {
+  const trusted = parseTrustedProxies('172.16.0.0/12');
+  assert.equal(clientKey(asReq('172.18.0.5', { 'x-forwarded-for': '198.51.100.7' }), trusted), '198.51.100.7');
+  assert.equal(clientKey(asReq('::ffff:172.18.0.5', { 'x-forwarded-for': '198.51.100.7' }), trusted), '198.51.100.7');
+  // Without the list the same request is keyed on the proxy, which is what put every
+  // visitor in one bucket.
+  assert.equal(clientKey(asReq('172.18.0.5', { 'x-forwarded-for': '198.51.100.7' })), '172.18.0.5');
+});
+
+test('clientKey: the header is still ignored from a peer that is not trusted', () => {
+  const trusted = parseTrustedProxies('172.16.0.0/12');
+  assert.equal(clientKey(asReq('203.0.113.9', { 'x-forwarded-for': '198.51.100.7' }), trusted), '203.0.113.9');
+});
+
+test('clientKey: trusted hops are skipped and the first address that is not one is the client', () => {
+  const trusted = parseTrustedProxies('172.16.0.0/12');
+  // Two proxies in a chain: the client, then the first proxy, as the second saw them.
+  assert.equal(
+    clientKey(asReq('172.18.0.5', { 'x-forwarded-for': '198.51.100.7, 172.18.0.9' }), trusted),
+    '198.51.100.7',
+  );
+  // A client that prepends its own entries gains nothing: the rightmost untrusted one wins.
+  assert.equal(
+    clientKey(asReq('172.18.0.5', { 'x-forwarded-for': '1.1.1.1, 198.51.100.7' }), trusted),
+    '198.51.100.7',
+  );
+  // Every hop trusted: nothing to read, so the socket address.
+  assert.equal(
+    clientKey(asReq('172.18.0.5', { 'x-forwarded-for': '172.18.0.9' }), trusted),
+    '172.18.0.5',
+  );
+});
+
+test('clientKey: an entry that is not an IP address is never used as a key', () => {
+  const trusted = parseTrustedProxies('172.16.0.0/12');
+  // A client that could choose the key could fill the bucket table with strings of its own.
+  for (const junk of ['evil', 'a'.repeat(5000), '198.51.100.7:99', '<script>']) {
+    assert.equal(
+      clientKey(asReq('172.18.0.5', { 'x-forwarded-for': `198.51.100.7, ${junk}` }), trusted),
+      '172.18.0.5',
+      junk.slice(0, 20),
+    );
+  }
+});
+
+// ---- request targets -------------------------------------------------------------------
+//
+// new URL(target, base) on a raw request line was three bugs: it read "//host/path" as a
+// different host (so a doubled slash reached /metrics past a proxy allowlist), it collapsed
+// dot segments, and it threw on "http://[", which with no handler ended the process.
+
+const ORIGIN = 'http://localhost:3030';
+const BACKSLASH = String.fromCharCode(92);
+
+test('parseRequestTarget: a canonical path is accepted, query and all', () => {
+  assert.equal(parseRequestTarget('/health', ORIGIN).pathname, '/health');
+  assert.equal(parseRequestTarget('/score/0x' + 'ab'.repeat(32), ORIGIN).pathname, '/score/0x' + 'ab'.repeat(32));
+  const jobs = parseRequestTarget('/jobs/0x' + 'ab'.repeat(20) + '?fromBlock=5', ORIGIN);
+  assert.equal(jobs.pathname, '/jobs/0x' + 'ab'.repeat(20));
+  assert.equal(jobs.searchParams.get('fromBlock'), '5');
+  assert.equal(parseRequestTarget('/a//b', ORIGIN).pathname, '/a//b', 'inner doubled slashes are left alone');
+});
+
+test('parseRequestTarget: refuses what would be read as another host, rewritten, or thrown on', () => {
+  for (const target of [
+    '//evidence/metrics',                    // scheme-relative: host "evidence", path "/metrics"
+    '//metrics',
+    `/${BACKSLASH}evidence/metrics`,         // a backslash is a slash to the URL parser
+    '/evidence/../metrics',                  // dot segments collapse
+    '/%2e%2e/metrics',
+    '/health/.',
+    'http://[',                              // throws
+    'http://localhost:3030/health',          // absolute-form
+    '*',
+    '',
+    'health',
+    undefined,
+    null,
+    42,
+  ]) {
+    assert.equal(parseRequestTarget(target, ORIGIN), null, `accepted ${JSON.stringify(target)}`);
+  }
+});
+
+// ---- credential scopes -----------------------------------------------------------------
+
+const creds = new Map([['admin', 'a'.repeat(40)], ['counteraudit', 'c'.repeat(40)], ['hoodscan', 'h'.repeat(40)]]);
+
+test('readScopes: a credential with no restriction may do everything, as before', () => {
+  const scopes = readScopes({}, creds);
+  for (const name of ['admin', 'counteraudit', 'hoodscan', 'unauthenticated']) {
+    for (const s of SCOPES) assert.equal(mayUse(scopes, name, s), true, `${name} ${s}`);
+  }
+});
+
+test('readScopes: a restriction applies to the credential it names and no other', () => {
+  const scopes = readScopes({ ORACLE_SCOPES_COUNTERAUDIT: 'attest' }, creds);
+  assert.equal(mayUse(scopes, 'counteraudit', 'attest'), true);
+  for (const s of ['flag', 'link', 'epoch']) assert.equal(mayUse(scopes, 'counteraudit', s), false, s);
+  assert.equal(mayUse(scopes, 'hoodscan', 'epoch'), true, 'another credential is untouched');
+});
+
+test('readScopes: a list, with spaces and case', () => {
+  const scopes = readScopes({ ORACLE_SCOPES_HOODSCAN: ' Attest , FLAG ' }, creds);
+  assert.equal(mayUse(scopes, 'hoodscan', 'attest'), true);
+  assert.equal(mayUse(scopes, 'hoodscan', 'flag'), true);
+  assert.equal(mayUse(scopes, 'hoodscan', 'link'), false);
+});
+
+test('readScopes: a scope it does not know is a startup failure, because a typo would strip a credential bare', () => {
+  assert.throws(() => readScopes({ ORACLE_SCOPES_COUNTERAUDIT: 'atest' }, creds), /unknown scope atest/);
+  assert.throws(() => readScopes({ ORACLE_SCOPES_COUNTERAUDIT: 'attest,epochs' }, creds), /unknown scope epochs/);
+});
+
+test('readScopes: a restriction on a credential that does not exist is a startup failure', () => {
+  // A misspelt name would otherwise leave the real credential unrestricted, silently.
+  assert.throws(() => readScopes({ ORACLE_SCOPES_COUNTERAUDT: 'attest' }, creds), /does not exist/);
+});
+
+test('readScopes: blank means unrestricted, and admin cannot be restricted', () => {
+  const scopes = readScopes({ ORACLE_SCOPES_COUNTERAUDIT: '   ', ORACLE_SCOPES_ADMIN: 'attest' }, creds);
+  assert.equal(mayUse(scopes, 'counteraudit', 'epoch'), true);
+  assert.equal(mayUse(scopes, 'admin', 'epoch'), true, 'the operator cannot lock itself out');
+});
+
+test('weakCredentials: names the credentials shorter than 32 characters, never their value', () => {
+  const weak = weakCredentials(new Map([['admin', 'x'.repeat(31)], ['ok', 'y'.repeat(32)], ['tiny', 'z']]));
+  assert.deepEqual(weak, ['admin', 'tiny']);
+});

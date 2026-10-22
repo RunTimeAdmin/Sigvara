@@ -59,6 +59,11 @@ const counters = {
   finalizeThrottled: 0,
   rateLimitHits: 0,
   httpRequests: 0,
+  // Requests refused before routing because the target was not a canonical path, and
+  // requests whose handler threw. The second should be zero; either one climbing means
+  // someone is probing the listener or a route has a bug.
+  httpBadTargets: 0,
+  httpHandlerErrors: 0,
 
   // Checker mode. These were incremented by index.js for a week without being declared
   // here, and inc() drops unknown names silently, so every divergence this operator
@@ -282,6 +287,12 @@ function toPrometheusText(extra = {}) {
   lines.push('# HELP sigvara_oracle_http_requests_total Total HTTP requests');
   lines.push('# TYPE sigvara_oracle_http_requests_total counter');
   lines.push(`sigvara_oracle_http_requests_total ${counters.httpRequests}`);
+
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_http_refused_total Requests refused before routing, or ended by an unexpected error');
+  lines.push('# TYPE sigvara_oracle_http_refused_total counter');
+  lines.push(`sigvara_oracle_http_refused_total{reason="bad_target"} ${counters.httpBadTargets}`);
+  lines.push(`sigvara_oracle_http_refused_total{reason="handler_error"} ${counters.httpHandlerErrors}`);
 
   lines.push('');
   lines.push('# HELP sigvara_oracle_last_successful_epoch_timestamp_seconds Unix timestamp of last successful epoch');
