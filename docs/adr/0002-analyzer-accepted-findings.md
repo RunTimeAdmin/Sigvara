@@ -87,6 +87,10 @@ event-signature change.
   storage struct at the ERC-7201 slot, the pattern OpenZeppelin's upgradeable
   contracts use for namespaced storage. A test recomputes the slot from the
   namespace string.
+- `timestamp` (Low), `SigvaraStaking.expireSlash`: a slash proposal that nobody executed
+  or cancelled lapses 14 days after its challenge deadline. The window is a
+  fortnight, far above the skew a block producer controls, and a few seconds
+  either way moves the end of it by a few seconds.
 
 ## Fixed
 
