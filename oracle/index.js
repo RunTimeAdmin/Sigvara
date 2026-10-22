@@ -19,6 +19,7 @@ const badge = require('./badge');
 const jobs = require('./jobs');
 const paymentScan = require('./payment-scan');
 const metrics = require('./metrics');
+const { readPrivateKey } = require('./secrets');
 
 // Verified-payment settings. Read once at startup so a malformed value fails the
 // process rather than silently disabling verification on the first request.
@@ -37,9 +38,20 @@ let jobsChainId = null;
 
 const trimTrailingSlash = (u) => String(u).endsWith('/') ? String(u).replace(/\/+$/, '') : String(u);
 
+// From ORACLE_PRIVATE_KEY_FILE or ORACLE_PRIVATE_KEY. Read inside a try so that a malformed
+// key stops the process with a fixed message: ethers puts the whole value in its own error,
+// and a restart loop would print it on every restart. See secrets.js.
+let privateKey = '';
+try {
+  privateKey = readPrivateKey();
+} catch (err) {
+  console.error(`[oracle] ${err.message}`);
+  process.exit(1);
+}
+
 const cfg = {
   rpcUrl:            process.env.RPC_URL            || '',
-  privateKey:        process.env.ORACLE_PRIVATE_KEY || '',
+  privateKey,
   identityAddress:   process.env.IDENTITY_ADDRESS   || '',
   reputationAddress: process.env.REPUTATION_ADDRESS || '',
   epochMs:           Number(process.env.EPOCH_HOURS || 24) * 3_600_000,

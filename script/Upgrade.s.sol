@@ -25,10 +25,14 @@ import "../src/SigvaraEpochFees.sol";
  *   TARGET=staking forge script script/Upgrade.s.sol --rpc-url arc_testnet --broadcast -vvvv
  *
  * Required env vars:
- *   DEPLOYER_PRIVATE_KEY — must hold UPGRADER_ROLE on the target proxy. On mainnet
- *                          that role belongs to the governance timelock, so this
- *                          script is used to simulate and to produce the calldata,
- *                          not to broadcast.
+ *   DEPLOYER_PRIVATE_KEY — must hold UPGRADER_ROLE on the target proxy. After the
+ *                          handover that role belongs to the timelock, which this script
+ *                          cannot act as: it broadcasts with the key it is given and does
+ *                          not print timelock calldata. Upgrade through the timelock
+ *                          instead: deploy the implementation from any funded key, the
+ *                          Safe calls schedule(proxy, 0, upgradeToAndCall(impl, data),
+ *                          predecessor, salt, delay), and once the delay has run anyone
+ *                          calls execute with the same arguments.
  *   TARGET               — identity | reputation | staking | oracleBond | epochFees
  *
  * Optional env vars:
