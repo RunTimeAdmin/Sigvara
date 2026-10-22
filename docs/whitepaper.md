@@ -634,6 +634,15 @@ Ordered by what unblocks what, not by difficulty.
 5. **A reward distributor.** Replaces `rewardPool` as a plain address with a contract
    paying operators for epochs served.
 6. **External audit**, then Arc mainnet with a committee multisig.
+7. **Delivery and disputes for x402 payments.** Not started, and outside the first audit.
+   Money moving is verified from the chain today, but whether the work was delivered arrives
+   as an attestation from a trusted service, so a payer that was not delivered what it paid
+   for has no recourse of its own. The plan is outcomes bound to the settled payment by a
+   payer signature, a payer-initiated challenge against the agent's bond, and an arbiter
+   path beyond the committee. x402 now has an authorize, capture and refund scheme and open
+   escrow and delivery-receipt proposals, so the aim is to supply the bonded verifier and
+   the seller's standing to those, not to add a competing payment scheme. Order and scope
+   follow what the x402 Foundation takes into the standard.
 
 ---
 
