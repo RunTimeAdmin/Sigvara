@@ -756,6 +756,18 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
             staking.claimable(victim), "slot 8 is claimable");
     }
 
+    /// Appended after `claimable`. A mapping again, so the probe is a key that holds a value.
+    function test_storageLayout_lastDroppedAtPinnedToSlot9() public {
+        _deposit();
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "evidence");
+        vm.prank(committee);
+        staking.cancelSlash(didHash);
+        assertGt(staking.lastDroppedAt(didHash), 0);
+        assertEq(uint256(vm.load(address(staking), keccak256(abi.encode(didHash, uint256(9))))),
+            staking.lastDroppedAt(didHash), "slot 9 is lastDroppedAt");
+    }
+
     /**
      * SigvaraStaking inherits the NON-upgradeable ReentrancyGuard. That is safe only
      * because OpenZeppelin >= 5.1 keeps `_status` in a namespaced slot; the older version
@@ -1121,6 +1133,239 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
 
         assertTrue(identity.isActive(didHash));
         assertFalse(identity.slashSuspended(didHash));
+    }
+
+    /// The loop: file, cancel, file again in the same block. The agent is Active for no time at
+    /// all, so it can never queue a withdrawal, and its stake never unfreezes.
+    function test_initiateSlash_cannotBeRefiledStraightAfterACancel() public {
+        _deposit();
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "evidence");
+        vm.prank(committee);
+        staking.cancelSlash(didHash);
+
+        vm.expectRevert(abi.encodeWithSelector(
+            SigvaraStaking.SlashCooldownActive.selector, didHash, block.timestamp + CHALLENGE
+        ));
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "again");
+    }
+
+    /// The cooldown is one challenge period, to the second, and then the committee may file again.
+    function test_initiateSlash_refileIsOpenExactlyOneChallengePeriodAfterTheDrop() public {
+        _deposit();
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "evidence");
+        vm.prank(committee);
+        staking.cancelSlash(didHash);
+        uint256 droppedAt = block.timestamp;
+        assertEq(staking.lastDroppedAt(didHash), droppedAt);
+
+        vm.warp(droppedAt + CHALLENGE - 1);
+        vm.expectRevert(abi.encodeWithSelector(
+            SigvaraStaking.SlashCooldownActive.selector, didHash, droppedAt + CHALLENGE
+        ));
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "too soon");
+
+        vm.warp(droppedAt + CHALLENGE);
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "with stronger evidence");
+        assertEq(uint8(staking.getSlashProposal(didHash).state), uint8(SigvaraStaking.SlashState.Pending));
+    }
+
+    /// What the cooldown is for: a window in which the operator can act. It can queue a withdrawal
+    /// the moment a proposal is dropped, and the queued amount stays slashable.
+    function test_initiateSlash_theCooldownLeavesTheOperatorAWindowToQueueAWithdrawal() public {
+        _deposit();
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "evidence");
+        vm.prank(committee);
+        staking.cancelSlash(didHash);
+
+        vm.startPrank(operator);
+        identity.updateStatus(didHash, SigvaraIdentity.AgentStatus.Suspended);
+        staking.initiateWithdrawal(didHash, MIN_STAKE * 2);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + CHALLENGE);
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "with stronger evidence");
+        vm.warp(block.timestamp + CHALLENGE + 1);
+        staking.executeSlash(didHash);
+        assertGt(staking.claimable(victim), 0, "the queued amount was still slashed");
+    }
+
+    /// Every way a proposal can be dropped starts the cooldown, not only the committee's cancel.
+    function test_initiateSlash_aResolvedDisputeStartsTheCooldown() public {
+        _deposit();
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "evidence");
+        vm.prank(operator);
+        staking.disputeSlash(didHash);
+        vm.prank(committee);
+        staking.resolveDispute(didHash, false);
+
+        vm.expectRevert(abi.encodeWithSelector(
+            SigvaraStaking.SlashCooldownActive.selector, didHash, block.timestamp + CHALLENGE
+        ));
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "again");
+    }
+
+    function test_initiateSlash_anExpiredDisputeStartsTheCooldown() public {
+        _deposit();
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "evidence");
+        vm.prank(operator);
+        staking.disputeSlash(didHash);
+        vm.warp(block.timestamp + staking.DISPUTE_RESOLUTION_PERIOD() + 1);
+        staking.expireDispute(didHash);
+
+        vm.expectRevert(abi.encodeWithSelector(
+            SigvaraStaking.SlashCooldownActive.selector, didHash, block.timestamp + CHALLENGE
+        ));
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "again");
+    }
+
+    // -------------------------------------------------------------------------
+    // The admin's veto
+    // -------------------------------------------------------------------------
+
+    function test_vetoSlash_dropsAPendingProposalAndReinstatesTheAgent() public {
+        _deposit();
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "evidence");
+        assertFalse(identity.isActive(didHash), "suspended while the proposal is open");
+
+        vm.expectEmit(address(staking));
+        emit SigvaraStaking.SlashCancelled(didHash, admin);
+        vm.expectEmit(address(staking));
+        emit SigvaraStaking.SlashVetoed(didHash, admin);
+        vm.prank(admin);
+        staking.vetoSlash(didHash);
+
+        assertEq(uint8(staking.getSlashProposal(didHash).state), uint8(SigvaraStaking.SlashState.Cancelled));
+        assertTrue(identity.isActive(didHash), "reinstated like any dropped proposal");
+        assertFalse(identity.slashSuspended(didHash));
+        assertEq(staking.lastDroppedAt(didHash), block.timestamp, "the committee waits before it files again");
+    }
+
+    function test_vetoSlash_dropsADisputedProposal() public {
+        _deposit();
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "evidence");
+        vm.prank(operator);
+        staking.disputeSlash(didHash);
+
+        vm.prank(admin);
+        staking.vetoSlash(didHash);
+
+        assertEq(uint8(staking.getSlashProposal(didHash).state), uint8(SigvaraStaking.SlashState.Cancelled));
+        assertTrue(identity.isActive(didHash));
+    }
+
+    /// The deadline passing does not make a slash final. Until someone executes it the proposal is
+    /// still Pending, and the veto still works.
+    function test_vetoSlash_worksAfterTheChallengeDeadlineAndBeforeAnyoneExecutes() public {
+        _setupPendingSlash(); // warps past the deadline
+
+        vm.prank(admin);
+        staking.vetoSlash(didHash);
+
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.NoActivePendingSlash.selector, didHash));
+        staking.executeSlash(didHash);
+        assertEq(staking.getStake(didHash), MIN_STAKE * 2, "nothing was taken");
+    }
+
+    function test_vetoSlash_reverts_forTheCommitteeAndStrangers() public {
+        _deposit();
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "evidence");
+
+        bytes32 adminRole = staking.DEFAULT_ADMIN_ROLE();
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControl.AccessControlUnauthorizedAccount.selector, committee, adminRole
+        ));
+        vm.prank(committee);
+        staking.vetoSlash(didHash);
+
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, adminRole
+        ));
+        vm.prank(stranger);
+        staking.vetoSlash(didHash);
+    }
+
+    function test_vetoSlash_reverts_whenNothingIsOpen() public {
+        _deposit();
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.NoActivePendingSlash.selector, didHash));
+        vm.prank(admin);
+        staking.vetoSlash(didHash);
+
+        // And not on a proposal that already ended.
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "evidence");
+        vm.prank(committee);
+        staking.cancelSlash(didHash);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.NoActivePendingSlash.selector, didHash));
+        vm.prank(admin);
+        staking.vetoSlash(didHash);
+    }
+
+    function test_vetoSlash_cannotUndoAnExecutedSlash() public {
+        _setupPendingSlash();
+        staking.executeSlash(didHash);
+
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.NoActivePendingSlash.selector, didHash));
+        vm.prank(admin);
+        staking.vetoSlash(didHash);
+        assertEq(uint8(staking.getSlashProposal(didHash).state), uint8(SigvaraStaking.SlashState.Executed));
+    }
+
+    /// A veto unfreezes the bond as any drop does, and starts the same cooldown, so the committee
+    /// cannot answer a veto by filing again in the same block.
+    function test_vetoSlash_unfreezesTheBondAndStartsTheCooldown() public {
+        _deposit();
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "evidence");
+        vm.prank(admin);
+        staking.vetoSlash(didHash);
+
+        vm.startPrank(operator);
+        identity.updateStatus(didHash, SigvaraIdentity.AgentStatus.Suspended);
+        staking.initiateWithdrawal(didHash, MIN_STAKE); // allowed: no proposal is open
+        vm.stopPrank();
+
+        vm.expectRevert(abi.encodeWithSelector(
+            SigvaraStaking.SlashCooldownActive.selector, didHash, block.timestamp + CHALLENGE
+        ));
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "again");
+    }
+
+    /// The same rule as cancelSlash when the agent no longer holds the minimum: the slash lock is
+    /// lifted and the agent is left Suspended.
+    function test_vetoSlash_belowMinimum_leavesSuspendedAndUnlocked() public {
+        _deposit();
+        vm.startPrank(operator);
+        identity.updateStatus(didHash, SigvaraIdentity.AgentStatus.Suspended);
+        staking.initiateWithdrawal(didHash, MIN_STAKE * 2);
+        vm.stopPrank();
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "");
+        assertTrue(identity.slashSuspended(didHash));
+
+        vm.prank(admin);
+        staking.vetoSlash(didHash);
+
+        assertFalse(identity.slashSuspended(didHash), "slash lock lifted");
+        assertEq(
+            uint8(identity.getIdentity(didHash).status),
+            uint8(SigvaraIdentity.AgentStatus.Suspended),
+            "not reinstated without a bond"
+        );
     }
 
     function test_resolveDispute_reverts_notDisputed() public {
