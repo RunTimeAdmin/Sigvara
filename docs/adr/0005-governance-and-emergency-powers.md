@@ -20,6 +20,8 @@ was not:
   frozen for good;
 - the committee also ruled on the operator's dispute, and could uphold it the moment it was filed, which
   cut short the whole challenge period the admin's veto relies on;
+- the reputation challenge window was read live when a score finalized or was rejected, so an admin
+  who changed it moved the end of every proposal already pending;
 - a slash proposal that nobody executed or cancelled never lapsed. Once its window closed the operator
   could no longer dispute it, so a stake could sit frozen until the admin vetoed it;
 - there was no way to stop new value or new state entering a registry while a bug was being fixed,
@@ -94,6 +96,12 @@ This ADR records what was decided about each, and what was left as a stated trus
    `UPGRADER_ROLE` itself. Without it a compromised slasher would have to be removed through the same
    48 hours it needs to do its damage. `ORACLE_ROLE` and `GUARDIAN_ROLE` grants stay with the admin,
    for the reasons below.
+9. **A score's review window is fixed when it is proposed.** `finalizeReputation` and
+   `rejectReputation` used to read the live `challengeWindow`, so shortening it hurried a proposal past
+   the committee's review and cut the time the committee had to reject it. `PendingScore.finalizableAt`
+   is now set at proposal time to the time of the proposal plus the window in force then, and both calls
+   read it, the way staking snapshots its challenge deadline. A proposal that was pending before the
+   field existed reads zero and is judged against the live window, as it always was.
 
 ## What stays on the admin Safe, and why
 
@@ -122,6 +130,8 @@ stated trust assumption, not an oversight:
 - A delay protects funds only as far as notice helps: an agent's stake takes 21 days to leave and an
   operator's bond 7, and both stay slashable while they wait, so the 48 hours is time to see and
   respond, not time to get out.
+- Changing the reputation window changes it for proposals made afterwards. One already pending keeps
+  the end it was made under.
 - Proxies initialised by the older code, the Arc testnet ones among them, keep the admin as the
   grantor of these roles. Mainnet is a fresh deployment, and `scripts/check-mainnet.sh` reads the
   role admins to confirm the arrangement.

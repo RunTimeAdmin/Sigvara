@@ -691,9 +691,9 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
 
     /**
      * PendingScore lives in a mapping, so a field only has to go at the end of the struct to
-     * leave every proposal already pending where it was. `proposer` is the sixth slot: the
-     * struct's data takes two, then proposedAt, exists and evidenceRoot one each. A proposal
-     * stored before it existed reads zero there.
+     * leave every proposal already pending where it was. `proposer` is the sixth slot and
+     * `finalizableAt` the seventh: the struct's data takes two, then proposedAt, exists and
+     * evidenceRoot one each. A proposal stored before a field existed reads zero there.
      */
     function test_storageLayout_pendingScoreFieldsPinned() public {
         // Foundry starts the clock at 1, which is also what `exists` stores, so with the default
@@ -710,8 +710,112 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
         assertEq(vm.load(address(rep), bytes32(base + 4)), root, "evidenceRoot");
         assertEq(
             address(uint160(uint256(vm.load(address(rep), bytes32(base + 5))))), oracle,
-            "proposer, appended last"
+            "proposer"
         );
+        assertEq(
+            uint256(vm.load(address(rep), bytes32(base + 6))), block.timestamp + CHALLENGE_WINDOW,
+            "finalizableAt, appended last"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // The window is fixed when a score is proposed
+    // -------------------------------------------------------------------------
+
+    /// Staking snapshots its challenge deadline for a reason: reading the live window at the end let an
+    /// admin shorten an in-flight window to nothing. A proposal's review period is a promise made when it
+    /// was proposed, so changing the window afterwards moves neither end of it.
+    function test_theWindowIsFixedWhenAScoreIsProposed_shorteningDoesNotHurryAProposal() public {
+        vm.prank(admin);
+        rep.setChallengeWindow(3 hours);
+        uint256 proposedAt = block.timestamp;
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
+
+        vm.prank(admin);
+        rep.setChallengeWindow(1 hours); // the floor
+
+        vm.warp(proposedAt + 1 hours + 1);
+        vm.expectRevert(abi.encodeWithSelector(
+            SigvaraReputation.ChallengeWindowActive.selector, DID, proposedAt + 3 hours
+        ));
+        rep.finalizeReputation(DID);
+
+        vm.warp(proposedAt + 3 hours);
+        rep.finalizeReputation(DID);
+        assertEq(rep.getTotalScore(DID), 100);
+    }
+
+    function test_theWindowIsFixedWhenAScoreIsProposed_lengtheningDoesNotHoldOneBack() public {
+        uint256 proposedAt = block.timestamp;
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
+
+        vm.prank(admin);
+        rep.setChallengeWindow(7 days);
+
+        vm.warp(proposedAt + CHALLENGE_WINDOW);
+        rep.finalizeReputation(DID);
+        assertEq(rep.getTotalScore(DID), 100);
+    }
+
+    /// The committee's side of the same promise. It can reject until the window the proposal was made
+    /// under ends: not for less time because the window was shortened, and not for more because it was
+    /// lengthened.
+    function test_theWindowIsFixedWhenAScoreIsProposed_rejectionKeepsItsOriginalEnd() public {
+        vm.prank(admin);
+        rep.setChallengeWindow(3 hours);
+        uint256 proposedAt = block.timestamp;
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
+        vm.prank(admin);
+        rep.setChallengeWindow(1 hours);
+
+        vm.warp(proposedAt + 2 hours); // past the live window, inside the one it was proposed under
+        vm.prank(committee);
+        rep.rejectReputation(DID);
+        assertFalse(rep.getPendingScore(DID).exists);
+
+        // And a proposal made under a short window cannot be rejected for longer once it is lengthened.
+        proposedAt = block.timestamp;
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
+        vm.prank(admin);
+        rep.setChallengeWindow(7 days);
+        vm.warp(proposedAt + 1 hours);
+        vm.expectRevert(abi.encodeWithSelector(
+            SigvaraReputation.ChallengeWindowExpired.selector, DID, proposedAt + 1 hours
+        ));
+        vm.prank(committee);
+        rep.rejectReputation(DID);
+    }
+
+    function test_getPendingScore_reportsTheFixedEnd() public {
+        uint256 proposedAt = block.timestamp;
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
+        assertEq(rep.getPendingScore(DID).finalizableAt, proposedAt + CHALLENGE_WINDOW);
+    }
+
+    /// A proposal that was pending when the field was added reads zero there, and is treated as it was
+    /// before: against the window now in force.
+    function test_aProposalFromBeforeTheFieldExistedUsesTheLiveWindow() public {
+        uint256 proposedAt = block.timestamp;
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
+        uint256 base = uint256(keccak256(abi.encode(DID, uint256(1)))); // pendingScores is slot 1
+        vm.store(address(rep), bytes32(base + 6), bytes32(0)); // as written before finalizableAt existed
+
+        vm.prank(admin);
+        rep.setChallengeWindow(2 hours);
+        vm.warp(proposedAt + 1 hours + 1);
+        vm.expectRevert(abi.encodeWithSelector(
+            SigvaraReputation.ChallengeWindowActive.selector, DID, proposedAt + 2 hours
+        ));
+        rep.finalizeReputation(DID);
+
+        vm.warp(proposedAt + 2 hours);
+        rep.finalizeReputation(DID);
     }
 
     function test_initializeV2_grantsCommitteeAndSetsWindow_onceOnly() public {
