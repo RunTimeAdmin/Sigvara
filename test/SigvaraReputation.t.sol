@@ -558,6 +558,64 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
         rep.setChallengeWindow(2 hours);
     }
 
+    // A window of zero lets a proposal finalize in the block it was made, and the committee's
+    // rejection is refused in that same block, so nobody can object. The floor keeps a window
+    // open in all three places the window is set.
+
+    function test_challengeWindow_setterRefusesBelowTheFloor() public {
+        uint256 floor = rep.MIN_CHALLENGE_WINDOW();
+        assertEq(floor, 1 hours);
+
+        vm.expectRevert(abi.encodeWithSelector(SigvaraReputation.ChallengeWindowTooShort.selector, 0, floor));
+        vm.prank(admin);
+        rep.setChallengeWindow(0);
+
+        vm.expectRevert(abi.encodeWithSelector(SigvaraReputation.ChallengeWindowTooShort.selector, floor - 1, floor));
+        vm.prank(admin);
+        rep.setChallengeWindow(floor - 1);
+
+        assertEq(rep.challengeWindow(), CHALLENGE_WINDOW, "unchanged after the refusals");
+    }
+
+    function test_challengeWindow_setterAcceptsTheFloor() public {
+        uint256 floor = rep.MIN_CHALLENGE_WINDOW();
+        vm.prank(admin);
+        rep.setChallengeWindow(floor);
+        assertEq(rep.challengeWindow(), 1 hours);
+    }
+
+    function test_challengeWindow_initializeRefusesBelowTheFloor() public {
+        address impl = address(new SigvaraReputation());
+
+        vm.expectRevert(abi.encodeWithSelector(SigvaraReputation.ChallengeWindowTooShort.selector, 0, 1 hours));
+        new ERC1967Proxy(impl, abi.encodeCall(SigvaraReputation.initialize, (admin, oracle, staking, committee, 0)));
+
+        vm.expectRevert(
+            abi.encodeWithSelector(SigvaraReputation.ChallengeWindowTooShort.selector, 1 hours - 1, 1 hours)
+        );
+        new ERC1967Proxy(
+            impl,
+            abi.encodeCall(SigvaraReputation.initialize, (admin, oracle, staking, committee, 1 hours - 1))
+        );
+    }
+
+    function test_challengeWindow_initializeV2RefusesBelowTheFloor() public {
+        // A proxy that has run initialize and still has version 2 open, as a fresh deployment does.
+        SigvaraReputation fresh = SigvaraReputation(address(new ERC1967Proxy(
+            address(new SigvaraReputation()),
+            abi.encodeCall(SigvaraReputation.initialize, (admin, oracle, staking, committee, CHALLENGE_WINDOW))
+        )));
+
+        vm.expectRevert(abi.encodeWithSelector(SigvaraReputation.ChallengeWindowTooShort.selector, 0, 1 hours));
+        vm.prank(admin);
+        fresh.initializeV2(committee, 0);
+
+        // A refused call did not use the version up.
+        vm.prank(admin);
+        fresh.initializeV2(committee, 1 hours);
+        assertEq(fresh.challengeWindow(), 1 hours);
+    }
+
     // -------------------------------------------------------------------------
     // Upgrade safety
     // -------------------------------------------------------------------------
@@ -1702,7 +1760,9 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
     function test_initialize_zeroRoleHolders_grantNothing() public {
         SigvaraReputation fresh = SigvaraReputation(address(new ERC1967Proxy(
             address(new SigvaraReputation()),
-            abi.encodeCall(SigvaraReputation.initialize, (admin, address(0), address(0), address(0), 0))
+            abi.encodeCall(
+                SigvaraReputation.initialize, (admin, address(0), address(0), address(0), CHALLENGE_WINDOW)
+            )
         )));
         assertFalse(fresh.hasRole(fresh.ORACLE_ROLE(), address(0)));
         assertFalse(fresh.hasRole(fresh.STAKING_CORE_ROLE(), address(0)));

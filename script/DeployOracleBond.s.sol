@@ -37,8 +37,13 @@ contract DeployOracleBond is Script {
     uint256 constant DEFAULT_UNBONDING = 7 days;
     uint256 constant ARC_MAINNET = 5042;
 
+    /// The floor SigvaraOracleBond enforces in its initializer and setter. test/DeployScripts.t.sol
+    /// pins it to the contract's own constant.
+    uint256 constant MIN_UNBONDING = 1 days;
+
     error RolesNotSeparated(address deployer, address slasher, address beneficiary);
     error DefaultAmountOnMainnet(string name, uint256 value);
+    error PeriodBelowFloor(string name, uint256 value, uint256 floor);
 
     function run() external {
         uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
@@ -52,6 +57,7 @@ contract DeployOracleBond is Script {
 
         _checkRoleSeparation(deployer, slasher, beneficiary);
         _checkMainnetBondAmount(bondAmount);
+        _checkMainnetUnbonding(unbonding);
 
         vm.startBroadcast(deployerKey);
 
@@ -91,6 +97,14 @@ contract DeployOracleBond is Script {
     function _checkMainnetBondAmount(uint256 bondAmount) internal view {
         if (block.chainid != ARC_MAINNET) return;
         if (bondAmount == DEFAULT_BOND) revert DefaultAmountOnMainnet("ORACLE_BOND_AMOUNT", bondAmount);
+    }
+
+    /// @dev Mainnet only. The contract refuses an unbonding period under the floor itself, with
+    ///      its own error. This names the variable and fails before anything is sent. With no
+    ///      cooldown an operator could start to leave and withdraw before the slasher could act.
+    function _checkMainnetUnbonding(uint256 unbonding) internal view {
+        if (block.chainid != ARC_MAINNET) return;
+        if (unbonding < MIN_UNBONDING) revert PeriodBelowFloor("ORACLE_UNBONDING", unbonding, MIN_UNBONDING);
     }
 
     /// @dev The deployer keeps DEFAULT_ADMIN_ROLE and UPGRADER_ROLE. If it is also the
