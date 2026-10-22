@@ -14,6 +14,8 @@ was not:
 - the admin Safe could grant itself `SLASHER_ROLE`, point the slash beneficiary at itself and slash every
   operator's bond in one batch. None of that is an upgrade, so the timelock never saw it, and neither
   did the challenge period, because the bond registry slashes at once;
+- nothing stopped one address from being both the slasher and the beneficiary, so a registry set up that
+  way would take an operator's bond and pay itself;
 - the committee both filed slashes and was the only party that could drop one, and a slash pays a
   quarter of the bond to whoever filed it and a quarter to the victim it names;
 - the committee could drop a proposal and file the next in the same block, so a stake could be held
@@ -107,6 +109,15 @@ This ADR records what was decided about each, and what was left as a stated trus
    is now set at proposal time to the time of the proposal plus the window in force then, and both calls
    read it, the way staking snapshots its challenge deadline. A proposal that was pending before the
    field existed reads zero and is judged against the live window, as it always was.
+10. **The slasher is never the payee.** `SigvaraOracleBond` refuses one address as both the holder of
+    `SLASHER_ROLE` and the slash beneficiary: in `initialize`, in every later grant of the role (the check
+    sits in `_grantRole`, so a grant through the timelock is covered) and in `setSlashBeneficiary`. The
+    slash itself stays immediate and partial, as before. `script/DeployOracleBond.s.sol` says so before
+    anything is sent, so a deploy that states neither address now stops, since both default to the
+    deployer. `scripts/check-mainnet.sh` adds what an address check can reach: the treasury is not the
+    committee, holds no slasher role, and is not an owner of the admin Safe or of the committee Safe.
+    Whether different addresses are different people cannot be read from the chain; the owner lists are
+    confirmed by the signers, as for the other Safe checks.
 
 ## What stays on the admin Safe, and why
 
@@ -141,7 +152,8 @@ stated trust assumption, not an oversight:
   the end it was made under.
 - Proxies initialised by the older code, the Arc testnet ones among them, keep the admin as the
   grantor of these roles. Mainnet is a fresh deployment, and `scripts/check-mainnet.sh` reads the
-  role admins to confirm the arrangement.
+  role admins to confirm the arrangement. They also have no slasher/payee guard until their
+  implementation is upgraded, and the upgrade does not re-check the pairing they were set up with.
 - The audit pack lists the veto and the dispute ruling as admin powers, the two setters as upgrade-class,
   and the guardian.
 - A slash that is legitimate has to be executed within 14 days of its deadline, or it lapses and has to

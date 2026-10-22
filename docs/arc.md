@@ -286,7 +286,7 @@ PowerShell:
 ```powershell
 $env:SVR_ADDRESS       = "0x41De2D6D55318e197a00E8f5B496eA2790e23E6c"
 $env:SLASHER_ADDRESS   = "0x..."   # governance or the committee, not the deployer
-$env:SLASH_BENEFICIARY = "0x..."   # where seized bonds go, not the deployer
+$env:SLASH_BENEFICIARY = "0x..."   # where seized bonds go, not the deployer, and not the slasher
 forge script script/DeployOracleBond.s.sol --rpc-url arc_testnet -vvvv              # simulate
 forge script script/DeployOracleBond.s.sol --rpc-url arc_testnet --broadcast -vvvv
 ```

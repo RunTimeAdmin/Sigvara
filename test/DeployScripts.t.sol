@@ -41,6 +41,7 @@ contract DeployOracleBond_Harness is DeployOracleBond {
     function checkBondAmount(uint256 a) external view { _checkMainnetBondAmount(a); }
     function checkUnbonding(uint256 u) external view { _checkMainnetUnbonding(u); }
     function checkGuardian(address d, address s, address g) external view { _checkMainnetGuardian(d, s, g); }
+    function checkRoles(address d, address s, address ben) external view { _checkRoleSeparation(d, s, ben); }
     function floor() external pure returns (uint256) { return MIN_UNBONDING; }
 }
 
@@ -278,6 +279,41 @@ contract DeployScriptGuardsTest is Test {
     function test_oracleBond_testnet_stillAcceptsNoGuardian() public {
         vm.chainId(5042002);
         b.checkGuardian(deployer, makeAddr("slasher"), address(0));
+    }
+
+    // ---- the bond's slasher and payee
+
+    /// The contract refuses a slasher that is also the beneficiary, so the script says so before anything
+    /// is sent, on every chain, naming the pair. That includes the defaults, which name the deployer for
+    /// both.
+    function test_oracleBond_refusesASlasherThatIsTheBeneficiary() public {
+        address both = makeAddr("both");
+        uint256[2] memory chains = [uint256(5042), uint256(5042002)];
+        for (uint256 i = 0; i < chains.length; i++) {
+            vm.chainId(chains[i]);
+            vm.expectRevert(abi.encodeWithSelector(DeployOracleBond.SlasherIsBeneficiary.selector, both));
+            b.checkRoles(deployer, both, both);
+
+            vm.expectRevert(abi.encodeWithSelector(DeployOracleBond.SlasherIsBeneficiary.selector, deployer));
+            b.checkRoles(deployer, deployer, deployer);
+        }
+    }
+
+    function test_oracleBond_mainnet_stillRefusesTheDeployerInEitherRole() public {
+        vm.chainId(5042);
+        address slasher = makeAddr("slasher");
+        address treasury = makeAddr("treasury");
+        vm.expectRevert(abi.encodeWithSelector(DeployOracleBond.RolesNotSeparated.selector, deployer, deployer, treasury));
+        b.checkRoles(deployer, deployer, treasury);
+        vm.expectRevert(abi.encodeWithSelector(DeployOracleBond.RolesNotSeparated.selector, deployer, slasher, deployer));
+        b.checkRoles(deployer, slasher, deployer);
+        b.checkRoles(deployer, slasher, treasury);
+    }
+
+    function test_oracleBond_testnet_stillOnlyWarnsAboutTheDeployerInOneRole() public {
+        vm.chainId(5042002);
+        b.checkRoles(deployer, deployer, makeAddr("treasury"));
+        b.checkRoles(deployer, makeAddr("slasher"), deployer);
     }
 
     // ---- EpochFees roles

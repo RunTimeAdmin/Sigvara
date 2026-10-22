@@ -22,7 +22,8 @@ import "../src/SigvaraOracleBond.sol";
  * Required env:
  *   DEPLOYER_PRIVATE_KEY
  *   SVR_ADDRESS          — stake-token token
- * Optional env (default to the deployer):
+ * Optional env (default to the deployer, but the two must differ: the registry refuses one address
+ * as both slasher and payee, so state at least one of them):
  *   SLASHER_ADDRESS       — granted SLASHER_ROLE (governance/committee)
  *   SLASH_BENEFICIARY     — destination for slashed bonds (defaults to deployer)
  *   ORACLE_BOND_AMOUNT    — minimum bond in wei (default 1,000 SVR; the default is refused on
@@ -45,6 +46,7 @@ contract DeployOracleBond is Script {
     uint256 constant MIN_UNBONDING = 1 days;
 
     error RolesNotSeparated(address deployer, address slasher, address beneficiary);
+    error SlasherIsBeneficiary(address account);
     error DefaultAmountOnMainnet(string name, uint256 value);
     error PeriodBelowFloor(string name, uint256 value, uint256 floor);
     error GuardianNotSet();
@@ -135,6 +137,11 @@ contract DeployOracleBond is Script {
         internal
         view
     {
+        // The registry refuses one address as both slasher and payee when it initializes. Said here
+        // first, on every chain and before anything is sent. The defaults name the deployer for both,
+        // so a deploy that states neither stops here.
+        if (slasher == beneficiary) revert SlasherIsBeneficiary(slasher);
+
         bool slasherIsDeployer = slasher == deployer;
         bool payeeIsDeployer = beneficiary == deployer;
         if (!slasherIsDeployer && !payeeIsDeployer) return;

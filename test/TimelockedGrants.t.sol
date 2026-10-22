@@ -265,6 +265,26 @@ contract TimelockedGrantsTest is Test {
         bond.setSlashBeneficiary(address(0));
     }
 
+    /// The timelock cannot be used to put the slasher on both sides either: a scheduled call that names
+    /// the slasher as the beneficiary, or grants the beneficiary the slasher role, is refused when it runs.
+    function test_theTimelockCannotMakeTheSlasherThePayee() public {
+        _handover();
+
+        bytes memory toSlasher = abi.encodeCall(SigvaraOracleBond.setSlashBeneficiary, (slasher));
+        _schedule(address(bond), toSlasher);
+        vm.warp(block.timestamp + DELAY);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraOracleBond.SlasherIsBeneficiary.selector, slasher));
+        _execute(address(bond), toSlasher);
+        assertEq(bond.slashBeneficiary(), treasury);
+
+        bytes memory grant = abi.encodeCall(IAccessControl.grantRole, (SLASHER_ROLE, treasury));
+        _schedule(address(bond), grant);
+        vm.warp(block.timestamp + DELAY);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraOracleBond.SlasherIsBeneficiary.selector, treasury));
+        _execute(address(bond), grant);
+        assertFalse(bond.hasRole(SLASHER_ROLE, treasury));
+    }
+
     // ---------------------------------------------------------------------
     // The drain, as the review described it
     // ---------------------------------------------------------------------
