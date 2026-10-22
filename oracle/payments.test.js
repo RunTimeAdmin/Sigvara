@@ -672,3 +672,151 @@ test('both intake paths attribute a multi-sender payment identically', async () 
   assert.equal(pushed.legs.length, 2);
   assert.equal(pushed.legs.reduce((s, l) => s + l.amount, 0n), 1000n);
 });
+
+// ---- what counts as a payment ----------------------------------------------
+//
+// Two intake paths, one rule. A zero-value Transfer can name any sender its emitter likes
+// (transferFrom with a value of 0 needs no allowance), and the minimum used to be tested
+// against a transaction's total, so one real payment carried any number of zero-value or
+// dust legs through with it, each credited as a separate counterparty.
+
+const { countsAsPayment } = require('./payments');
+const { ageScore } = require('./scoring');
+const STRANGER = '0x8857A7C392d1Bb1A68647c64Ce18D9AA1Fd023b0';
+
+test('countsAsPayment: positive and at least the minimum, nothing else', () => {
+  assert.equal(countsAsPayment(0n, 0n), false, 'zero never counts, even with a minimum of 0');
+  assert.equal(countsAsPayment(0n, 100n), false);
+  assert.equal(countsAsPayment(99n, 100n), false);
+  assert.equal(countsAsPayment(100n, 100n), true, 'exactly the minimum counts');
+  assert.equal(countsAsPayment(1n, 0n), true);
+});
+
+test('verifyPayment: a transaction of zero-value transfers is not a payment, whatever the minimum', async () => {
+  for (const minAmount of [0n, 1_000n]) {
+    const provider = fakeProvider({
+      receipt: { status: 1, blockNumber: 99, logs: [transferLog({ from: STRANGER, value: 0n })] },
+    });
+    await assert.rejects(
+      () => verifyPayment({ provider, cfg: { ...CFG, minAmount } }, TX, AGENT),
+      (e) => e.code === 'no_transfer',
+      `minimum ${minAmount}`,
+    );
+  }
+});
+
+test('verifyPayment: a zero-value leg beside a real payment is dropped, not credited as a counterparty', async () => {
+  const provider = fakeProvider({
+    receipt: {
+      status: 1,
+      blockNumber: 99,
+      logs: [transferLog({ from: PAYER, value: 5_000_000n }), transferLog({ from: STRANGER, value: 0n })],
+    },
+  });
+  const out = await verifyPayment({ provider, cfg: { ...CFG, minAmount: 10_000n } }, TX, AGENT);
+  assert.deepEqual(out.legs.map((l) => l.payer), [ethers.getAddress(PAYER)]);
+  assert.equal(out.amount, 5_000_000n);
+});
+
+test('verifyPayment: the minimum applies to each sender, not to the total', async () => {
+  // Two senders at 600k each total 1.2M, over a 1M minimum, and neither paid it.
+  const provider = fakeProvider({
+    receipt: {
+      status: 1,
+      blockNumber: 99,
+      logs: [transferLog({ from: PAYER, value: 600_000n }), transferLog({ from: OTHER, value: 600_000n })],
+    },
+  });
+  await assert.rejects(
+    () => verifyPayment({ provider, cfg: { ...CFG, minAmount: 1_000_000n } }, TX, AGENT),
+    (e) => e.code === 'below_minimum',
+  );
+});
+
+test('verifyPayment: a dust leg beside a qualifying one is dropped, and the amount is what qualified', async () => {
+  const provider = fakeProvider({
+    receipt: {
+      status: 1,
+      blockNumber: 99,
+      logs: [transferLog({ from: PAYER, value: 2_000_000n }), transferLog({ from: OTHER, value: 7n })],
+    },
+  });
+  const out = await verifyPayment({ provider, cfg: { ...CFG, minAmount: 1_000_000n } }, TX, AGENT);
+  assert.equal(out.legs.length, 1);
+  assert.equal(out.amount, 2_000_000n, 'the dust is not part of the reported amount');
+});
+
+test('verifyPayment: one sender paying in several transfers is held to the minimum on the sum', async () => {
+  const provider = fakeProvider({
+    receipt: {
+      status: 1,
+      blockNumber: 99,
+      logs: [transferLog({ from: PAYER, value: 400_000n }), transferLog({ from: PAYER, value: 600_000n })],
+    },
+  });
+  const out = await verifyPayment({ provider, cfg: { ...CFG, minAmount: 1_000_000n } }, TX, AGENT);
+  assert.equal(out.amount, 1_000_000n);
+});
+
+// Whatever the shape of a transaction, the attested path and the scan must credit the same
+// senders the same amounts and refuse the same ones. Each had its own comparison and they
+// disagreed: a real payment carrying zero-value legs credited them by one route and not the
+// other, and two honest operators then scored the same agent differently.
+test('both intake paths credit the same senders for every shape of transaction', async () => {
+  const scan = require('./payment-scan');
+  const T = ethers.id('Transfer(address,address,uint256)');
+  const tx = '0x' + '8e'.repeat(32);
+  const shapes = [
+    ['one real payer', 0n, [[PAYER, 5_000n]]],
+    ['real plus a zero-value stranger, no minimum', 0n, [[PAYER, 5_000n], [STRANGER, 0n]]],
+    ['real plus a zero-value stranger, minimum set', 1_000n, [[PAYER, 5_000n], [STRANGER, 0n]]],
+    ['two real payers', 1_000n, [[PAYER, 5_000n], [OTHER, 2_000n]]],
+    ['real plus dust below the minimum', 1_000n, [[PAYER, 5_000n], [OTHER, 7n]]],
+    ['only dust', 1_000n, [[PAYER, 7n]]],
+    ['two senders under the minimum, total over it', 1_000n, [[PAYER, 600n], [OTHER, 600n]]],
+    ['only zero-value, no minimum', 0n, [[STRANGER, 0n]]],
+    ['only zero-value, minimum set', 1_000n, [[STRANGER, 0n]]],
+    ['one sender split across transfers', 1_000n, [[PAYER, 400n], [PAYER, 600n]]],
+    ['zero then positive from one sender', 100n, [[PAYER, 0n], [PAYER, 500n]]],
+  ];
+  const asMap = (rows) => Object.fromEntries(
+    rows.map((r) => [r.payer.toLowerCase(), String(r.amount)]).sort(),
+  );
+  for (const [name, minAmount, legsIn] of shapes) {
+    const logs = legsIn.map(([from, value], logIndex) => ({
+      address: ASSET,
+      logIndex,
+      blockNumber: 10,
+      transactionHash: tx,
+      topics: [T, ethers.zeroPadValue(from, 32), ethers.zeroPadValue(AGENT, 32)],
+      data: ethers.toBeHex(value, 32),
+    }));
+    const provider = {
+      getTransactionReceipt: async () => ({ status: 1, blockNumber: 10, logs }),
+      getBlockNumber: async () => 100,
+      getBlock: async () => ({ timestamp: 1_700_000_000 }),
+    };
+    let pushed = [];
+    try {
+      pushed = (await verifyPayment(
+        { provider, cfg: { asset: ASSET, minConfirmations: 1, minAmount } }, tx, AGENT,
+      )).legs;
+    } catch (err) {
+      assert.ok(err instanceof PaymentError, `${name}: unexpected ${err.message}`);
+    }
+    const pulled = scan.planCredits(logs.map((l) => scan.decodeTransfer(l)), {
+      didHashOf: (a) => (a.toLowerCase() === AGENT.toLowerCase() ? 'did-A' : null),
+      minAmount,
+    }).credits;
+    assert.deepEqual(asMap(pushed), asMap(pulled), name);
+  }
+});
+
+test('activityWindow: an agent that was never paid has an empty window, which scores no tenure', () => {
+  const win = activityWindow([], 90 * 86_400_000, Date.now());
+  assert.deepEqual(win, { firstActivitySec: 0, lastActivitySec: 0, recency: 0 });
+  const registeredAt = Math.floor(Date.now() / 1000) - 400 * 86_400;
+  assert.equal(ageScore(registeredAt, win), 0, 'a year of registration with no payments is worth nothing');
+  // null still means verification is off, and keeps the calendar behaviour deployments rely on.
+  assert.ok(ageScore(registeredAt, null) > 0);
+});

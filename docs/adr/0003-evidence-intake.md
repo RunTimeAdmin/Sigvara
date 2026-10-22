@@ -108,7 +108,7 @@ being useful, not a substitute for having them.
 `oracle/payment-scan.js` implements the scan: ERC-20 Transfer logs to registered agent
 addresses, chunked and checkpointed like the registration scan, with its own backoff via
 `chain.readWithBackoff`. Credits are planned purely and every refusal is named —
-`self_payment`, `below_minimum`, `already_credited` — because a silent filter here is
+`self_payment`, `below_minimum`, `zero_value`, `already_credited` — because a silent filter here is
 indistinguishable from an agent nobody paid, which is the ambiguity this ADR exists to
 remove.
 

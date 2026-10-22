@@ -40,7 +40,7 @@ The compose file mounts `oracle_state` volume to `/data` for persistence. The HT
 
 Do not simply proxy the whole service. [`Caddyfile.oracle.example`](Caddyfile.oracle.example) publishes `/health`, `/score/*`, `/evidence/*` and `POST /attest`, and answers 404 for everything else, which is the arrangement running on the Arc testnet deployment at `oracle.sigvara.xyz`. `/flag`, `/flag/resolve`, `/link` and `/epoch` stay off the proxy: they are token-gated, but keeping them unreachable means an attacker needs a shell on the box before the token matters at all.
 
-`/attest` being published does not make it open. The oracle decides per request: a **positive** attestation carrying a payment it verifies against the chain needs no token, because the payment is the credential and the payer is read from the transfer log rather than asserted. A **negative** one still requires the token. `successScore` is `successful / (total + prior)`, so a negative lowers the score directly, while the payment proves only that money moved and never that the work failed — leaving it open would let anyone downgrade any agent for the price of one minimum transfer, which on a faucet-backed testnet is free.
+`/attest` being published does not make it open. The oracle decides per request. A **positive** attestation carrying a payment it verifies against the chain needs no token to record that *payment*: the payer is read from the transfer log rather than asserted, and the payment counts toward fee volume and tenure. It records no *outcome*. A settlement hash is public, so whoever submits one has not shown that they paid or that they saw the work, and the first credit for a settlement is final; an outcome therefore needs the token, and a positive without one is stored the way a payment found by the scan is, with no outcome. A **negative** one still requires the token. `successScore` is `successful / (total + prior)`, so a negative lowers the score directly, while the payment proves only that money moved and never that the work failed — leaving it open would let anyone downgrade any agent for the price of one minimum transfer, which on a faucet-backed testnet is free.
 
 The read paths are deliberately unauthenticated: `/evidence` exists so a third party can re-derive a score without trusting the operator, and evidence nobody can fetch is evidence nobody can audit. They are rate-limited instead, as described under the endpoints below. `/metrics` is excluded from the proxy despite being harmless to serve, because its counters describe the operator rather than the protocol.
 
@@ -187,8 +187,14 @@ Submit an attestation for an agent's task outcome. The request shape depends on
 `PAYMENT_VERIFICATION`.
 
 With verification required, `{"success": true}` needs no token: the verified payment is
-the credential. `{"success": false}`, a missing `success`, or any non-boolean value
-returns 401 without one. `success` must be exactly `true` — `"yes"` is not a positive.
+the credential for the *payment*. Without the token it is recorded with no outcome (the
+response says `"outcomeRecorded": false`). With the token the outcome is recorded: `true`,
+`false`, or left out for none. `{"success": false}`, a missing `success`, or any non-boolean
+value returns 401 without a token, and `success` must be exactly `true` for a stranger:
+`"yes"` is not a positive. With a token, a non-boolean `success` is a 400.
+
+A payment credited without an outcome (by the scan, or by a request with no token) can be
+given one afterwards by a token holder, once. An outcome that is already recorded is final.
 
 **With `PAYMENT_VERIFICATION=required`** (what mainnet should run) the attestation must
 carry the settlement transaction of a real payment to the agent — the `transaction`
@@ -209,7 +215,9 @@ the Merkle leaf. Validated for shape only.
 
 The oracle reads the agent's own address from the identity registry, finds transfers of
 `PAYMENT_ASSET` to it in that receipt, checks the amount and confirmations, and takes
-the payer **from the transfer log**. Anything in an `attester` field is ignored. The
+the payer **from the transfer log**. Each sender is held to `PAYMENT_MIN_AMOUNT` on its
+own, and a sender whose transfers sum to zero is not a payment at all; the pull scan
+applies the same rule. Anything in an `attester` field is ignored. The
 settlement hash is recorded so the same receipt can never be credited twice, and the
 event is stamped with the block's timestamp rather than the time it was submitted.
 
@@ -227,16 +235,18 @@ This is fine for local testing and worthless as a trust signal in public.
   "attester": "0xPayer...",
   "amount": "20000000",
   "successful": 10,
-  "total": 15
+  "total": 15,
+  "outcomeRecorded": true
 }
 ```
 
 | Status | Meaning |
 |---|---|
 | 200 | Accepted |
-| 402 | The payment did not check out; `code` says why (including `self_payment`) |
-| 409 | This settlement was already credited |
-| 429 | Cooldown active for this (attester, didHash) — `remainingSeconds` says how long |
+| 400 | Malformed body, unknown agent, or a `success` that is not a boolean |
+| 402 | The payment did not check out; `code` says why (`self_payment`, `no_transfer`, `below_minimum`) |
+| 409 | `replayed`: this settlement was already credited. `outcome_recorded`: it already has an outcome, which is final |
+| 429 | Cooldown active for this (attester, didHash) — `remainingSeconds` says how long. Applies to callers without a token; a token holder reporting on a verified payment is not throttled |
 | 502 | The RPC failed. Not a verdict on the payment; retry |
 
 The 502 case is counted separately from rejected attestations: a node having a bad
@@ -687,7 +697,7 @@ with it off, the largest factor in the score is a count of HTTP requests.
 |----------|---------|-------------|
 | `PAYMENT_VERIFICATION` | `off` | `off` or `required` |
 | `PAYMENT_ASSET` | (empty) | ERC-20 that payments settle in. **Required** when verification is on — a missing value stops the process at startup rather than silently disabling the check |
-| `PAYMENT_MIN_AMOUNT` | `0` | Smallest payment that counts, in the asset's base units. Stops dust minting attestations |
+| `PAYMENT_MIN_AMOUNT` | `0` | Smallest payment that counts, per sender, in the asset's base units. Stops dust minting attestations. **Must be above 0 when verification is `required`**: the process refuses to start otherwise. A zero-value transfer never counts, whatever this is |
 | `PAYMENT_MIN_CONFIRMATIONS` | `1` | Confirmations before a settlement is accepted |
 | `PAYMENT_FEE_UNIT` | `100000000` | Base units of volume per point of `feeScore`. With 6-decimal USDC this is one point per $100, so the 20-point cap lands at $2,000 of settled volume |
 | `PAYMENT_HALF_LIFE_DAYS` | `90` | Days after which a payment counts half. `0` disables decay, which makes the score answer "was this agent ever busy" instead of "is it busy now" |

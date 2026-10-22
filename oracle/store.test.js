@@ -654,3 +654,58 @@ test('load: credits stored under a mixed-case didHash are folded back into the a
   assert.deepEqual(r.merged, [goodEvent.txHash, '0x' + 'ef'.repeat(32)], 'both credits, existing one first');
   assert.deepEqual(r.keys, [lower, 'did-healthy'].sort(), 'no mixed-case key survives');
 });
+
+// ---- setPaymentOutcome ------------------------------------------------------
+//
+// A payment found by the scan, or attested by someone with no token, is credited without an
+// outcome. The party that audited the work must still be able to record one afterwards.
+
+const { setPaymentOutcome } = require('./store');
+const OUTCOME_PAYER = '0x45D8c79e1188A429dbDfd8400A2869316d6fCe8D';
+
+test('setPaymentOutcome: gives a payment credited without an outcome its first one', () => {
+  const did = '0x' + 'd1'.repeat(32);
+  const tx = '0x' + 'e1'.repeat(32);
+  assert.equal(creditPayment(did, tx, 500n, OUTCOME_PAYER, null), true);
+  const before = getPaymentEvents(did);
+  assert.equal(setPaymentOutcome(did, tx, OUTCOME_PAYER, false), 'set');
+  const after = getPaymentEvents(did);
+  assert.equal(after[0].success, false);
+  assert.notEqual(after, before, 'a new array, so the evidence cache sees a new revision');
+  assert.equal(before[0].success, null, 'the earlier array was not edited in place');
+  assert.ok(Object.isFrozen(after), 'the new array is frozen like every other version');
+});
+
+test('setPaymentOutcome: an outcome, once recorded, is final', () => {
+  const did = '0x' + 'd2'.repeat(32);
+  const tx = '0x' + 'e2'.repeat(32);
+  assert.equal(creditPayment(did, tx, 500n, OUTCOME_PAYER, true), true);
+  assert.equal(setPaymentOutcome(did, tx, OUTCOME_PAYER, false), 'already_set');
+  assert.equal(getPaymentEvents(did)[0].success, true, 'the audited result was not overwritten');
+});
+
+test('setPaymentOutcome: matches the hash and payer without regard to case, and only that payer', () => {
+  const did = '0x' + 'd3'.repeat(32);
+  const tx = '0x' + 'AB'.repeat(32);
+  const other = '0x18CBcE50390f5f6ebe4E20Fc17833F25c8D94811';
+  assert.equal(creditPayment(did, tx, 500n, OUTCOME_PAYER, null), true);
+  assert.equal(creditPayment(did, tx, 700n, other, null), true, 'a second sender in the same transaction');
+  assert.equal(setPaymentOutcome(did.toUpperCase().replace('0X', '0x'), tx.toLowerCase(), OUTCOME_PAYER.toLowerCase(), true), 'set');
+  const events = getPaymentEvents(did);
+  assert.equal(events.find((e) => e.payer === OUTCOME_PAYER).success, true);
+  assert.equal(events.find((e) => e.payer === other).success, null, 'the other sender is untouched');
+});
+
+test('setPaymentOutcome: a settlement that was never credited is not_found', () => {
+  const did = '0x' + 'd4'.repeat(32);
+  assert.equal(setPaymentOutcome(did, '0x' + 'e4'.repeat(32), OUTCOME_PAYER, true), 'not_found');
+});
+
+test('setPaymentOutcome: refuses anything but a boolean, which would be recorded as no outcome', () => {
+  const did = '0x' + 'd5'.repeat(32);
+  const tx = '0x' + 'e5'.repeat(32);
+  creditPayment(did, tx, 500n, OUTCOME_PAYER, null);
+  assert.throws(() => setPaymentOutcome(did, tx, OUTCOME_PAYER, 'false'), TypeError);
+  assert.throws(() => setPaymentOutcome(did, tx, OUTCOME_PAYER, null), TypeError);
+  assert.equal(getPaymentEvents(did)[0].success, null);
+});

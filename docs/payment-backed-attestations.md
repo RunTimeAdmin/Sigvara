@@ -40,8 +40,15 @@ curl -X POST https://oracle.sigvara.xyz/attest \
   -d '{"didHash":"0x84...","success":true,"payment":{"txHash":"0x3daf88..."}}'
 ```
 
-The payment is the credential. You do not identify yourself, because the oracle does
-not take your word for who you are: it reads the payer off the transfer log.
+The payment is the credential for the payment. You do not identify yourself, because the
+oracle does not take your word for who you are: it reads the payer off the transfer log.
+
+What a request with no token records is the payment, as fee volume and tenure. It records
+no outcome. A settlement hash is public, so whoever submits one has not shown that they
+paid or that they saw the work, and the first credit for a settlement is final. Outcomes
+come from CounterAudit, which holds a token, and can be added to a payment that was
+credited without one (once; a recorded outcome is final). The response says which
+happened with `outcomeRecorded`.
 
 **A negative attestation still needs the admin token.** The asymmetry is deliberate.
 `successScore` is `successful / (total + prior)`, so a negative lowers the score
@@ -49,8 +56,8 @@ directly, and a verified payment proves money moved but never that the work fail
 Leaving that open would mean anyone could downgrade any agent for the price of one
 `PAYMENT_MIN_AMOUNT` transfer — which, on a testnet whose bond token has an open
 faucet, is free. Negative outcomes therefore come from CounterAudit, which reports
-work it actually audited. Positive claims carry their own cost and can be left open;
-negative ones cannot.
+work it actually audited. Positive claims carry their own cost and can be left open as
+payment evidence; negative ones cannot.
 
 The oracle then:
 
@@ -58,8 +65,8 @@ The oracle then:
    DID and cannot be repointed after registration,
 2. fetches the transaction receipt and looks for transfers of the accepted asset
    to that address,
-3. checks the total against `PAYMENT_MIN_AMOUNT` and the age against
-   `PAYMENT_MIN_CONFIRMATIONS`,
+3. checks each sender's payment against `PAYMENT_MIN_AMOUNT` (a zero-value transfer
+   never counts) and the age against `PAYMENT_MIN_CONFIRMATIONS`,
 4. takes the payer from the transfer log and uses it as the attester identity,
    ignoring anything the caller put in the `attester` field,
 5. records the settlement hash so the same receipt can never be credited twice,

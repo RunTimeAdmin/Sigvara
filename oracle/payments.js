@@ -105,6 +105,26 @@ function required(cfg) {
 }
 
 /**
+ * Whether one sender's contribution to a transaction counts as a payment.
+ *
+ * The one rule both intake paths apply, so they cannot drift apart: the attested path
+ * (verifyPayment) and the pull scan (planCredits) each used to have their own comparison,
+ * and they disagreed.
+ *
+ * Strictly positive, whatever the configured minimum. A zero-value Transfer is not a
+ * payment, and on a standard ERC-20 anyone can emit one naming any sender by calling
+ * transferFrom with a value of 0, which needs no allowance. With a minimum of 0 such a
+ * log used to be credited as a payment from an address that never paid anything.
+ * A positive value cannot be forged this way: the transfer reverts without an allowance.
+ *
+ * The minimum applies to each sender, not to the transaction's total. A total let one real
+ * payment carry any number of tiny or zero-value legs along with it.
+ */
+function countsAsPayment(amount, minAmount) {
+  return amount > 0n && amount >= minAmount;
+}
+
+/**
  * Pull the ERC-20 Transfer logs out of a receipt that credit `payTo` in `asset`.
  *
  * A single transaction can carry several transfers (a router, a batch, a fee
@@ -179,13 +199,6 @@ async function verifyPayment({ provider, cfg }, txHash, payTo) {
     throw new PaymentError('no_transfer', `no ${cfg.asset} transfer to ${payTo} in this transaction`);
   }
 
-  // Sum the credits rather than taking the largest: a payment split across two
-  // logs is still one payment. The payer is whoever contributed the most, which
-  // is the meaningful counterparty when a router sits in the middle.
-  const amount = credits.reduce((sum, c) => sum + c.value, 0n);
-  if (amount < cfg.minAmount) {
-    throw new PaymentError('below_minimum', `paid ${amount}, minimum is ${cfg.minAmount}`);
-  }
   // Per sender, because two payers can credit one agent in a single transaction and
   // collapsing them loses who actually paid. The scan groups the same way, so the two
   // intake paths agree by construction rather than by keeping two payer-selection rules
@@ -197,9 +210,25 @@ async function verifyPayment({ provider, cfg }, txHash, payTo) {
     const key = c.from.toLowerCase();
     bySender.set(key, (bySender.get(key) ?? 0n) + c.value);
   }
-  const legs = [...bySender.entries()]
-    .map(([addr, value]) => ({ payer: ethers.getAddress(addr), amount: value }))
+  const senders = [...bySender.entries()]
+    .map(([addr, value]) => ({ payer: ethers.getAddress(addr), amount: value }));
+
+  // Each sender is held to the minimum on its own, by the same rule the scan applies
+  // (countsAsPayment). This used to test the transaction's total, so one real payment
+  // carried any number of zero-value or dust legs through with it, each credited as a
+  // separate counterparty, while the scan refused the same legs: two honest operators
+  // disagreeing about one transaction.
+  const legs = senders
+    .filter((s) => countsAsPayment(s.amount, cfg.minAmount))
     .sort((a, b) => (b.amount > a.amount ? 1 : b.amount < a.amount ? -1 : 0));
+  if (legs.length === 0) {
+    if (senders.every((s) => s.amount === 0n)) {
+      throw new PaymentError('no_transfer', `only zero-value transfers to ${payTo} in this transaction`);
+    }
+    throw new PaymentError('below_minimum', `no sender paid the minimum of ${cfg.minAmount}`);
+  }
+  // What counted: the qualifying senders' total, not everything that moved.
+  const amount = legs.reduce((sum, l) => sum + l.amount, 0n);
 
   // The largest contributor still names the attestation: it decides the attester
   // identity, the cooldown key and the self-payment refusal, all unchanged. For a single
@@ -230,8 +259,8 @@ async function verifyPayment({ provider, cfg }, txHash, payTo) {
   return {
     payer,
     amount,
-    // Each sender's own contribution. `amount` stays the total, which is what the
-    // response reports and what the minimum was checked against.
+    // Each qualifying sender's own contribution. `amount` is their total, which is what
+    // the response reports.
     legs,
     blockNumber: receipt.blockNumber,
     settledAt: block.timestamp * 1000,
@@ -477,9 +506,16 @@ function diversifiedAttestations(events, cfg, now = Date.now(), payerScores = nu
  * `recency` is the decay weight of the most recent payment, so a tenure that was
  * earned and then abandoned fades at the same rate as everything else. Self-payments
  * never reach the log, so this window is made of arm's-length trade only.
+ *
+ * With no events the window is empty, not absent. This used to return null, and ageScore
+ * reads null as "payment verification is off" and falls back to the calendar, so an agent
+ * that had never been paid scored tenure from its registration date alone: 14 points at
+ * 30 days, 25 at a year, up to 30. That is the free factor the window exists to remove.
+ * This function is only called with verification on, so an agent with no payments gets
+ * the empty window and scores 0.
  */
 function activityWindow(events, halfLifeMs, now = Date.now()) {
-  if (!events || events.length === 0) return null;
+  if (!events || events.length === 0) return { firstActivitySec: 0, lastActivitySec: 0, recency: 0 };
   let first = Infinity, last = -Infinity;
   for (const e of events) {
     if (e.ts < first) first = e.ts;
@@ -513,6 +549,7 @@ module.exports = {
   PaymentError,
   readConfig,
   required,
+  countsAsPayment,
   verifyPayment,
   transfersTo,
   feeScoreFromVolume,

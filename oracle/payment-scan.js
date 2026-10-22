@@ -40,6 +40,7 @@
  */
 
 const { ethers } = require('ethers');
+const { countsAsPayment } = require('./payments');
 
 /** Transfer(address indexed from, address indexed to, uint256 value). */
 const TRANSFER_TOPIC = ethers.id('Transfer(address,address,uint256)');
@@ -227,7 +228,13 @@ function planCredits(decoded, opts) {
 
     // Per agent, not per transaction: a batch payout credits each recipient it paid.
     if (isUsed(g.txHash, g.didHash, g.from)) { reject('already_credited'); continue; }
-    if (g.amount < minAmount) { reject('below_minimum'); continue; }
+    // The rule the attested path applies, from one place. A zero-value Transfer is reported
+    // as such rather than as "below the minimum": it is not a small payment, it is a log
+    // anyone can emit naming any sender (see countsAsPayment).
+    if (!countsAsPayment(g.amount, minAmount)) {
+      reject(g.amount === 0n ? 'zero_value' : 'below_minimum');
+      continue;
+    }
     // Same rule as the attested path: an operator paying its own agent costs only gas,
     // and the money comes straight back.
     if (lower(g.from) === lower(g.to)) { reject('self_payment'); continue; }
