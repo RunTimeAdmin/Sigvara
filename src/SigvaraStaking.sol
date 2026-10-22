@@ -189,6 +189,8 @@ contract SigvaraStaking is
     /// A proposal against this agent was dropped less than one challenge period ago.
     error SlashCooldownActive(bytes32 didHash, uint256 refileAt);
     error DisputeResolutionActive(bytes32 didHash, uint256 expiresAt);
+    /// A Pending proposal is still inside the fortnight in which anyone may execute it.
+    error ExecutionPeriodActive(bytes32 didHash, uint256 expiresAt);
     error NothingClaimable(address account);
 
     // -------------------------------------------------------------------------
@@ -483,7 +485,7 @@ contract SigvaraStaking is
      *         not reinstate the agent. Disputing used to set Cancelled, which released
      *         the bond: an operator could queue the whole stake, cancel every proposal
      *         the committee filed at no cost, and claim once unbonding elapsed.
-     *         The committee then calls resolveDispute. If it never does, anyone may
+     *         The admin then calls resolveDispute. If it never does, anyone may
      *         call expireDispute after DISPUTE_RESOLUTION_PERIOD so the freeze is
      *         bounded in the other direction too.
      */
@@ -506,13 +508,20 @@ contract SigvaraStaking is
     }
 
     /**
-     * @notice Committee resolves a disputed slash: uphold it or drop it.
+     * @notice The admin rules on a disputed slash: uphold it or drop it.
      * @param  uphold True to slash, false to cancel and reinstate the agent.
+     * @dev    The committee files a slash and does not rule on it. A slash pays a quarter of the
+     *         bond to whoever filed it and a quarter to the victim it names, so a committee that
+     *         decided its own disputes would be accuser, judge and payee at once, and could uphold
+     *         the moment a dispute was filed, cutting short the whole challenge period the admin's
+     *         veto relies on. The admin already holds the veto, so the ruling and the check on it
+     *         sit with one key that is separate from the accuser. If the admin never rules, anyone
+     *         can expire the dispute after DISPUTE_RESOLUTION_PERIOD and the agent keeps its stake.
      */
     function resolveDispute(bytes32 didHash, bool uphold)
         external
         nonReentrant
-        onlyRole(SLASHING_COMMITTEE_ROLE)
+        onlyRole(DEFAULT_ADMIN_ROLE)
     {
         SlashProposal storage proposal = slashProposals[didHash];
         if (proposal.state != SlashState.Disputed) revert SlashNotDisputed(didHash);
@@ -525,10 +534,11 @@ contract SigvaraStaking is
     }
 
     /**
-     * @notice Release a dispute the committee never resolved.
-     * @dev    Permissionless, so an operator is never dependent on committee liveness
+     * @notice Release a dispute nobody ruled on.
+     * @dev    Permissionless, so an operator is never dependent on anyone's liveness
      *         to get an unresolved freeze lifted. The committee may re-file with
-     *         stronger evidence; it simply cannot sit on a frozen bond forever.
+     *         stronger evidence once its cooldown has passed; it simply cannot sit on a
+     *         frozen bond forever.
      */
     function expireDispute(bytes32 didHash) external nonReentrant {
         SlashProposal storage proposal = slashProposals[didHash];
@@ -536,6 +546,28 @@ contract SigvaraStaking is
 
         uint256 expiresAt = proposal.disputedAt + DISPUTE_RESOLUTION_PERIOD;
         if (block.timestamp <= expiresAt) revert DisputeResolutionActive(didHash, expiresAt);
+
+        _dropProposal(didHash, proposal);
+    }
+
+    /**
+     * @notice Lapse a slash proposal that nobody executed or cancelled.
+     * @dev    The counterpart of expireDispute for a proposal nobody disputed. Once the challenge
+     *         window has closed the operator can no longer dispute, and a proposal left Pending
+     *         after that point used to stay Pending for good: the agent stayed suspended and a
+     *         queued withdrawal could not be claimed, with only the admin's veto to end it.
+     *         Permissionless, so a frozen bond never depends on the committee's liveness or its
+     *         goodwill. Until it lapses it can still be executed by anyone, as an undisputed slash
+     *         always could, and a slash worth executing is worth a fortnight, since the victim and
+     *         the reporter are paid from it. A lapsed proposal is dropped like any other: the agent
+     *         is reinstated and the committee waits one challenge period before it files again.
+     */
+    function expireSlash(bytes32 didHash) external nonReentrant {
+        SlashProposal storage proposal = slashProposals[didHash];
+        if (proposal.state != SlashState.Pending) revert NoActivePendingSlash(didHash);
+
+        uint256 expiresAt = proposal.challengeDeadline + EXECUTION_PERIOD;
+        if (block.timestamp <= expiresAt) revert ExecutionPeriodActive(didHash, expiresAt);
 
         _dropProposal(didHash, proposal);
     }
@@ -553,15 +585,14 @@ contract SigvaraStaking is
     }
 
     /**
-     * @notice The admin drops a pending or disputed slash. The committee accuses and rules;
-     *         this is the second key that can stop it.
+     * @notice The admin drops a pending or disputed slash. The committee accuses; the admin
+     *         rules on a dispute and can stop a proposal at any point.
      * @dev    The committee is trusted to file slashes, and a slash pays a quarter of the bond to
      *         whoever filed it and a quarter to the victim it names, so a committee that is
      *         compromised, or simply wrong, has a reason to file. The proposal sits for a whole
      *         challenge period before anyone can execute it, and this is what an independent
-     *         admin does inside that period. It adds no power the admin did not have: an admin
-     *         can grant itself the committee role and call cancelSlash. It makes the check
-     *         explicit and usable without a role grant in the middle of an incident.
+     *         admin does inside that period. It is usable without a role grant in the middle of
+     *         an incident.
      *
      *         Works while the proposal is Pending, including after its challenge deadline and
      *         before anyone executes it, and while it is Disputed. The agent is reinstated as
@@ -680,11 +711,17 @@ contract SigvaraStaking is
     ///         instantly claimable while a slash is being prepared.
     uint256 public constant MIN_UNBONDING_PERIOD = 1 days;
 
-    /// @notice How long the committee has to resolve a dispute before anyone may
-    ///         expire it. A dispute freezes the stake, so without this cap the
-    ///         committee could freeze an operator's bond indefinitely by filing
-    ///         once and never resolving.
+    /// @notice How long the admin has to rule on a dispute before anyone may
+    ///         expire it. A dispute freezes the stake, so without this cap a bond
+    ///         could be frozen indefinitely by filing once and never resolving.
     uint256 public constant DISPUTE_RESOLUTION_PERIOD = 14 days;
+
+    /// @notice How long after its challenge deadline a Pending proposal can still be
+    ///         executed before anyone may expire it. The same reasoning as the dispute
+    ///         period: the operator cannot dispute once the window has closed, so a
+    ///         proposal that is neither executed nor cancelled would freeze the bond
+    ///         for good.
+    uint256 public constant EXECUTION_PERIOD = 14 days;
 
     function setChallengePeriod(uint256 newPeriod) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (newPeriod < MIN_CHALLENGE_PERIOD) revert PeriodTooShort(newPeriod, MIN_CHALLENGE_PERIOD);

@@ -130,14 +130,14 @@ contract DisputeFreezeTest is Test, RegistrationHelper {
         staking.initiateSlash(didHash, victim, "");
     }
 
-    /// The committee upholds: the slash lands even though it was disputed.
+    /// The admin upholds: the slash lands even though it was disputed.
     function test_resolveDispute_upheld_slashes() public {
         vm.prank(committee);
         staking.initiateSlash(didHash, victim, "");
         vm.prank(operator);
         staking.disputeSlash(didHash);
 
-        vm.prank(committee);
+        vm.prank(admin);
         staking.resolveDispute(didHash, true);
 
         assertEq(staking.getStake(didHash), 0, "stake slashed");
@@ -150,14 +150,14 @@ contract DisputeFreezeTest is Test, RegistrationHelper {
         );
     }
 
-    /// The committee rules for the operator: proposal dropped, stake released.
+    /// The admin rules for the operator: proposal dropped, stake released.
     function test_resolveDispute_rejected_releasesStake() public {
         vm.prank(committee);
         staking.initiateSlash(didHash, victim, "");
         vm.prank(operator);
         staking.disputeSlash(didHash);
 
-        vm.prank(committee);
+        vm.prank(admin);
         staking.resolveDispute(didHash, false);
 
         assertTrue(identity.isActive(didHash), "agent reinstated");

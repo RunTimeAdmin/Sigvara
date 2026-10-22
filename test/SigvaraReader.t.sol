@@ -190,7 +190,7 @@ contract SigvaraReaderTest is StackFixture {
         assertEq(uint8(t.slash), uint8(ISigvaraStaking.SlashState.Disputed));
         assertFalse(reader.isTrusted(agent, 0));
 
-        vm.prank(committee);
+        vm.prank(admin);
         staking.resolveDispute(didHash, false);
         t = reader.trust(agent);
         assertEq(uint8(t.slash), uint8(ISigvaraStaking.SlashState.Cancelled));

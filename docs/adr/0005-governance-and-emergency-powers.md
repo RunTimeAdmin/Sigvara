@@ -15,6 +15,10 @@ was not:
   quarter of the bond to whoever filed it and a quarter to the victim it names;
 - the committee could drop a proposal and file the next in the same block, so a stake could be held
   frozen for good;
+- the committee also ruled on the operator's dispute, and could uphold it the moment it was filed, which
+  cut short the whole challenge period the admin's veto relies on;
+- a slash proposal that nobody executed or cancelled never lapsed. Once its window closed the operator
+  could no longer dispute it, so a stake could sit frozen until the admin vetoed it;
 - there was no way to stop new value or new state entering a registry while a bug was being fixed,
   and the only fix is a timelocked upgrade, 48 hours away;
 - the epoch-fee module charges an agent in a call that is separate from the score it pays for, and cuts
@@ -30,11 +34,12 @@ This ADR records what was decided about each, and what was left as a stated trus
    `SigvaraReputation.setOperatorBond` require `UPGRADER_ROLE`, which the timelock holds, instead of
    the admin role. After the handover the admin Safe cannot make either call; it schedules it on the
    timelock and it executes after the delay. Both are tested through a real `TimelockController`.
-2. **A second key can stop a slash.** `SigvaraStaking.vetoSlash(didHash)` lets the admin drop a
-   Pending proposal, including after its challenge deadline and before anyone executes it, or a
-   Disputed one. The committee accuses and rules; the admin Safe is a separate key that can stop it.
-   It adds no power the admin did not have (it can grant itself the committee role), so the change
-   is to make the check explicit and usable without a grant in the middle of an incident.
+2. **A second key stops a slash and rules on disputes.** `SigvaraStaking.vetoSlash(didHash)` lets the
+   admin drop a Pending proposal, including after its challenge deadline and before anyone executes
+   it, or a Disputed one. `resolveDispute` is the admin's too: the committee files a slash and no longer
+   rules on it, so nobody is accuser, judge and payee at once, and a dispute cannot be upheld before the
+   admin has had the whole window. If the admin never rules, anyone can expire the dispute after 14
+   days and the agent keeps its stake. The committee still files and cancels.
 3. **The committee cannot file again at once.** Every drop (cancelled, vetoed, expired after a
    dispute, resolved in the agent's favour) records `lastDroppedAt`, and `initiateSlash` refuses
    for one challenge period after it. An operator always gets a window to act, and a withdrawal it
@@ -64,6 +69,16 @@ This ADR records what was decided about each, and what was left as a stated trus
    tests stay in the repository. When fees are to be turned on, the charge moves into the proposal
    transaction, so a fee can only be paid by a score that was actually proposed, and the module is
    audited then.
+7. **A slash nobody finishes lapses.** Once the challenge window closes the operator cannot dispute, and a
+   Pending proposal that nobody executed or cancelled used to stay Pending for good, with the agent
+   suspended and its withdrawals blocked. `expireSlash(didHash)` now lets anyone drop it 14 days after its
+   deadline, the counterpart of `expireDispute`. Until then it can still be executed by anyone, and a
+   slash worth executing is worth a fortnight, since the victim and the reporter are paid from it. A
+   lapsed proposal is dropped like any other, so the agent is reinstated and the committee waits one
+   challenge period before it can file again. The cooldown stays shorter than the unbonding period on
+   purpose: a withdrawal queued after a drop stays slashable until it is claimed, so a cancelled slash
+   cannot become a way to exit before the committee can re-file. What bounds a freeze is the lapse, not
+   a longer cooldown.
 
 ## What stays on the admin Safe, and why
 
@@ -82,7 +97,10 @@ oracle role at once. That is a stated trust assumption, not an oversight:
 
 - A change of stake view or operator registry takes 48 hours of notice. A redeployed staking
   contract is therefore a scheduled operation, not an instant one.
-- The audit pack lists the veto as an admin power, the two setters as upgrade-class, and the guardian.
+- The audit pack lists the veto and the dispute ruling as admin powers, the two setters as upgrade-class,
+  and the guardian.
+- A slash that is legitimate has to be executed within 14 days of its deadline, or it lapses and has to
+  be filed again after the cooldown, so it should be executed as soon as the window closes.
 - A pause can be used against the protocol by a compromised guardian: it can close new registrations,
   deposits, proposals and bonds for three of every four days until the admin revokes it. That is a
   nuisance with an instant remedy, and the price of being able to stop a live bug while a fix is built.
