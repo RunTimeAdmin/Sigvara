@@ -251,6 +251,12 @@ identities would be a liquid commodity, which is the farm-and-sell market in its
 most convenient form. `operatorTransferCount` is public, so a consumer can also
 discount an identity that has changed hands repeatedly.
 
+The restart does not depend on how mature the score was or on what the oracle did last.
+A score that has fully matured, one the oracle has just finalized again, and one that has
+fallen below what had been released all start the buyer at zero. A transfer accepted in
+the same second as a finalize counts as a transfer after it: Arc timestamps have one
+second granularity, and consecutive blocks can share one.
+
 Transfers are refused while a slash is pending, so an accused agent cannot be handed
 to a buyer who had no part in what it did, and refused unless the agent is bonded at
 handover, so what changes hands carries collateral rather than only a reputation.

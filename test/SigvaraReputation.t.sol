@@ -836,6 +836,105 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
         assertEq(rep.getTotalScore(DID), 20, "the buyer re-earns the right to spend it");
     }
 
+    function _sellTo(address buyer) internal {
+        vm.prank(operator);
+        identity.offerOperatorTransfer(DID, buyer);
+        vm.prank(buyer);
+        identity.acceptOperatorTransfer(DID);
+    }
+
+    /// The seller lets the score mature and the oracle finalizes it again, which anchors the
+    /// stored value at the full score. A sale after that has to restart maturity all the same:
+    /// that anchor was earned by the seller, and a read that returned the earned score before
+    /// it looked for a handover handed the whole thing to the buyer.
+    function test_maturity_restartsOnAHandoverAfterAFinalizeAtFullMaturity() public {
+        _finalizeWithMaturity(4);
+        vm.warp(block.timestamp + 25 days);
+        _proposeAndFinalize(DID, maxScore);
+        assertEq(rep.maturedScore(DID), 100, "the re-finalize anchored the full score");
+        assertEq(rep.getTotalScore(DID), 100, "the seller holds all of it");
+
+        // A later second than the finalize, so only the order of the checks is under test.
+        vm.warp(block.timestamp + 1 hours);
+        _sellTo(makeAddr("buyer"));
+
+        assertEq(rep.getEarnedScore(DID), 100, "the record survives the sale");
+        assertEq(rep.getTotalScore(DID), 0, "none of it is spendable by the buyer yet");
+
+        vm.warp(block.timestamp + 5 days);
+        assertEq(rep.getTotalScore(DID), 20, "the buyer re-earns it at the normal rate");
+    }
+
+    /// The same shortcut served a score that had fallen below its anchor: a fall applies at
+    /// once, and the buyer still has to re-earn what is left rather than inherit it.
+    function test_maturity_restartsOnAHandoverAfterAScoreFellBelowTheAnchor() public {
+        _finalizeWithMaturity(4);
+        vm.warp(block.timestamp + 25 days);
+
+        SigvaraReputation.ReputationData memory low = maxScore;
+        low.feeScore = 0; low.successScore = 0; low.ageScore = 0;
+        low.externalScore = 0; low.propagationScore = 0; // leaves communityScore 5
+        _proposeAndFinalize(DID, low);
+        assertEq(rep.getTotalScore(DID), 5, "the seller sees the fall at once");
+
+        vm.warp(block.timestamp + 1 hours);
+        _sellTo(makeAddr("buyer"));
+
+        assertEq(rep.getTotalScore(DID), 0, "the buyer starts from nothing");
+        vm.warp(block.timestamp + 1 days);
+        assertEq(rep.getTotalScore(DID), 4);
+        vm.warp(block.timestamp + 1 days);
+        assertEq(rep.getTotalScore(DID), 5, "and stops at what was earned");
+    }
+
+    /// Arc timestamps have one second granularity and consecutive blocks can share one. A sale
+    /// accepted in the same second as a finalize has operatorChangedAt == maturedAt, which a
+    /// strict comparison read as "no handover since the anchor was set", so the buyer kept
+    /// the anchor the seller had matured.
+    function test_maturity_restartsWhenTheSaleSharesTheFinalizeTimestamp() public {
+        _finalizeWithMaturity(4);
+        vm.warp(block.timestamp + 20 days);
+
+        address buyer = makeAddr("buyer");
+        vm.prank(operator);
+        identity.offerOperatorTransfer(DID, buyer);
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
+        vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
+        rep.finalizeReputation(DID);
+        assertGt(rep.maturedScore(DID), 0, "the finalize anchored what the seller had matured");
+
+        vm.prank(buyer);
+        identity.acceptOperatorTransfer(DID);
+        assertEq(identity.operatorChangedAt(DID), rep.maturedAt(DID), "the same second");
+
+        assertEq(rep.getTotalScore(DID), 0, "the buyer still starts from nothing");
+        vm.warp(block.timestamp + 5 days);
+        assertEq(rep.getTotalScore(DID), 20);
+    }
+
+    /// A sale followed by a finalize in the same second: the finalize runs after the transfer, so
+    /// it anchors the restarted value, and the stored anchor and the handover agree.
+    function test_maturity_aFinalizeInTheSameSecondAsTheSaleAnchorsTheRestartedValue() public {
+        _finalizeWithMaturity(4);
+        vm.warp(block.timestamp + 20 days);
+
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
+        address buyer = makeAddr("buyer");
+        vm.prank(operator);
+        identity.offerOperatorTransfer(DID, buyer);
+        vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
+        vm.prank(buyer);
+        identity.acceptOperatorTransfer(DID);
+        rep.finalizeReputation(DID);
+
+        assertEq(rep.maturedScore(DID), 0, "anchored after the sale, so from nothing");
+        assertEq(rep.getTotalScore(DID), 0);
+        vm.warp(block.timestamp + 5 days);
+        assertEq(rep.getTotalScore(DID), 20);
+    }
+
     /// A hardcoded selector that drifts would not fail loudly: the staticcall would
     /// simply miss, the branch would be skipped, and maturity would silently stop
     /// restarting on a handover. I got this constant wrong once already.
