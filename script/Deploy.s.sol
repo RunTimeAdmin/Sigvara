@@ -44,7 +44,8 @@ import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
  *                            defaults to deployer
  *   COMMITTEE_ADDRESS      — initial SLASHING_COMMITTEE_ROLE holder (testnet 3-of-5 multisig)
  *                            defaults to deployer
- *   MINIMUM_STAKE          — minimum stake-token stake in wei (default: 1,000 SVR)
+ *   MINIMUM_STAKE          — minimum stake-token stake in wei (default: 1,000 SVR; the default
+ *                            is refused on mainnet, so state the number there)
  *   CHALLENGE_PERIOD       — slash challenge window in seconds (default: 7 days)
  *   SCORE_CHALLENGE_WINDOW — reputation-score challenge window in seconds (default: 6 hours)
  *   UNBONDING_PERIOD       — seconds a queued withdrawal is still slashable before claim (default: 21 days)
@@ -80,6 +81,7 @@ contract Deploy is Script {
     error BondTokenNotSet();
     error BondTokenInvalid(address token);
     error PeriodBelowFloor(string name, uint256 value, uint256 floor);
+    error DefaultAmountOnMainnet(string name, uint256 value);
 
     function run() external {
         uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
@@ -95,6 +97,7 @@ contract Deploy is Script {
         _checkRoleSeparation(deployer, oracle, committee);
         _checkMainnetToken(vm.envOr("SVR_ADDRESS", address(0)));
         _checkMainnetPeriods(period, unbondPeriod, scoreWindow);
+        _checkMainnetMinimumStake(minStake);
 
         vm.startBroadcast(deployerKey);
 
@@ -224,6 +227,15 @@ contract Deploy is Script {
             revert PeriodBelowFloor("UNBONDING_PERIOD", unbondPeriod, MIN_UNBONDING_PERIOD);
         }
         if (scoreWindow == 0) revert PeriodBelowFloor("SCORE_CHALLENGE_WINDOW", scoreWindow, 1);
+    }
+
+    /// @dev Mainnet only. A forgotten MINIMUM_STAKE leaves the testnet default, which is a valid
+    ///      number and a very different deployment from the one intended. The admin can change
+    ///      it with a setter afterwards, but the first weeks would run on the wrong figure, so
+    ///      the default is refused and the number has to be stated.
+    function _checkMainnetMinimumStake(uint256 minStake) internal view {
+        if (block.chainid != ARC_MAINNET) return;
+        if (minStake == DEFAULT_MINIMUM_STAKE) revert DefaultAmountOnMainnet("MINIMUM_STAKE", minStake);
     }
 
     // SVR_ADDRESS points at an existing ERC-20 (the mainnet bond asset). When unset,

@@ -7,7 +7,9 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 
 import "../script/Deploy.s.sol";
 import "../script/DeployEpochFees.s.sol";
+import "../script/DeployOracleBond.s.sol";
 import "../src/SigvaraStaking.sol";
+import "../src/SigvaraOracleBond.sol";
 
 contract Token18 is ERC20 {
     constructor() ERC20("Sigvara", "SVR") {}
@@ -26,7 +28,12 @@ contract SilentContract {
 contract Deploy_Harness is Deploy {
     function checkToken(address t) external view { _checkMainnetToken(t); }
     function checkPeriods(uint256 a, uint256 b, uint256 c) external view { _checkMainnetPeriods(a, b, c); }
+    function checkMinimumStake(uint256 m) external view { _checkMainnetMinimumStake(m); }
     function floors() external pure returns (uint256, uint256) { return (MIN_CHALLENGE_PERIOD, MIN_UNBONDING_PERIOD); }
+}
+
+contract DeployOracleBond_Harness is DeployOracleBond {
+    function checkBondAmount(uint256 a) external view { _checkMainnetBondAmount(a); }
 }
 
 contract DeployEpochFees_Harness is DeployEpochFees {
@@ -43,6 +50,7 @@ contract DeployEpochFees_Harness is DeployEpochFees {
 contract DeployScriptGuardsTest is Test {
     Deploy_Harness h;
     DeployEpochFees_Harness f;
+    DeployOracleBond_Harness b;
 
     address deployer = makeAddr("deployer");
     address oracle = makeAddr("oracle");
@@ -51,6 +59,7 @@ contract DeployScriptGuardsTest is Test {
     function setUp() public {
         h = new Deploy_Harness();
         f = new DeployEpochFees_Harness();
+        b = new DeployOracleBond_Harness();
     }
 
     // ---- the bond token
@@ -139,6 +148,44 @@ contract DeployScriptGuardsTest is Test {
         (uint256 challenge, uint256 unbonding) = h.floors();
         assertEq(challenge, s.MIN_CHALLENGE_PERIOD());
         assertEq(unbonding, s.MIN_UNBONDING_PERIOD());
+    }
+
+    // ---- the amounts
+
+    /// A forgotten variable gives a valid number and a very different deployment, so on mainnet
+    /// the default is refused and the figure has to be stated.
+    function test_mainnet_refusesTheDefaultMinimumStake() public {
+        vm.chainId(5042);
+        vm.expectRevert(abi.encodeWithSelector(Deploy.DefaultAmountOnMainnet.selector, "MINIMUM_STAKE", 1_000e18));
+        h.checkMinimumStake(1_000e18);
+    }
+
+    function test_mainnet_acceptsAStatedMinimumStake() public {
+        vm.chainId(5042);
+        h.checkMinimumStake(10_000e18);
+    }
+
+    function test_testnet_stillAcceptsTheDefaultMinimumStake() public {
+        vm.chainId(5042002);
+        h.checkMinimumStake(1_000e18);
+    }
+
+    function test_oracleBond_mainnet_refusesTheDefaultBondAmount() public {
+        vm.chainId(5042);
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployOracleBond.DefaultAmountOnMainnet.selector, "ORACLE_BOND_AMOUNT", 1_000e18)
+        );
+        b.checkBondAmount(1_000e18);
+    }
+
+    function test_oracleBond_mainnet_acceptsAStatedBondAmount() public {
+        vm.chainId(5042);
+        b.checkBondAmount(2_500_000e18);
+    }
+
+    function test_oracleBond_testnet_stillAcceptsTheDefaultBondAmount() public {
+        vm.chainId(5042002);
+        b.checkBondAmount(1_000e18);
     }
 
     // ---- EpochFees roles
@@ -244,20 +291,29 @@ contract DeployScriptRunTest is Test {
         vm.expectRevert(abi.encodeWithSelector(Deploy.PeriodBelowFloor.selector, "UNBONDING_PERIOD", 0, 1 days));
         d.run();
 
+        // Mainnet with MINIMUM_STAKE left unset, which means the testnet default: refused, the
+        // figure has to be stated.
+        _env(svr, oracle, committee, 21 days);
+        vm.expectRevert(abi.encodeWithSelector(Deploy.DefaultAmountOnMainnet.selector, "MINIMUM_STAKE", 1_000e18));
+        d.run();
+
         // Mainnet, valid inputs: runs, and uses up staking's initializeV2 with the period.
         _env(svr, oracle, committee, 21 days);
+        vm.setEnv("MINIMUM_STAKE", vm.toString(uint256(10_000e18)));
         vm.recordLogs();
         d.run();
         (address staking, uint256 period, uint256 n) = _stakingFrom(vm.getRecordedLogs());
         assertEq(n, 1, "initializeV2 should have run exactly once");
         assertEq(period, 21 days);
         assertEq(SigvaraStaking(staking).unbondingPeriod(), 21 days);
+        assertEq(SigvaraStaking(staking).minimumStake(), 10_000e18, "the stated minimum stake is the one used");
         assertEq(address(SigvaraStaking(staking).svrToken()), svr, "the bond token is the one supplied");
 
-        // The admin can no longer call it with another value, which is the point.
+        // The admin can no longer call it with another value, which is the point. A value that
+        // would pass the floor, so that only the used-up version can be the reason for the revert.
         vm.prank(deployer);
         vm.expectRevert(Initializable.InvalidInitialization.selector);
-        SigvaraStaking(staking).initializeV2(0);
+        SigvaraStaking(staking).initializeV2(30 days);
 
         // Testnet: an unset token still means the faucet token, and initializeV2 is used up there too.
         vm.chainId(5042002);
@@ -311,6 +367,24 @@ contract DeployScriptRunTest is Test {
         fees = _emitterOf(vm.getRecordedLogs(), keccak256("EpochLengthUpdated(uint256)"));
         assertEq(SigvaraEpochFees(fees).epochLength(), 6 hours);
 
+        // OracleBond on mainnet: the default bond amount is refused, a stated one deploys.
+        DeployOracleBond ob = new DeployOracleBond();
+        vm.setEnv("SLASHER_ADDRESS", vm.toString(makeAddr("slasher")));
+        vm.setEnv("SLASH_BENEFICIARY", vm.toString(makeAddr("beneficiary")));
+        vm.setEnv("ORACLE_BOND_AMOUNT", "");
+        vm.setEnv("ORACLE_UNBONDING", "");
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployOracleBond.DefaultAmountOnMainnet.selector, "ORACLE_BOND_AMOUNT", 1_000e18)
+        );
+        ob.run();
+
+        vm.setEnv("ORACLE_BOND_AMOUNT", vm.toString(uint256(2_500_000e18)));
+        vm.recordLogs();
+        ob.run();
+        address obProxy = _emitterOf(vm.getRecordedLogs(), keccak256("RoleGranted(bytes32,address,address)"));
+        assertTrue(obProxy != address(0), "the bond registry was deployed");
+        assertEq(SigvaraOracleBond(obProxy).bondAmount(), 2_500_000e18, "the stated bond amount is the one used");
+
         // Leave the process environment as found, except DEPLOYER_PRIVATE_KEY. forge runs test
         // contracts in parallel threads of one process, and test/SplitAuthority.t.sol sets that
         // variable to this same public key. Clearing it here could land in the middle of that
@@ -324,5 +398,10 @@ contract DeployScriptRunTest is Test {
         vm.setEnv("UNBONDING_PERIOD", "");
         vm.setEnv("IDENTITY_ADDRESS", "");
         vm.setEnv("REWARD_POOL", "");
+        vm.setEnv("MINIMUM_STAKE", "");
+        vm.setEnv("ORACLE_BOND_AMOUNT", "");
+        vm.setEnv("ORACLE_UNBONDING", "");
+        vm.setEnv("SLASHER_ADDRESS", "");
+        vm.setEnv("SLASH_BENEFICIARY", "");
     }
 }
