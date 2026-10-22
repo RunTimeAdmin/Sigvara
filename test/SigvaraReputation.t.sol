@@ -616,6 +616,84 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
         assertEq(fresh.challengeWindow(), 1 hours);
     }
 
+    // A window with no end holds every proposal for good, and one near the integer limit made the sum that
+    // dates a proposal overflow, which stopped proposals altogether. The ceiling keeps it to a number of
+    // days, in all three places the window is set.
+
+    function test_challengeWindow_ceilingIsPinned() public view {
+        assertEq(rep.MAX_CHALLENGE_WINDOW(), 7 days);
+    }
+
+    function test_challengeWindow_setterRefusesAboveTheCeiling() public {
+        uint256 ceiling = rep.MAX_CHALLENGE_WINDOW();
+
+        vm.prank(admin);
+        rep.setChallengeWindow(ceiling);
+        assertEq(rep.challengeWindow(), ceiling);
+
+        vm.expectRevert(abi.encodeWithSelector(SigvaraReputation.ChallengeWindowTooLong.selector, ceiling + 1, ceiling));
+        vm.prank(admin);
+        rep.setChallengeWindow(ceiling + 1);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(SigvaraReputation.ChallengeWindowTooLong.selector, type(uint256).max, ceiling)
+        );
+        vm.prank(admin);
+        rep.setChallengeWindow(type(uint256).max);
+        assertEq(rep.challengeWindow(), ceiling, "unchanged after the refusals");
+    }
+
+    function test_challengeWindow_initializeRefusesAboveTheCeiling() public {
+        address impl = address(new SigvaraReputation());
+        uint256 ceiling = rep.MAX_CHALLENGE_WINDOW();
+
+        vm.expectRevert(abi.encodeWithSelector(SigvaraReputation.ChallengeWindowTooLong.selector, ceiling + 1, ceiling));
+        new ERC1967Proxy(
+            impl,
+            abi.encodeCall(SigvaraReputation.initialize, (admin, oracle, staking, committee, ceiling + 1))
+        );
+
+        SigvaraReputation atCeiling = SigvaraReputation(address(new ERC1967Proxy(
+            impl,
+            abi.encodeCall(SigvaraReputation.initialize, (admin, oracle, staking, committee, ceiling))
+        )));
+        assertEq(atCeiling.challengeWindow(), ceiling);
+    }
+
+    function test_challengeWindow_initializeV2RefusesAboveTheCeiling() public {
+        SigvaraReputation fresh = SigvaraReputation(address(new ERC1967Proxy(
+            address(new SigvaraReputation()),
+            abi.encodeCall(SigvaraReputation.initialize, (admin, oracle, staking, committee, CHALLENGE_WINDOW))
+        )));
+        uint256 ceiling = fresh.MAX_CHALLENGE_WINDOW();
+
+        vm.expectRevert(abi.encodeWithSelector(SigvaraReputation.ChallengeWindowTooLong.selector, ceiling + 1, ceiling));
+        vm.prank(admin);
+        fresh.initializeV2(committee, ceiling + 1);
+
+        // A refused call did not use the version up.
+        vm.prank(admin);
+        fresh.initializeV2(committee, ceiling);
+        assertEq(fresh.challengeWindow(), ceiling);
+    }
+
+    /// A proposal made under the longest window dates itself without overflow and finalizes once it has run.
+    function test_challengeWindow_aProposalAtTheCeilingFinalizesAfterIt() public {
+        uint256 ceiling = rep.MAX_CHALLENGE_WINDOW(); // read before the prank, which an external call would use up
+        vm.prank(admin);
+        rep.setChallengeWindow(ceiling);
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
+
+        vm.warp(block.timestamp + 7 days - 1);
+        vm.expectRevert();
+        rep.finalizeReputation(DID);
+
+        vm.warp(block.timestamp + 1);
+        rep.finalizeReputation(DID);
+        assertEq(rep.getEarnedScore(DID), 100);
+    }
+
     // -------------------------------------------------------------------------
     // Upgrade safety
     // -------------------------------------------------------------------------
@@ -1229,6 +1307,59 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
         vm.expectRevert(SigvaraReputation.MaturityRateZero.selector);
         vm.prank(admin);
         rep.initializeV4(0);
+    }
+
+    /// The score is 0 to 100, so a rate of 100 a day already releases all of it in a day, and any higher
+    /// rate is the same thing with a risk of overflowing the product it is multiplied into. The ceiling
+    /// is that rate, in every place the rate is set.
+    function test_maturityRate_ceilingIsPinned() public view {
+        assertEq(rep.MAX_MATURITY_RATE_PER_DAY(), 100);
+    }
+
+    function test_maturityRate_setterRefusesAboveTheCeiling() public {
+        uint256 ceiling = rep.MAX_MATURITY_RATE_PER_DAY();
+        vm.prank(admin);
+        rep.initializeV4(4);
+
+        vm.prank(admin);
+        rep.setMaturityRate(ceiling);
+        assertEq(rep.maturityRatePerDay(), ceiling);
+
+        vm.expectRevert(abi.encodeWithSelector(SigvaraReputation.MaturityRateTooHigh.selector, ceiling + 1, ceiling));
+        vm.prank(admin);
+        rep.setMaturityRate(ceiling + 1);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(SigvaraReputation.MaturityRateTooHigh.selector, type(uint256).max, ceiling)
+        );
+        vm.prank(admin);
+        rep.setMaturityRate(type(uint256).max);
+        assertEq(rep.maturityRatePerDay(), ceiling, "unchanged after the refusals");
+    }
+
+    function test_maturityRate_initializeV4RefusesAboveTheCeiling() public {
+        uint256 ceiling = rep.MAX_MATURITY_RATE_PER_DAY();
+        vm.expectRevert(abi.encodeWithSelector(SigvaraReputation.MaturityRateTooHigh.selector, ceiling + 1, ceiling));
+        vm.prank(admin);
+        rep.initializeV4(ceiling + 1);
+
+        // A refused call did not use the version up.
+        vm.prank(admin);
+        rep.initializeV4(ceiling);
+        assertEq(rep.maturityRatePerDay(), ceiling);
+    }
+
+    /// At the highest rate, whenever the score is read, the read neither reverts nor overshoots: a whole
+    /// score is spendable after a day and a century later it is still the score that was earned.
+    function test_maturityRate_atTheCeilingTheReadNeverRevertsOrOvershoots() public {
+        _finalizeWithMaturity(rep.MAX_MATURITY_RATE_PER_DAY());
+        assertEq(rep.getTotalScore(DID), 0, "none of it at the moment of finalizing");
+
+        vm.warp(block.timestamp + 1 days);
+        assertEq(rep.getTotalScore(DID), 100);
+
+        vm.warp(block.timestamp + 100 * 365 days);
+        assertEq(rep.getTotalScore(DID), 100);
     }
 
     function test_maturity_setMaturityRate_onlyAdmin() public {

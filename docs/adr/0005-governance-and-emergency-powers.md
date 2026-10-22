@@ -58,10 +58,27 @@ This ADR records what was decided about each, and what was left as a stated trus
    dispute, resolved in the agent's favour) records `lastDroppedAt`, and `initiateSlash` refuses
    for one challenge period after it. An operator always gets a window to act, and a withdrawal it
    queues in that window stays slashable.
-4. **Floors are enforced where the value is set.** The reputation challenge window (one hour), the
-   bond registry's unbonding period (one day) and bond requirement (above zero), staking's challenge
-   (three days) and unbonding (one day) periods, and a minimum stake above zero are refused in the
-   initializers as well as the setters.
+4. **Floors and ceilings are enforced where the value is set.** The reputation challenge window (one
+   hour), the bond registry's unbonding period (one day) and bond requirement (above zero), staking's
+   challenge (three days) and unbonding (one day) periods, and a minimum stake above zero are refused in
+   the initializers as well as the setters. So are values above a ceiling:
+
+   | Parameter | Contract | Floor | Ceiling |
+   | --------- | -------- | ----- | ------- |
+   | Score challenge window | `SigvaraReputation` | 1 hour | 7 days |
+   | Maturity rate | `SigvaraReputation` | above 0 | 100 points a day |
+   | Slash challenge period | `SigvaraStaking` | 3 days | 30 days |
+   | Unbonding period | `SigvaraStaking` | 1 day | 90 days |
+   | Unbonding period | `SigvaraOracleBond` | 1 day | 90 days |
+
+   The ceilings exist because the admin can change each of these at once and nothing else stood in the
+   way of a typo or a compromised key. The unbonding period is read when a withdrawal is claimed, so one
+   huge value locks every queued exit, including those already waiting. A window or a rate near the
+   integer limit overflows the sum that dates a proposal or the product that releases a score, which
+   stops proposals or score reads. A rate of 100 a day already releases a whole score in a day, so a
+   higher rate adds nothing. The ceilings are generous against the intended values (6 hours, 4 a day,
+   7 days, 21 days, 7 days); raising one is a contract upgrade, which takes the timelock. The deploy
+   scripts check them first on mainnet and name the variable.
 5. **A guardian can stop new inflows, and nothing else.** `GUARDIAN_ROLE` may call `pauseInflows()` on
    identity, staking, reputation and the bond registry. It closes only the ways something new enters:
    `registerAgent`, `depositStake`, `proposeReputation` and `proposeIfEmpty`, `depositBond`. It never
@@ -122,9 +139,9 @@ This ADR records what was decided about each, and what was left as a stated trus
 ## What stays on the admin Safe, and why
 
 The admin Safe grants `ORACLE_ROLE` and `GUARDIAN_ROLE`, revokes any role except `UPGRADER_ROLE`, and
-sets every parameter that has a floor. None of that is delayed. A compromised admin Safe can therefore
-still grant itself the oracle or guardian role at once, and move a parameter inside its floor. That is a
-stated trust assumption, not an oversight:
+sets every parameter that has a floor and a ceiling. None of that is delayed. A compromised admin Safe can
+therefore still grant itself the oracle or guardian role at once, and move a parameter between its floor
+and its ceiling. That is a stated trust assumption, not an oversight:
 
 - Delaying the oracle grant would mean a 48 hour wait before a replacement oracle key could be enabled
   in an incident, which is the moment it is needed. Neither role takes funds: a score sits in a
@@ -135,7 +152,7 @@ stated trust assumption, not an oversight:
   A compromised admin Safe cannot install a slasher or a committee member, or route slashed funds,
   without 48 hours of public notice.
 - The remaining protection is the committee's challenge period on every slash, the admin's veto and
-  ruling above, the floors, and the Safe itself: its threshold and owners are verified on chain before
+  ruling above, the floors and ceilings, and the Safe itself: its threshold and owners are verified on chain before
   launch and published, and the admin Safe and the committee share no owner, because the veto and the
   ruling are a second key only if the two are different people (`scripts/check-mainnet.sh` fails if
   an address is an owner of both).
