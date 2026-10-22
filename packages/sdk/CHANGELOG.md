@@ -15,6 +15,24 @@ its far-off expiry, which stalled its pruning behind it.
 A payload dated more than 60 seconds (`MAX_FUTURE_SKEW_SECONDS`) ahead is now refused as
 not fresh. Challenges a gate issues itself are dated by its own clock and are unaffected.
 
+### Changed: chain reads time out, and `admit` reads in parallel
+
+`SigvaraVerifier` built its provider with ethers' defaults, which wait five minutes for an RPC
+that has gone quiet, so a gate whose node died held every `admit` that long. Reads now give up
+after 30 seconds, `DEFAULT_RPC_TIMEOUT_MS`, and `timeoutMs` on `SigvaraVerifier` and
+`SigvaraGate` changes it (a positive number). The calls are single view calls, so one that takes
+half a minute is not going to answer. Anyone who relied on the five-minute wait can pass it.
+
+`SigvaraGate.admit` read the identity, then the status, then the score, one after the other. The
+status and the score do not depend on each other and now go out together, so an admit costs two
+round trips and not three. The answer is unchanged: standing is still named before score.
+
+The gate's comment that an unauthenticated caller "cannot make this gate do RPC work" was not
+true: checking the signature needs the agent's registered key, which is read from chain first.
+The width check bounds what a malformed signature costs, and a well-sized one for a registered
+agent costs one identity read. The comment and the README now say so; rate-limit callers where
+the gate is exposed.
+
 ### New: `SigvaraAgent.signChallengeFor(payload, audience)`
 
 `signChallenge` signs whatever it is handed, so the audience in a challenge protected an agent

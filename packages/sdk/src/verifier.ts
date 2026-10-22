@@ -1,4 +1,4 @@
-import { ethers } from 'ethers';
+import { ethers, FetchRequest } from 'ethers';
 import { IDENTITY_ABI, REPUTATION_ABI, STAKING_ABI } from './abis';
 import { parseDid, computeDidHash } from './did';
 import { verifyChallenge, parseChallengePayload, isChallengeExpired } from './challenge';
@@ -12,6 +12,13 @@ import type {
   ContractAddresses,
 } from './types';
 
+/**
+ * How long one read may take before it is abandoned. ethers waits five minutes by default, so a
+ * gate whose RPC had gone quiet held every admit that long. The reads here are single view calls;
+ * one that takes half a minute is not going to answer.
+ */
+export const DEFAULT_RPC_TIMEOUT_MS = 30_000;
+
 export class SigvaraVerifier {
   private readonly provider: ethers.JsonRpcProvider;
   private readonly addresses: ContractAddresses;
@@ -23,7 +30,13 @@ export class SigvaraVerifier {
   private _staking?: ethers.Contract;
 
   constructor(config: VerifierConfig) {
-    this.provider = new ethers.JsonRpcProvider(config.rpcUrl);
+    const timeoutMs = config.timeoutMs ?? DEFAULT_RPC_TIMEOUT_MS;
+    if (!(timeoutMs > 0) || !Number.isFinite(timeoutMs)) {
+      throw new Error(`SigvaraVerifier: timeoutMs must be a positive number of milliseconds, got ${timeoutMs}`);
+    }
+    const connection = new FetchRequest(config.rpcUrl);
+    connection.timeout = timeoutMs;
+    this.provider = new ethers.JsonRpcProvider(connection);
     this.addresses = config.addresses;
     this._chainId = config.chainId;
   }

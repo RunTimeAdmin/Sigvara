@@ -69,14 +69,41 @@ describe('SigvaraGate', () => {
     expect(r.reason).toBe('not_active');
   });
 
-  it('refuses a bad proof without touching the chain', async () => {
-    // An unauthenticated caller must not be able to make the gate do RPC work.
+  it('asks for the status and the score together, not one after the other', async () => {
+    // The two reads do not depend on each other. Both have to be under way before either has
+    // answered, so an admit costs one round trip for them and not two.
+    const gate = gateWith();
+    const v = (gate as any).verifier;
+    const order: string[] = [];
+    let release!: () => void;
+    const hold = new Promise<void>((resolve) => { release = resolve; });
+    v.isActive = vi.fn(async () => { order.push('status asked'); await hold; return true; });
+    v.getTotalScore = vi.fn(async () => { order.push('score asked'); await hold; return 50; });
+
+    const c = gate.challenge(DID);
+    const pending = gate.admit(DID, c, signChallenge(c.payload, kp.secretKey));
+    await vi.waitFor(() => expect(order).toEqual(['status asked', 'score asked']));
+    release();
+    expect((await pending).ok).toBe(true);
+  });
+
+  it('still names the standing, not the score, when an agent is both inactive and under the bar', async () => {
+    const gate = gateWith({ active: false, score: 1 });
+    const c = gate.challenge(DID);
+    const r = await gate.admit(DID, c, signChallenge(c.payload, kp.secretKey));
+    expect(r.reason).toBe('not_active');
+  });
+
+  it('refuses a bad proof without reading the status or the score', async () => {
+    // A caller who cannot prove an identity must not make the gate read either. Checking the proof
+    // itself costs one identity read, which belongs to SigvaraVerifier and is not stubbed here.
     const gate = gateWith({ proved: false });
     const v = (gate as any).verifier;
     const c = gate.challenge(DID);
     const r = await gate.admit(DID, c, 'nonsense');
     expect(r.reason).toBe('bad_proof');
     expect(v.isActive).not.toHaveBeenCalled();
+    expect(v.getTotalScore).not.toHaveBeenCalled();
     expect(v.getReputation).not.toHaveBeenCalled();
   });
 
