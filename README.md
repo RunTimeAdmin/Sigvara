@@ -127,7 +127,7 @@ graph TB
 | [`SigvaraReputation`](src/SigvaraReputation.sol) | **Computed-score anchor.** Stores the oracle's normalized, capped 6-factor score — the layer *above* ERC-8004's raw feedback. Exposes `getTotalScore()` and `meetsThreshold()` for on-chain consumers. |
 | [`SigvaraStaking`](src/SigvaraStaking.sol) | **Staked accountability.** Agent bond management with committee-initiated slashing (7-day challenge window, permissionless execution after timelock). No ERC-8004 equivalent — this is the differentiator. Bond token is set by address at deploy: the faucet `SVRToken` on testnet, [SVR](docs/token.md) on mainnet — the contracts treat it as a plain `IERC20` either way. |
 | [`SigvaraIdentity`](src/SigvaraIdentity.sol) | **The registry in use today.** `did:sigvara` registration with proof of control by the agent address, on-chain Ed25519 PKI, bond-gated status (`PendingBond` → `Active`) and two-step operator transfer. ERC-8004 is the long-term identity layer ([ADR 0001](docs/adr/0001-erc8004-as-identity-layer.md)); until that migration lands this contract is what every deployed component reads and writes. Its non-redundant part (the Ed25519 auth key, bond-gated status, transfer history) becomes an extension keyed to an ERC-8004 agent id. |
-| [`SigvaraOracleBond`](src/SigvaraOracleBond.sol) | **Oracle accountability.** Performance bonds for oracle operators. When wired into `SigvaraReputation.operatorBond`, only an admitted, bonded operator can propose a score. Deployed on Arc testnet and wired. |
+| [`SigvaraOracleBond`](src/SigvaraOracleBond.sol) | **Oracle accountability.** Performance bonds for oracle operators. When wired into `SigvaraReputation.operatorBond`, only an admitted, bonded operator, or the signer it has named, can propose a score, so the key that signs need not be the key that holds the bond. Deployed on Arc testnet and wired. |
 
 The retained contracts use UUPS upgradeable proxies (OpenZeppelin v5), controlled by a governance timelock on mainnet.
 
@@ -525,11 +525,11 @@ Everything below runs offline, with no network access and no deployed contracts,
 
 | Suite | Count | Command |
 |---|---|---|
-| Contracts — unit, fuzz, E2E, upgrade, deploy-script and 6 invariants | 397 | `forge test` |
-| Oracle | 509 | `cd oracle && node --test` |
+| Contracts — unit, fuzz, E2E, upgrade, deploy-script, handover and 12 invariants | 487 | `forge test` |
+| Oracle | 700 | `cd oracle && node --test` |
 | SDK | 140 | `cd packages/sdk && npx vitest run` |
 
-Counts are test functions, so each of the 6 invariants counts once. CI's Foundry runs those 6 as a single campaign, so its summary reads 392 total tests: 386 run and 6 skipped, the six in `test/SplitAuthorityFork.t.sol`. The SDK's 140 includes 8 integration tests that skip without a live deployment.
+Counts are test functions, so each of the 12 invariants counts once. The two fork suites need an RPC and skip without one. The SDK's 140 includes 8 integration tests that skip without a live deployment.
 
 ### Unit Tests (default)
 
@@ -550,6 +550,13 @@ under-collateralized.
 
 ```bash
 forge test --match-contract StakingInvariantTest
+```
+
+The operator bond registry has its own campaign: signer mappings stay symmetric, a signer
+is never also an operator, and an address is active only through a bonded, Active operator.
+
+```bash
+forge test --match-contract OracleBondInvariantTest
 ```
 
 ### E2E Integration Tests
@@ -576,9 +583,9 @@ Key scenarios tested:
 | Role | Holder (Testnet) | Mainnet target | Permissions |
 |---|---|---|---|
 | `DEFAULT_ADMIN_ROLE` | Deployer EOA `0x18CBcE50…` | Governance timelock | Grant/revoke all roles, set maturity rate, wire the stake view and oracle bond |
-| `UPGRADER_ROLE` | Deployer EOA `0x18CBcE50…` | Governance timelock | Authorize UUPS upgrades |
+| `UPGRADER_ROLE` | Deployer EOA `0x18CBcE50…` | Governance timelock | Authorize UUPS upgrades. On a registry initialised by the current code it is administered by itself, so the admin cannot grant it |
 | `STAKING_CORE_ROLE` | `SigvaraStaking` `0xA69d62B2…` | `SigvaraStaking` | Suspend / slash agents, zero reputation, clear slash suspensions |
-| `ORACLE_ROLE` | Primary `0x6352b8FF…` + checker `0x989aabd6…`, both bonded | Multiple independently operated bonded operators | Propose reputation scores |
+| `ORACLE_ROLE` | Primary `0x6352b8FF…` + checker `0x989aabd6…`, both bonded | Multiple independently operated bonded operators, each signing with a key its cold bond owner has named | Propose reputation scores; charge epoch fees |
 | `SLASHING_COMMITTEE_ROLE` | EOA `0x045d6c1D…` | 3-of-5 multisig | Initiate slash proposals, reject bad scores |
 | Operator | Agent registrant | Agent registrant | Register, suspend, reinstate, rotate key, transfer the agent |
 
@@ -588,8 +595,10 @@ admin and upgrade rights to a timelock or Safe is a named mainnet blocker; see t
 [readiness review](docs/SECURITY_AND_MAINNET_READINESS_REVIEW.md).
 
 When `SigvaraReputation.operatorBond` is set, `proposeReputation` additionally requires
-the caller to be an admitted, bonded operator in `SigvaraOracleBond` — so `ORACLE_ROLE`
-alone is not enough to write a score. Finalizing stays permissionless.
+the caller to be an admitted, bonded operator in `SigvaraOracleBond`, or the signer one
+has named — so `ORACLE_ROLE` alone is not enough to write a score. Finalizing stays
+permissionless, but it refuses a proposal whose proposer has since lost that standing;
+a replacement proposal supersedes it.
 
 ---
 

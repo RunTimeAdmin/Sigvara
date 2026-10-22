@@ -296,8 +296,8 @@ it produced (see the note in section 2).
 
 Deploying the registry changes no behaviour on its own. `SigvaraReputation` has to be
 pointed at it, after which proposing a score requires the caller to be an admitted,
-bonded operator as well as holding `ORACLE_ROLE`. The role says who may speak; the
-bond is what they lose for speaking falsely.
+bonded operator, or the signer one has named (below), as well as holding `ORACLE_ROLE`.
+The role says who may speak; the bond is what they lose for speaking falsely.
 
 **Order matters.** Turning this on stops every oracle that has not bonded and been
 admitted, so do it last:
@@ -331,8 +331,37 @@ cast call <oracleBond proxy> "isActiveOperator(address)(bool)" <oracle wallet> -
 The oracle service reads this at startup and warns if the wallet cannot propose, so a
 misordered rollout shows up at boot rather than as a silent hourly failure.
 
-Finalization stays permissionless. It is mechanical and cannot change the number, and
-gating it would let an operator's exit strand every score it had already proposed.
+Finalization stays permissionless: anyone can call it, and it cannot change the number.
+What it checks is the proposer. A pending proposal whose proposer no longer holds
+`ORACLE_ROLE`, or is no longer an active operator or the signer of one, reverts
+`ProposerNotAuthorized`. Removing an operator or clearing a signer therefore also stops
+whatever that key proposed from going live unreviewed. The cost is that such a proposal
+is stranded until a successor replaces it: the oracle does that on its next epoch after
+the window has passed, and a checking operator does it at once with `proposeIfEmpty`.
+
+### Keeping the bond off the signing key
+
+The key an oracle signs with lives on a server, so it should not be the key that owns the
+bond. An Active operator names one signer, and the registry then answers for that signer
+as it would for the operator:
+
+```bash
+cast send <oracleBond proxy> "setSigner(address)" <signing key address> --private-key $OPERATOR_KEY --rpc-url arc_testnet
+cast call <oracleBond proxy> "isActiveOperator(address)(bool)" <signing key address> --rpc-url arc_testnet
+```
+
+The operator, which can be a cold key or a Safe, keeps `depositBond`, `initiateUnbond` and
+`withdrawBond`; the signing key can propose, finalize and charge epoch fees and cannot move
+the bond. Naming a signer grants no role anywhere. The admin still grants `ORACLE_ROLE` to
+the signing key, on `SigvaraReputation` and on `SigvaraEpochFees`, which are separate
+contracts. Only an Active operator can name a signer, one address cannot sign for two
+operators, and a signer cannot post a bond of its own.
+
+`setSigner` with a new address replaces the old one (the operator has to be Active), and
+`clearSigner()` removes it in any status. Either takes effect in the same block: the old key's next propose, finalize or
+charge is refused, and so are its proposals still waiting out their challenge window. The
+signer is released when the operator withdraws its bond or is slashed to nothing.
+`removeOperator` does not release it.
 
 ## 5. Upgrading a deployed proxy
 
@@ -368,6 +397,18 @@ registries, so only `epochFees` — which has never been deployed — needs
 `PROXY=0x...`. When the new implementation adds state that must not start at zero,
 pass `INIT_CALLDATA` with the encoded reinitializer call so it lands in the same
 transaction as the upgrade.
+
+Reinitializers are `DEFAULT_ADMIN_ROLE`-gated. A deployer that holds both roles can carry
+one in the upgrade. After the handover the timelock is the upgrader and the Safe is the
+admin, and inside `upgradeToAndCall` the caller is still the timelock, so the upgrade goes
+through with empty data and the Safe calls the reinitializer in a second transaction.
+`test/Upgrade.t.sol` pins both paths.
+
+`SigvaraEpochFees` has one for the once-per-epoch charge:
+`cast calldata "initializeV2(uint256,address)" <epoch seconds> <oracleBond proxy>`. Until it
+has run the registry refuses to charge once a fee is set, so an upgrade that forgets it
+fails closed. Pick the epoch length to match the oracle's `EPOCH_HOURS`: an agent is
+charged once per epoch however often it is scored in it.
 
 **Rehearse against a fork before broadcasting.** The simulation proves the
 transaction succeeds; it does not prove the storage still means what it did. A

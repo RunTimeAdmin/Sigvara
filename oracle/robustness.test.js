@@ -370,6 +370,22 @@ test('a fee charge that fails outright is an error, not an unconfirmed transacti
   });
 });
 
+test('an agent already charged this epoch is scored without being charged again', async () => {
+  const world = new World();
+  world.addRegisteredAgent();
+  for (const [k, v] of Object.entries(FEES)) world.set(k, v);
+  world.set('charge', 'already_charged');
+
+  await inEpoch({ world, env: BASE_ENV }, ({ text, calls, logs }) => {
+    assert.deepEqual(names(calls), ['canPropose', 'chargeEpoch', 'proposeScore'], 'it is scored all the same');
+    assert.match(logs, /already charged this epoch; scoring without charging again/);
+    assert.equal(counter(text, 'sigvara_oracle_fee_charges_total{result="already_paid"}'), 1);
+    assert.equal(counter(text, 'sigvara_oracle_fee_charges_total{result="error"}'), 0, 'not a failure');
+    assert.equal(counter(text, 'sigvara_oracle_fee_charges_total{result="ok"}'), 0, 'and not a charge');
+    assert.equal(counter(text, 'sigvara_oracle_propose_total{result="success"}'), 1);
+  });
+});
+
 test('without epoch fees nothing is simulated or charged, and the proposal goes straight out', async () => {
   const world = new World();
   world.addRegisteredAgent();
@@ -410,6 +426,199 @@ test('a proposal the contract reverts is still an ordinary propose error', async
     assert.equal(counter(text, 'sigvara_oracle_propose_total{result="error"}'), 1);
     assert.equal(counter(text, 'sigvara_oracle_tx_refused_total{reason="fee_cap"}'), 0);
     assert.equal(counter(text, 'sigvara_oracle_tx_refused_total{reason="unconfirmed"}'), 0);
+  });
+});
+
+// ---- the boot check on who may sign ----------------------------------------------------------
+//
+// The contracts accept a proposal from an active operator or from the signer one has named, so
+// the oracle's wallet may be either. The check is reported and not enforced: the contract
+// decides, and an oracle that cannot propose should say so at boot and not once an hour.
+
+const BOND_REGISTRY = `0x${'b0'.repeat(20)}`;
+
+test('a wallet that is neither an operator nor a signer is told so at boot, and the epoch still runs', async () => {
+  const world = new World();
+  world.addRegisteredAgent();
+  world.set('operatorStanding', { enforced: true, allowed: false, operatorBond: BOND_REGISTRY });
+
+  await inEpoch({ world, env: BASE_ENV }, ({ text, logs }) => {
+    assert.match(logs, /WARNING: this wallet is neither an admitted operator in 0xb0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0 nor the signer one has named/);
+    assert.match(logs, /until its operator has bonded, been admitted and named this wallet with setSigner/);
+    assert.doesNotMatch(logs, /bonded operator check passed/);
+    assert.equal(counter(text, EPOCHS_OK), 1, 'reported, not enforced');
+  });
+});
+
+test('a wallet that is an operator, or the signer of one, passes the boot check quietly', async () => {
+  const world = new World();
+  world.addRegisteredAgent();
+  world.set('operatorStanding', { enforced: true, allowed: true, operatorBond: BOND_REGISTRY });
+
+  await inEpoch({ world, env: BASE_ENV }, ({ logs }) => {
+    assert.match(logs, /bonded operator check passed \(registry 0xb0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0\)/);
+    assert.doesNotMatch(logs, /WARNING: this wallet/);
+  });
+});
+
+test('with no operator registry configured the boot check says nothing either way', async () => {
+  const world = new World();
+  world.addRegisteredAgent();
+
+  await inEpoch({ world, env: BASE_ENV }, ({ logs }) => {
+    assert.doesNotMatch(logs, /bonded operator check passed/);
+    assert.doesNotMatch(logs, /WARNING: this wallet/);
+  });
+});
+
+// ---- a proposer that has lost its authority ----------------------------------------------
+//
+// The contract stores who made the pending proposal and will not finalize it once that
+// proposer is no longer an active operator, a signer of one, or a holder of ORACLE_ROLE.
+// Nobody can finalize such a proposal, so the oracle must neither retry it for ever nor call
+// it a failure: the primary replaces it, and a checker takes the slot over.
+
+const STRANDED = 'sigvara_oracle_proposals_stranded_total';
+const DIVERGED = 'sigvara_oracle_checker_comparisons_total{verdict="diverged"}';
+const CHECKER_ENV = { ...BASE_ENV, ORACLE_MODE: 'checker', DIVERGENCE_TOLERANCE: '3' };
+const ZERO_SCORE = { feeScore: 0, successScore: 0, ageScore: 0, externalScore: 0, communityScore: 0, propagationScore: 0 };
+// Far from anything an agent with no payments computes, so a checker is bound to disagree.
+const HIGH_SCORE = { feeScore: 40, successScore: 25, ageScore: 10, externalScore: 0, communityScore: 5, propagationScore: 5 };
+
+function pendingProposal(world, { agedPastWindow = false, data = ZERO_SCORE, ...extra } = {}) {
+  return {
+    exists: true,
+    proposedAt: world.data.nowSec - (agedPastWindow ? 30_000 : 100),
+    data,
+    evidenceRoot: null,
+    ...extra,
+  };
+}
+
+test('a pending proposal whose proposer has lost its authority is replaced, not counted as a failure', async () => {
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  world.setFor('pending', agent.didHash, pendingProposal(world, { agedPastWindow: true, proposerDead: true }));
+
+  await inEpoch({ world, env: BASE_ENV }, ({ text, calls, logs }) => {
+    assert.deepEqual(names(calls), ['finalizeScore', 'proposeScore'], 'finalize was tried, then the fresh proposal went out');
+    assert.match(logs, /the pending proposal's proposer is no longer authorized; replacing it/);
+    assert.equal(counter(text, STRANDED), 1);
+    assert.equal(counter(text, 'sigvara_oracle_finalize_total{result="error"}'), 0);
+    assert.equal(counter(text, 'sigvara_oracle_finalize_total{result="success"}'), 0, 'nothing was finalized');
+    assert.equal(counter(text, 'sigvara_oracle_propose_total{result="success"}'), 1);
+    assert.equal(counter(text, EPOCHS_OK), 1);
+  });
+});
+
+test('a pending proposal from a proposer that is still authorized is finalized as before', async () => {
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  world.setFor('pending', agent.didHash, pendingProposal(world, { agedPastWindow: true }));
+
+  await inEpoch({ world, env: BASE_ENV }, ({ text, calls }) => {
+    assert.deepEqual(names(calls), ['finalizeScore', 'proposeScore']);
+    assert.equal(counter(text, STRANDED), 0);
+    assert.equal(counter(text, 'sigvara_oracle_finalize_total{result="success"}'), 1);
+  });
+});
+
+test('a checker covers for a pending proposal whose proposer has lost its authority', async () => {
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  world.setFor('pending', agent.didHash, pendingProposal(world, { data: HIGH_SCORE, proposerDead: true }));
+
+  await inEpoch({ world, env: CHECKER_ENV }, ({ text, calls, logs }) => {
+    assert.deepEqual(
+      calls.map((c) => [c.name, c.args[3]]),
+      [['canPropose', true], ['proposeScore', true]],
+      'asked whether the compare-and-swap would be accepted over the occupied slot, then sent it',
+    );
+    assert.match(logs, /the pending proposal's proposer is no longer authorized; covering for it/);
+    assert.equal(counter(text, STRANDED), 1);
+    assert.equal(counter(text, DIVERGED), 0, 'a dead proposal is not compared, so it is not a divergence');
+    assert.equal(counter(text, 'sigvara_oracle_propose_total{result="success"}'), 1);
+  });
+});
+
+test('a checker leaves a live proposal alone, however far it disagrees with it', async () => {
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  world.setFor('pending', agent.didHash, pendingProposal(world, { data: HIGH_SCORE }));
+
+  await inEpoch({ world, env: CHECKER_ENV }, ({ text, calls }) => {
+    assert.deepEqual(names(calls), ['canPropose'], 'the probe was refused, so nothing was sent');
+    assert.equal(counter(text, STRANDED), 0);
+    assert.equal(counter(text, DIVERGED), 1, 'it says it disagrees, which is all a checker may do');
+    assert.equal(counter(text, 'sigvara_oracle_propose_total{result="success"}'), 0);
+  });
+});
+
+test('a checker that cannot ask whether the proposer is gone treats the proposal as live', async () => {
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  world.setFor('pending', agent.didHash, pendingProposal(world, { data: HIGH_SCORE, proposerDead: true }));
+  world.setFor('canPropose', agent.didHash, 'throw');
+
+  await inEpoch({ world, env: CHECKER_ENV }, ({ text, calls }) => {
+    assert.deepEqual(names(calls), ['canPropose'], 'nothing was sent on a guess');
+    assert.equal(counter(text, STRANDED), 0);
+    assert.equal(counter(text, 'sigvara_oracle_propose_total{result="success"}'), 0);
+  });
+});
+
+/** What this oracle computes for an agent with no payments: the scores a primary would propose. */
+function computedScores() {
+  const world = new World();
+  world.addRegisteredAgent();
+  return inEpoch({ world, env: BASE_ENV }, ({ calls }) => {
+    const { feeScore, successScore, ageScore, externalScore, communityScore, propagationScore } = calls[0].args[1];
+    return { feeScore, successScore, ageScore, externalScore, communityScore, propagationScore };
+  });
+}
+
+test('a checker finalizes a proposal it agrees with once its window has passed', async () => {
+  const agreed = await computedScores();
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  world.setFor('pending', agent.didHash, pendingProposal(world, { agedPastWindow: true, data: agreed }));
+
+  await inEpoch({ world, env: CHECKER_ENV }, ({ text, calls }) => {
+    assert.deepEqual(names(calls), ['canPropose', 'finalizeScore'], 'it asked, found a live proposer, and finalized');
+    assert.equal(counter(text, 'sigvara_oracle_finalize_total{result="success"}'), 1);
+    assert.equal(counter(text, STRANDED), 0);
+  });
+});
+
+test('a checker that finds the proposer gone only when it finalizes leaves the slot for the next epoch', async () => {
+  const agreed = await computedScores();
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  // The probe is told the proposer was live when it asked, and the finalize that it is not: the
+  // operator was removed in between.
+  world.setFor('pending', agent.didHash, pendingProposal(world, { agedPastWindow: true, data: agreed, proposerDead: true }));
+  world.setFor('canPropose', agent.didHash, { ok: false, reason: 'ScoreAlreadyPending' });
+
+  await inEpoch({ world, env: CHECKER_ENV }, ({ text, calls, logs }) => {
+    assert.deepEqual(names(calls), ['canPropose', 'finalizeScore']);
+    assert.match(logs, /the proposer is no longer authorized; covering for it next epoch/);
+    assert.equal(counter(text, STRANDED), 1);
+    assert.equal(counter(text, 'sigvara_oracle_finalize_total{result="error"}'), 0, 'not a failed finalize');
+    assert.equal(counter(text, 'sigvara_oracle_propose_total{result="success"}'), 0, 'and nothing proposed on a guess');
+    assert.equal(counter(text, EPOCHS_OK), 1);
+  });
+});
+
+test('a checker whose own wallet would be refused leaves the proposal alone', async () => {
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  world.setFor('pending', agent.didHash, pendingProposal(world, { data: HIGH_SCORE, proposerDead: true }));
+  world.setFor('canPropose', agent.didHash, { ok: false, reason: 'OperatorNotBonded' });
+
+  await inEpoch({ world, env: CHECKER_ENV }, ({ text, calls }) => {
+    assert.deepEqual(names(calls), ['canPropose']);
+    assert.equal(counter(text, STRANDED), 0);
+    assert.equal(counter(text, 'sigvara_oracle_propose_total{result="success"}'), 0);
   });
 });
 

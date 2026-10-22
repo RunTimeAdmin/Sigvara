@@ -415,3 +415,59 @@ test('canPropose: against a real endpoint that accepts, the answer is yes', asyn
   await startChain();
   assert.deepEqual(await chain.canPropose(DID, SCORES), { ok: true });
 });
+
+test('canPropose: a refusal the contract names is reported by name, including OracleNotBonded', async () => {
+  const data = new ethers.Interface(['error OracleNotBonded(address oracle)']).encodeErrorResult('OracleNotBonded', [ADDR(5)]);
+  await startChain({ revertCall: data });
+  assert.deepEqual(await chain.canPropose(DID, SCORES), { ok: false, reason: 'OracleNotBonded' });
+});
+
+// ---- a send the contract refuses is named from its data ------------------------------------------
+//
+// Found by running the oracle against the real contracts on a real node. A send that fails
+// while its gas is estimated comes back from the provider with the revert data attached and no
+// name: ethers decodes a custom error only where it holds the contract's interface, which is a
+// call. The name-based recognizers read "unknown custom error", so AlreadyCharged was counted as
+// a failed charge and the agent went unscored. ScoreAlreadyPending was affected the same way.
+
+const revertData = (signature, args) => {
+  const iface = new ethers.Interface([`error ${signature}`]);
+  return iface.encodeErrorResult(signature.slice(0, signature.indexOf('(')), args);
+};
+
+test('a charge refused as AlreadyCharged is recognised when it fails at gas estimation', async () => {
+  await startChain({ revertEstimate: revertData('AlreadyCharged(bytes32 didHash, uint256 epoch)', [DID, 2954n]) });
+  await assert.rejects(
+    () => chain.chargeEpoch(DID),
+    (err) => err.revert === null && chain.isAlreadyCharged(err) && !chain.isProposerNotAuthorized(err) && !chain.isSlotTaken(err),
+    'ethers gives no name here, so the match has to come from the data',
+  );
+  assert.equal(rpc.sent.length, 0, 'nothing was sent');
+});
+
+test('a finalize refused as ProposerNotAuthorized is recognised when it fails at gas estimation', async () => {
+  await startChain({ revertEstimate: revertData('ProposerNotAuthorized(bytes32 didHash, address proposer)', [DID, ADDR(6)]) });
+  await assert.rejects(
+    () => chain.finalizeScore(DID),
+    (err) => err.revert === null && chain.isProposerNotAuthorized(err) && !chain.isAlreadyCharged(err) && !chain.isSlotTaken(err),
+  );
+  assert.equal(rpc.sent.length, 0);
+});
+
+test('a compare-and-swap refused as ScoreAlreadyPending is recognised when it fails at gas estimation', async () => {
+  await startChain({ revertEstimate: revertData('ScoreAlreadyPending(bytes32 didHash, uint256 proposedAt)', [DID, 1_700_000_000n]) });
+  await assert.rejects(
+    () => chain.proposeScore(DID, SCORES, ethers.ZeroHash, true),
+    (err) => err.revert === null && chain.isSlotTaken(err) && !chain.isProposerNotAuthorized(err) && !chain.isAlreadyCharged(err),
+  );
+  assert.equal(rpc.sent.length, 0);
+});
+
+test('a refusal this oracle does not know is none of the three', async () => {
+  // Any other custom error, with data, must not be mistaken for a benign outcome.
+  await startChain({ revertEstimate: revertData('InsufficientBalance(bytes32 didHash, uint256 requested, uint256 available)', [DID, 10n, 3n]) });
+  await assert.rejects(
+    () => chain.chargeEpoch(DID),
+    (err) => !chain.isAlreadyCharged(err) && !chain.isProposerNotAuthorized(err) && !chain.isSlotTaken(err),
+  );
+});

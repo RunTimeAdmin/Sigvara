@@ -7,6 +7,8 @@
 //
 //   const rpc = await startFakeRpc({ priorityFee: 5_000_000n * 10n ** 9n });
 //   ... chain.init({ rpcUrl: rpc.url, ... }) ...
+//   options: priorityFee, gas, autoMine, throttleReceipts, revertCall (eth_call reverts with this
+//            data), revertEstimate (eth_estimateGas reverts with this data)
 //   rpc.sent        every raw transaction received, decoded
 //   rpc.calls       every method called, in order
 //   rpc.mine(hash)  give a received transaction a receipt
@@ -34,6 +36,8 @@ async function startFakeRpc(options = {}) {
     throttleReceipts: options.throttleReceipts ?? 0,
     // When set (revert data as hex), every eth_call reverts with it.
     revertCall: options.revertCall ?? null,
+    // Likewise for eth_estimateGas, which is where a send that the contract would refuse fails.
+    revertEstimate: options.revertEstimate ?? null,
     sent: [],
     calls: [],
     receipts: new Map(),
@@ -96,7 +100,15 @@ async function startFakeRpc(options = {}) {
       case 'eth_gasPrice': return hex(state.gasPrice);
       case 'eth_maxPriorityFeePerGas': return hex(state.priorityFee);
       case 'eth_getTransactionCount': return hex(transactionCount(params[1]));
-      case 'eth_estimateGas': return hex(state.gas);
+      case 'eth_estimateGas': {
+        if (state.revertEstimate) {
+          const err = new Error('execution reverted');
+          err.rpcCode = 3;
+          err.rpcData = state.revertEstimate;
+          throw err;
+        }
+        return hex(state.gas);
+      }
       case 'eth_call': {
         // A contract call that simply succeeds, or reverts with the data a test supplies.
         if (state.revertCall) {

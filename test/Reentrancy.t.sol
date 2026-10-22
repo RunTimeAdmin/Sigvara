@@ -245,6 +245,8 @@ contract EpochFeesReentrancyTest is Test, RegistrationHelper {
                 admin, admin, address(token), address(identity), makeAddr("rewardPool"), 1e18
             ))
         )));
+        vm.prank(admin);
+        fees.initializeV2(1 days, address(0)); // chargeEpoch refuses to charge without an epoch length
 
         token.mint(funder, 10_000e18);
         vm.prank(funder);

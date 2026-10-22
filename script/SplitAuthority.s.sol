@@ -28,26 +28,31 @@ import {TimelockController} from "@openzeppelin/contracts/governance/TimelockCon
  * upgrade made through it cannot land without N hours of public notice". That holds
  * however many owners the Safe has.
  *
- * It does not bind the Safe itself. DEFAULT_ADMIN_ROLE administers UPGRADER_ROLE, because
- * no contract names another admin for it, so the Safe can grant itself UPGRADER_ROLE in one
- * transaction and upgrade in the next with no delay. Checked on a fork. The delay below
- * therefore guards the honest path and not a compromised Safe. Closing that takes either
- * admin behind the timelock as well, which this script does not do, or a contract change
- * that makes UPGRADER_ROLE its own admin. Neither is done here.
+ * It binds the Safe too, on contracts deployed with UPGRADER_ROLE as its own admin, which
+ * is how every registry now initializes: DEFAULT_ADMIN_ROLE cannot grant the role, so the
+ * Safe cannot give itself upgrade rights and skip the delay. Before that, DEFAULT_ADMIN_ROLE
+ * administered UPGRADER_ROLE because no contract named another admin for it, and the Safe
+ * could grant itself the role in one transaction and upgrade in the next (checked on a
+ * fork). Proxies deployed before the change, the Arc testnet ones among them, are still
+ * like that. `plan` and `renounce` say which case each contract is, rather than leave it to
+ * be assumed. What the Safe can still do with no delay is everything else DEFAULT_ADMIN_ROLE
+ * administers: role grants, setStakeView, setOperatorBond and the other setters. So the
+ * Safe's owners and threshold matter as much as the timelock does.
  *
  * ## Why this runs in phases
  *
- * Renouncing DEFAULT_ADMIN_ROLE is irreversible and unrecoverable. If the Safe address
- * is wrong, or the Safe cannot execute on this chain, the proxies are left frozen at
- * their current implementations with nobody able to upgrade them or grant a role, for
- * good. So the EOA gives its authority away before it drops any, and `renounce` reads
- * the chain and refuses unless the replacements are demonstrably already in place.
+ * Renouncing UPGRADER_ROLE is irreversible. Only a holder can grant it, and afterwards the
+ * only holder is the timelock, which only the Safe can drive. If the Safe address is wrong,
+ * or the Safe cannot execute on this chain, the proxies are left frozen at their current
+ * implementations with nobody able to upgrade them, for good. So the EOA gives its
+ * authority away before it drops any, and `renounce` reads the chain and refuses unless the
+ * replacements are demonstrably already in place.
  *
- * The proof that the Safe works is not a separate ceremony. Phase 3 has the EOA grant
- * admin to the Safe, and phase 4 has *the Safe* grant upgrader to the timelock. That
- * grant is a step the migration needs anyway, and it can only succeed if the Safe can
- * really execute against these contracts on this chain. If phase 4 does not land,
- * phase 5 refuses, and the EOA still holds everything.
+ * The proof that the Safe works is not a separate ceremony. Phase 3 has the EOA grant admin
+ * to the Safe and upgrader to the timelock, and phase 4 has *the Safe* remove the EOA's
+ * DEFAULT_ADMIN_ROLE. That removal is a step the migration needs anyway, and it can only
+ * succeed if the Safe can really execute against these contracts on this chain. If phase 4
+ * does not land, phase 5 refuses, and the EOA still holds everything it had.
  *
  * ## Usage
  *
@@ -58,13 +63,14 @@ import {TimelockController} from "@openzeppelin/contracts/governance/TimelockCon
  *   PHASE=deploy-timelock SAFE=0x... \
  *     forge script script/SplitAuthority.s.sol --rpc-url arc_testnet --broadcast -vv
  *
- *   # 3. EOA hands admin to the Safe. Reversible: the EOA still holds admin too.
- *   PHASE=grant-admin SAFE=0x... \
+ *   # 3. EOA grants admin to the Safe and upgrader to the timelock. Reversible: the EOA
+ *   #    still holds both too. (`grant-admin` is the old name for this phase.)
+ *   PHASE=grant SAFE=0x... TIMELOCK=0x... \
  *     forge script script/SplitAuthority.s.sol --rpc-url arc_testnet --broadcast -vv
  *
  *   # 4. Print the calls for the Safe to make. Paste them into the Safe transaction
  *   #    builder and execute there. This is the step that proves the Safe works.
- *   PHASE=safe-calldata SAFE=0x... TIMELOCK=0x... \
+ *   PHASE=safe-calldata SAFE=0x... \
  *     forge script script/SplitAuthority.s.sol --rpc-url arc_testnet -vv
  *
  *   # 5. Only now does the EOA drop anything. Refuses unless step 4 actually landed.
@@ -73,16 +79,17 @@ import {TimelockController} from "@openzeppelin/contracts/governance/TimelockCon
  *
  * Env:
  *   SAFE                 Safe address. Required for every phase except a bare `plan`.
- *   TIMELOCK             TimelockController address, from phase 2.
+ *   TIMELOCK             TimelockController address, from phase 2. Needed for phases 3 and 5.
  *   TIMELOCK_MIN_DELAY   Seconds of notice before a scheduled upgrade can execute.
  *                        Default 48 hours.
  *   DEPLOYER_PRIVATE_KEY Broadcasting key for phases 2, 3 and 5. Must be the current
- *                        admin. Phases 1 and 4 never broadcast and never read it.
+ *                        admin and upgrader. Phases 1 and 4 never broadcast and never read it.
  *   CONFIRM              Must be `yes-drop-the-deployer` for phase 5.
  *
- * Rehearse first: test/SplitAuthorityFork.t.sol runs this migration against a fork of
- * the live deployment, with a real Safe deployed through Arc's own Safe factory, and
- * checks what the deployer can no longer do afterwards.
+ * Rehearse first: test/SplitAuthority.t.sol runs every phase offline against fresh registries
+ * and a stand-in Safe. test/SplitAuthorityFork.t.sol runs the same steps against a fork of
+ * the live deployment, with a real Safe deployed through Arc's own Safe factory, and checks
+ * what the deployer can no longer do afterwards.
  */
 contract SplitAuthority is Script {
     bytes32 internal constant ADMIN_ROLE = 0x00; // DEFAULT_ADMIN_ROLE
@@ -112,6 +119,7 @@ contract SplitAuthority is Script {
     error TimelockCannotBeProposedTo(address timelock, address safe);
     error TimelockHasNoDelay(address timelock);
     error DeployerCanActAlone(address safe);
+    error DeployerStillAdmin(string target, address deployer);
 
     function run() external {
         string memory phase = vm.envOr("PHASE", string("plan"));
@@ -119,7 +127,7 @@ contract SplitAuthority is Script {
 
         if (p == keccak256("plan")) return _plan();
         if (p == keccak256("deploy-timelock")) return _deployTimelock();
-        if (p == keccak256("grant-admin")) return _grantAdmin();
+        if (p == keccak256("grant") || p == keccak256("grant-admin")) return _grant();
         if (p == keccak256("safe-calldata")) return _safeCalldata();
         if (p == keccak256("renounce")) return _renounce();
         revert UnknownPhase(phase);
@@ -148,6 +156,7 @@ contract SplitAuthority is Script {
             console2.log(targets[i].name, targets[i].addr);
             _printHolder("   admin    ", targets[i].addr, ADMIN_ROLE, deployer, safe, timelock);
             _printHolder("   upgrader ", targets[i].addr, UPGRADER_ROLE, deployer, safe, timelock);
+            _printUpgraderAdmin(targets[i].addr);
         }
         console2.log("");
 
@@ -237,22 +246,34 @@ contract SplitAuthority is Script {
     }
 
     // -------------------------------------------------------------------------
-    // Phase 3: the EOA grants admin to the Safe
+    // Phase 3: the EOA grants admin to the Safe and upgrader to the timelock
     // -------------------------------------------------------------------------
 
-    /// @dev Additive only. The EOA keeps everything it had, so a wrong Safe address at
-    ///      this point costs a transaction and nothing else.
-    function _grantAdmin() internal {
+    /// @dev Additive only. The EOA keeps everything it had, so a wrong Safe or timelock
+    ///      address at this point costs a transaction and nothing else.
+    ///
+    ///      The EOA grants upgrader because it is the only party that can. Once UPGRADER_ROLE
+    ///      administers itself, the Safe holding DEFAULT_ADMIN_ROLE cannot hand it out, and
+    ///      the migration used to rely on exactly that to have the Safe prove itself.
+    function _grant() internal {
         address safe = _requireSafe();
+        address timelock = _requireTimelock();
         Target[] memory targets = _targets();
 
         vm.startBroadcast(vm.envUint("DEPLOYER_PRIVATE_KEY"));
         for (uint256 i = 0; i < targets.length; i++) {
-            if (!IAccessControl(targets[i].addr).hasRole(ADMIN_ROLE, safe)) {
-                IAccessControl(targets[i].addr).grantRole(ADMIN_ROLE, safe);
-                console2.log("granted admin on", targets[i].name);
+            IAccessControl c = IAccessControl(targets[i].addr);
+            if (!c.hasRole(ADMIN_ROLE, safe)) {
+                c.grantRole(ADMIN_ROLE, safe);
+                console2.log("granted admin to the Safe on", targets[i].name);
             } else {
-                console2.log("already admin on", targets[i].name);
+                console2.log("Safe already admin on", targets[i].name);
+            }
+            if (!c.hasRole(UPGRADER_ROLE, timelock)) {
+                c.grantRole(UPGRADER_ROLE, timelock);
+                console2.log("granted upgrader to the timelock on", targets[i].name);
+            } else {
+                console2.log("timelock already upgrader on", targets[i].name);
             }
         }
         vm.stopBroadcast();
@@ -272,10 +293,14 @@ contract SplitAuthority is Script {
      *      that the Safe can execute against these contracts on this chain. Running
      *      them from the EOA would leave identical on-chain state and prove nothing,
      *      which is exactly the mistake that bricks the proxies one phase later.
+     *
+     *      The call is the removal of the EOA's DEFAULT_ADMIN_ROLE. It needs the Safe to
+     *      hold admin already, so it cannot land before phase 3, and nothing but a Safe
+     *      that can really execute here makes it land.
      */
     function _safeCalldata() internal view {
         address safe = _requireSafe();
-        address timelock = _requireTimelock();
+        address deployer = _deployerAddress();
         Target[] memory targets = _targets();
 
         console2.log("=== execute these FROM THE SAFE ===");
@@ -285,19 +310,23 @@ contract SplitAuthority is Script {
 
         uint256 pending;
         for (uint256 i = 0; i < targets.length; i++) {
-            if (IAccessControl(targets[i].addr).hasRole(UPGRADER_ROLE, timelock)) {
+            IAccessControl c = IAccessControl(targets[i].addr);
+            if (!c.hasRole(ADMIN_ROLE, deployer)) {
                 console2.log("done:", targets[i].name);
                 continue;
             }
             pending++;
+            if (!c.hasRole(ADMIN_ROLE, safe)) {
+                console2.log("WARNING: the Safe is not admin on", targets[i].name, "yet. Run PHASE=grant first.");
+            }
             console2.log(targets[i].name);
             console2.log("   to  ", targets[i].addr);
-            console2.logBytes(abi.encodeWithSelector(IAccessControl.grantRole.selector, UPGRADER_ROLE, timelock));
+            console2.logBytes(_revokeDeployerAdminCall(deployer));
         }
 
         console2.log("");
         if (pending == 0) {
-            console2.log("All grants landed. PHASE=renounce is now unblocked.");
+            console2.log("All removals landed. PHASE=renounce is now unblocked.");
         } else {
             console2.log("pending", pending);
             console2.log("If the Safe cannot execute these, STOP. Do not renounce.");
@@ -309,16 +338,19 @@ contract SplitAuthority is Script {
     // -------------------------------------------------------------------------
 
     /**
-     * @dev The only irreversible phase. Every check below stands for a way to end up
-     *      with proxies nobody can administer:
+     * @dev The only irreversible phase. The deployer gives up UPGRADER_ROLE, which only a
+     *      holder can grant, so afterwards the timelock is the sole upgrader and only the
+     *      Safe can drive the timelock. Every check below stands for a way to end up with
+     *      proxies nobody can upgrade:
      *
      *        - a Safe address with no code on this chain (a typo, or a Safe that only
      *          exists at that address on some other chain)
      *        - a Safe that is the deployer, which renounces nothing
      *        - a contract that never received the admin grant, because phase 3 ran
      *          before it was deployed or its name was missing from the artifact
-     *        - a timelock that never received upgrader, because the Safe could not in
-     *          fact execute
+     *        - a timelock that never received upgrader
+     *        - a deployer that still holds DEFAULT_ADMIN_ROLE, which is the evidence that
+     *          the Safe has not in fact executed phase 4
      *        - a timelock with no proposer or no delay, which can never be used
      *
      *      All of them are checked against the chain, not against what the earlier
@@ -350,17 +382,16 @@ contract SplitAuthority is Script {
             IAccessControl c = IAccessControl(targets[i].addr);
             if (!c.hasRole(ADMIN_ROLE, safe)) revert SafeMissingAdmin(targets[i].name, safe);
             if (!c.hasRole(UPGRADER_ROLE, timelock)) revert TimelockMissingUpgrader(targets[i].name, timelock);
+            // The Safe removed it, or it is still there. Dropping it from here would reach
+            // the same state and prove nothing about the Safe.
+            if (c.hasRole(ADMIN_ROLE, deployer)) revert DeployerStillAdmin(targets[i].name, deployer);
         }
 
         vm.startBroadcast(vm.envUint("DEPLOYER_PRIVATE_KEY"));
         for (uint256 i = 0; i < targets.length; i++) {
             IAccessControl c = IAccessControl(targets[i].addr);
-            // Upgrader first. If the run dies between the two calls the deployer is
-            // left holding admin, which can grant upgrader back. The other order
-            // leaves it holding upgrader with no way to restore admin.
             if (c.hasRole(UPGRADER_ROLE, deployer)) c.renounceRole(UPGRADER_ROLE, deployer);
-            if (c.hasRole(ADMIN_ROLE, deployer)) c.renounceRole(ADMIN_ROLE, deployer);
-            console2.log("deployer dropped on", targets[i].name);
+            console2.log("deployer dropped upgrader on", targets[i].name);
         }
         vm.stopBroadcast();
 
@@ -368,6 +399,12 @@ contract SplitAuthority is Script {
         console2.log("=== done ===");
         console2.log("admin    ", safe);
         console2.log("upgrader ", timelock);
+        for (uint256 i = 0; i < targets.length; i++) {
+            if (!_upgraderAdminIsSelf(targets[i].addr)) {
+                console2.log("WARNING: the Safe can still give itself upgrade rights on", targets[i].name);
+                console2.log("   (UPGRADER_ROLE is administered by DEFAULT_ADMIN_ROLE there)");
+            }
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -410,6 +447,13 @@ contract SplitAuthority is Script {
         if (timelock == address(0)) revert TimelockNotSet();
     }
 
+    /// @dev The call the Safe pastes into the transaction builder for each contract. A function
+    ///      of its own so that a test can read what the Safe will execute, instead of trusting a
+    ///      log line: the wrong role here would have the Safe sign something that proves nothing.
+    function _revokeDeployerAdminCall(address deployer) internal pure returns (bytes memory) {
+        return abi.encodeWithSelector(IAccessControl.revokeRole.selector, ADMIN_ROLE, deployer);
+    }
+
     /// @dev Both of these tolerate a SAFE that is some other kind of contract: another
     ///      multisig is a legitimate target, and a check that cannot be performed must
     ///      not be reported as a check that passed.
@@ -432,6 +476,27 @@ contract SplitAuthority is Script {
         }
     }
 
+    /// @dev Whether DEFAULT_ADMIN_ROLE could grant UPGRADER_ROLE on this contract. Read from
+    ///      the contract, because it differs between a proxy initialized with UPGRADER_ROLE as
+    ///      its own admin and one deployed before that was done.
+    function _upgraderAdminIsSelf(address target) internal view returns (bool) {
+        // A low-level call, not try/catch: a try cannot catch the revert a high-level call makes
+        // when the target has no code, and an address that answers with nothing would then end
+        // the whole plan instead of being reported as not self-administered.
+        (bool ok, bytes memory ret) = target.staticcall(
+            abi.encodeWithSelector(IAccessControl.getRoleAdmin.selector, UPGRADER_ROLE)
+        );
+        return ok && ret.length == 32 && abi.decode(ret, (bytes32)) == UPGRADER_ROLE;
+    }
+
+    function _printUpgraderAdmin(address target) internal view {
+        if (_upgraderAdminIsSelf(target)) {
+            console2.log("   upgrader role: administered by itself, so the Safe cannot grant it");
+        } else {
+            console2.log("   WARNING upgrader role: administered by DEFAULT_ADMIN_ROLE, so the Safe can skip the timelock");
+        }
+    }
+
     function _printHolder(
         string memory label,
         address target,
@@ -451,7 +516,9 @@ contract SplitAuthority is Script {
 
 interface IAccessControl {
     function hasRole(bytes32 role, address account) external view returns (bool);
+    function getRoleAdmin(bytes32 role) external view returns (bytes32);
     function grantRole(bytes32 role, address account) external;
+    function revokeRole(bytes32 role, address account) external;
     function renounceRole(bytes32 role, address callerConfirmation) external;
 }
 

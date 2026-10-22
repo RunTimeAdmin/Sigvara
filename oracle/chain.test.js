@@ -569,6 +569,63 @@ test('isSlotTaken: a real failure is not mistaken for a lost race', () => {
   assert.equal(chain.isSlotTaken(undefined), false);
 });
 
+// ---- isProposerNotAuthorized and isAlreadyCharged ---------------------------
+//
+// Two refusals the contracts now make that are not failures. A pending proposal whose
+// proposer has lost its authority cannot be finalized by anyone, and the proposal made
+// next replaces it. An agent already charged in this calendar epoch has paid for it. Each
+// is matched on the decoded name, the ethers v6 revert shape, and the message, like
+// isSlotTaken, and for the same reason: getting the match wrong in either direction is
+// costly, so both directions are pinned.
+
+test('isProposerNotAuthorized: recognises the decoded error, the v6 revert shape and the message', () => {
+  assert.equal(chain.isProposerNotAuthorized({ errorName: 'ProposerNotAuthorized' }), true);
+  assert.equal(chain.isProposerNotAuthorized({ revert: { name: 'ProposerNotAuthorized', args: [] } }), true);
+  assert.equal(chain.isProposerNotAuthorized(new Error('execution reverted: ProposerNotAuthorized(0x..., 0x...)')), true);
+  assert.equal(chain.isProposerNotAuthorized({ shortMessage: 'execution reverted (ProposerNotAuthorized)' }), true);
+});
+
+test('isProposerNotAuthorized: any other failure is not mistaken for a stranded proposal', () => {
+  // The dangerous direction. Reading a throttled node or an empty wallet as "the proposer is
+  // gone" would send a fresh proposal over one that was about to be finalized, and restart
+  // its challenge window.
+  assert.equal(chain.isProposerNotAuthorized({ errorName: 'ChallengeWindowActive' }), false);
+  assert.equal(chain.isProposerNotAuthorized({ revert: { name: 'OperatorNotBonded' } }), false);
+  assert.equal(chain.isProposerNotAuthorized(new Error('insufficient funds for gas')), false);
+  assert.equal(chain.isProposerNotAuthorized(new Error('429 Too Many Requests')), false);
+  assert.equal(chain.isProposerNotAuthorized(new Error('ScoreAlreadyPending')), false);
+  assert.equal(chain.isProposerNotAuthorized(null), false);
+  assert.equal(chain.isProposerNotAuthorized(undefined), false);
+});
+
+test('isAlreadyCharged: recognises the decoded error, the v6 revert shape and the message', () => {
+  assert.equal(chain.isAlreadyCharged({ errorName: 'AlreadyCharged' }), true);
+  assert.equal(chain.isAlreadyCharged({ revert: { name: 'AlreadyCharged', args: [] } }), true);
+  assert.equal(chain.isAlreadyCharged(new Error('execution reverted: AlreadyCharged(0x..., 123)')), true);
+  assert.equal(chain.isAlreadyCharged({ shortMessage: 'execution reverted (AlreadyCharged)' }), true);
+});
+
+test('isAlreadyCharged: a charge that failed for another reason is not read as paid', () => {
+  // The dangerous direction. A charge that failed because the operator cannot pay must not
+  // be read as "already paid": the agent would be scored for nothing.
+  assert.equal(chain.isAlreadyCharged({ errorName: 'EpochLengthNotSet' }), false);
+  assert.equal(chain.isAlreadyCharged({ revert: { name: 'OperatorNotBonded' } }), false);
+  assert.equal(chain.isAlreadyCharged(new Error('ERC20InsufficientBalance')), false);
+  assert.equal(chain.isAlreadyCharged(new Error('insufficient funds for gas')), false);
+  assert.equal(chain.isAlreadyCharged(null), false);
+  assert.equal(chain.isAlreadyCharged(undefined), false);
+});
+
+test('the three named refusals do not overlap', () => {
+  const stranded = { revert: { name: 'ProposerNotAuthorized' } };
+  const charged = { revert: { name: 'AlreadyCharged' } };
+  const taken = { revert: { name: 'ScoreAlreadyPending' } };
+  assert.deepEqual(
+    [stranded, charged, taken].map((e) => [chain.isProposerNotAuthorized(e), chain.isAlreadyCharged(e), chain.isSlotTaken(e)]),
+    [[true, false, false], [false, true, false], [false, false, true]],
+  );
+});
+
 // -------------------------------------------------------------------------
 // getAgentScore — counterparty standing, and why it is not the total
 //

@@ -177,6 +177,11 @@ contract SigvaraIdentity is Initializable, AccessControlUpgradeable, UUPSUpgrade
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(UPGRADER_ROLE, admin);
+        // Upgrading is administered by upgraders, not by DEFAULT_ADMIN_ROLE. Otherwise the admin
+        // Safe could grant itself the role and upgrade in the next transaction, which makes the
+        // timelock that holds UPGRADER_ROLE a delay on the honest path and nothing on a
+        // compromised admin.
+        _setRoleAdmin(UPGRADER_ROLE, UPGRADER_ROLE);
 
         if (stakingCore != address(0)) {
             _grantRole(STAKING_CORE_ROLE, stakingCore);

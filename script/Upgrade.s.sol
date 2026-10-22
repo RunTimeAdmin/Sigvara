@@ -32,7 +32,14 @@ import "../src/SigvaraEpochFees.sol";
  *                          instead: deploy the implementation from any funded key, the
  *                          Safe calls schedule(proxy, 0, upgradeToAndCall(impl, data),
  *                          predecessor, salt, delay), and once the delay has run anyone
- *                          calls execute with the same arguments.
+ *                          calls execute with the same arguments. `data` cannot be a
+ *                          reinitializer there: they are all DEFAULT_ADMIN_ROLE-gated,
+ *                          msg.sender inside upgradeToAndCall is still the timelock, and
+ *                          the timelock is not the admin. The upgrade lands with empty
+ *                          data and the Safe calls the reinitializer in a second
+ *                          transaction, so a new reinitializer needs an unset state that
+ *                          fails closed (SigvaraEpochFees refuses to charge until its
+ *                          epoch length is set). test/Upgrade.t.sol pins this.
  *   TARGET               — identity | reputation | staking | oracleBond | epochFees
  *
  * Optional env vars:

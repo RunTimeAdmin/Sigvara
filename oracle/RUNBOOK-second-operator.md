@@ -315,6 +315,14 @@ cast call 0x6603C96275e85F724Cdf74666b399365e4cA29ed "hasRole(bytes32,address)(b
 A checker that never proposes would not strictly need this, but then its failover half
 does nothing, and the failure is invisible until the primary is already down.
 
+**If the bond is owned by another key.** The bond can belong to a cold key or a Safe, with the
+key on this host named as its signer. Then the owner makes the `depositBond` call in section 4, and
+once the operator is admitted it calls `setSigner(<CHECKER_ADDRESS>)` on `SigvaraOracleBond`. The
+grant above is unchanged and goes to the signer. The host's wallet needs gas and no SVR, and
+`isActiveOperator(<CHECKER_ADDRESS>)` reads true, so the checker logs `bonded operator check
+passed` at startup. `clearSigner()` from the owner revokes it in one transaction. See
+`docs/arc.md`, section 4b.
+
 ## 6. Configure
 
 Start from [`.env.checker.example`](./.env.checker.example), not from `.env.example` and
@@ -342,9 +350,10 @@ REPUTATION_ADDRESS=0x6603C96275e85F724Cdf74666b399365e4cA29ed
 
 Why those four:
 
-- **`FEE_REGISTRY_ADDRESS` empty.** `SigvaraEpochFees.chargeEpoch` has no per-epoch
-  idempotency. A checker running the fee path would debit the agent a second time for
-  one scoring epoch. Startup refuses the combination outright.
+- **`FEE_REGISTRY_ADDRESS` empty.** A checker does not bill. A fee registry that predates
+  the once-per-epoch charge would debit the agent a second time for one scoring epoch,
+  and a current one would refuse the second charge while the two operators raced for the
+  first. Startup refuses the combination outright.
 - **`EPOCH_HOURS` under 3.** A proposal is only auditable while it sits in
   `pendingScores`. On a longer cadence the checker misses proposals and reports an empty
   `/divergence`, which reads as "checked, found nothing".
@@ -636,7 +645,8 @@ Governance can also force this with `removeOperator(address)` from
 `DEFAULT_ADMIN_ROLE`, and should revoke `ORACLE_ROLE` at the same time. Revoking the
 role alone leaves a bonded operator that cannot propose; removing the operator alone
 leaves an address holding `ORACLE_ROLE` whose proposals now revert on the bond check.
-Neither half is a clean removal on its own.
+Neither half is a clean removal on its own. Either one also stops whatever that key still has
+pending from being finalized, so a successor has to replace it (`docs/arc.md`, section 4b).
 
 ## 11. The watcher
 

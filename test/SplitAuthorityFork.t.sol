@@ -10,9 +10,9 @@ import "../src/SigvaraStaking.sol";
  * Rehearsal for script/SplitAuthority.s.sol, against a fork of the live Arc testnet
  * deployment with its real roles, real bonds and the real in-flight slash drill in it.
  *
- * The migration it rehearses ends with the deployer renouncing DEFAULT_ADMIN_ROLE,
- * which cannot be undone. If the replacement authority does not work, the proxies are
- * frozen for good. So the questions worth answering before broadcasting are not "does
+ * The migration it rehearses ends with the deployer renouncing UPGRADER_ROLE, which
+ * cannot be undone. If the replacement authority does not work, the proxies are frozen
+ * for good. So the questions worth answering before broadcasting are not "does
  * the script run" but:
  *
  *   - can the deployer still do the two things it should no longer be able to do
@@ -163,6 +163,21 @@ contract SplitAuthorityForkTest is Test {
         }
     }
 
+    /**
+     * The live proxies were deployed before UPGRADER_ROLE administered itself, so on them the
+     * Safe, which holds DEFAULT_ADMIN_ROLE, can still give itself upgrade rights and skip the
+     * timelock. This pins that as the state of the deployed testnet contracts. It is the case
+     * the registries initialize to avoid, and test/SplitAuthority.t.sol shows the Safe refused.
+     */
+    function test_afterSplit_onTheLegacyProxiesTheSafeCanStillSkipTheTimelock() public onlyArcFork {
+        _migrate();
+        for (uint256 i = 0; i < targets.length; i++) {
+            assertEq(IAccessControl(targets[i]).getRoleAdmin(UPGRADER_ROLE), ADMIN_ROLE, names[i]);
+            _execFromSafe(targets[i], abi.encodeCall(IAccessControl.grantRole, (UPGRADER_ROLE, safe)));
+            assertTrue(IAccessControl(targets[i]).hasRole(UPGRADER_ROLE, safe), names[i]);
+        }
+    }
+
     function test_afterSplit_upgradingRequiresTheDelay() public onlyArcFork {
         _migrate();
 
@@ -261,22 +276,24 @@ contract SplitAuthorityForkTest is Test {
     // -------------------------------------------------------------------------
 
     function _migrate() internal {
-        for (uint256 i = 0; i < targets.length; i++) {
-            vm.prank(DEPLOYER);
-            IAccessControl(targets[i]).grantRole(ADMIN_ROLE, safe);
-        }
-
-        // From the Safe, exactly as phase 4 requires. Running these as the deployer
-        // would reach the same state and prove nothing.
-        for (uint256 i = 0; i < targets.length; i++) {
-            _execFromSafe(targets[i], abi.encodeCall(IAccessControl.grantRole, (UPGRADER_ROLE, address(timelock))));
-        }
-
+        // Phase 3: the deployer grants admin to the Safe and upgrader to the timelock.
         for (uint256 i = 0; i < targets.length; i++) {
             vm.startPrank(DEPLOYER);
-            IAccessControl(targets[i]).renounceRole(UPGRADER_ROLE, DEPLOYER);
-            IAccessControl(targets[i]).renounceRole(ADMIN_ROLE, DEPLOYER);
+            IAccessControl(targets[i]).grantRole(ADMIN_ROLE, safe);
+            IAccessControl(targets[i]).grantRole(UPGRADER_ROLE, address(timelock));
             vm.stopPrank();
+        }
+
+        // Phase 4, from the Safe exactly as the script prints it: remove the deployer's
+        // admin. Running these as the deployer would reach the same state and prove nothing.
+        for (uint256 i = 0; i < targets.length; i++) {
+            _execFromSafe(targets[i], abi.encodeCall(IAccessControl.revokeRole, (ADMIN_ROLE, DEPLOYER)));
+        }
+
+        // Phase 5: the deployer drops the one role it still holds.
+        for (uint256 i = 0; i < targets.length; i++) {
+            vm.prank(DEPLOYER);
+            IAccessControl(targets[i]).renounceRole(UPGRADER_ROLE, DEPLOYER);
         }
     }
 

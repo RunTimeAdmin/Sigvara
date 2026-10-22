@@ -18,6 +18,8 @@ contract SigvaraOracleBondTest is Test {
     address op1         = makeAddr("op1");
     address op2         = makeAddr("op2");
     address stranger    = makeAddr("stranger");
+    address signer1     = makeAddr("signer1");
+    address signer2     = makeAddr("signer2");
 
     uint256 constant BOND = 1000e18;
     uint256 constant UNBOND = 7 days;
@@ -532,6 +534,309 @@ contract SigvaraOracleBondTest is Test {
     }
 
     // -------------------------------------------------------------------------
+    // Signer delegation: the bond owner and the signing key are different addresses
+    // -------------------------------------------------------------------------
+
+    function _withSigner(address op, address signer) internal {
+        _bondAndAdmit(op, BOND);
+        vm.prank(op);
+        bond.setSigner(signer);
+    }
+
+    function test_setSigner_signerSpeaksForTheOperator() public {
+        _bondAndAdmit(op1, BOND);
+        assertFalse(bond.isActiveOperator(signer1), "a stranger before it is named");
+
+        vm.expectEmit(address(bond));
+        emit SigvaraOracleBond.SignerSet(op1, signer1);
+        vm.prank(op1);
+        bond.setSigner(signer1);
+
+        assertTrue(bond.isActiveOperator(signer1));
+        assertEq(bond.operatorOfSigner(signer1), op1);
+        assertEq(bond.signerOf(op1), signer1);
+        assertTrue(bond.isActiveOperator(op1), "the operator still answers for itself");
+    }
+
+    /// The point of the split. Whoever holds the signing key can speak for the operator and
+    /// can do nothing at all to the bond: it cannot start the unbond, withdraw, or top up.
+    function test_signer_cannotMoveTheBond() public {
+        _withSigner(op1, signer1);
+
+        vm.startPrank(signer1);
+        vm.expectRevert(abi.encodeWithSelector(
+            SigvaraOracleBond.WrongStatus.selector, signer1, SigvaraOracleBond.Status.None
+        ));
+        bond.initiateUnbond();
+        vm.expectRevert(abi.encodeWithSelector(
+            SigvaraOracleBond.WrongStatus.selector, signer1, SigvaraOracleBond.Status.None
+        ));
+        bond.withdrawBond();
+        vm.expectRevert(abi.encodeWithSelector(SigvaraOracleBond.AlreadySigner.selector, signer1));
+        bond.depositBond(1e18);
+        vm.stopPrank();
+
+        assertEq(bond.bondOf(op1), BOND);
+        assertEq(svr.balanceOf(address(bond)), BOND);
+        assertEq(bond.activeCount(), 1);
+    }
+
+    /// The signer's standing is the operator's, read live. Each way an operator stops
+    /// being Active with its bond takes the signer with it, without anyone having to
+    /// remember the signer exists.
+    function test_signer_losesStandingWhenTheOperatorLeaves() public {
+        _withSigner(op1, signer1);
+        vm.prank(op1);
+        bond.initiateUnbond();
+        assertFalse(bond.isActiveOperator(signer1), "unbond started");
+    }
+
+    function test_signer_losesStandingWhenTheOperatorIsRemoved() public {
+        _withSigner(op1, signer1);
+        vm.prank(admin);
+        bond.removeOperator(op1);
+        assertFalse(bond.isActiveOperator(signer1), "removed by governance");
+    }
+
+    function test_signer_losesStandingWhenTheOperatorIsSlashedBelowTheBond() public {
+        _withSigner(op1, signer1);
+        vm.prank(slasher);
+        bond.slash(op1, 1);
+        assertFalse(bond.isActiveOperator(signer1), "demoted");
+    }
+
+    function test_signer_losesStandingWhenTheBondRequirementRises() public {
+        _withSigner(op1, signer1);
+        vm.prank(admin);
+        bond.setBondAmount(BOND * 2);
+        assertFalse(bond.isActiveOperator(signer1), "under-bonded");
+        vm.prank(op1);
+        bond.depositBond(BOND);
+        assertTrue(bond.isActiveOperator(signer1), "restored by topping up, as for the operator");
+    }
+
+    function test_clearSigner_endsTheSignersStanding() public {
+        _withSigner(op1, signer1);
+
+        vm.expectEmit(address(bond));
+        emit SigvaraOracleBond.SignerCleared(op1, signer1);
+        vm.prank(op1);
+        bond.clearSigner();
+
+        assertFalse(bond.isActiveOperator(signer1));
+        assertEq(bond.operatorOfSigner(signer1), address(0));
+        assertEq(bond.signerOf(op1), address(0));
+        assertTrue(bond.isActiveOperator(op1), "the operator is untouched");
+    }
+
+    function test_clearSigner_withoutOne_reverts() public {
+        _bondAndAdmit(op1, BOND);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraOracleBond.NoSigner.selector, op1));
+        vm.prank(op1);
+        bond.clearSigner();
+    }
+
+    /// An operator that has already started leaving must still be able to give the answer
+    /// to a stolen key.
+    function test_clearSigner_worksWhileExiting() public {
+        _withSigner(op1, signer1);
+        vm.prank(op1);
+        bond.initiateUnbond();
+        vm.prank(op1);
+        bond.clearSigner();
+        assertEq(bond.operatorOfSigner(signer1), address(0));
+    }
+
+    function test_setSigner_replacesTheOldOne() public {
+        _withSigner(op1, signer1);
+
+        vm.expectEmit(address(bond));
+        emit SigvaraOracleBond.SignerCleared(op1, signer1);
+        vm.expectEmit(address(bond));
+        emit SigvaraOracleBond.SignerSet(op1, signer2);
+        vm.prank(op1);
+        bond.setSigner(signer2);
+
+        assertFalse(bond.isActiveOperator(signer1), "the old signer is out the moment the new one is named");
+        assertTrue(bond.isActiveOperator(signer2));
+        assertEq(bond.operatorOfSigner(signer1), address(0));
+        assertEq(bond.signerOf(op1), signer2);
+    }
+
+    /// Naming the same signer again changes nothing and does not trip over itself.
+    function test_setSigner_sameSignerAgain_isRefused() public {
+        _withSigner(op1, signer1);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraOracleBond.SignerNotFree.selector, signer1));
+        vm.prank(op1);
+        bond.setSigner(signer1);
+        assertTrue(bond.isActiveOperator(signer1));
+    }
+
+    /// Only an operator governance has admitted, and which still holds its bond, can name
+    /// a signer. Otherwise anyone could reserve addresses they do not own.
+    function test_setSigner_requiresAnActiveOperator() public {
+        // Not in the registry at all.
+        vm.expectRevert(abi.encodeWithSelector(
+            SigvaraOracleBond.WrongStatus.selector, op1, SigvaraOracleBond.Status.None
+        ));
+        vm.prank(op1);
+        bond.setSigner(signer1);
+
+        // Bonded, not yet admitted.
+        vm.prank(op1);
+        bond.depositBond(BOND);
+        vm.expectRevert(abi.encodeWithSelector(
+            SigvaraOracleBond.WrongStatus.selector, op1, SigvaraOracleBond.Status.Bonded
+        ));
+        vm.prank(op1);
+        bond.setSigner(signer1);
+
+        // Leaving.
+        vm.prank(admin);
+        bond.admit(op1);
+        vm.prank(op1);
+        bond.initiateUnbond();
+        vm.expectRevert(abi.encodeWithSelector(
+            SigvaraOracleBond.WrongStatus.selector, op1, SigvaraOracleBond.Status.Exiting
+        ));
+        vm.prank(op1);
+        bond.setSigner(signer1);
+
+        // Demoted: Active status is what counts, and a slash below the bar changes it.
+        _bondAndAdmit(op2, BOND);
+        vm.prank(slasher);
+        bond.slash(op2, 1);
+        vm.expectRevert(abi.encodeWithSelector(
+            SigvaraOracleBond.WrongStatus.selector, op2, SigvaraOracleBond.Status.Bonded
+        ));
+        vm.prank(op2);
+        bond.setSigner(signer1);
+    }
+
+    /// A signer cannot itself name a signer: it is not an operator.
+    function test_setSigner_aSignerCannotNameOne() public {
+        _withSigner(op1, signer1);
+        vm.expectRevert(abi.encodeWithSelector(
+            SigvaraOracleBond.WrongStatus.selector, signer1, SigvaraOracleBond.Status.None
+        ));
+        vm.prank(signer1);
+        bond.setSigner(signer2);
+    }
+
+    function test_setSigner_rejectsZeroAndSelf() public {
+        _bondAndAdmit(op1, BOND);
+        vm.expectRevert(SigvaraOracleBond.ZeroAddress.selector);
+        vm.prank(op1);
+        bond.setSigner(address(0));
+        vm.expectRevert(abi.encodeWithSelector(SigvaraOracleBond.SignerNotFree.selector, op1));
+        vm.prank(op1);
+        bond.setSigner(op1);
+    }
+
+    /// An address with any other part in the registry cannot be a signer, because
+    /// isActiveOperator could not then say which of two things it was answering for.
+    function test_setSigner_rejectsAddressesInUse() public {
+        _withSigner(op1, signer1);
+        _bondAndAdmit(op2, BOND);
+
+        // Another operator, Active.
+        vm.expectRevert(abi.encodeWithSelector(SigvaraOracleBond.SignerNotFree.selector, op1));
+        vm.prank(op2);
+        bond.setSigner(op1);
+
+        // Another operator's signer.
+        vm.expectRevert(abi.encodeWithSelector(SigvaraOracleBond.SignerNotFree.selector, signer1));
+        vm.prank(op2);
+        bond.setSigner(signer1);
+
+        // An applicant that has bonded and not been admitted.
+        svr.mint(stranger, BOND);
+        vm.startPrank(stranger);
+        svr.approve(address(bond), type(uint256).max);
+        bond.depositBond(BOND);
+        vm.stopPrank();
+        vm.expectRevert(abi.encodeWithSelector(SigvaraOracleBond.SignerNotFree.selector, stranger));
+        vm.prank(op2);
+        bond.setSigner(stranger);
+    }
+
+    /// The same address cannot sign for two operators.
+    function test_setSigner_oneSignerForOneOperator() public {
+        _withSigner(op1, signer1);
+        _bondAndAdmit(op2, BOND);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraOracleBond.SignerNotFree.selector, signer1));
+        vm.prank(op2);
+        bond.setSigner(signer1);
+    }
+
+    function test_twoOperators_haveIndependentSigners() public {
+        _withSigner(op1, signer1);
+        _withSigner(op2, signer2);
+        assertTrue(bond.isActiveOperator(signer1));
+        assertTrue(bond.isActiveOperator(signer2));
+
+        vm.prank(op1);
+        bond.clearSigner();
+        assertFalse(bond.isActiveOperator(signer1));
+        assertTrue(bond.isActiveOperator(signer2), "the other operator's signer is untouched");
+    }
+
+    /// When an operator leaves for good the address it named is released, not reserved for a
+    /// record that no longer exists.
+    function test_withdrawBond_releasesTheSigner() public {
+        _withSigner(op1, signer1);
+        vm.prank(op1);
+        bond.initiateUnbond();
+        vm.warp(block.timestamp + UNBOND);
+
+        vm.expectEmit(address(bond));
+        emit SigvaraOracleBond.SignerCleared(op1, signer1);
+        vm.prank(op1);
+        bond.withdrawBond();
+
+        assertEq(bond.operatorOfSigner(signer1), address(0));
+        assertEq(bond.signerOf(op1), address(0));
+
+        // The released address can now be an operator in its own right.
+        svr.mint(signer1, BOND);
+        vm.startPrank(signer1);
+        svr.approve(address(bond), BOND);
+        bond.depositBond(BOND);
+        vm.stopPrank();
+        assertEq(bond.bondOf(signer1), BOND);
+    }
+
+    function test_slashToZero_releasesTheSigner() public {
+        _withSigner(op1, signer1);
+        vm.prank(slasher);
+        bond.slash(op1, BOND);
+        assertEq(bond.operatorOfSigner(signer1), address(0));
+        assertEq(bond.signerOf(op1), address(0));
+        assertFalse(bond.isActiveOperator(signer1));
+    }
+
+    /// A partial slash that leaves a bond behind keeps the record, and the signer with it.
+    function test_partialSlash_keepsTheSignerNamed() public {
+        _bondAndAdmit(op1, 2 * BOND);
+        vm.prank(op1);
+        bond.setSigner(signer1);
+        vm.prank(slasher);
+        bond.slash(op1, BOND / 2);
+        assertEq(bond.operatorOfSigner(signer1), op1);
+        assertTrue(bond.isActiveOperator(signer1), "still above the requirement");
+    }
+
+    function test_upgrade_keepsSigners() public {
+        _withSigner(op1, signer1);
+        address newImpl = address(new SigvaraOracleBond());
+        vm.prank(admin);
+        bond.upgradeToAndCall(newImpl, "");
+        assertTrue(bond.isActiveOperator(signer1));
+        assertEq(bond.operatorOfSigner(signer1), op1);
+        assertEq(bond.signerOf(op1), signer1);
+    }
+
+    // -------------------------------------------------------------------------
     // Upgrade authorization
     // -------------------------------------------------------------------------
 
@@ -597,5 +902,30 @@ contract SigvaraOracleBondTest is Test {
         // First field of Operator is `bond`.
         bytes32 slot = keccak256(abi.encode(op1, uint256(5)));
         assertEq(uint256(vm.load(address(bond), slot)), 1234e18);
+    }
+
+    /// The signer mappings were appended after `operators`. A proxy that predates them reads
+    /// both as empty, so every operator keeps acting for itself and nothing needs migrating.
+    function test_storageLayout_signerMappingsPinnedToSlots6And7() public {
+        _withSigner(op1, signer1);
+        assertEq(
+            address(uint160(uint256(vm.load(address(bond), keccak256(abi.encode(signer1, uint256(6))))))),
+            op1,
+            "slot 6 is signer => operator"
+        );
+        assertEq(
+            address(uint160(uint256(vm.load(address(bond), keccak256(abi.encode(op1, uint256(7))))))),
+            signer1,
+            "slot 7 is operator => signer"
+        );
+    }
+
+    /// An operator written the way a proxy that predates signers wrote it has empty signer
+    /// mappings and must read as active exactly as before.
+    function test_legacyOperator_withNoSignerMappingsStillReadsActive() public {
+        _bondAndAdmit(op1, BOND);
+        assertEq(uint256(vm.load(address(bond), keccak256(abi.encode(op1, uint256(7))))), 0);
+        assertEq(uint256(vm.load(address(bond), keccak256(abi.encode(op1, uint256(6))))), 0);
+        assertTrue(bond.isActiveOperator(op1));
     }
 }

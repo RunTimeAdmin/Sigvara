@@ -31,6 +31,7 @@ contract Deploy_Harness is Deploy {
 
 contract DeployEpochFees_Harness is DeployEpochFees {
     function checkRoles(address d, address o, address p) external view { _checkRoleSeparation(d, o, p); }
+    function checkBond(address b) external view { _checkOperatorBond(b); }
 }
 
 /**
@@ -163,6 +164,25 @@ contract DeployScriptGuardsTest is Test {
         vm.chainId(5042002);
         f.checkRoles(deployer, deployer, deployer);
     }
+
+    /// On mainnet the right to charge follows the operator's bond. With no registry it would
+    /// follow the role alone, and removing an operator would leave a second contract's role
+    /// to be remembered.
+    function test_epochFees_mainnet_refusesAMissingOperatorBond() public {
+        vm.chainId(5042);
+        vm.expectRevert(DeployEpochFees.OperatorBondNotSet.selector);
+        f.checkBond(address(0));
+    }
+
+    function test_epochFees_mainnet_acceptsAnOperatorBond() public {
+        vm.chainId(5042);
+        f.checkBond(makeAddr("bond"));
+    }
+
+    function test_epochFees_testnet_warnsOnlyWithoutAnOperatorBond() public {
+        vm.chainId(5042002);
+        f.checkBond(address(0));
+    }
 }
 
 /**
@@ -196,6 +216,12 @@ contract DeployScriptRunTest is Test {
                 period = abi.decode(logs[i].data, (uint256));
                 n++;
             }
+        }
+    }
+
+    function _emitterOf(Vm.Log[] memory logs, bytes32 topic0) internal pure returns (address emitter) {
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].topics.length > 0 && logs[i].topics[0] == topic0) emitter = logs[i].emitter;
         }
     }
 
@@ -259,11 +285,39 @@ contract DeployScriptRunTest is Test {
         vm.expectRevert(abi.encodeWithSelector(DeployEpochFees.RolesNotSeparated.selector, deployer, oracle, deployer));
         e.run();
 
+        // Separated, but with no operator bond registry: refused, because the right to charge
+        // would then follow the role alone.
         vm.setEnv("REWARD_POOL", vm.toString(pool));
-        e.run(); // separated: deploys
+        vm.setEnv("OPERATOR_BOND", "");
+        vm.setEnv("EPOCH_LENGTH", "");
+        vm.expectRevert(DeployEpochFees.OperatorBondNotSet.selector);
+        e.run();
 
-        // Leave the process environment as found.
-        vm.setEnv("DEPLOYER_PRIVATE_KEY", "");
+        // Separated and bonded: deploys, and sets the epoch length and the registry, which are
+        // not part of initialize.
+        address bond = makeAddr("bond");
+        vm.setEnv("OPERATOR_BOND", vm.toString(bond));
+        vm.recordLogs();
+        e.run();
+        address fees = _emitterOf(vm.getRecordedLogs(), keccak256("EpochLengthUpdated(uint256)"));
+        assertTrue(fees != address(0), "the epoch length was set");
+        assertEq(SigvaraEpochFees(fees).epochLength(), 1 days, "the default is one day");
+        assertEq(address(SigvaraEpochFees(fees).operatorBond()), bond);
+
+        // And an explicit epoch length is used.
+        vm.setEnv("EPOCH_LENGTH", "21600");
+        vm.recordLogs();
+        e.run();
+        fees = _emitterOf(vm.getRecordedLogs(), keccak256("EpochLengthUpdated(uint256)"));
+        assertEq(SigvaraEpochFees(fees).epochLength(), 6 hours);
+
+        // Leave the process environment as found, except DEPLOYER_PRIVATE_KEY. forge runs test
+        // contracts in parallel threads of one process, and test/SplitAuthority.t.sol sets that
+        // variable to this same public key. Clearing it here could land in the middle of that
+        // test and make its script fail to parse an empty key. Left set, it is harmless: both
+        // tests set it again before every script run, and it is a published anvil key.
+        vm.setEnv("OPERATOR_BOND", "");
+        vm.setEnv("EPOCH_LENGTH", "");
         vm.setEnv("SVR_ADDRESS", "");
         vm.setEnv("ORACLE_ADDRESS", "");
         vm.setEnv("COMMITTEE_ADDRESS", "");

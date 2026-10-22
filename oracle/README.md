@@ -200,6 +200,8 @@ Also exposed, and worth knowing about:
 | `sigvara_oracle_propose_total{result="slot_taken"}` | `proposeIfEmpty` declining to overwrite a pending score. A normal race outcome, not a failure. |
 | `sigvara_oracle_propose_attempts_total`, `..._finalize_attempts_total` | attempts, so success + error + slot_taken can be reconciled rather than assumed to account for everything. |
 | `sigvara_oracle_proposals_rejected_total` | scores the slashing committee rejected. |
+| `sigvara_oracle_proposals_stranded_total` | pending proposals whose proposer had lost its authority (its operator removed or exited, its signer cleared, or its `ORACLE_ROLE` revoked), so the contract would not finalize them. The primary replaces one with a fresh proposal; a checker takes over from it. Nonzero after a key rotation is expected; nonzero otherwise means an operator was removed with proposals in flight. |
+| `sigvara_oracle_fee_charges_total{result="already_paid"}` | agents the epoch fee was not taken from a second time, because the contract had already charged them in the same calendar epoch (an earlier run of this oracle, or anyone else). Scoring carried on. |
 | `sigvara_oracle_evidence_cache_total{result}` | `/evidence` responses served from cache against rebuilt. A miss hashes a Merkle tree over the agent's whole payment history and derives every proof, so the hit rate is the difference between a cheap endpoint and an expensive one. |
 | `sigvara_oracle_fee_charges_total{result="skipped"}` | agents not charged an epoch fee because the contract's dry run said their proposal would be refused, or because the dry run could not be made. Nonzero for long means proposals are being refused: look at the oracle's bond and the agents' status. |
 | `sigvara_oracle_tx_refused_total{reason}` | `fee_cap`: a transaction the oracle would not sign because the fee the RPC quoted was above `MAX_FEE_GWEI` or `MAX_TX_COST`. `unconfirmed`: a transaction that was sent and not seen mined within `TX_WAIT_SECONDS`, even after one replacement. Either one is a reason to look at the RPC. |
@@ -642,13 +644,16 @@ Setup, step by step with the exact transactions, is in
    10,000 per address per day, so a bond of 1,000 was a tenth of one free daily claim
    and deterred nothing. 25,000 is two and a half days of claims: a nuisance for a
    casual sybil, trivial for anyone actually standing up an operator.
-3. `ORACLE_ROLE` on `SigvaraReputation`, granted by `DEFAULT_ADMIN_ROLE`.
+3. `ORACLE_ROLE` on `SigvaraReputation`, granted by `DEFAULT_ADMIN_ROLE`. If another key owns
+   the bond, that owner first names this wallet with `setSigner` (docs/arc.md, section 4b).
 4. Its own `ORACLE_STATE_PATH`. Sharing a state file would mean sharing the payment
    observations the score is computed from, which is most of what is being checked.
-5. **`FEE_REGISTRY_ADDRESS` unset.** `SigvaraEpochFees.chargeEpoch` has no per-epoch
-   idempotency, so a checker that ran the primary's fee path would debit the agent a
-   second time for one scoring epoch. Startup refuses `ORACLE_MODE=checker` together
-   with a fee registry. A checker's failover proposals are unbilled.
+5. **`FEE_REGISTRY_ADDRESS` unset.** A checker does not bill. A registry that predates the
+   once-per-epoch charge has no memory of what it charged, so a checker that ran the
+   primary's fee path would debit the agent a second time for one scoring epoch; a current
+   one would refuse the second charge, and the two operators would still be racing for it.
+   Startup refuses `ORACLE_MODE=checker` together with a fee registry. A checker's
+   failover proposals are unbilled.
 6. **`EPOCH_HOURS` below half the challenge window** (so under 3 on Arc testnet, where
    the window is 6h). A proposal is only auditable while it sits in `pendingScores`; a
    checker on a longer cadence misses proposals entirely and its empty `/divergence`

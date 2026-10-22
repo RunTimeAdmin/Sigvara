@@ -16,6 +16,7 @@
 //     explodeHealth: when true, the /health route throws
 //     chainId:   the chain id the fake node reports (default 5042)
 //     nonceGap:  how many of the wallet's transactions the node holds pending (default 0)
+//     operatorStanding: { enforced, allowed, operatorBond } what the boot check finds (default not enforced)
 //   }
 //
 // Keys are lowercase. Unless the world lists agents to score, epochs are switched off: the
@@ -26,10 +27,13 @@
 //     registered:      [ "<didhash>" ]  agents the registry returns (each also needs an `agents` entry)
 //     challengeWindow: seconds (default 21600)
 //     feeGating:       true to configure the epoch fee; epochFee: its size, as a decimal string
-//     pending:         { "<didhash>": { exists, proposedAt, data, evidenceRoot } }  (default none)
+//     pending:         { "<didhash>": { exists, proposedAt, data, evidenceRoot, proposerDead } }  (default none)
+//                      proposerDead: the proposer has lost its authority, so finalize reverts with
+//                      ProposerNotAuthorized and a compare-and-swap proposal may replace it
 //     bonded, covered: { "<didhash>": bool }  (default true)
-//     canPropose:      { "<didhash>": { ok: false, reason } | "throw" }  (default ok)
-//     charge:          "ok" | "fail" | "unconfirmed"
+//     canPropose:      { "<didhash>": { ok: false, reason } | "throw" }  (default ok, except that
+//                      the compare-and-swap entry point refuses a slot held by a live proposer)
+//     charge:          "ok" | "fail" | "already_charged" | "unconfirmed"
 //     propose:         "ok" | "revert" | "fee_cap" | "unconfirmed"
 //   }
 //
@@ -84,7 +88,7 @@ const chain = {
   getScanState: () => null,
   restoreScanState: () => false,
   verifyDidHashDerivation: async () => false,
-  operatorStanding: async () => ({ enforced: false }),
+  operatorStanding: async () => world().operatorStanding ?? ({ enforced: false }),
   getLatestBlockTimestamp: async () => world().nowSec,
   getAgentScore: async (address) => world().standing[String(address).toLowerCase()] ?? 0,
   readWithBackoff: (_label, fn) => fn(),
@@ -93,6 +97,8 @@ const chain = {
   ChainMismatchError: real.ChainMismatchError,
   isTxUnconfirmed: real.isTxUnconfirmed,
   isFeeCap: real.isFeeCap,
+  isProposerNotAuthorized: real.isProposerNotAuthorized,
+  isAlreadyCharged: real.isAlreadyCharged,
   getChainId: async () => world().chainId ?? 5042,
   assertChainId: async (expected = null) => {
     const actual = world().chainId ?? 5042;
@@ -111,17 +117,32 @@ const chain = {
   pruneAgent() {},
   isSlotTaken: () => false,
   isRateLimited: () => false,
-  finalizeScore: async (didHash) => { record('finalizeScore', didHash); return fakeHash('f1'); },
+  // The contract refuses to finalize a proposal whose proposer has lost its authority, which
+  // the world says with `proposerDead` on the pending entry.
+  finalizeScore: async (didHash) => {
+    record('finalizeScore', didHash);
+    if (world().pending?.[didHash]?.proposerDead) {
+      throw new Error('stub: execution reverted: ProposerNotAuthorized');
+    }
+    return fakeHash('f1');
+  },
   canPropose: async (didHash, scores, evidenceRoot, ifEmpty) => {
     record('canPropose', didHash, scores, evidenceRoot ?? null, ifEmpty);
-    const rule = world().canPropose?.[didHash];
+    const w = world();
+    const rule = w.canPropose?.[didHash];
     if (rule === 'throw') throw new Error('stub: the simulation could not be run');
-    return rule ?? { ok: true };
+    if (rule) return rule;
+    // The compare-and-swap entry point refuses an occupied slot, unless the proposer that
+    // holds it is dead. The replacing entry point overwrites whatever is there.
+    const held = w.pending?.[didHash];
+    if (ifEmpty && held?.exists && !held.proposerDead) return { ok: false, reason: 'ScoreAlreadyPending' };
+    return { ok: true };
   },
   chargeEpoch: async (didHash) => {
     record('chargeEpoch', didHash);
     const mode = world().charge ?? 'ok';
     if (mode === 'fail') throw new Error('stub: execution reverted: the operator cannot pay');
+    if (mode === 'already_charged') throw new Error('stub: execution reverted: AlreadyCharged');
     if (mode === 'unconfirmed') throw new real.TxUnconfirmedError(fakeHash('c1'), 60_000);
     return fakeHash('c0');
   },

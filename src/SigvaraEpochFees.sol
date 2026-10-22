@@ -9,6 +9,7 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 import "./SigvaraIdentity.sol";
+import "./interfaces/IOperatorSet.sol";
 
 /**
  * @title SigvaraEpochFees
@@ -31,6 +32,19 @@ import "./SigvaraIdentity.sol";
  *         `epochFee` is USD-targeted and governance-tunable (§5); setting it to 0
  *         disables gating entirely (useful on testnet), so chargeEpoch is a no-op
  *         that always reports "covered."
+ *
+ *         One charge per agent per epoch. The contract defines an epoch as a period of
+ *         `epochLength` seconds, numbered by block.timestamp / epochLength, and refuses a
+ *         second charge for the same agent inside one. chargeEpoch used to have no memory
+ *         at all, so a restart that re-ran an epoch charged every agent twice, and a stolen
+ *         oracle key could empty every prepaid balance in a loop. Now the most it can take
+ *         is what the agent would have paid anyway. A caller that is told an agent was
+ *         already charged this epoch should treat it as paid and carry on.
+ *
+ *         With an operator set configured, the caller must also be an active operator in it,
+ *         or the signer of one, as SigvaraReputation requires to propose. Removing an
+ *         operator then ends its right to charge in the same transaction that ends its right
+ *         to propose, so the second contract's role is not the one to forget.
  */
 contract SigvaraEpochFees is
     Initializable,
@@ -68,6 +82,21 @@ contract SigvaraEpochFees is
     uint256 public collected;                    // slot 5 — charged fees awaiting distribution
     mapping(bytes32 => uint256) public balance;  // slot 6 — didHash => prepaid stake-token
 
+    /// The bonded operator registry, or address(0) for the role alone. Same meaning as
+    /// SigvaraReputation.operatorBond, and meant to be the same registry.
+    IOperatorSet public operatorBond;            // slot 7
+
+    /// Seconds in one epoch. Zero until set, and chargeEpoch refuses to charge while it is:
+    /// a fee registry that charges with no per-epoch limit is the behaviour this replaces.
+    uint256 public epochLength;                  // slot 8
+
+    /// When each agent was last charged, in block.timestamp. Zero means never.
+    mapping(bytes32 => uint256) public lastChargedAt; // slot 9
+
+    /// The shortest epoch the setters accept. A typo of seconds for hours would otherwise
+    /// make the limit meaningless while looking configured.
+    uint256 public constant MIN_EPOCH_LENGTH = 1 hours;
+
     address internal constant BURN_ADDRESS = address(0xdead);
 
     // -------------------------------------------------------------------------
@@ -81,6 +110,8 @@ contract SigvaraEpochFees is
     event EpochFeeUpdated(uint256 newFee);
     event StageUpdated(Stage newStage);
     event RewardPoolUpdated(address newRewardPool);
+    event OperatorBondSet(address indexed operatorBond);
+    event EpochLengthUpdated(uint256 newLength);
 
     // -------------------------------------------------------------------------
     // Errors
@@ -92,6 +123,14 @@ contract SigvaraEpochFees is
     error InsufficientBalance(bytes32 didHash, uint256 requested, uint256 available);
     error NothingToDistribute();
     error AgentNotRegistered(bytes32 didHash);
+    error OracleNotBonded(address oracle);
+    /// chargeEpoch was called with a fee set and no epoch length. Set one with initializeV2
+    /// or setEpochLength.
+    error EpochLengthNotSet();
+    error EpochLengthBelowFloor(uint256 value, uint256 floor);
+    /// The agent was already charged in this epoch. Carries the epoch so the caller can say
+    /// which. Not a failure to pay: the agent is covered for it.
+    error AlreadyCharged(bytes32 didHash, uint256 epoch);
 
     // -------------------------------------------------------------------------
     // Constructor / Initializer
@@ -127,6 +166,11 @@ contract SigvaraEpochFees is
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(UPGRADER_ROLE, admin);
+        // Upgrading is administered by upgraders, not by DEFAULT_ADMIN_ROLE. Otherwise the admin
+        // Safe could grant itself the role and upgrade in the next transaction, which makes the
+        // timelock that holds UPGRADER_ROLE a delay on the honest path and nothing on a
+        // compromised admin.
+        _setRoleAdmin(UPGRADER_ROLE, UPGRADER_ROLE);
         if (oracle != address(0)) _grantRole(ORACLE_ROLE, oracle);
 
         svr = IERC20(svrToken);
@@ -134,6 +178,33 @@ contract SigvaraEpochFees is
         rewardPool = rewardPool_;
         epochFee = epochFee_;
         stage = Stage.Bootstrap;
+    }
+
+    /**
+     * @notice Sets the epoch length and the operator registry. Run it straight after
+     *         initialize(), or through upgradeToAndCall on a proxy that predates both.
+     * @dev    Separate from initialize() so its signature, which every deploy script and
+     *         test calls, does not change. Admin-gated because on a fresh deployment version
+     *         2 is still unconsumed after initialize(), and a stranger must not be able to
+     *         take it. Until it runs chargeEpoch refuses to charge, deliberately: the
+     *         alternative is a fee registry with no per-epoch limit that looks configured.
+     *         That costs nothing while epochFee is 0, which is the state every deployment
+     *         starts in.
+     *
+     * @param epochLength_  Seconds in one epoch, at least MIN_EPOCH_LENGTH. Match it to the
+     *                      oracle's cadence: the charge for a run is refused if the agent was
+     *                      already charged in the same epoch, so an epoch longer than the
+     *                      cadence skips charges and one much shorter weakens the limit.
+     * @param operatorBond_ SigvaraOracleBond, or address(0) to leave the role alone governing.
+     */
+    function initializeV2(uint256 epochLength_, address operatorBond_)
+        external
+        onlyRole(DEFAULT_ADMIN_ROLE)
+        reinitializer(2)
+    {
+        _setEpochLength(epochLength_);
+        operatorBond = IOperatorSet(operatorBond_);
+        emit OperatorBondSet(operatorBond_);
     }
 
     // -------------------------------------------------------------------------
@@ -197,11 +268,26 @@ contract SigvaraEpochFees is
      * @dev    Oracle-only. Reverts InsufficientBalance when the agent is uncovered;
      *         see the comment in the body for why it no longer returns false. When
      *         epochFee == 0 gating is disabled: always returns true, charges nothing.
+     *
+     *         At most once per agent per epoch: a second call inside the same epoch reverts
+     *         AlreadyCharged. The agent is covered for that epoch, so a caller treats that
+     *         as paid. With an operator set configured the caller must be an active operator
+     *         in it, or its signer.
      * @return charged Always true; an uncovered agent reverts instead.
      */
     function chargeEpoch(bytes32 didHash) external onlyRole(ORACLE_ROLE) returns (bool charged) {
         uint256 fee = epochFee;
         if (fee == 0) return true;
+
+        _requireBondedOracle();
+
+        uint256 length = epochLength;
+        if (length == 0) revert EpochLengthNotSet();
+        uint256 epoch = block.timestamp / length;
+        uint256 last = lastChargedAt[didHash];
+        // `last != 0` because zero means never charged, which would otherwise read as
+        // epoch 0 and refuse a first charge in an epoch that small.
+        if (last != 0 && last / length >= epoch) revert AlreadyCharged(didHash, epoch);
 
         uint256 bal = balance[didHash];
         // Revert rather than reporting failure in a return value. The only caller is
@@ -210,9 +296,18 @@ contract SigvaraEpochFees is
         if (bal < fee) revert InsufficientBalance(didHash, fee, bal);
 
         balance[didHash] = bal - fee;
+        lastChargedAt[didHash] = block.timestamp;
         collected += fee;
         emit EpochCharged(didHash, fee, balance[didHash]);
         return true;
+    }
+
+    /// @dev The same check SigvaraReputation makes before it accepts a proposal, against the
+    ///      same registry. Optional for the same reason: unset means the role alone governs.
+    function _requireBondedOracle() internal view {
+        IOperatorSet set = operatorBond;
+        if (address(set) == address(0)) return;
+        if (!set.isActiveOperator(msg.sender)) revert OracleNotBonded(msg.sender);
     }
 
     // -------------------------------------------------------------------------
@@ -263,6 +358,28 @@ contract SigvaraEpochFees is
         if (newRewardPool == address(0)) revert ZeroAddress();
         rewardPool = newRewardPool;
         emit RewardPoolUpdated(newRewardPool);
+    }
+
+    /// @notice Change the epoch length. Takes effect for the next charge: an agent already
+    ///         charged is judged against the new length, which can make "this epoch" larger
+    ///         or smaller than it was when the charge was made. Zero is refused; a registry
+    ///         with no epoch length is the unset state, and is reached only by never setting it.
+    function setEpochLength(uint256 newLength) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _setEpochLength(newLength);
+    }
+
+    /// @notice Point at the bonded operator registry, or pass address(0) to leave the role
+    ///         alone governing. Turning it on stops every oracle that has not bonded and been
+    ///         admitted, so set it after the operators are in the registry.
+    function setOperatorBond(address operatorBond_) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        operatorBond = IOperatorSet(operatorBond_);
+        emit OperatorBondSet(operatorBond_);
+    }
+
+    function _setEpochLength(uint256 newLength) internal {
+        if (newLength < MIN_EPOCH_LENGTH) revert EpochLengthBelowFloor(newLength, MIN_EPOCH_LENGTH);
+        epochLength = newLength;
+        emit EpochLengthUpdated(newLength);
     }
 
     // -------------------------------------------------------------------------

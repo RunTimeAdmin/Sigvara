@@ -10,6 +10,7 @@ import "@openzeppelin/contracts/access/IAccessControl.sol";
 import "../src/SigvaraIdentity.sol";
 import "../src/SigvaraReputation.sol";
 import "../src/SigvaraStaking.sol";
+import "../src/SigvaraEpochFees.sol";
 import "../script/Upgrade.s.sol";
 
 /// Minimal ERC20 for testing only.
@@ -229,6 +230,106 @@ contract UpgradeTest is Test, RegistrationHelper {
         vm.prank(operator);
         staking.claimWithdrawal(didHash);
         assertEq(svr.balanceOf(operator), MIN_STAKE);
+    }
+
+    // ------------------------------------------------------------ epoch fees --
+    //
+    // A fee registry from before the per-epoch limit has epochLength and operatorBond at zero.
+    // initialize() on this code leaves the same two slots at zero, so a proxy built here
+    // stands in for one that was already live.
+
+    function _feesProxy() internal returns (SigvaraEpochFees fees) {
+        fees = SigvaraEpochFees(address(new ERC1967Proxy(
+            address(new SigvaraEpochFees()),
+            abi.encodeCall(SigvaraEpochFees.initialize, (admin, oracle, address(svr), address(identity), admin, 0))
+        )));
+        svr.mint(operator, 100e18);
+        vm.startPrank(operator);
+        svr.approve(address(fees), 100e18);
+        fees.depositFor(didHash, 100e18);
+        vm.stopPrank();
+    }
+
+    /// The path the testnet proxy takes: the deployer holds both roles, so the upgrade and the
+    /// reinitializer land in one transaction and there is no moment with the limit unset.
+    function test_upgrade_epochFees_atomicWithInitializeV2_whenTheUpgraderIsTheAdmin() public {
+        SigvaraEpochFees fees = _feesProxy();
+        assertEq(fees.epochLength(), 0, "stands in for a proxy from before the limit");
+        address newImpl = address(new SigvaraEpochFees());
+        vm.prank(admin);
+        fees.upgradeToAndCall(newImpl, abi.encodeCall(SigvaraEpochFees.initializeV2, (1 days, address(0))));
+
+        assertEq(_impl(address(fees)), newImpl);
+        assertEq(fees.balance(didHash), 100e18, "prepaid balances survive");
+        assertEq(fees.epochLength(), 1 days);
+        assertEq(address(fees.operatorBond()), address(0));
+
+        vm.prank(admin);
+        fees.setEpochFee(10e18);
+        vm.prank(oracle);
+        fees.chargeEpoch(didHash);
+        assertEq(fees.balance(didHash), 90e18);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraEpochFees.AlreadyCharged.selector, didHash, block.timestamp / 1 days));
+        vm.prank(oracle);
+        fees.chargeEpoch(didHash);
+    }
+
+    /// An upgrade that forgets the reinitializer must not leave a fee registry that charges
+    /// without a limit. It refuses to charge until the length is set.
+    function test_upgrade_epochFees_withoutTheReinitializerRefusesToCharge() public {
+        SigvaraEpochFees fees = _feesProxy();
+        address newImpl = address(new SigvaraEpochFees());
+        vm.startPrank(admin);
+        fees.upgradeToAndCall(newImpl, "");
+        fees.setEpochFee(10e18);
+        vm.stopPrank();
+
+        vm.expectRevert(SigvaraEpochFees.EpochLengthNotSet.selector);
+        vm.prank(oracle);
+        fees.chargeEpoch(didHash);
+        assertEq(fees.balance(didHash), 100e18, "nothing was taken");
+
+        vm.prank(admin);
+        fees.initializeV2(1 days, address(0));
+        vm.prank(oracle);
+        fees.chargeEpoch(didHash);
+        assertEq(fees.balance(didHash), 90e18);
+    }
+
+    /// After the handover the timelock holds UPGRADER_ROLE and the Safe holds the admin role.
+    /// The reinitializer is admin-gated, and inside upgradeToAndCall msg.sender is still the
+    /// timelock, so a timelocked upgrade cannot carry it. The upgrade goes through first and the
+    /// Safe makes the second call, which is why every reinitializer here has to be fail-closed
+    /// until it has run.
+    function test_upgrade_epochFees_aTimelockThatIsNotTheAdminCannotCarryTheReinitializer() public {
+        SigvaraEpochFees fees = _feesProxy();
+        address timelock = makeAddr("timelock");
+        address safe = makeAddr("safe");
+        vm.startPrank(admin);
+        fees.grantRole(fees.UPGRADER_ROLE(), timelock);
+        fees.grantRole(fees.DEFAULT_ADMIN_ROLE(), safe);
+        fees.setEpochFee(10e18);
+        vm.stopPrank();
+
+        address newImpl = address(new SigvaraEpochFees());
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControl.AccessControlUnauthorizedAccount.selector, timelock, fees.DEFAULT_ADMIN_ROLE()
+        ));
+        vm.prank(timelock);
+        fees.upgradeToAndCall(newImpl, abi.encodeCall(SigvaraEpochFees.initializeV2, (1 days, address(0))));
+        assertTrue(_impl(address(fees)) != newImpl, "the whole upgrade reverted");
+
+        vm.prank(timelock);
+        fees.upgradeToAndCall(newImpl, "");
+        vm.expectRevert(SigvaraEpochFees.EpochLengthNotSet.selector);
+        vm.prank(oracle);
+        fees.chargeEpoch(didHash);
+
+        vm.prank(safe);
+        fees.initializeV2(1 days, address(0));
+        vm.prank(oracle);
+        fees.chargeEpoch(didHash);
+        assertEq(fees.balance(didHash), 90e18);
     }
 }
 
