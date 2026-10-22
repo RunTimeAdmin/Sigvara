@@ -93,6 +93,38 @@ test('checkerStatus: running but not completing epochs is an alert', () => {
   assert.match(s.reason, /has not completed an epoch/);
 });
 
+test('checkerStatus: a checker that has never completed an epoch is silent from the moment it started', () => {
+  // /health reports lastSuccessfulEpochMs 0 and timeSinceLastEpochMs null until the first epoch
+  // succeeds. Number(null) is 0, so this used to read as no silence at all and a checker whose every
+  // epoch failed stayed "ok" for as long as it ran.
+  const never = { ok: true, lastSuccessfulEpochMs: 0, timeSinceLastEpochMs: null };
+  const s = checkerStatus({ ...never, uptimeSeconds: 9 * 3600 }, payload, Date.now(), MAX_SILENCE);
+  assert.equal(s.ok, false);
+  assert.match(s.reason, /has not completed an epoch since it started 540 minutes ago/);
+});
+
+test('checkerStatus: a checker that has only just started gets the same time as any other', () => {
+  const never = { ok: true, lastSuccessfulEpochMs: 0, timeSinceLastEpochMs: null };
+  assert.equal(checkerStatus({ ...never, uptimeSeconds: 300 }, payload, Date.now(), MAX_SILENCE).ok, true);
+  const limit = MAX_SILENCE / 1000;
+  assert.equal(checkerStatus({ ...never, uptimeSeconds: limit }, payload, Date.now(), MAX_SILENCE).ok, true, 'at the limit');
+  assert.equal(checkerStatus({ ...never, uptimeSeconds: limit + 1 }, payload, Date.now(), MAX_SILENCE).ok, false, 'a second past it');
+});
+
+test('checkerStatus: a checker that does not say how long it has been up is not judged silent', () => {
+  // Nothing to measure from, so nothing to alert on: an older build, or a partial answer.
+  assert.equal(checkerStatus({ ok: true, lastSuccessfulEpochMs: 0, timeSinceLastEpochMs: null }, payload, Date.now(), MAX_SILENCE).ok, true);
+  assert.equal(checkerStatus({ ok: true }, payload, Date.now(), MAX_SILENCE).ok, true);
+});
+
+test('checkerStatus: once an epoch has completed, the time since it decides, not the uptime', () => {
+  const s = checkerStatus(
+    { ok: true, lastSuccessfulEpochMs: Date.now() - 60_000, timeSinceLastEpochMs: 60_000, uptimeSeconds: 99 * 3600 },
+    payload, Date.now(), MAX_SILENCE,
+  );
+  assert.equal(s.ok, true);
+});
+
 test('checkerStatus: a checker whose cadence cannot see proposals is an alert', () => {
   // It would serve an empty divergence list that reads as "checked, found nothing".
   const s = checkerStatus(healthy, { mode: 'checker', seesProposals: false }, Date.now(), MAX_SILENCE);
