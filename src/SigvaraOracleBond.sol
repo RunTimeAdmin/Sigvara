@@ -8,6 +8,8 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
+import "./interfaces/IOperatorSet.sol";
+
 /**
  * @title SigvaraOracleBond
  * @notice Performance-bond registry for the oracle operator set (tokenomics v0.3
@@ -30,12 +32,22 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
  *         This contract tracks bonds and active status only. Granting the actual
  *         ORACLE_ROLE on SigvaraReputation / SigvaraEpochFees stays a
  *         governance action, gated off `isActiveOperator()`.
+ *
+ *         Operator and signer. The operator is whoever holds the bond: a cold key or a
+ *         Safe. The signer is the key an oracle service uses to propose, finalize and
+ *         charge, which lives on a host. An operator names one signer, and
+ *         `isActiveOperator(signer)` then answers for the operator that named it, while
+ *         every function that moves the bond stays with the operator. Before this split the
+ *         two were one address, so whoever took the service's key could also start an unbond
+ *         and withdraw seven days later. Now it can only speak, and the operator can end that
+ *         at once by naming another signer or none.
  */
 contract SigvaraOracleBond is
     Initializable,
     AccessControlUpgradeable,
     UUPSUpgradeable,
-    ReentrancyGuard
+    ReentrancyGuard,
+    IOperatorSet
 {
     using SafeERC20 for IERC20;
 
@@ -70,6 +82,16 @@ contract SigvaraOracleBond is
     uint256 public activeCount;         // slot 4 — number of Active operators
     mapping(address => Operator) public operators; // slot 5
 
+    /// The signer an operator has named, in both directions. Appended after `operators`:
+    /// existing proxies read both as empty, which means "no signer" and leaves every
+    /// operator acting for itself exactly as before.
+    ///
+    /// Both exist so that the two questions asked on chain are one read each:
+    /// isActiveOperator(signer) needs signer -> operator, and clearing or replacing needs
+    /// operator -> signer. A zero value means no signer.
+    mapping(address => address) public operatorOfSigner; // slot 6: signer => the operator it speaks for
+    mapping(address => address) public signerOf;         // slot 7: operator => its signer
+
     // -------------------------------------------------------------------------
     // Events
     // -------------------------------------------------------------------------
@@ -83,6 +105,8 @@ contract SigvaraOracleBond is
     event BondAmountUpdated(uint256 newBondAmount);
     event UnbondingPeriodUpdated(uint256 newPeriod);
     event SlashBeneficiaryUpdated(address newBeneficiary);
+    event SignerSet(address indexed operator, address indexed signer);
+    event SignerCleared(address indexed operator, address indexed signer);
 
     // -------------------------------------------------------------------------
     // Errors
@@ -95,6 +119,13 @@ contract SigvaraOracleBond is
     error SlashExceedsBond(address operator, uint256 amount, uint256 bond);
     error UnbondingActive(address operator, uint256 claimableAt);
     error NoBond(address operator);
+    /// The address already has a part in this registry: it holds a bond record, has named a
+    /// signer, or is another operator's signer. A signer must be an address nobody else uses.
+    error SignerNotFree(address signer);
+    /// An address that signs for an operator cannot also hold a bond of its own, because
+    /// isActiveOperator could then not say which of the two it was answering for.
+    error AlreadySigner(address account);
+    error NoSigner(address operator);
 
     // -------------------------------------------------------------------------
     // Constructor / Initializer
@@ -121,6 +152,11 @@ contract SigvaraOracleBond is
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(UPGRADER_ROLE, admin);
+        // Upgrading is administered by upgraders, not by DEFAULT_ADMIN_ROLE. Otherwise the admin
+        // Safe could grant itself the role and upgrade in the next transaction, which makes the
+        // timelock that holds UPGRADER_ROLE a delay on the honest path and nothing on a
+        // compromised admin.
+        _setRoleAdmin(UPGRADER_ROLE, UPGRADER_ROLE);
         if (slasher != address(0)) _grantRole(SLASHER_ROLE, slasher);
 
         svr = IERC20(svrToken);
@@ -140,6 +176,7 @@ contract SigvaraOracleBond is
      */
     function depositBond(uint256 amount) external nonReentrant {
         if (amount == 0) revert ZeroAmount();
+        if (operatorOfSigner[msg.sender] != address(0)) revert AlreadySigner(msg.sender);
         Operator storage op = operators[msg.sender];
         if (op.status == Status.Exiting) revert WrongStatus(msg.sender, op.status);
 
@@ -194,9 +231,55 @@ contract SigvaraOracleBond is
         op.bond = 0;
         op.status = Status.None;
         op.unbondingAt = 0;
+        _clearSigner(msg.sender);
 
         svr.safeTransfer(msg.sender, amount);
         emit BondWithdrawn(msg.sender, amount);
+    }
+
+    /**
+     * @notice Name the key that signs for this operator, replacing any earlier one.
+     * @dev    Callable only by an Active operator, which is to say one governance has
+     *         admitted and which still holds its bond. Anyone being able to call it would let
+     *         a stranger reserve addresses it does not own, and the reservation blocks the
+     *         owner from using them: a signer cannot hold a bond or be another operator's
+     *         signer. The cost of being Active is the cost of doing that.
+     *
+     *         The signer must be an address nobody else uses here. The caller keeps every
+     *         power over the bond. Naming a signer does not grant ORACLE_ROLE anywhere: that
+     *         stays a governance decision on each contract, and the signer needs it as well as
+     *         this.
+     *
+     *         Not nonReentrant: it moves no tokens and makes no external call.
+     */
+    function setSigner(address signer) external {
+        Operator storage op = operators[msg.sender];
+        if (op.status != Status.Active) revert WrongStatus(msg.sender, op.status);
+        if (signer == address(0)) revert ZeroAddress();
+        if (signer == msg.sender || !_isFree(signer)) revert SignerNotFree(signer);
+
+        address previous = signerOf[msg.sender];
+        if (previous != address(0)) {
+            delete operatorOfSigner[previous];
+            emit SignerCleared(msg.sender, previous);
+        }
+
+        signerOf[msg.sender] = signer;
+        operatorOfSigner[signer] = msg.sender;
+        emit SignerSet(msg.sender, signer);
+    }
+
+    /**
+     * @notice Stop anyone signing for this operator. Takes effect in the same block: the
+     *         former signer's next call to propose, finalize or charge is refused, and so
+     *         are its proposals still waiting out their challenge window.
+     * @dev    Allowed in any status, including Exiting. It is the operator's answer to a
+     *         stolen signing key, and an operator that has already started leaving should
+     *         still be able to give it.
+     */
+    function clearSigner() external {
+        if (signerOf[msg.sender] == address(0)) revert NoSigner(msg.sender);
+        _clearSigner(msg.sender);
     }
 
     // -------------------------------------------------------------------------
@@ -254,6 +337,7 @@ contract SigvaraOracleBond is
         if (op.bond == 0) {
             op.status = Status.None;
             op.unbondingAt = 0;
+            _clearSigner(operator);
         }
 
         svr.safeTransfer(slashBeneficiary, amount);
@@ -309,13 +393,40 @@ contract SigvaraOracleBond is
      *      Belt and braces with the demotion in `slash`, which keeps activeCount honest.
      *      This one keeps the answer honest even when nothing has called in to recompute.
      */
-    function isActiveOperator(address operator) external view returns (bool) {
+    function isActiveOperator(address account) external view override returns (bool) {
+        // A registered signer answers for the operator that named it. Any other address
+        // answers for itself, which is all this function used to do and is still what an
+        // operator that never named a signer gets.
+        address operator = operatorOfSigner[account];
+        if (operator == address(0)) operator = account;
         Operator storage op = operators[operator];
         return op.status == Status.Active && op.bond >= bondAmount;
     }
 
     function bondOf(address operator) external view returns (uint256) {
         return operators[operator].bond;
+    }
+
+    // -------------------------------------------------------------------------
+    // Internal
+    // -------------------------------------------------------------------------
+
+    /// @dev Drops the operator's signer, if it has one. Also run when the operator leaves
+    ///      the set for good (bond withdrawn, or slashed to nothing), so that the address it
+    ///      named is released rather than reserved for a record that no longer exists.
+    function _clearSigner(address operator) internal {
+        address signer = signerOf[operator];
+        if (signer == address(0)) return;
+        delete signerOf[operator];
+        delete operatorOfSigner[signer];
+        emit SignerCleared(operator, signer);
+    }
+
+    /// @dev An address no part of this registry refers to yet.
+    function _isFree(address account) internal view returns (bool) {
+        return operators[account].status == Status.None
+            && signerOf[account] == address(0)
+            && operatorOfSigner[account] == address(0);
     }
 
     // -------------------------------------------------------------------------

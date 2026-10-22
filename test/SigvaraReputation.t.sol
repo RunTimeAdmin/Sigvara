@@ -631,6 +631,31 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
             "slot 8 is evidenceRoots");
     }
 
+    /**
+     * PendingScore lives in a mapping, so a field only has to go at the end of the struct to
+     * leave every proposal already pending where it was. `proposer` is the sixth slot: the
+     * struct's data takes two, then proposedAt, exists and evidenceRoot one each. A proposal
+     * stored before it existed reads zero there.
+     */
+    function test_storageLayout_pendingScoreFieldsPinned() public {
+        // Foundry starts the clock at 1, which is also what `exists` stores, so with the default
+        // timestamp swapping proposedAt and exists would pass this test. A mutation run found
+        // that. Any timestamp other than 1 tells the two slots apart.
+        vm.warp(1_700_000_123);
+        bytes32 root = keccak256("evidence");
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, root);
+
+        uint256 base = uint256(keccak256(abi.encode(DID, uint256(1)))); // pendingScores is slot 1
+        assertEq(uint256(vm.load(address(rep), bytes32(base + 2))), block.timestamp, "proposedAt");
+        assertEq(uint256(vm.load(address(rep), bytes32(base + 3))), 1, "exists");
+        assertEq(vm.load(address(rep), bytes32(base + 4)), root, "evidenceRoot");
+        assertEq(
+            address(uint160(uint256(vm.load(address(rep), bytes32(base + 5))))), oracle,
+            "proposer, appended last"
+        );
+    }
+
     function test_initializeV2_grantsCommitteeAndSetsWindow_onceOnly() public {
         // Deliberately not the shared proxy: setUp() runs initializeV3 on that one,
         // which consumes initializer version 3 and puts version 2 permanently out of
@@ -1003,9 +1028,13 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
         rep.proposeReputation(DID, maxScore, bytes32(0));
     }
 
-    /// An operator that exits must not strand the scores it already proposed.
-    /// Finalization is mechanical and stays permissionless.
-    function test_operatorBond_finalizeStillWorksAfterTheOracleExits() public {
+    /// A proposer that has left the operator set no longer has its proposals made live.
+    ///
+    /// This replaces the earlier rule, which kept an exiting operator's scores finalizable
+    /// so that leaving could not strand them. The same rule meant a removed or compromised
+    /// key's proposals went live unreviewed unless the committee rejected each one inside
+    /// its window. A successor replaces what is stranded, with a proposal of its own.
+    function test_operatorBond_finalizeRefusesAProposerThatHasLeft() public {
         OperatorSetMock set = new OperatorSetMock();
         vm.prank(admin);
         rep.setOperatorBond(address(set));
@@ -1016,9 +1045,252 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
 
         set.set(oracle, false); // ejected, or unbonded, mid-window
         vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraReputation.ProposerNotAuthorized.selector, DID, oracle));
         rep.finalizeReputation(DID);
 
+        assertEq(rep.getEarnedScore(DID), 0, "nothing went live");
+        assertTrue(rep.getPendingScore(DID).exists, "and the proposal is left where it is");
+    }
+
+    // -------------------------------------------------------------------------
+    // The proposer is recorded, and asked about again at finalization
+    // -------------------------------------------------------------------------
+
+    // The role is read before the prank: `vm.prank` applies to the next call, and an argument
+    // that is itself a call would use it up.
+    function _grantOracle(address who) internal {
+        bytes32 role = rep.ORACLE_ROLE();
+        vm.prank(admin);
+        rep.grantRole(role, who);
+    }
+
+    function _revokeOracle(address who) internal {
+        bytes32 role = rep.ORACLE_ROLE();
+        vm.prank(admin);
+        rep.revokeRole(role, who);
+    }
+
+    function _active(OperatorSetMock set, address who) internal {
+        _grantOracle(who);
+        set.set(who, true);
+    }
+
+    function test_proposer_isRecordedOnBothEntryPoints() public {
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
+        assertEq(rep.getPendingScore(DID).proposer, oracle);
+
+        address checker = makeAddr("checker");
+        _grantOracle(checker);
+        // Replace through the compare-and-swap path once the first is gone.
+        vm.prank(committee);
+        rep.rejectReputation(DID);
+        vm.prank(checker);
+        rep.proposeIfEmpty(DID, maxScore, bytes32(0));
+        assertEq(rep.getPendingScore(DID).proposer, checker);
+    }
+
+    /// The proposer's role is revoked after it proposes a perfect score. Finalizing used to
+    /// make that score live anyway; it is refused now.
+    function test_finalize_refusesWhenTheProposersRoleIsRevoked() public {
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
+
+        vm.startPrank(admin);
+        rep.revokeRole(rep.ORACLE_ROLE(), oracle);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraReputation.ProposerNotAuthorized.selector, DID, oracle));
+        rep.finalizeReputation(DID);
+        assertEq(rep.getEarnedScore(DID), 0);
+    }
+
+    function test_finalize_stillWorksWhileTheProposerIsAuthorized() public {
+        OperatorSetMock set = new OperatorSetMock();
+        vm.prank(admin);
+        rep.setOperatorBond(address(set));
+        set.set(oracle, true);
+
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
+        vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
+        rep.finalizeReputation(DID);
         assertEq(rep.getEarnedScore(DID), 100);
+    }
+
+    /// Holding the role alone is not enough once an operator set is configured, and the
+    /// operator set alone is not enough either: both are asked at finalization, as they
+    /// are when proposing.
+    function test_finalize_needsTheRoleAndTheOperatorSet() public {
+        OperatorSetMock set = new OperatorSetMock();
+        vm.prank(admin);
+        rep.setOperatorBond(address(set));
+        set.set(oracle, true);
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
+        vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
+
+        _revokeOracle(oracle);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraReputation.ProposerNotAuthorized.selector, DID, oracle));
+        rep.finalizeReputation(DID);
+
+        _grantOracle(oracle);
+        rep.finalizeReputation(DID); // restored: both hold again
+        assertEq(rep.getEarnedScore(DID), 100);
+    }
+
+    /// Before the window has run, the error is still the window's. The proposer check comes
+    /// after it, so nobody reads "not authorized" for a proposal that was never finalizable.
+    function test_finalize_windowErrorComesFirst() public {
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
+        _revokeOracle(oracle);
+
+        vm.expectRevert(abi.encodeWithSelector(
+            SigvaraReputation.ChallengeWindowActive.selector, DID, block.timestamp + CHALLENGE_WINDOW
+        ));
+        rep.finalizeReputation(DID);
+    }
+
+    /// A proposal written before the proposer was recorded has address(0) in that slot and
+    /// has to keep finalizing, or the first upgrade would strand everything pending.
+    function test_finalize_legacyProposalWithNoProposerStillFinalizes() public {
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
+        _clearProposerSlot(DID);
+        assertEq(rep.getPendingScore(DID).proposer, address(0), "now reads as a legacy proposal");
+
+        _revokeOracle(oracle); // nobody to ask, so this changes nothing
+        vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
+        rep.finalizeReputation(DID);
+        assertEq(rep.getEarnedScore(DID), 100);
+    }
+
+    function _clearProposerSlot(bytes32 did) internal {
+        bytes32 base = keccak256(abi.encode(did, uint256(1))); // pendingScores is slot 1
+        vm.store(address(rep), bytes32(uint256(base) + 5), bytes32(0));
+    }
+
+    /// A proposal whose proposer has lost its authority does not hold the slot. A checker
+    /// covering for a removed primary replaces it through the compare-and-swap path.
+    function test_proposeIfEmpty_replacesADeadProposal() public {
+        OperatorSetMock set = new OperatorSetMock();
+        vm.prank(admin);
+        rep.setOperatorBond(address(set));
+        set.set(oracle, true);
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
+
+        address checker = makeAddr("checker");
+        _active(set, checker);
+        set.set(oracle, false); // the primary is removed
+
+        vm.prank(checker);
+        rep.proposeIfEmpty(DID, maxScore, bytes32(uint256(7)));
+        SigvaraReputation.PendingScore memory p = rep.getPendingScore(DID);
+        assertEq(p.proposer, checker);
+        assertEq(p.evidenceRoot, bytes32(uint256(7)));
+
+        vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
+        rep.finalizeReputation(DID);
+        assertEq(rep.getEarnedScore(DID), 100);
+    }
+
+    function test_proposeIfEmpty_stillRefusesALiveProposal() public {
+        OperatorSetMock set = new OperatorSetMock();
+        vm.prank(admin);
+        rep.setOperatorBond(address(set));
+        set.set(oracle, true);
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
+
+        address checker = makeAddr("checker");
+        _active(set, checker);
+        vm.expectRevert(abi.encodeWithSelector(
+            SigvaraReputation.ScoreAlreadyPending.selector, DID, block.timestamp
+        ));
+        vm.prank(checker);
+        rep.proposeIfEmpty(DID, maxScore, bytes32(0));
+    }
+
+    /// With nobody to ask, a legacy proposal counts as live, which is how it behaved.
+    function test_proposeIfEmpty_legacyProposalHoldsTheSlot() public {
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
+        _clearProposerSlot(DID);
+        _revokeOracle(oracle);
+
+        address checker = makeAddr("checker");
+        _grantOracle(checker);
+        vm.expectRevert(abi.encodeWithSelector(
+            SigvaraReputation.ScoreAlreadyPending.selector, DID, block.timestamp
+        ));
+        vm.prank(checker);
+        rep.proposeIfEmpty(DID, maxScore, bytes32(0));
+    }
+
+    /// With no operator set, the role alone decides, for the slot as for finalization.
+    function test_proposeIfEmpty_deadByRoleWithNoOperatorSet() public {
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
+        address checker = makeAddr("checker");
+        vm.startPrank(admin);
+        rep.grantRole(rep.ORACLE_ROLE(), checker);
+        rep.revokeRole(rep.ORACLE_ROLE(), oracle);
+        vm.stopPrank();
+
+        vm.prank(checker);
+        rep.proposeIfEmpty(DID, maxScore, bytes32(0));
+        assertEq(rep.getPendingScore(DID).proposer, checker);
+    }
+
+    /// The ordinary replacing entry point needs no such rule: it always replaces.
+    function test_proposeReputation_replacesADeadProposalAndTheNewOneFinalizes() public {
+        OperatorSetMock set = new OperatorSetMock();
+        vm.prank(admin);
+        rep.setOperatorBond(address(set));
+        set.set(oracle, true);
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
+        set.set(oracle, false);
+
+        address successor = makeAddr("successor");
+        _active(set, successor);
+        SigvaraReputation.ReputationData memory modest = _score(10, 5, 10, 0, 2, 0);
+        vm.prank(successor);
+        rep.proposeReputation(DID, modest, bytes32(0));
+
+        vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
+        rep.finalizeReputation(DID);
+        assertEq(rep.getEarnedScore(DID), 27, "the successor's number, not the stranded one");
+    }
+
+    /// The committee's route is untouched: it can still reject a dead proposal inside its window.
+    function test_reject_stillWorksOnADeadProposal() public {
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
+        _revokeOracle(oracle);
+
+        vm.prank(committee);
+        rep.rejectReputation(DID);
+        assertFalse(rep.getPendingScore(DID).exists);
+    }
+
+    function _score(uint8 fee, uint8 success, uint8 age, uint8 ext, uint8 community, uint8 prop)
+        internal
+        pure
+        returns (SigvaraReputation.ReputationData memory)
+    {
+        return SigvaraReputation.ReputationData({
+            feeScore: fee,
+            successScore: success,
+            ageScore: age,
+            externalScore: ext,
+            communityScore: community,
+            propagationScore: prop,
+            lastUpdated: 0
+        });
     }
 
     function test_operatorBond_canBeTurnedBackOff() public {

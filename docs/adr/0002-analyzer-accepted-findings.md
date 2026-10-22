@@ -15,6 +15,13 @@ Slither 0.11.5 over `src/` on 17 September 2026 reported 16 findings: 0 High,
 16 again (3 Medium, 11 Low, 2 Informational): `expireDispute` joined the same
 timestamp class, and the previously listed uninitialized-local was fixed.
 
+On 22 October 2026, after the operator-custody change (signer registry, stored
+proposer, once-per-epoch charge), it reports 27: 0 High, 4 Medium, 17 Low,
+6 Informational. Four are new in that change and are dispositioned below under
+"Added with the operator-custody change". One Informational finding went away:
+`SigvaraOracleBond` now inherits `IOperatorSet`. The older counts above were
+not re-derived.
+
 ## Accepted
 
 ### `timestamp` (Low, 11 sites)
@@ -46,6 +53,23 @@ Event address parameters that are not `indexed`. Indexing changes the ABI of
 already-deployed testnet contracts' events and the oracle's log parsing; not
 worth a breaking change for a filtering convenience. Revisit at the next
 event-signature change.
+
+### Added with the operator-custody change
+
+- `incorrect-equality` (Medium), `SigvaraOracleBond._isFree`: an enum compared
+  to `Status.None` and two mapping entries compared to `address(0)`, to decide
+  whether an address is unused by the registry. Same class and same
+  disposition as `isActiveOperator` above: no token balance is compared.
+- `timestamp` (Low), `SigvaraEpochFees.chargeEpoch`: `last / length >= epoch`,
+  where an epoch is `block.timestamp / length`. This is the once-per-epoch
+  limit, and it is a real use of the clock. The epoch length has a floor of one
+  hour (`MIN_EPOCH_LENGTH`), so a few seconds of skew moves a boundary by a few
+  seconds, and a charge landing in the neighbouring epoch is bounded by the
+  same limit. Reconsider if the floor is ever lowered to minutes.
+- `timestamp` (Low), `SigvaraOracleBond._isFree` and `setSigner`: neither reads
+  the clock. Slither follows the `operators` mapping, whose struct also holds
+  `unbondingAt`, and treats a read of any field as a read of the timestamp.
+  False positives, listed so that nobody has to re-derive that.
 
 ## Fixed
 

@@ -8,16 +8,7 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 
 import "./SigvaraIdentity.sol";
-
-/**
- * @notice The slice of SigvaraOracleBond this contract needs.
- * @dev    An interface rather than an import: the bond registry is deployed by its own
- *         script and is optional, so reputation should not carry a hard dependency on
- *         a contract that may not exist on a given chain.
- */
-interface IOperatorSet {
-    function isActiveOperator(address operator) external view returns (bool);
-}
+import "./interfaces/IOperatorSet.sol";
 
 /**
  * @title SigvaraReputation
@@ -67,6 +58,11 @@ interface IOperatorSet {
  *   because the registry is deployed separately and a chain may not have one: with no
  *   operator set configured the role alone governs, which is the single-operator
  *   arrangement this started from.
+ *
+ *   A proposal remembers who made it, and is finalized only while that proposer still
+ *   could make it: it holds ORACLE_ROLE and, with an operator set, is still active in it.
+ *   So removing an operator, clearing its signer or revoking the role also ends whatever
+ *   that key has pending, without the committee having to reject each proposal in time.
  *
  * Maturity:
  *   A score is earned immediately but becomes spendable only over time. Reads return
@@ -144,6 +140,10 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
         // its own in `reputations`, so a field added inside it would shift proposedAt
         // and exists here and corrupt every live proposal after an upgrade.
         bytes32 evidenceRoot;
+        // Who proposed it, appended after evidenceRoot for the same reason. A proposal that
+        // was already pending when this field was added reads address(0) here, and is
+        // treated as it was before: live, with nobody to ask.
+        address proposer;
     }
 
     // -------------------------------------------------------------------------
@@ -229,6 +229,10 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
     error AgentNotBonded(bytes32 didHash);
     error MaturityRateZero();
     error OracleNotBonded(address oracle);
+    /// The proposer of a pending score no longer holds ORACLE_ROLE or, when an operator set
+    /// is configured, is no longer an active operator in it. Its proposal will not be made
+    /// live. A proposal from an authorized proposer replaces it.
+    error ProposerNotAuthorized(bytes32 didHash, address proposer);
 
     // -------------------------------------------------------------------------
     // Constructor / Initializer
@@ -259,6 +263,11 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(UPGRADER_ROLE, admin);
+        // Upgrading is administered by upgraders, not by DEFAULT_ADMIN_ROLE. Otherwise the admin
+        // Safe could grant itself the role and upgrade in the next transaction, which makes the
+        // timelock that holds UPGRADER_ROLE a delay on the honest path and nothing on a
+        // compromised admin.
+        _setRoleAdmin(UPGRADER_ROLE, UPGRADER_ROLE);
 
         if (oracle != address(0)) _grantRole(ORACLE_ROLE, oracle);
         if (stakingCore != address(0)) _grantRole(STAKING_CORE_ROLE, stakingCore);
@@ -357,7 +366,13 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
         onlyRole(ORACLE_ROLE)
     {
         PendingScore storage existing = pendingScores[didHash];
-        if (existing.exists) revert ScoreAlreadyPending(didHash, existing.proposedAt);
+        // A proposal whose proposer has since lost its authority cannot be finalized, so it
+        // is not holding the slot in any way that matters. A checker covering for a primary
+        // that was removed has to be able to replace it, and would otherwise be locked out
+        // by the very thing the removal was meant to stop.
+        if (existing.exists && _proposerStillAuthorized(existing.proposer)) {
+            revert ScoreAlreadyPending(didHash, existing.proposedAt);
+        }
         _propose(didHash, data, evidenceRoot);
     }
 
@@ -379,7 +394,8 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
             data: data,
             proposedAt: block.timestamp,
             exists: true,
-            evidenceRoot: evidenceRoot
+            evidenceRoot: evidenceRoot,
+            proposer: msg.sender
         });
 
         emit ScoreProposed(didHash, block.timestamp, evidenceRoot);
@@ -399,6 +415,17 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
 
         uint256 finalizableAt = pending.proposedAt + challengeWindow;
         if (block.timestamp < finalizableAt) revert ChallengeWindowActive(didHash, finalizableAt);
+
+        // Finalization stays permissionless, so nothing is asked of whoever calls it. What
+        // is asked is whether the PROPOSER could still have made this proposal. A proposal
+        // is that party's claim, and one whose proposer has been removed, unbonded, slashed,
+        // had its signer cleared or lost its role is not a claim this contract will make
+        // live unreviewed. That is what lets an operator or governance kill a stolen key's
+        // pending proposals at once, instead of relying on the committee to reject each one
+        // inside its window. The successor replaces it with proposeReputation or proposeIfEmpty.
+        if (!_proposerStillAuthorized(pending.proposer)) {
+            revert ProposerNotAuthorized(didHash, pending.proposer);
+        }
 
         // Stamp lastUpdated in memory so the struct is written to storage once,
         // and compute the event's total from the same memory copy instead of
@@ -505,13 +532,29 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
     ///      Queued withdrawals do not count. They remain slashable until claimed, but an
     ///      agent on its way out should stop accruing reputation rather than keep
     ///      earning while it unwinds.
-    /// @dev Checked on propose only. Finalization stays permissionless: it is
-    ///      mechanical, it cannot change the number, and gating it on operator status
-    ///      would let an oracle's exit strand every score it had already proposed.
+    /// @dev Checked on the caller when proposing. Finalization stays permissionless, so it
+    ///      asks nothing of its caller; it asks about the proposer instead, in
+    ///      _proposerStillAuthorized. That strands a departing operator's pending scores
+    ///      until a successor replaces them. The alternative is a removed or compromised
+    ///      key's proposals going live unreviewed, which is the worse of the two.
     function _requireBondedOracle() internal view {
         IOperatorSet set = operatorBond;
         if (address(set) == address(0)) return;
         if (!set.isActiveOperator(msg.sender)) revert OracleNotBonded(msg.sender);
+    }
+
+    /// @dev Whether whoever made a pending proposal could still make it: it holds
+    ///      ORACLE_ROLE and, if an operator set is configured, is an active operator in
+    ///      it (or the signer of one). The same two conditions proposing requires, asked
+    ///      again at finalization and when a checker wants the slot.
+    ///
+    ///      address(0) is a proposal written before the proposer was recorded. There is
+    ///      nobody to ask, so it is live, which is how it behaved when it was made.
+    function _proposerStillAuthorized(address proposer) internal view returns (bool) {
+        if (proposer == address(0)) return true;
+        if (!hasRole(ORACLE_ROLE, proposer)) return false;
+        IOperatorSet set = operatorBond;
+        return address(set) == address(0) || set.isActiveOperator(proposer);
     }
 
     function _requireScorable(bytes32 didHash) internal view {
