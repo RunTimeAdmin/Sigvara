@@ -26,6 +26,7 @@
 // and that log is what can be checked after the fact by anyone.
 
 const { ethers } = require('ethers');
+const { numberSetting } = require('./config');
 
 // keccak256("Transfer(address,address,uint256)")
 const TRANSFER_TOPIC = ethers.id('Transfer(address,address,uint256)');
@@ -73,7 +74,7 @@ function readConfig(env = process.env) {
     feeUnit: BigInt(env.PAYMENT_FEE_UNIT || '100000000'),
     // Days after which a payment counts half. 0 disables decay, which makes a
     // score answer "was this agent ever busy" rather than "is it busy now".
-    halfLifeMs: Number(env.PAYMENT_HALF_LIFE_DAYS ?? 90) * 86_400_000,
+    halfLifeMs: numberSetting(env.PAYMENT_HALF_LIFE_DAYS, 90) * 86_400_000,
     // How much evidence one counterparty can contribute: at most this many points
     // of feeScore, and this many attestations of weight. Volume from a single
     // payer is otherwise indistinguishable from volume from a hundred, which is
@@ -91,12 +92,12 @@ function readConfig(env = process.env) {
     // from each payer the scores run 4, 8, 12, 16, 20 as payers are added. If six is
     // a hard floor, set this to 3 and accept seven.
     // 0 disables the cap.
-    maxPerPayer: Number(env.PAYMENT_MAX_PER_PAYER ?? 4),
+    maxPerPayer: numberSetting(env.PAYMENT_MAX_PER_PAYER, 4),
     // Web of trust. A counterparty that is itself a scored Sigvara agent is better
     // evidence than an anonymous wallet, so its cap is raised in proportion to its
     // own score: at the default of 1.0 a perfectly scored counterparty counts double.
     // 0 disables the weighting and every payer is treated alike.
-    trustWeight: Number(env.PAYMENT_TRUST_WEIGHT ?? 1),
+    trustWeight: numberSetting(env.PAYMENT_TRUST_WEIGHT, 1),
   };
 }
 

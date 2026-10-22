@@ -16,6 +16,7 @@ const path = require('path');
 // payments age on exactly the same function; payments.js requires only ethers, so this
 // direction of dependency is not circular.
 const { decayWeight, WEIGHT_SCALE } = require('./payments');
+const { numberSetting } = require('./config');
 
 const STATE_PATH = process.env.ORACLE_STATE_PATH || '/data/oracle-state.json';
 
@@ -41,7 +42,7 @@ const flags = new Map();
 // verified against the chain.
 const DEFAULT_FLAG_HALF_LIFE_DAYS = 30;
 const FLAG_HALF_LIFE_MS =
-  Number(process.env.FLAG_HALF_LIFE_DAYS ?? DEFAULT_FLAG_HALF_LIFE_DAYS) * 86_400_000;
+  numberSetting(process.env.FLAG_HALF_LIFE_DAYS, DEFAULT_FLAG_HALF_LIFE_DAYS) * 86_400_000;
 
 // didHash → ERC-8004 agentId (string) this agent is linked to (ownership-verified at link time)
 const links = new Map();

@@ -776,7 +776,9 @@ Every numeric setting in these tables is checked before anything starts. A value
 set and is not a plain number in range stops the process, with every offending setting
 named. `PAYMENT_MAX_PER_PAYER=four` used to remove the per-payer cap, and
 `PAYMENT_HALF_LIFE_DAYS=90d` used to remove decay, because `Number('four')` is `NaN` and
-every comparison against `NaN` is false. A blank value still means unset.
+every comparison against `NaN` is false. A blank value means unset and takes the default; write `0` to
+switch off a control that allows it (decay, the per-payer cap, the trust weighting). A blank used to read as
+`0` for those four and switched the control off without a word.
 
 ### Payment verification
 

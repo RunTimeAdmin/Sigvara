@@ -11,9 +11,10 @@
 // checker was silent. EPOCH_HOURS and DIVERGENCE_TOLERANCE already refuse to start for
 // this reason; this extends the same rule to the rest.
 //
-// This validates and does not parse. The modules keep reading their settings as they did,
-// so a blank value still means what it always meant to each of them; only a value that is
-// set and is not a sane number is refused.
+// This validates, and parses only where parsing mattered. A value that is set and is not a
+// sane number is refused. A blank value means unset, which is how a template says it and what
+// a compose passthrough leaves behind. Four settings used to read a blank as zero and so
+// switched a control off; those go through numberSetting below.
 
 // [name, kind, min, max]. kind: 'int' whole number, 'num' any finite number, 'bigint' a
 // whole number written as digits (amounts in base units, which overflow a JSON number).
@@ -94,6 +95,19 @@ function requireValidNumericConfig(label, env = process.env) {
 }
 
 /**
+ * A numeric setting, with a blank value read as unset.
+ *
+ * `Number(env.X ?? fallback)` only falls back on undefined. A blank X (`PAYMENT_MAX_PER_PAYER=`)
+ * is the empty string, and Number('') is 0, which for these settings means "off": no per-payer cap,
+ * no payment decay, no trust weighting, no flag decay. checkNumericConfig and the README both treat
+ * a blank as unset, so the modules have to as well. A value that is set is parsed as it always was,
+ * and 0 still disables where it is documented to.
+ */
+function numberSetting(raw, fallback) {
+  return raw === undefined || String(raw).trim() === '' ? fallback : Number(raw);
+}
+
+/**
  * Why ORACLE_MODE cannot be used, or null. Unset, blank or `primary` runs a primary and
  * `checker` a checker, exactly as written. Anything else used to run a primary without a
  * word: `CHECKER` or `Checker` on the checker host would then overwrite and finalize the
@@ -106,4 +120,6 @@ function oracleModeError(raw) {
   return `ORACLE_MODE="${String(raw).slice(0, 40)}" is not a mode: leave it unset (or primary), or set checker`;
 }
 
-module.exports = { checkNumericConfig, requireValidNumericConfig, numberProblem, oracleModeError, NUMERIC };
+module.exports = {
+  checkNumericConfig, requireValidNumericConfig, numberProblem, numberSetting, oracleModeError, NUMERIC,
+};

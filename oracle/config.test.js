@@ -4,10 +4,21 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { checkNumericConfig, numberProblem, oracleModeError, NUMERIC } = require('./config');
+const { checkNumericConfig, numberProblem, numberSetting, oracleModeError, NUMERIC } = require('./config');
 
 // These are the values that used to turn a control off. Each parsed to NaN, a comparison
 // against NaN is never true, and the failure was silent and in the unsafe direction.
+
+test('numberSetting: a blank or missing value is unset, anything else is parsed as it always was', () => {
+  assert.equal(numberSetting(undefined, 4), 4);
+  assert.equal(numberSetting('', 4), 4);
+  assert.equal(numberSetting('   ', 4), 4);
+  assert.equal(numberSetting('7', 4), 7);
+  assert.equal(numberSetting('2.5', 1), 2.5);
+  assert.equal(numberSetting('0', 4), 0, 'zero still switches a control off where that is documented');
+  // Not rescued here: checkNumericConfig refuses it at startup, before any module reads it.
+  assert.ok(Number.isNaN(numberSetting('four', 4)));
+});
 
 test('checkNumericConfig: nothing set is nothing to complain about', () => {
   assert.deepEqual(checkNumericConfig({}), []);
