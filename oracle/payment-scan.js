@@ -40,10 +40,9 @@
  */
 
 const { ethers } = require('ethers');
-const { countsAsPayment } = require('./payments');
-
-/** Transfer(address indexed from, address indexed to, uint256 value). */
-const TRANSFER_TOPIC = ethers.id('Transfer(address,address,uint256)');
+// TRANSFER_TOPIC, Transfer(address indexed from, address indexed to, uint256 value): one
+// definition, shared with the attested path, rather than a copy that could drift.
+const { countsAsPayment, TRANSFER_TOPIC } = require('./payments');
 
 /**
  * Recipients per getLogs call.

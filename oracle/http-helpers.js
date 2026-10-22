@@ -114,10 +114,12 @@ function mayAttestUnauthenticated(success, paymentsRequired) {
   return success === true && paymentsRequired === true;
 }
 
-// Returns the didHash from a /score/:didHash path, or null if it doesn't match.
+// Returns the didHash from a /score/:didHash path, or null if it doesn't match. Lowercase,
+// the one spelling the store keys by (as parseDidHash returns): a caller's mixed case
+// would otherwise find none of the agent's attestations, flags or link.
 function parseScorePath(pathname) {
   const match = pathname.match(SCORE_PATH_RE);
-  return match ? match[1] : null;
+  return match ? match[1].toLowerCase() : null;
 }
 
 // Simple in-memory fixed-window rate limiter, keyed by an arbitrary string
