@@ -314,3 +314,38 @@ test('mapChunked: a rejecting mapper rejects the whole call', async () => {
     /boom/,
   );
 });
+
+// ---- clockSkewError ---------------------------------------------------------------------
+//
+// Scores are computed against the chain's timestamp, so whoever supplies it chooses how old
+// every payment looks.
+
+const { clockSkewError } = require('./epoch-policy');
+
+test('clockSkewError: clocks that agree to within the limit are fine, either way round', () => {
+  const host = 1_800_000_000_000;
+  assert.equal(clockSkewError(1_800_000_000, host, 600_000), null);
+  assert.equal(clockSkewError(1_800_000_000 + 30, host, 600_000), null, 'chain a little ahead');
+  assert.equal(clockSkewError(1_800_000_000 - 30, host, 600_000), null, 'chain a little behind');
+  assert.equal(clockSkewError(1_800_000_000 + 600, host, 600_000), null, 'exactly the limit');
+});
+
+test('clockSkewError: a chain clock far ahead or far behind is refused, and says which', () => {
+  const host = 1_800_000_000_000;
+  const ahead = clockSkewError(1_800_000_000 + 3_600, host, 600_000);
+  assert.match(ahead, /3600s ahead of this host/);
+  assert.match(ahead, /MAX_CLOCK_SKEW_SECONDS/);
+  assert.match(clockSkewError(1_800_000_000 - 3_600, host, 600_000), /3600s behind this host/);
+});
+
+test('clockSkewError: a timestamp that is not a number is refused, never compared', () => {
+  // NaN > limit is false, so an unchecked NaN would have passed as "no skew".
+  for (const bad of [NaN, undefined, 'soon', Infinity]) {
+    assert.match(clockSkewError(bad, Date.now(), 600_000), /not a number/, String(bad));
+  }
+});
+
+test('clockSkewError: a blockNumber-style bigint timestamp is read as seconds', () => {
+  const host = 1_800_000_000_000;
+  assert.equal(clockSkewError(1_800_000_000n, host, 600_000), null);
+});

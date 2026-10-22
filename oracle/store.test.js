@@ -709,3 +709,253 @@ test('setPaymentOutcome: refuses anything but a boolean, which would be recorded
   assert.throws(() => setPaymentOutcome(did, tx, OUTCOME_PAYER, null), TypeError);
   assert.equal(getPaymentEvents(did)[0].success, null);
 });
+
+// ---------------------------------------------------------------------------
+// A state file that cannot be read
+//
+// Any error but "no such file" used to be logged as "starting fresh", and the next save
+// wrote an empty state over the original. What is in that file cannot be rebuilt from the
+// chain: attested outcomes, flags, links, and the record of which settlements were already
+// credited. A stray comma from editing it by hand was enough to lose all of it, and to
+// credit the same settlement twice.
+// ---------------------------------------------------------------------------
+
+// Writes `main` and `backup` (an object, a string for raw content, or null for no file) into
+// a fresh directory and runs a script against them in a child process.
+function inChildWithFiles({ main = null, backup = null }, script) {
+  const dir = fsx.mkdtempSync(pathx.join(os.tmpdir(), 'sigvara-store-'));
+  const statePath = pathx.join(dir, 'oracle-state.json');
+  const put = (p, v) => {
+    if (v !== null) fsx.writeFileSync(p, typeof v === 'string' ? v : JSON.stringify(v));
+  };
+  put(statePath, main);
+  put(`${statePath}.bak`, backup);
+  try {
+    return execFileSync(process.execPath, ['-e', script], {
+      env: { ...process.env, ORACLE_STATE_PATH: statePath },
+      cwd: __dirname,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } finally {
+    fsx.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const lastJson = (out) => JSON.parse(out.trim().split('\n').pop());
+
+const goodState = {
+  attestations: { 'did-a': { successful: 3, total: 4 } },
+  flags: { 'did-a': [1_700_000_000_000] },
+  usedPaymentTxs: ['0x' + 'ab'.repeat(32) + '|did-a|0x' + '11'.repeat(20)],
+  savedAt: '2026-10-01T00:00:00.000Z',
+};
+
+// What every script below reports, so the assertions read as the facts they are about.
+const REPORT = `
+  const report = (extra = {}) => console.log(JSON.stringify({
+    attestations: [...s.attestations.keys()],
+    flags: [...s.flags.keys()],
+    used: s.usedPaymentTxs.size,
+    load: s.getLoadReport(),
+    files: fs.readdirSync(require('path').dirname(process.env.ORACLE_STATE_PATH)).sort(),
+    ...extra,
+  }));
+`;
+
+test('load: a state file that cannot be read stops the load, with the file untouched', () => {
+  const out = inChildWithFiles({ main: '{"attestations": {"did-a": ' }, `
+    const fs = require('fs');
+    const s = require('./store');
+    ${REPORT}
+    let error = null;
+    try { s.load(); } catch (e) { error = { name: e.constructor.name, message: e.message }; }
+    report({ error, stillThere: fs.readFileSync(process.env.ORACLE_STATE_PATH, 'utf8') });
+  `);
+  const r = lastJson(out);
+  assert.equal(r.error.name, 'StateLoadError', 'it must throw, not carry on empty');
+  assert.match(r.error.message, /cannot be used/);
+  assert.match(r.error.message, /no backup/);
+  assert.equal(r.stillThere, '{"attestations": {"did-a": ', 'the original is exactly as it was');
+  assert.deepEqual(r.attestations, [], 'and nothing was loaded');
+});
+
+test('load: a file that reads only in part applies none of it', () => {
+  // attestations are fine and usedPaymentTxs is not a list. The old loader had already
+  // filled the attestations by the time it reached the second, which is how a settlement
+  // came to be credited twice.
+  const out = inChildWithFiles({ main: { ...goodState, usedPaymentTxs: 'oops' } }, `
+    const fs = require('fs');
+    const s = require('./store');
+    ${REPORT}
+    let error = null;
+    try { s.load(); } catch (e) { error = e.message; }
+    report({ error });
+  `);
+  const r = lastJson(out);
+  assert.match(r.error, /usedPaymentTxs is not a list/);
+  assert.deepEqual(r.attestations, [], 'nothing from the half-readable file was applied');
+  assert.deepEqual(r.flags, []);
+});
+
+test('load: an unusable file falls back to the previous save, keeps the bad one, and says so', () => {
+  const out = inChildWithFiles({ main: 'not json at all', backup: goodState }, `
+    const fs = require('fs');
+    const s = require('./store');
+    ${REPORT}
+    s.load();
+    report();
+  `);
+  const r = lastJson(out);
+  assert.equal(r.load.source, 'backup');
+  assert.match(r.load.detail, /JSON/);
+  assert.deepEqual(r.attestations, ['did-a'], 'the previous save was used');
+  assert.equal(r.used, 1);
+  assert.ok(r.files.some((f) => f.startsWith('oracle-state.json.corrupt-')), 'the bad file was kept');
+  assert.ok(!r.files.includes('oracle-state.json'), 'and moved out of the way, not overwritten');
+});
+
+test('load: an unusable file and an unusable backup is a refusal that names both', () => {
+  const out = inChildWithFiles({ main: 'garbage', backup: '{"flags": []' }, `
+    const s = require('./store');
+    ${REPORT.replace('fs.readdirSync', 'require("fs").readdirSync')}
+    let error = null;
+    try { s.load(); } catch (e) { error = e.message; }
+    report({ error });
+  `);
+  const r = lastJson(out);
+  assert.match(r.error, /cannot be used/);
+  assert.match(r.error, /backup from the previous save is unusable/);
+  assert.match(r.error, /move the file aside/);
+  assert.deepEqual(r.attestations, []);
+});
+
+test('load: a missing file is a fresh start even when a backup exists', () => {
+  // Deleting the state file is the documented way to rescan from FROM_BLOCK. A backup must
+  // not quietly bring back what the operator removed on purpose.
+  const out = inChildWithFiles({ main: null, backup: goodState }, `
+    const s = require('./store');
+    ${REPORT.replace('fs.readdirSync', 'require("fs").readdirSync')}
+    s.load();
+    report();
+  `);
+  const r = lastJson(out);
+  assert.equal(r.load.source, 'fresh');
+  assert.deepEqual(r.attestations, []);
+});
+
+test('load: the version this build writes is read, and the very next one is not', () => {
+  const { STATE_SCHEMA_VERSION } = require('./store');
+  for (const [version, loads] of [[STATE_SCHEMA_VERSION, true], [STATE_SCHEMA_VERSION + 1, false]]) {
+    const out = inChildWithFiles({ main: { ...goodState, schemaVersion: version } }, `
+      const s = require('./store');
+      let error = null;
+      try { s.load(); } catch (e) { error = e.constructor.name; }
+      console.log(JSON.stringify({ error }));
+    `);
+    assert.equal(lastJson(out).error, loads ? null : 'StateLoadError', `schemaVersion ${version}`);
+  }
+});
+
+test('load: a file written by a newer version is refused, and the backup does not stand in for it', () => {
+  const out = inChildWithFiles({ main: { ...goodState, schemaVersion: 99 }, backup: goodState }, `
+    const s = require('./store');
+    ${REPORT.replace('fs.readdirSync', 'require("fs").readdirSync')}
+    let error = null;
+    try { s.load(); } catch (e) { error = { name: e.constructor.name, message: e.message }; }
+    report({ error });
+  `);
+  const r = lastJson(out);
+  assert.equal(r.error.name, 'StateLoadError');
+  assert.match(r.error.message, /format version 99/);
+  assert.match(r.error.message, /newer version/);
+  assert.deepEqual(r.attestations, [], 'older state would be saved over everything the newer build recorded');
+  assert.ok(!r.files.some((f) => f.includes('corrupt')), 'and the file is not moved aside as if damaged');
+});
+
+test('load: a file with no version is read as the original format', () => {
+  const out = inChildWithFiles({ main: goodState }, `
+    const s = require('./store');
+    ${REPORT.replace('fs.readdirSync', 'require("fs").readdirSync')}
+    s.load();
+    report();
+  `);
+  assert.equal(lastJson(out).load.source, 'file');
+});
+
+test('load: a field of the wrong kind is unusable, not read as empty', () => {
+  for (const bad of [
+    { attestations: [1, 2] },
+    { flags: 'many' },
+    { paymentEvents: 7 },
+    { chainId: 'arc' },
+    { schemaVersion: 'one' },
+    [],
+  ]) {
+    const out = inChildWithFiles({ main: bad }, `
+      const s = require('./store');
+      let error = null;
+      try { s.load(); } catch (e) { error = e.constructor.name; }
+      console.log(JSON.stringify({ error }));
+    `);
+    assert.equal(lastJson(out).error, 'StateLoadError', JSON.stringify(bad));
+  }
+});
+
+test('persist: writes the format version and the chain, and load reads the chain back', () => {
+  const out = inChildWithFiles({}, `
+    const fs = require('fs');
+    const s = require('./store');
+    s.setStateChainId(5042);
+    s.persist();
+    const written = JSON.parse(fs.readFileSync(process.env.ORACLE_STATE_PATH, 'utf8'));
+    s.setStateChainId(null);
+    s.load();
+    console.log(JSON.stringify({ version: written.schemaVersion, chainId: written.chainId, back: s.getStateChainId(), current: s.STATE_SCHEMA_VERSION }));
+  `);
+  const r = lastJson(out);
+  assert.equal(r.version, r.current);
+  assert.equal(r.chainId, 5042);
+  assert.equal(r.back, 5042);
+});
+
+test('persist: keeps the previous save as a backup that a later load can use', () => {
+  const out = inChildWithFiles({}, `
+    const fs = require('fs');
+    const s = require('./store');
+    s.addFlag('did-first');
+    s.persist();                       // save 1: only did-first
+    s.addFlag('did-second');
+    s.persist();                       // save 2: both; the backup is save 1
+    const backup = JSON.parse(fs.readFileSync(s.BACKUP_PATH, 'utf8'));
+    fs.writeFileSync(process.env.ORACLE_STATE_PATH, '{ broken');   // the live file is damaged
+    s.flags.clear();
+    s.load();
+    console.log(JSON.stringify({ backupFlags: Object.keys(backup.flags), recovered: [...s.flags.keys()], source: s.getLoadReport().source }));
+  `);
+  const r = lastJson(out);
+  assert.deepEqual(r.backupFlags, ['did-first']);
+  assert.deepEqual(r.recovered, ['did-first'], 'the damaged file is replaced by the save before it');
+  assert.equal(r.source, 'backup');
+});
+
+test('persist: copes with a filesystem that cannot hard link, and never fails the save over a backup', () => {
+  const out = inChildWithFiles({}, `
+    const fs = require('fs');
+    const s = require('./store');
+    const realLink = fs.linkSync;
+    fs.linkSync = () => { const e = new Error('operation not permitted'); e.code = 'EPERM'; throw e; };
+    s.addFlag('did-a'); s.persist();
+    s.addFlag('did-b'); s.persist();
+    const viaCopy = fs.existsSync(s.BACKUP_PATH) && Object.keys(JSON.parse(fs.readFileSync(s.BACKUP_PATH, 'utf8')).flags);
+    const okAfterCopy = s.getLastPersist().ok;
+    // And with neither a link nor a copy possible, the save itself still lands.
+    fs.copyFileSync = () => { throw new Error('disk full'); };
+    s.addFlag('did-c'); s.persist();
+    console.log(JSON.stringify({ viaCopy, okAfterCopy, okWithoutBackup: s.getLastPersist().ok }));
+  `);
+  const r = lastJson(out);
+  assert.deepEqual(r.viaCopy, ['did-a'], 'the copy fallback holds the previous save');
+  assert.equal(r.okAfterCopy, true);
+  assert.equal(r.okWithoutBackup, true);
+});

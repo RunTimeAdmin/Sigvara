@@ -161,82 +161,232 @@ function pruneFlags(minWeight = 0.001, now = Date.now(), halfLifeMs = FLAG_HALF_
   }
 }
 
+// The format version of the state file. Written on every save and checked on load, so that
+// a build older than the file refuses it instead of reading what it understands and then
+// saving that over the rest. A file with no version predates this and is read as version 0.
+const STATE_SCHEMA_VERSION = 1;
+
+// The previous good state, one save behind. persist() keeps it by linking the live file here
+// just before replacing it, which costs no copy.
+const BACKUP_PATH = `${STATE_PATH}.bak`;
+
+class StateLoadError extends Error {}
+
+// How the last load went: 'fresh' (no file), 'file', or 'backup' (the file was unusable and
+// the previous save was used instead). Reported by /health, so a recovery is not only a line
+// in a log.
+let loadReport = { source: 'none', detail: null };
+function getLoadReport() { return { ...loadReport }; }
+
+// The chain this state belongs to, once the oracle knows it. Saved with the state and
+// compared with the chain the RPC reports, so that state from one chain is never used on
+// another.
+let stateChainId = null;
+function getStateChainId() { return stateChainId; }
+function setStateChainId(id) { stateChainId = id; }
+
+const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+/**
+ * The contents of a state file as fresh data structures, or a throw.
+ *
+ * Nothing is touched here. load() used to fill the live maps as it parsed, so a throw part
+ * way through left whatever had been read so far, and the rest missing: a failure after
+ * attestations and before usedPaymentTxs meant the same settlement could be credited twice.
+ * Parsing into new structures and applying them only once the whole file has read makes a
+ * file either loaded or not loaded.
+ */
+function parseState(parsed) {
+  if (!isObject(parsed)) throw new Error('the file does not hold a JSON object');
+
+  const version = parsed.schemaVersion ?? 0;
+  if (!Number.isInteger(version) || version < 0) {
+    throw new Error(`schemaVersion ${JSON.stringify(parsed.schemaVersion)} is not a version number`);
+  }
+  if (version > STATE_SCHEMA_VERSION) {
+    // Not recoverable from the backup: the backup is older than a file this build cannot
+    // read, and loading it would save over everything the newer build recorded since.
+    const err = new StateLoadError(
+      `the state file is format version ${version} and this build reads up to ${STATE_SCHEMA_VERSION}. ` +
+      'It was written by a newer version of the oracle; running this one would overwrite it with ' +
+      'what it understands. Run the newer version, or restore a state file this one wrote.',
+    );
+    err.noFallback = true;
+    throw err;
+  }
+
+  for (const key of ['attestations', 'flags', 'links', 'attestCooldowns', 'paymentEvents', 'divergences']) {
+    if (parsed[key] !== undefined && parsed[key] !== null && !isObject(parsed[key])) {
+      throw new Error(`${key} is not an object`);
+    }
+  }
+  if (parsed.usedPaymentTxs !== undefined && !Array.isArray(parsed.usedPaymentTxs)) {
+    throw new Error('usedPaymentTxs is not a list');
+  }
+  if (parsed.chainId !== undefined && parsed.chainId !== null && !Number.isInteger(parsed.chainId)) {
+    throw new Error(`chainId ${JSON.stringify(parsed.chainId)} is not a whole number`);
+  }
+
+  const next = {
+    attestations: new Map(),
+    flags: new Map(),
+    links: new Map(),
+    attestCooldowns: new Map(),
+    paymentEvents: new Map(),
+    usedPaymentTxs: new Set(),
+    divergences: new Map(),
+    scanState: parsed.scanState || null,
+    paymentScanState: parsed.paymentScanState || null,
+    chainId: parsed.chainId ?? null,
+  };
+
+  for (const [k, v] of Object.entries(parsed.attestations || {})) next.attestations.set(k, v);
+  /* Flags were a bare count before 19 Sep 2026 and are timestamps now.
+   *
+   * A legacy file has no record of when each flag was raised, so the best available
+   * estimate is the moment the file was last written: not later than that, and
+   * usually not much earlier. Stamping them "now" instead would silently grant every
+   * historical flag a fresh 30-day lease, which is the opposite of the intent.
+   *
+   * Missing savedAt falls back to now, which errs toward keeping the penalty rather
+   * than discarding it, because a flag we cannot date is not evidence it was cleared. */
+  const legacyFlagTs = Date.parse(parsed.savedAt || '') || Date.now();
+  let migratedFlags = 0;
+  for (const [k, v] of Object.entries(parsed.flags || {})) {
+    if (Array.isArray(v)) { next.flags.set(k, v); continue; }
+    const n = Math.max(0, Math.floor(Number(v) || 0));
+    if (n === 0) continue;
+    next.flags.set(k, Array(n).fill(legacyFlagTs));
+    migratedFlags += n;
+  }
+  if (migratedFlags > 0) {
+    console.log(`[oracle] migrated ${migratedFlags} legacy flag(s) to timestamps, dated ${new Date(legacyFlagTs).toISOString()}`);
+  }
+  for (const [k, v] of Object.entries(parsed.links || {})) next.links.set(k, v);
+  for (const [k, v] of Object.entries(parsed.attestCooldowns || {})) next.attestCooldowns.set(k, v);
+  // Validated at the boundary, because re-seeding paymentEvents by hand is ordinary
+  // operational practice and the scoring maths converts these straight to BigInt. An
+  // amount of '1.5' or '1_000_000', or a missing ts, throws four frames deep inside
+  // decayWeight or decayedVolume, where the message names neither the agent nor the
+  // field. Dropping the event names both and lets every other agent score.
+  let badEvents = 0;
+  let refiled = 0;
+  for (const [k, v] of Object.entries(parsed.paymentEvents || {})) {
+    const usable = (Array.isArray(v) ? v : []).filter((e) => {
+      const why = paymentEventError(e);
+      if (why) {
+        badEvents += 1;
+        console.warn(`[oracle] dropping unusable payment event for ${k}: ${why}`);
+      }
+      return !why;
+    });
+    if (!usable.length) continue;
+    // Keys are lowercase. A mixed-case key holds credits /attest filed before it
+    // normalised the hash, where scoring never looked; folding them back in returns
+    // those payments to the agent they paid.
+    const key = k.toLowerCase();
+    if (key !== k) refiled += usable.length;
+    next.paymentEvents.set(key, Object.freeze([...(next.paymentEvents.get(key) ?? []), ...usable]));
+  }
+  if (refiled) {
+    console.warn(`[oracle] refiled ${refiled} payment event(s) stored under a mixed-case didHash`);
+  }
+  if (badEvents) {
+    console.error(
+      `[oracle] ${badEvents} payment event(s) in the state file were unusable and have ` +
+      'been dropped. Fee volume and tenure for those agents are understated until fixed.',
+    );
+  }
+  for (const h of parsed.usedPaymentTxs || []) next.usedPaymentTxs.add(h);
+  for (const [k, v] of Object.entries(parsed.divergences || {})) {
+    // Re-applied on load, not just on write: a file that grew under an older build
+    // would otherwise never shrink back inside the cap.
+    if (Array.isArray(v)) next.divergences.set(k, v.slice(-MAX_DIVERGENCES_PER_AGENT));
+  }
+  return next;
+}
+
+// Replaces the live state with a parsed file. The maps are exported and shared, so they are
+// emptied and refilled rather than replaced. Nothing here can throw.
+function applyState(next) {
+  attestations.clear();
+  for (const [k, v] of next.attestations) attestations.set(k, v);
+  flags.clear();
+  for (const [k, v] of next.flags) flags.set(k, v);
+  links.clear();
+  for (const [k, v] of next.links) links.set(k, v);
+  attestCooldowns.clear();
+  for (const [k, v] of next.attestCooldowns) attestCooldowns.set(k, v);
+  paymentEvents.clear();
+  for (const [k, v] of next.paymentEvents) paymentEvents.set(k, v);
+  usedPaymentTxs.clear();
+  for (const h of next.usedPaymentTxs) usedPaymentTxs.add(h);
+  divergences.clear();
+  for (const [k, v] of next.divergences) divergences.set(k, v);
+  scanState = next.scanState;
+  paymentScanState = next.paymentScanState;
+  stateChainId = next.chainId;
+}
+
+function readStateFile(file) {
+  return parseState(JSON.parse(fs.readFileSync(file, 'utf8')));
+}
+
+/**
+ * Load the state file. Throws StateLoadError when there is a file and nothing usable can be
+ * made of it, and the caller is expected to stop.
+ *
+ * Any error but "no such file" used to be logged as "starting fresh", and the next save
+ * wrote an empty state over the original. State here is what cannot be rebuilt from the
+ * chain: attested outcomes, flags, links, and the record of which settlements were already
+ * credited. One stray comma from editing the file by hand was enough to lose all of it, and
+ * to credit the same settlement a second time.
+ *
+ *  - No file: a fresh start, as before. Deleting the file is the documented way to rescan.
+ *  - A file that reads: used.
+ *  - A file that does not: the previous save (.bak) is used instead, the bad file is moved
+ *    aside rather than overwritten, and /health says so.
+ *  - Neither: refuse. Starting empty is the operator's call, made by moving the file away.
+ */
 function load() {
+  let next;
   try {
-    const parsed = JSON.parse(fs.readFileSync(STATE_PATH, 'utf8'));
-    for (const [k, v] of Object.entries(parsed.attestations || {})) attestations.set(k, v);
-    /* Flags were a bare count before 19 Sep 2026 and are timestamps now.
-     *
-     * A legacy file has no record of when each flag was raised, so the best available
-     * estimate is the moment the file was last written: not later than that, and
-     * usually not much earlier. Stamping them "now" instead would silently grant every
-     * historical flag a fresh 30-day lease, which is the opposite of the intent.
-     *
-     * Missing savedAt falls back to now, which errs toward keeping the penalty rather
-     * than discarding it, because a flag we cannot date is not evidence it was cleared. */
-    const legacyFlagTs = Date.parse(parsed.savedAt || '') || Date.now();
-    let migratedFlags = 0;
-    for (const [k, v] of Object.entries(parsed.flags || {})) {
-      if (Array.isArray(v)) { flags.set(k, v); continue; }
-      const n = Math.max(0, Math.floor(Number(v) || 0));
-      if (n === 0) continue;
-      flags.set(k, Array(n).fill(legacyFlagTs));
-      migratedFlags += n;
-    }
-    if (migratedFlags > 0) {
-      console.log(`[oracle] migrated ${migratedFlags} legacy flag(s) to timestamps, dated ${new Date(legacyFlagTs).toISOString()}`);
-    }
-    for (const [k, v] of Object.entries(parsed.links || {})) links.set(k, v);
-    for (const [k, v] of Object.entries(parsed.attestCooldowns || {})) attestCooldowns.set(k, v);
-    // Validated at the boundary, because re-seeding paymentEvents by hand is ordinary
-    // operational practice and the scoring maths converts these straight to BigInt. An
-    // amount of '1.5' or '1_000_000', or a missing ts, throws four frames deep inside
-    // decayWeight or decayedVolume, where the message names neither the agent nor the
-    // field. Dropping the event names both and lets every other agent score.
-    let badEvents = 0;
-    let refiled = 0;
-    for (const [k, v] of Object.entries(parsed.paymentEvents || {})) {
-      const usable = (Array.isArray(v) ? v : []).filter((e) => {
-        const why = paymentEventError(e);
-        if (why) {
-          badEvents += 1;
-          console.warn(`[oracle] dropping unusable payment event for ${k}: ${why}`);
-        }
-        return !why;
-      });
-      if (!usable.length) continue;
-      // Keys are lowercase. A mixed-case key holds credits /attest filed before it
-      // normalised the hash, where scoring never looked; folding them back in returns
-      // those payments to the agent they paid.
-      const key = k.toLowerCase();
-      if (key !== k) refiled += usable.length;
-      paymentEvents.set(key, Object.freeze([...(paymentEvents.get(key) ?? []), ...usable]));
-    }
-    if (refiled) {
-      console.warn(`[oracle] refiled ${refiled} payment event(s) stored under a mixed-case didHash`);
-    }
-    if (badEvents) {
-      console.error(
-        `[oracle] ${badEvents} payment event(s) in ${STATE_PATH} were unusable and have ` +
-        'been dropped. Fee volume and tenure for those agents are understated until fixed.',
-      );
-    }
-    for (const h of parsed.usedPaymentTxs || []) usedPaymentTxs.add(h);
-    for (const [k, v] of Object.entries(parsed.divergences || {})) {
-      // Re-applied on load, not just on write: a file that grew under an older build
-      // would otherwise never shrink back inside the cap.
-      if (Array.isArray(v)) divergences.set(k, v.slice(-MAX_DIVERGENCES_PER_AGENT));
-    }
-    scanState = parsed.scanState || null;
-    paymentScanState = parsed.paymentScanState || null;
-    console.log(`[oracle] state loaded from ${STATE_PATH}: ${attestations.size} attestations, ${flags.size} flags, ${links.size} links, ${attestCooldowns.size} cooldowns`);
+    next = readStateFile(STATE_PATH);
+    loadReport = { source: 'file', detail: null };
   } catch (err) {
     if (err.code === 'ENOENT') {
       console.log(`[oracle] no prior state at ${STATE_PATH}, starting fresh`);
-    } else {
-      console.warn(`[oracle] state load failed (${err.message}); starting fresh`);
+      loadReport = { source: 'fresh', detail: null };
+      return;
     }
+    if (err.noFallback) throw err;
+
+    let backupWhy;
+    try {
+      next = readStateFile(BACKUP_PATH);
+    } catch (backupErr) {
+      backupWhy = backupErr.code === 'ENOENT'
+        ? 'there is no backup from an earlier save'
+        : `the backup from the previous save is unusable too (${backupErr.message})`;
+    }
+    if (!next) {
+      throw new StateLoadError(
+        `the state file ${STATE_PATH} cannot be used (${err.message}) and ${backupWhy}. ` +
+        'Starting empty would lose the attestations, flags, links and payment records that cannot ' +
+        'be rebuilt from the chain, and the next save would overwrite the file. Restore it from ' +
+        'a backup, or move the file aside to start empty on purpose.',
+      );
+    }
+    const aside = `${STATE_PATH}.corrupt-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+    try { fs.renameSync(STATE_PATH, aside); } catch { /* the next save replaces it either way */ }
+    loadReport = { source: 'backup', detail: err.message };
+    console.error(
+      `[oracle] RECOVERED: the state file was unusable (${err.message}); loaded the previous save from ` +
+      `${BACKUP_PATH}. Anything recorded since that save is lost. The bad file was kept at ${aside}.`,
+    );
   }
+  applyState(next);
+  console.log(`[oracle] state loaded from ${loadReport.source === 'backup' ? BACKUP_PATH : STATE_PATH}: ${attestations.size} attestations, ${flags.size} flags, ${links.size} links, ${attestCooldowns.size} cooldowns`);
 }
 
 /**
@@ -278,11 +428,31 @@ function paymentEventError(e) {
   return null;
 }
 
+/**
+ * Keep the state as it was before this save, as BACKUP_PATH.
+ *
+ * Linked, not copied: the live file and the backup share one inode until the rename that
+ * follows gives the live path a new one, so the backup costs nothing and cannot be a
+ * half-written copy. Filesystems without hard links fall back to a copy. A failure here
+ * never fails the save; a backup is a safeguard, not the state.
+ */
+function keepBackup() {
+  try {
+    fs.rmSync(BACKUP_PATH, { force: true });
+    fs.linkSync(STATE_PATH, BACKUP_PATH);
+  } catch (err) {
+    if (err.code === 'ENOENT') return; // the first save: there is nothing to keep
+    try { fs.copyFileSync(STATE_PATH, BACKUP_PATH); } catch { /* carry on without */ }
+  }
+}
+
 function persist() {
   try {
     fs.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
     const tmp = `${STATE_PATH}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify({
+      schemaVersion: STATE_SCHEMA_VERSION,
+      chainId: stateChainId,
       attestations: Object.fromEntries(attestations),
       flags: Object.fromEntries(flags),
       links: Object.fromEntries(links),
@@ -300,6 +470,7 @@ function persist() {
     // page cache. Cheap insurance for the file that holds every attested outcome.
     const fd = fs.openSync(tmp, 'r+');
     try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    keepBackup();
     fs.renameSync(tmp, STATE_PATH);
     lastPersist = { ok: true, at: Date.now(), error: null };
   } catch (err) {
@@ -614,6 +785,12 @@ module.exports = {
   prunePaymentEvents,
   load,
   persist,
+  StateLoadError,
+  getLoadReport,
+  getStateChainId,
+  setStateChainId,
+  STATE_SCHEMA_VERSION,
+  BACKUP_PATH,
   checkAttestCooldown,
   recordAttestation,
   pruneExpiredCooldowns,

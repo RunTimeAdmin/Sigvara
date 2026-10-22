@@ -357,6 +357,11 @@ Why those four:
 
 Do not copy the primary's `.env`. It carries the primary's key and its fee registry.
 
+The example also sets `EXPECTED_CHAIN_ID`, which is not one of the four but is worth
+keeping. A checker whose RPC fails over onto another chain would audit the primary against
+that chain's payments and report a divergence in the primary. With the id set, the process
+stops at startup if the RPC is on another chain, and skips an epoch if it moves there later.
+
 ## 7. Deploy
 
 **There are two compose files and they are not interchangeable.** Picking the wrong one

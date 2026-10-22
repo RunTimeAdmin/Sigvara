@@ -28,6 +28,10 @@
  *   CHECKER_URL=https://checker.example node watcher.js
  */
 
+// A watcher that fails open is worse than none: MAX_SILENCE_MINUTES=2h parsed to NaN, and a
+// comparison against NaN is never true, so no checker was ever judged silent. See config.js.
+require('./config').requireValidNumericConfig('watcher');
+
 const { ethers } = require('ethers');
 const {
   checkerStatus, triage, alertKey, webhookPayload, describeDivergence, trackPollOutcome,

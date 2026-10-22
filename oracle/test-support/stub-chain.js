@@ -14,17 +14,48 @@
 //     agents:    { "<didhash>": { operator, agentAddress, registeredAt, status } }
 //     standing:  { "<address>": hard score of a counterparty }
 //     explodeHealth: when true, the /health route throws
+//     chainId:   the chain id the fake node reports (default 5042)
+//     nonceGap:  how many of the wallet's transactions the node holds pending (default 0)
 //   }
 //
-// Keys are lowercase. Epochs are switched off: the fake registry read throws, which the
-// oracle logs and survives, so only the request handlers run.
+// Keys are lowercase. Unless the world lists agents to score, epochs are switched off: the
+// fake registry read throws, which the oracle logs and survives, so only the request
+// handlers run. An epoch is switched on by naming the agents it should see:
+//
+//   {
+//     registered:      [ "<didhash>" ]  agents the registry returns (each also needs an `agents` entry)
+//     challengeWindow: seconds (default 21600)
+//     feeGating:       true to configure the epoch fee; epochFee: its size, as a decimal string
+//     pending:         { "<didhash>": { exists, proposedAt, data, evidenceRoot } }  (default none)
+//     bonded, covered: { "<didhash>": bool }  (default true)
+//     canPropose:      { "<didhash>": { ok: false, reason } | "throw" }  (default ok)
+//     charge:          "ok" | "fail" | "unconfirmed"
+//     propose:         "ok" | "revert" | "fee_cap" | "unconfirmed"
+//   }
+//
+// Every write the oracle attempts is appended to the file named by STUB_CALLS, one JSON line
+// each, so a test can say what was asked of the chain and in what order.
 
 const fs = require('fs');
 const Module = require('module');
 const path = require('path');
 
+const oracleDir = path.resolve(__dirname, '..');
+// The error classes and their predicates are the real ones, so a test sees the message an
+// operator would. chain.js needs only ethers and epoch-policy to load.
+const real = require(path.join(oracleDir, 'chain.js'));
+
 const world = () => JSON.parse(fs.readFileSync(process.env.STUB_WORLD, 'utf8'));
 const ZERO = '0x0000000000000000000000000000000000000000';
+
+const record = (name, ...args) => {
+  if (!process.env.STUB_CALLS) return;
+  fs.appendFileSync(
+    process.env.STUB_CALLS,
+    `${JSON.stringify({ name, args }, (_k, v) => (typeof v === 'bigint' ? v.toString() : v))}\n`,
+  );
+};
+const fakeHash = (tag) => `0x${tag.repeat(32)}`;
 
 const provider = {
   getTransactionReceipt: async (hash) => world().receipts[String(hash).toLowerCase()] ?? null,
@@ -33,12 +64,23 @@ const provider = {
 };
 
 const chain = {
-  init() {},
+  // What index.js hands the chain module, so a test can see its settings arrive.
+  init(cfg) {
+    record('init', {
+      txWaitMs: cfg.txWaitMs, maxFeeGwei: cfg.maxFeeGwei, maxTxCost: cfg.maxTxCost, expectedChainId: cfg.expectedChainId,
+    });
+  },
   STATUS_SLASHED: 2,
   getProvider: () => provider,
   getAgentInfo: async (didHash) => world().agents[String(didHash).toLowerCase()]
     ?? { operator: ZERO, agentAddress: ZERO, registeredAt: 0, status: 0 },
-  getRegisteredAgents: async () => { throw new Error('stub: epochs are off in end-to-end tests'); },
+  getRegisteredAgents: async () => {
+    const w = world();
+    if (!w.registered) throw new Error('stub: epochs are off in end-to-end tests');
+    return w.registered.map((didHash) => ({
+      didHash, agentAddress: w.agents[didHash]?.agentAddress ?? null, blockNumber: 1,
+    }));
+  },
   getScanState: () => null,
   restoreScanState: () => false,
   verifyDidHashDerivation: async () => false,
@@ -46,6 +88,51 @@ const chain = {
   getLatestBlockTimestamp: async () => world().nowSec,
   getAgentScore: async (address) => world().standing[String(address).toLowerCase()] ?? 0,
   readWithBackoff: (_label, fn) => fn(),
+
+  // The chain check runs at boot and before every epoch.
+  ChainMismatchError: real.ChainMismatchError,
+  isTxUnconfirmed: real.isTxUnconfirmed,
+  isFeeCap: real.isFeeCap,
+  getChainId: async () => world().chainId ?? 5042,
+  assertChainId: async (expected = null) => {
+    const actual = world().chainId ?? 5042;
+    if (expected != null && actual !== Number(expected)) throw new real.ChainMismatchError(Number(expected), actual);
+    return actual;
+  },
+  getNonceGap: async () => world().nonceGap ?? 0,
+
+  // What an epoch reads and writes.
+  getChallengeWindow: async () => world().challengeWindow ?? 21600,
+  feeGatingConfigured: () => !!world().feeGating,
+  getEpochFee: async () => BigInt(world().epochFee ?? 0),
+  getPendingScore: async (didHash) => world().pending?.[didHash] ?? { exists: false },
+  isCovered: async (didHash) => world().covered?.[didHash] ?? true,
+  isBonded: async (didHash) => world().bonded?.[didHash] ?? true,
+  pruneAgent() {},
+  isSlotTaken: () => false,
+  isRateLimited: () => false,
+  finalizeScore: async (didHash) => { record('finalizeScore', didHash); return fakeHash('f1'); },
+  canPropose: async (didHash, scores, evidenceRoot, ifEmpty) => {
+    record('canPropose', didHash, scores, evidenceRoot ?? null, ifEmpty);
+    const rule = world().canPropose?.[didHash];
+    if (rule === 'throw') throw new Error('stub: the simulation could not be run');
+    return rule ?? { ok: true };
+  },
+  chargeEpoch: async (didHash) => {
+    record('chargeEpoch', didHash);
+    const mode = world().charge ?? 'ok';
+    if (mode === 'fail') throw new Error('stub: execution reverted: the operator cannot pay');
+    if (mode === 'unconfirmed') throw new real.TxUnconfirmedError(fakeHash('c1'), 60_000);
+    return fakeHash('c0');
+  },
+  proposeScore: async (didHash, scores, evidenceRoot, ifEmpty) => {
+    record('proposeScore', didHash, scores, evidenceRoot ?? null, ifEmpty);
+    const mode = world().propose ?? 'ok';
+    if (mode === 'revert') throw new Error('stub: execution reverted: the proposal was refused');
+    if (mode === 'fee_cap') throw new real.FeeCapError('stub: the fee is above the cap');
+    if (mode === 'unconfirmed') throw new real.TxUnconfirmedError(fakeHash('d1'), 60_000, fakeHash('d2'));
+    return fakeHash('d0');
+  },
 };
 
 const external = {
@@ -62,7 +149,6 @@ const external = {
   verifyOwnership: async () => false,
 };
 
-const oracleDir = path.resolve(__dirname, '..');
 for (const [file, fake] of [['chain.js', chain], ['external.js', external]]) {
   const filename = require.resolve(path.join(oracleDir, file));
   const stub = new Module(filename);
