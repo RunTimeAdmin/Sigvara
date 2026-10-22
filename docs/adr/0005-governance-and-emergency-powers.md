@@ -120,7 +120,9 @@ stated trust assumption, not an oversight:
   without 48 hours of public notice.
 - The remaining protection is the committee's challenge period on every slash, the admin's veto and
   ruling above, the floors, and the Safe itself: its threshold and owners are verified on chain before
-  launch and published.
+  launch and published, and the admin Safe and the committee share no owner, because the veto and the
+  ruling are a second key only if the two are different people (`scripts/check-mainnet.sh` fails if
+  an address is an owner of both).
 
 ## Consequences
 

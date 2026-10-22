@@ -253,13 +253,20 @@ check_code() {
 #   SAFE_THRESHOLD                  the admin Safe's threshold, 2 or more
 check_safes() {
   FAIL=0
-  local confirmed
+  local confirmed shared
   expect "admin Safe owners are the confirmed list" "$(echo "$SAFE_OWNERS" | owners_of)" "$(cast call $SAFE 'getOwners()(address[])' --rpc-url "$RPC" 2>/dev/null | owners_of)"
   expect "admin Safe threshold is the confirmed one" "$SAFE_THRESHOLD" "$(val $SAFE 'getThreshold()(uint256)')"
   if [ "${SAFE_THRESHOLD:-0}" -lt 2 ]; then echo "FAIL  the admin Safe needs a threshold of 2 or more (SAFE_THRESHOLD is ${SAFE_THRESHOLD:-unset})"; FAIL=1; fi
   expect "committee owners are the confirmed list" "$(echo "$COMMITTEE_OWNERS" | owners_of)" "$(cast call $COMMITTEE 'getOwners()(address[])' --rpc-url "$RPC" 2>/dev/null | owners_of)"
   expect "committee has five owners" 5 "$(echo "$COMMITTEE_OWNERS" | owners_of | wc -w | tr -d ' ')"
   expect "committee threshold" "$WANT_COMMITTEE_THRESHOLD" "$(val $COMMITTEE 'getThreshold()(uint256)')"
+  # The admin Safe rules on disputes and holds the veto, which is a second key only if the committee
+  # that files slashes is made of different people. An owner of both Safes is the same person on both
+  # sides of that check.
+  shared=$(comm -12 <(echo "$SAFE_OWNERS" | owners_of | tr ' ' '\n' | sed '/^$/d') \
+                    <(echo "$COMMITTEE_OWNERS" | owners_of | tr ' ' '\n' | sed '/^$/d') | tr '\n' ' ')
+  if [ -n "$shared" ]; then echo "FAIL  the admin Safe and the committee share an owner: $shared"; FAIL=1
+  else echo "ok    the admin Safe and the committee have no owner in common"; fi
   confirmed=" $(echo "$SAFE_OWNERS,$COMMITTEE_OWNERS" | owners_of) "
   case "$confirmed" in *" ${DEPLOYER,,} "*) echo "FAIL  the deployer is an owner of a Safe"; FAIL=1;; esac
   summary safes
