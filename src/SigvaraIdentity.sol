@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
 import "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
 import "./InflowGuard.sol";
+import "./TimelockedGrants.sol";
 
 /**
  * @notice The slice of SigvaraStaking this contract needs.
@@ -29,7 +29,7 @@ interface IStakeView {
  *         This makes the DID trustlessly reproducible off-chain without querying the contract.
  *         The Ed25519 public key (raw 32 bytes) is stored for off-chain challenge-response auth.
  */
-contract SigvaraIdentity is Initializable, AccessControlUpgradeable, UUPSUpgradeable, InflowGuard {
+contract SigvaraIdentity is Initializable, TimelockedGrants, UUPSUpgradeable, InflowGuard {
     // -------------------------------------------------------------------------
     // Roles
     // -------------------------------------------------------------------------
@@ -184,6 +184,10 @@ contract SigvaraIdentity is Initializable, AccessControlUpgradeable, UUPSUpgrade
         // timelock that holds UPGRADER_ROLE a delay on the honest path and nothing on a
         // compromised admin.
         _setRoleAdmin(UPGRADER_ROLE, UPGRADER_ROLE);
+        // The role that can change an agent's standing is granted by upgraders too, so the admin Safe
+        // cannot install a holder in the next transaction. It can still revoke one at once
+        // (TimelockedGrants).
+        _setRoleAdmin(STAKING_CORE_ROLE, UPGRADER_ROLE);
 
         if (stakingCore != address(0)) {
             _grantRole(STAKING_CORE_ROLE, stakingCore);

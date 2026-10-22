@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 
 import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 
 import "./InflowGuard.sol";
+import "./TimelockedGrants.sol";
 import "./SigvaraIdentity.sol";
 import "./interfaces/IOperatorSet.sol";
 
@@ -73,7 +73,7 @@ import "./interfaces/IOperatorSet.sol";
  *   delayed. A drop applies at once, because slowing bad news down would protect the
  *   agent rather than whoever is relying on it.
  */
-contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgradeable, InflowGuard {
+contract SigvaraReputation is Initializable, TimelockedGrants, UUPSUpgradeable, InflowGuard {
     // -------------------------------------------------------------------------
     // Roles
     // -------------------------------------------------------------------------
@@ -279,6 +279,12 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
         // timelock that holds UPGRADER_ROLE a delay on the honest path and nothing on a
         // compromised admin.
         _setRoleAdmin(UPGRADER_ROLE, UPGRADER_ROLE);
+        // The roles that change an agent's standing or decide a score's fate are granted by upgraders
+        // too, so the admin Safe cannot install a holder in the next transaction. It can still revoke
+        // one at once (TimelockedGrants). The oracle role stays with the admin: a replacement key has
+        // to be enabled in an incident, and it takes no funds.
+        _setRoleAdmin(STAKING_CORE_ROLE, UPGRADER_ROLE);
+        _setRoleAdmin(SLASHING_COMMITTEE_ROLE, UPGRADER_ROLE);
 
         if (oracle != address(0)) _grantRole(ORACLE_ROLE, oracle);
         if (stakingCore != address(0)) _grantRole(STAKING_CORE_ROLE, stakingCore);

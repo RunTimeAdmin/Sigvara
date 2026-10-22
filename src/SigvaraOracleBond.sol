@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
@@ -9,6 +8,7 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 import "./InflowGuard.sol";
+import "./TimelockedGrants.sol";
 import "./interfaces/IOperatorSet.sol";
 
 /**
@@ -45,7 +45,7 @@ import "./interfaces/IOperatorSet.sol";
  */
 contract SigvaraOracleBond is
     Initializable,
-    AccessControlUpgradeable,
+    TimelockedGrants,
     UUPSUpgradeable,
     ReentrancyGuard,
     IOperatorSet,
@@ -172,6 +172,10 @@ contract SigvaraOracleBond is
         // timelock that holds UPGRADER_ROLE a delay on the honest path and nothing on a
         // compromised admin.
         _setRoleAdmin(UPGRADER_ROLE, UPGRADER_ROLE);
+        // The slasher takes bonds, at once and in any amount, so its role is granted by upgraders too.
+        // The admin Safe cannot install one in the next transaction, but can still revoke one at once
+        // (TimelockedGrants).
+        _setRoleAdmin(SLASHER_ROLE, UPGRADER_ROLE);
         if (slasher != address(0)) _grantRole(SLASHER_ROLE, slasher);
 
         svr = IERC20(svrToken);
@@ -389,7 +393,9 @@ contract SigvaraOracleBond is
         emit UnbondingPeriodUpdated(newPeriod);
     }
 
-    function setSlashBeneficiary(address newBeneficiary) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @notice Where slashed bond goes. Upgrade-class: it decides where value flows, so it takes the
+    ///         timelock. Left to the admin, a compromised Safe could point it at itself and slash.
+    function setSlashBeneficiary(address newBeneficiary) external onlyRole(UPGRADER_ROLE) {
         if (newBeneficiary == address(0)) revert ZeroAddress();
         slashBeneficiary = newBeneficiary;
         emit SlashBeneficiaryUpdated(newBeneficiary);

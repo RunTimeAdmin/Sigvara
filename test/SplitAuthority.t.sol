@@ -252,16 +252,20 @@ contract SplitAuthorityTest is Test {
             ));
             safe.exec(targets[i], abi.encodeCall(IAccessControl.revokeRole, (UPGRADER_ROLE, address(timelock))));
 
-            // And the Safe is still admin of everything else: grants and revokes work.
+            // And the Safe is still admin of the roles that stayed with it: grants and revokes work.
             address probe = address(0xBEEF);
-            safe.exec(targets[i], abi.encodeCall(IAccessControl.grantRole, (keccak256("SLASHING_COMMITTEE_ROLE"), probe)));
-            assertTrue(IAccessControl(targets[i]).hasRole(keccak256("SLASHING_COMMITTEE_ROLE"), probe));
-            safe.exec(targets[i], abi.encodeCall(IAccessControl.revokeRole, (keccak256("SLASHING_COMMITTEE_ROLE"), probe)));
+            bytes32 guardianRole = keccak256("GUARDIAN_ROLE");
+            safe.exec(targets[i], abi.encodeCall(IAccessControl.grantRole, (guardianRole, probe)));
+            assertTrue(IAccessControl(targets[i]).hasRole(guardianRole, probe));
+            safe.exec(targets[i], abi.encodeCall(IAccessControl.revokeRole, (guardianRole, probe)));
         }
 
-        // The two wiring setters are upgrade-class. The Safe holds admin and is refused, and the
+        // The wiring setters are upgrade-class. The Safe holds admin and is refused, and the
         // timelock holds the upgrader role and gets through, after its delay.
         _wiringGoesThroughTheTimelock(safe, timelock);
+
+        // So are the roles that take funds or change an agent's standing.
+        _fundRolesGoThroughTheTimelock(safe, timelock);
 
         // An upgrade goes through the timelock, with its delay.
         address staking = targets[2];
@@ -286,14 +290,22 @@ contract SplitAuthorityTest is Test {
         assertTrue(IAccessControl(staking).hasRole(UPGRADER_ROLE, address(0xCAFE)));
     }
 
-    /// setStakeView decides who counts as bonded and setOperatorBond decides who may score, and
-    /// passing zero to either turns its check off. Each changes the protocol about as much as an
-    /// upgrade, so after the handover the Safe cannot make either call and the timelock can.
+    /// setStakeView decides who counts as bonded, setOperatorBond decides who may score, and passing
+    /// zero to either turns its check off, and setSlashBeneficiary decides where slashed bond goes.
+    /// Each changes the protocol about as much as an upgrade, so after the handover the Safe cannot
+    /// make any of the calls and the timelock can.
     function _wiringGoesThroughTheTimelock(MockSafe safe, TimelockController timelock) internal {
         address identity = targets[0];
         address reputation = targets[1];
+        address bond = targets[3];
         address newView = makeAddr("newStakeView");
         address newSet = makeAddr("newOperatorSet");
+        address newBeneficiary = makeAddr("newBeneficiary");
+
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControl.AccessControlUnauthorizedAccount.selector, address(safe), UPGRADER_ROLE
+        ));
+        safe.exec(bond, abi.encodeCall(SigvaraOracleBond.setSlashBeneficiary, (newBeneficiary)));
 
         vm.expectRevert(abi.encodeWithSelector(
             IAccessControl.AccessControlUnauthorizedAccount.selector, address(safe), UPGRADER_ROLE
@@ -316,6 +328,11 @@ contract SplitAuthorityTest is Test {
             address(timelock),
             abi.encodeCall(TimelockController.schedule, (reputation, 0, bondCall, bytes32(0), salt, 48 hours))
         );
+        bytes memory beneficiaryCall = abi.encodeCall(SigvaraOracleBond.setSlashBeneficiary, (newBeneficiary));
+        safe.exec(
+            address(timelock),
+            abi.encodeCall(TimelockController.schedule, (bond, 0, beneficiaryCall, bytes32(0), salt, 48 hours))
+        );
 
         vm.expectRevert();
         timelock.execute(identity, 0, viewCall, bytes32(0), salt);
@@ -323,8 +340,49 @@ contract SplitAuthorityTest is Test {
         vm.warp(block.timestamp + 48 hours);
         timelock.execute(identity, 0, viewCall, bytes32(0), salt);
         timelock.execute(reputation, 0, bondCall, bytes32(0), salt);
+        timelock.execute(bond, 0, beneficiaryCall, bytes32(0), salt);
         assertEq(address(SigvaraIdentity(identity).stakeView()), newView, "stake view moved through the timelock");
         assertEq(address(SigvaraReputation(reputation).operatorBond()), newSet, "operator bond moved through it too");
+        assertEq(SigvaraOracleBond(bond).slashBeneficiary(), newBeneficiary, "and so did the slash beneficiary");
+    }
+
+    /// The roles that take bonded funds or change an agent's standing are granted by the upgrader,
+    /// so after the handover the Safe is refused on each, the timelock gets through after its delay,
+    /// and the Safe can still take the role away at once.
+    function _fundRolesGoThroughTheTimelock(MockSafe safe, TimelockController timelock) internal {
+        bytes32 core = keccak256("STAKING_CORE_ROLE");
+        bytes32 committee = keccak256("SLASHING_COMMITTEE_ROLE");
+        bytes32 slasher = keccak256("SLASHER_ROLE");
+        // identity, reputation (twice), staking, oracleBond: the contract and the role it hands out
+        address[5] memory on = [targets[0], targets[1], targets[1], targets[2], targets[3]];
+        bytes32[5] memory role = [core, core, committee, committee, slasher];
+        address probe = address(0xBEEF);
+
+        for (uint256 i = 0; i < on.length; i++) {
+            vm.expectRevert(abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, address(safe), UPGRADER_ROLE
+            ));
+            safe.exec(on[i], abi.encodeCall(IAccessControl.grantRole, (role[i], probe)));
+
+            safe.exec(
+                address(timelock),
+                abi.encodeCall(
+                    TimelockController.schedule,
+                    (on[i], 0, abi.encodeCall(IAccessControl.grantRole, (role[i], probe)), bytes32(0), keccak256(abi.encode(i)), 48 hours)
+                )
+            );
+        }
+
+        vm.warp(block.timestamp + 48 hours);
+        for (uint256 i = 0; i < on.length; i++) {
+            timelock.execute(
+                on[i], 0, abi.encodeCall(IAccessControl.grantRole, (role[i], probe)), bytes32(0), keccak256(abi.encode(i))
+            );
+            assertTrue(IAccessControl(on[i]).hasRole(role[i], probe), "granted through the timelock");
+
+            safe.exec(on[i], abi.encodeCall(IAccessControl.revokeRole, (role[i], probe)));
+            assertFalse(IAccessControl(on[i]).hasRole(role[i], probe), "and revoked by the Safe at once");
+        }
     }
 
     bytes32 constant IMPL_SLOT = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
