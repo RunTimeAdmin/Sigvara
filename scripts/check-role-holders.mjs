@@ -7,7 +7,7 @@
  * fails unless each role is held by exactly the expected addresses and no role exists
  * that is not on the list.
  *
- *   SAFE=0x.. TIMELOCK=0x.. COMMITTEE=0x.. ORACLE=0x.. node scripts/check-role-holders.mjs
+ *   SAFE=0x.. TIMELOCK=0x.. COMMITTEE=0x.. ORACLE=0x.. GUARDIAN=0x.. node scripts/check-role-holders.mjs
  *
  * Run it after the handover, not before: until then the deployer holds admin and upgrader.
  * The five proxies and the deploy block come from deployments/5042.json. The holders
@@ -47,6 +47,7 @@ const SAFE = need('SAFE');
 const TIMELOCK = need('TIMELOCK');
 const COMMITTEE = need('COMMITTEE');
 const ORACLE = need('ORACLE');
+const GUARDIAN = need('GUARDIAN');
 for (const k of ['identity', 'reputation', 'staking', 'oracleBond', 'epochFees']) {
   if (!artifact[k]) fail(`deployments/${CHAIN_ID}.json has no ${k}`);
 }
@@ -62,22 +63,31 @@ const STAKING = artifact.staking.toLowerCase();
 const expected = {
   identity: {
     address: artifact.identity,
-    roles: { DEFAULT_ADMIN_ROLE: [SAFE], UPGRADER_ROLE: [TIMELOCK], STAKING_CORE_ROLE: [STAKING] },
+    roles: {
+      DEFAULT_ADMIN_ROLE: [SAFE], UPGRADER_ROLE: [TIMELOCK], STAKING_CORE_ROLE: [STAKING],
+      GUARDIAN_ROLE: [GUARDIAN],
+    },
   },
   reputation: {
     address: artifact.reputation,
     roles: {
       DEFAULT_ADMIN_ROLE: [SAFE], UPGRADER_ROLE: [TIMELOCK], STAKING_CORE_ROLE: [STAKING],
-      ORACLE_ROLE: [ORACLE], SLASHING_COMMITTEE_ROLE: [COMMITTEE],
+      ORACLE_ROLE: [ORACLE], SLASHING_COMMITTEE_ROLE: [COMMITTEE], GUARDIAN_ROLE: [GUARDIAN],
     },
   },
   staking: {
     address: artifact.staking,
-    roles: { DEFAULT_ADMIN_ROLE: [SAFE], UPGRADER_ROLE: [TIMELOCK], SLASHING_COMMITTEE_ROLE: [COMMITTEE] },
+    roles: {
+      DEFAULT_ADMIN_ROLE: [SAFE], UPGRADER_ROLE: [TIMELOCK], SLASHING_COMMITTEE_ROLE: [COMMITTEE],
+      GUARDIAN_ROLE: [GUARDIAN],
+    },
   },
   oracleBond: {
     address: artifact.oracleBond,
-    roles: { DEFAULT_ADMIN_ROLE: [SAFE], UPGRADER_ROLE: [TIMELOCK], SLASHER_ROLE: [COMMITTEE] },
+    roles: {
+      DEFAULT_ADMIN_ROLE: [SAFE], UPGRADER_ROLE: [TIMELOCK], SLASHER_ROLE: [COMMITTEE],
+      GUARDIAN_ROLE: [GUARDIAN],
+    },
   },
   epochFees: {
     address: artifact.epochFees,
@@ -124,7 +134,7 @@ const hashOf = {
   DEFAULT_ADMIN_ROLE: ADMIN, UPGRADER_ROLE: R('UPGRADER_ROLE'), STAKING_CORE_ROLE: R('STAKING_CORE_ROLE'),
   ORACLE_ROLE: R('ORACLE_ROLE'), SLASHING_COMMITTEE_ROLE: R('SLASHING_COMMITTEE_ROLE'),
   SLASHER_ROLE: R('SLASHER_ROLE'), PROPOSER_ROLE: R('PROPOSER_ROLE'), CANCELLER_ROLE: R('CANCELLER_ROLE'),
-  EXECUTOR_ROLE: R('EXECUTOR_ROLE'),
+  EXECUTOR_ROLE: R('EXECUTOR_ROLE'), GUARDIAN_ROLE: R('GUARDIAN_ROLE'),
 };
 const nameOf = Object.fromEntries(Object.entries(hashOf).map(([n, h]) => [h, n]));
 

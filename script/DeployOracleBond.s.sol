@@ -28,6 +28,9 @@ import "../src/SigvaraOracleBond.sol";
  *   ORACLE_BOND_AMOUNT    — minimum bond in wei (default 1,000 SVR; the default is refused on
  *                           mainnet, so state the number there)
  *   ORACLE_UNBONDING      — unbonding cooldown seconds (default 7 days)
+ *   GUARDIAN_ADDRESS        the key granted GUARDIAN_ROLE. It can pause new bonds for three days
+ *                           at a time, and nothing else. Required on mainnet, where it may not be
+ *                           the deployer or the slasher. Unset elsewhere means no guardian.
  *
  * Writes the proxy address into deployments/{chainId}.json under "oracleBond", so the
  * address is recorded rather than living only in this script's console output.
@@ -44,6 +47,8 @@ contract DeployOracleBond is Script {
     error RolesNotSeparated(address deployer, address slasher, address beneficiary);
     error DefaultAmountOnMainnet(string name, uint256 value);
     error PeriodBelowFloor(string name, uint256 value, uint256 floor);
+    error GuardianNotSet();
+    error GuardianNotSeparated(address guardian);
 
     function run() external {
         uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
@@ -58,6 +63,8 @@ contract DeployOracleBond is Script {
         _checkRoleSeparation(deployer, slasher, beneficiary);
         _checkMainnetBondAmount(bondAmount);
         _checkMainnetUnbonding(unbonding);
+        address guardian = vm.envOr("GUARDIAN_ADDRESS", address(0));
+        _checkMainnetGuardian(deployer, slasher, guardian);
 
         vm.startBroadcast(deployerKey);
 
@@ -69,6 +76,8 @@ contract DeployOracleBond is Script {
                 (deployer, slasher, svr, bondAmount, unbonding, beneficiary)
             )
         )));
+        // The pause guardian, granted while the deployer still holds the admin role.
+        if (guardian != address(0)) bond.grantRole(bond.GUARDIAN_ROLE(), guardian);
 
         vm.stopBroadcast();
 
@@ -82,6 +91,7 @@ contract DeployOracleBond is Script {
         console2.log("OracleBond impl:   ", address(impl));
         console2.log("Slasher:           ", slasher);
         console2.log("Slash beneficiary: ", beneficiary);
+        console2.log("Guardian:          ", guardian);
         console2.log("Bond amount (wei): ", bondAmount);
         console2.log("Unbonding (s):     ", unbonding);
         console2.log("SVR:              ", svr);
@@ -105,6 +115,16 @@ contract DeployOracleBond is Script {
     function _checkMainnetUnbonding(uint256 unbonding) internal view {
         if (block.chainid != ARC_MAINNET) return;
         if (unbonding < MIN_UNBONDING) revert PeriodBelowFloor("ORACLE_UNBONDING", unbonding, MIN_UNBONDING);
+    }
+
+    /// @dev Mainnet only. The pause guardian is the only fast response to a live bug, since the
+    ///      other one is an upgrade 48 hours away, so a mainnet deployment without one is refused,
+    ///      and it may not be the deployer or the slasher: the key that can stop inflows has to be
+    ///      a different key from the ones that hold the roles.
+    function _checkMainnetGuardian(address deployer, address slasher, address guardian) internal view {
+        if (block.chainid != ARC_MAINNET) return;
+        if (guardian == address(0)) revert GuardianNotSet();
+        if (guardian == deployer || guardian == slasher) revert GuardianNotSeparated(guardian);
     }
 
     /// @dev The deployer keeps DEFAULT_ADMIN_ROLE and UPGRADER_ROLE. If it is also the

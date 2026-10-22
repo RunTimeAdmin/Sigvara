@@ -8,6 +8,7 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
+import "./InflowGuard.sol";
 import "./SigvaraIdentity.sol";
 
 /**
@@ -45,7 +46,8 @@ contract SigvaraStaking is
     Initializable,
     AccessControlUpgradeable,
     UUPSUpgradeable,
-    ReentrancyGuard
+    ReentrancyGuard,
+    InflowGuard
 {
     using SafeERC20 for IERC20;
 
@@ -283,7 +285,7 @@ contract SigvaraStaking is
      *         Requiring Active here would make that a one-way trip and strand the
      *         identity permanently. Slashed agents are terminal and still rejected.
      */
-    function depositStake(bytes32 didHash, uint256 amount) external nonReentrant {
+    function depositStake(bytes32 didHash, uint256 amount) external nonReentrant whenInflowsOpen {
         SigvaraIdentity.AgentIdentity memory id = identityRegistry.getIdentity(didHash);
         if (id.registeredAt == 0 || id.status == SigvaraIdentity.AgentStatus.Slashed) {
             revert AgentNotActive(didHash);
@@ -715,6 +717,18 @@ contract SigvaraStaking is
 
     function getSlashProposal(bytes32 didHash) external view returns (SlashProposal memory) {
         return slashProposals[didHash];
+    }
+
+    // -------------------------------------------------------------------------
+    // Inflow pause (see InflowGuard)
+    // -------------------------------------------------------------------------
+
+    function _checkGuardian() internal view override {
+        _checkRole(GUARDIAN_ROLE);
+    }
+
+    function _checkGuardianOrAdmin() internal view override {
+        if (!hasRole(GUARDIAN_ROLE, msg.sender)) _checkRole(DEFAULT_ADMIN_ROLE);
     }
 
     // -------------------------------------------------------------------------

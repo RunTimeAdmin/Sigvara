@@ -40,6 +40,20 @@ This ADR records what was decided about each, and what was left as a stated trus
    (three days) and unbonding (one day) periods, and a minimum stake above zero are refused in the
    initializers as well as the setters.
 
+5. **A guardian can stop new inflows, and nothing else.** `GUARDIAN_ROLE` may call `pauseInflows()` on
+   identity, staking, reputation and the bond registry. It closes only the ways something new enters:
+   `registerAgent`, `depositStake`, `proposeReputation` and `proposeIfEmpty`, `depositBond`. It never
+   touches withdrawals and claims, unbonding, disputes, rulings, slash execution, finalizing or
+   rejecting a score already proposed, operator transfers, or any admin call, so a pause cannot hold
+   anyone's funds or stop accountability. One pause lasts three days and ends by itself. That is longer
+   than the 48 hour upgrade delay, so a pause can bridge an emergency upgrade. The next pause cannot
+   begin until a day after the last one would have ended, counted from its start even if it was lifted
+   early, so a guardian cannot hold inflows shut for good. The guardian or the admin can lift one early,
+   and the admin revokes a guardian at once. The state sits in an ERC-7201 namespaced slot, so adding it
+   to a live proxy shifts no existing variable. The guardian is a separate, lighter key: the deploy
+   scripts require it on mainnet and refuse the deployer, the oracle, the committee and the slasher.
+   The admin can grant itself the role, so this separates duties and adds no new trust assumption.
+
 ## What stays on the admin Safe, and why
 
 Role grants and revocations, and every parameter that now has a floor, stay on the admin Safe and are
@@ -57,6 +71,8 @@ oracle role at once. That is a stated trust assumption, not an oversight:
 
 - A change of stake view or operator registry takes 48 hours of notice. A redeployed staking
   contract is therefore a scheduled operation, not an instant one.
-- The audit pack lists the veto as an admin power and the two setters as upgrade-class.
-- Two further decisions of the same review, an inflow-only pause and the deferral of the epoch-fee
-  module, are recorded in this file when they land.
+- The audit pack lists the veto as an admin power, the two setters as upgrade-class, and the guardian.
+- A pause can be used against the protocol by a compromised guardian: it can close new registrations,
+  deposits, proposals and bonds for three of every four days until the admin revokes it. That is a
+  nuisance with an instant remedy, and the price of being able to stop a live bug while a fix is built.
+- The deferral of the epoch-fee module is recorded in this file when it lands.

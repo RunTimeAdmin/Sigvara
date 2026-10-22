@@ -75,8 +75,11 @@ the chain before committing the file ([deploy-testnet.md](deploy-testnet.md), se
 and 5). Never use `--resume`.
 
 Optional role overrides (`ORACLE_ADDRESS`, `COMMITTEE_ADDRESS`, `MINIMUM_STAKE`,
-`CHALLENGE_PERIOD`, `SCORE_CHALLENGE_WINDOW`, `UNBONDING_PERIOD`) are documented
-in the header of `script/Deploy.s.sol`.
+`CHALLENGE_PERIOD`, `SCORE_CHALLENGE_WINDOW`, `UNBONDING_PERIOD`, `GUARDIAN_ADDRESS`) are
+documented in the header of `script/Deploy.s.sol`. `GUARDIAN_ADDRESS` is the key that may
+pause new inflows for three days at a time. It is optional on testnet and required on
+mainnet, where it may not be the deployer, the oracle or the committee. `DeployOracleBond`
+takes the same variable for the bond registry.
 
 Record the deploy block: `cast block-number --rpc-url arc_testnet`. The oracle
 needs it as `FROM_BLOCK`.

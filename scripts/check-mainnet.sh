@@ -14,6 +14,7 @@
 #   DEPLOYER   the address of the deploy key
 #   ORACLE     the oracle wallet
 #   COMMITTEE  the committee multisig
+#   GUARDIAN   the pause guardian    (check_core, check_bond_and_fees, check_holders)
 #   TREASURY   the slash beneficiary and reward pool
 #   SAFE       the admin Safe        (check_authority, check_timelock, check_safes, check_holders)
 #   TIMELOCK   the timelock          (check_authority, check_timelock, check_holders)
@@ -50,6 +51,7 @@ ORACLE_ROLE=$(cast keccak "ORACLE_ROLE")
 COMMITTEE_ROLE=$(cast keccak "SLASHING_COMMITTEE_ROLE")
 SLASHER_ROLE=$(cast keccak "SLASHER_ROLE")
 STAKING_CORE_ROLE=$(cast keccak "STAKING_CORE_ROLE")
+GUARDIAN_ROLE=$(cast keccak "GUARDIAN_ROLE")
 INIT_SLOT=0xf0c57e16840df040f15088dc2f81fe391c3923bec73e23a9662efc9c229c6a00   # OpenZeppelin Initializable
 FAIL=0
 
@@ -111,12 +113,23 @@ check_core() {
   has $REPUTATION $ORACLE_ROLE       $ORACLE    true "reputation: oracle holds ORACLE"
   has $REPUTATION $COMMITTEE_ROLE    $COMMITTEE true "reputation: committee holds SLASHING_COMMITTEE"
   has $STAKING    $COMMITTEE_ROLE    $COMMITTEE true "staking: committee holds SLASHING_COMMITTEE"
+  has $IDENTITY   $GUARDIAN_ROLE     $GUARDIAN  true "identity: guardian holds GUARDIAN"
+  has $REPUTATION $GUARDIAN_ROLE     $GUARDIAN  true "reputation: guardian holds GUARDIAN"
+  has $STAKING    $GUARDIAN_ROLE     $GUARDIAN  true "staking: guardian holds GUARDIAN"
+  # A reachable inflowsPaused() also shows the deployed code has the pause at all. Nothing is
+  # paused at launch.
+  expect "identity: inflows are open"     false "$(val $IDENTITY   'inflowsPaused()(bool)')"
+  expect "reputation: inflows are open"   false "$(val $REPUTATION 'inflowsPaused()(bool)')"
+  expect "staking: inflows are open"      false "$(val $STAKING    'inflowsPaused()(bool)')"
   # The deployer is admin and upgrader until the handover and should hold nothing else.
   has $IDENTITY   $STAKING_CORE_ROLE $DEPLOYER  false "identity: deployer does not hold STAKING_CORE"
   has $REPUTATION $STAKING_CORE_ROLE $DEPLOYER  false "reputation: deployer does not hold STAKING_CORE"
   has $REPUTATION $ORACLE_ROLE       $DEPLOYER  false "reputation: deployer does not hold ORACLE"
   has $REPUTATION $COMMITTEE_ROLE    $DEPLOYER  false "reputation: deployer does not hold SLASHING_COMMITTEE"
   has $STAKING    $COMMITTEE_ROLE    $DEPLOYER  false "staking: deployer does not hold SLASHING_COMMITTEE"
+  has $IDENTITY   $GUARDIAN_ROLE     $DEPLOYER  false "identity: deployer does not hold GUARDIAN"
+  has $REPUTATION $GUARDIAN_ROLE     $DEPLOYER  false "reputation: deployer does not hold GUARDIAN"
+  has $STAKING    $GUARDIAN_ROLE     $DEPLOYER  false "staking: deployer does not hold GUARDIAN"
   summary core
 }
 
@@ -131,6 +144,9 @@ check_bond_and_fees() {
   expect "epochFees: initialized once (1)"     1              "$(initialized $FEES)"
   has $BOND $SLASHER_ROLE $COMMITTEE true  "oracleBond: committee holds SLASHER"
   has $BOND $SLASHER_ROLE $DEPLOYER  false "oracleBond: deployer does not hold SLASHER"
+  has $BOND $GUARDIAN_ROLE $GUARDIAN true  "oracleBond: guardian holds GUARDIAN"
+  has $BOND $GUARDIAN_ROLE $DEPLOYER false "oracleBond: deployer does not hold GUARDIAN"
+  expect "oracleBond: inflows are open"       false               "$(val $BOND 'inflowsPaused()(bool)')"
   expect "epochFees.svr is SVR"           "$SVR"              "$(val $FEES 'svr()(address)')"
   expect "epochFees.identityRegistry"     "$IDENTITY"         "$(val $FEES 'identityRegistry()(address)')"
   expect "epochFees.epochFee is 0"        0                   "$(val $FEES 'epochFee()(uint256)')"
@@ -228,6 +244,6 @@ check_safes() {
 }
 
 # check_holders: who holds every role, replayed from the chain's own events, so a grant
-# nobody expected is seen. Needs SAFE, TIMELOCK, COMMITTEE and ORACLE exported. Run it after
-# the handover. RPC_URL (not RPC) picks the endpoint for the replay.
+# nobody expected is seen. Needs SAFE, TIMELOCK, COMMITTEE, ORACLE and GUARDIAN exported. Run
+# it after the handover. RPC_URL (not RPC) picks the endpoint for the replay.
 check_holders() { node scripts/check-role-holders.mjs; }

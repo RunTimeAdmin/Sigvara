@@ -7,6 +7,7 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 
 import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 
+import "./InflowGuard.sol";
 import "./SigvaraIdentity.sol";
 import "./interfaces/IOperatorSet.sol";
 
@@ -72,7 +73,7 @@ import "./interfaces/IOperatorSet.sol";
  *   delayed. A drop applies at once, because slowing bad news down would protect the
  *   agent rather than whoever is relying on it.
  */
-contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgradeable {
+contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgradeable, InflowGuard {
     // -------------------------------------------------------------------------
     // Roles
     // -------------------------------------------------------------------------
@@ -348,6 +349,7 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
     function proposeReputation(bytes32 didHash, ReputationData calldata data, bytes32 evidenceRoot)
         external
         onlyRole(ORACLE_ROLE)
+        whenInflowsOpen
     {
         _propose(didHash, data, evidenceRoot);
     }
@@ -377,6 +379,7 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
     function proposeIfEmpty(bytes32 didHash, ReputationData calldata data, bytes32 evidenceRoot)
         external
         onlyRole(ORACLE_ROLE)
+        whenInflowsOpen
     {
         PendingScore storage existing = pendingScores[didHash];
         // A proposal whose proposer has since lost its authority cannot be finalized, so it
@@ -734,6 +737,18 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
 
     function meetsThreshold(bytes32 didHash, uint8 threshold) external view returns (bool) {
         return getTotalScore(didHash) >= threshold;
+    }
+
+    // -------------------------------------------------------------------------
+    // Inflow pause (see InflowGuard)
+    // -------------------------------------------------------------------------
+
+    function _checkGuardian() internal view override {
+        _checkRole(GUARDIAN_ROLE);
+    }
+
+    function _checkGuardianOrAdmin() internal view override {
+        if (!hasRole(GUARDIAN_ROLE, msg.sender)) _checkRole(DEFAULT_ADMIN_ROLE);
     }
 
     // -------------------------------------------------------------------------
