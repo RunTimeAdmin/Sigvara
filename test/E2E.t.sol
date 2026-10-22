@@ -241,9 +241,9 @@ contract E2EIntegrationTest is Test, RegistrationHelper {
             "Slash should be disputed"
         );
 
-        // The committee rules for the operator: proposal dropped, agent restored,
+        // The admin rules for the operator: proposal dropped, agent restored,
         // stake released.
-        vm.prank(committee);
+        vm.prank(admin);
         staking.resolveDispute(didHash, false);
 
         assertTrue(identity.isActive(didHash), "Should be reinstated once the dispute is resolved");

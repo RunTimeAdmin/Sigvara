@@ -1203,7 +1203,7 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
         staking.initiateSlash(didHash, victim, "evidence");
         vm.prank(operator);
         staking.disputeSlash(didHash);
-        vm.prank(committee);
+        vm.prank(admin);
         staking.resolveDispute(didHash, false);
 
         vm.expectRevert(abi.encodeWithSelector(
@@ -1374,23 +1374,45 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
         staking.initiateSlash(didHash, victim, "");
 
         vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.SlashNotDisputed.selector, didHash));
-        vm.prank(committee);
+        vm.prank(admin);
         staking.resolveDispute(didHash, true);
     }
 
-    function test_resolveDispute_reverts_notCommittee() public {
+    /// The committee files a slash and may not also rule on it. A dispute is ruled by the admin, the
+    /// same key that can veto, so nobody judges their own accusation.
+    function test_resolveDispute_reverts_forTheCommitteeAndStrangers() public {
         _deposit();
         vm.prank(committee);
         staking.initiateSlash(didHash, victim, "");
         vm.prank(operator);
         staking.disputeSlash(didHash);
 
-        bytes32 role = staking.SLASHING_COMMITTEE_ROLE();
+        bytes32 role = staking.DEFAULT_ADMIN_ROLE();
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControl.AccessControlUnauthorizedAccount.selector, committee, role
+        ));
+        vm.prank(committee);
+        staking.resolveDispute(didHash, true);
+
         vm.expectRevert(abi.encodeWithSelector(
             IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, role
         ));
         vm.prank(stranger);
+        staking.resolveDispute(didHash, false);
+
+        assertEq(uint8(staking.getSlashProposal(didHash).state), uint8(SigvaraStaking.SlashState.Disputed));
+    }
+
+    function test_resolveDispute_theAdminCanUpholdOrDrop() public {
+        _deposit();
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "evidence");
+        vm.prank(operator);
+        staking.disputeSlash(didHash);
+        vm.prank(admin);
         staking.resolveDispute(didHash, true);
+        assertEq(uint8(staking.getSlashProposal(didHash).state), uint8(SigvaraStaking.SlashState.Executed));
+        assertGt(staking.claimable(victim), 0);
     }
 
     function test_expireDispute_reverts_notDisputed() public {
@@ -1413,6 +1435,119 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
             abi.encodeWithSelector(SigvaraStaking.DisputeResolutionActive.selector, didHash, expiresAt)
         );
         staking.expireDispute(didHash);
+    }
+
+    // -------------------------------------------------------------------------
+    // A proposal nobody finishes
+    // -------------------------------------------------------------------------
+
+    /// The freeze nobody could lift: the committee files, the window passes, and nobody executes or
+    /// cancels. Disputing is closed by then, so the proposal stayed Pending for good and a queued
+    /// withdrawal could not be claimed. Only the admin's veto could end it.
+    function test_expireSlash_liftsAFreezeNobodyFinished() public {
+        _deposit();
+        vm.startPrank(operator);
+        identity.updateStatus(didHash, SigvaraIdentity.AgentStatus.Suspended);
+        staking.initiateWithdrawal(didHash, MIN_STAKE * 2);
+        vm.stopPrank();
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "evidence");
+
+        // The window passes, nobody executes it, and the unbonding period passes too.
+        vm.warp(block.timestamp + UNBONDING + 1);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.SlashAlreadyPending.selector, didHash));
+        vm.prank(operator);
+        staking.claimWithdrawal(didHash);
+
+        vm.prank(stranger);
+        staking.expireSlash(didHash);
+
+        uint256 before = svr.balanceOf(operator);
+        vm.prank(operator);
+        staking.claimWithdrawal(didHash);
+        assertEq(svr.balanceOf(operator), before + MIN_STAKE * 2, "the whole stake came back");
+    }
+
+    /// Anyone can expire it, but not before the executor has had its fortnight, to the second.
+    function test_expireSlash_reverts_atExactExpiryAndOpensASecondLater() public {
+        _deposit();
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "evidence");
+        uint256 expiresAt = staking.getSlashProposal(didHash).challengeDeadline + staking.EXECUTION_PERIOD();
+
+        vm.warp(expiresAt);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.ExecutionPeriodActive.selector, didHash, expiresAt));
+        staking.expireSlash(didHash);
+
+        vm.warp(expiresAt + 1);
+        staking.expireSlash(didHash);
+        assertEq(uint8(staking.getSlashProposal(didHash).state), uint8(SigvaraStaking.SlashState.Cancelled));
+    }
+
+    /// An expired proposal is dropped like any other: the agent is reinstated and the committee waits
+    /// a challenge period before it can file again.
+    function test_expireSlash_dropsTheProposalReinstatesTheAgentAndStartsTheCooldown() public {
+        _deposit();
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "evidence");
+        vm.warp(block.timestamp + CHALLENGE + staking.EXECUTION_PERIOD() + 1);
+
+        vm.expectEmit(address(staking));
+        emit SigvaraStaking.SlashCancelled(didHash, stranger);
+        vm.prank(stranger);
+        staking.expireSlash(didHash);
+
+        assertTrue(identity.isActive(didHash), "reinstated");
+        assertFalse(identity.slashSuspended(didHash));
+        assertEq(staking.lastDroppedAt(didHash), block.timestamp);
+        vm.expectRevert(abi.encodeWithSelector(
+            SigvaraStaking.SlashCooldownActive.selector, didHash, block.timestamp + CHALLENGE
+        ));
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "again");
+    }
+
+    /// Only a Pending proposal can lapse. A disputed one has its own expiry, and an ended one nothing.
+    function test_expireSlash_reverts_unlessAProposalIsPending() public {
+        _deposit();
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.NoActivePendingSlash.selector, didHash));
+        staking.expireSlash(didHash); // nothing filed
+
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "evidence");
+        vm.prank(operator);
+        staking.disputeSlash(didHash);
+        vm.warp(block.timestamp + CHALLENGE + staking.EXECUTION_PERIOD() + 1);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.NoActivePendingSlash.selector, didHash));
+        staking.expireSlash(didHash); // disputed
+
+        vm.prank(admin);
+        staking.vetoSlash(didHash);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.NoActivePendingSlash.selector, didHash));
+        staking.expireSlash(didHash); // cancelled
+    }
+
+    function test_expireSlash_cannotUndoAnExecutedSlash() public {
+        _setupPendingSlash();
+        staking.executeSlash(didHash);
+        vm.warp(block.timestamp + staking.EXECUTION_PERIOD() + 1);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.NoActivePendingSlash.selector, didHash));
+        staking.expireSlash(didHash);
+        assertEq(uint8(staking.getSlashProposal(didHash).state), uint8(SigvaraStaking.SlashState.Executed));
+    }
+
+    /// Nothing about expiry takes execution away: until someone expires it, a proposal past its
+    /// fortnight can still be executed, as an undisputed slash always could.
+    function test_executeSlash_stillWorksPastTheExecutionPeriodUntilSomeoneExpiresIt() public {
+        _setupPendingSlash();
+        vm.warp(block.timestamp + staking.EXECUTION_PERIOD() + 1);
+        staking.executeSlash(didHash);
+        assertEq(uint8(staking.getSlashProposal(didHash).state), uint8(SigvaraStaking.SlashState.Executed));
+        assertGt(staking.claimable(victim), 0);
+    }
+
+    function test_executionPeriod_isAFortnight() public view {
+        assertEq(staking.EXECUTION_PERIOD(), 14 days);
     }
 
     function test_claimSlashProceeds_paysVictimAndReporter_once() public {

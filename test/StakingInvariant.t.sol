@@ -27,6 +27,7 @@ contract StakingHandler is Test {
     SigvaraStaking public staking;
 
     address public committee;
+    address public admin;
     address[] public operators;
     bytes32[] public didHashes;
     bool public seeded;
@@ -47,6 +48,7 @@ contract StakingHandler is Test {
         SigvaraIdentity identity_,
         SigvaraStaking staking_,
         address committee_,
+        address admin_,
         address[] memory operators_,
         bytes32[] memory didHashes_
     ) {
@@ -54,6 +56,7 @@ contract StakingHandler is Test {
         identity = identity_;
         staking = staking_;
         committee = committee_;
+        admin = admin_;
         operators = operators_;
         didHashes = didHashes_;
     }
@@ -143,14 +146,14 @@ contract StakingHandler is Test {
         } catch {}
     }
 
-    /// Disputes now freeze the bond until the committee rules, so the resolution
+    /// Disputes freeze the bond until the admin rules, so the resolution
     /// paths have to be part of the reachable state space.
     function resolveDispute(uint256 seed, bool uphold) external {
         (, bytes32 did) = _pick(seed);
         uint256 slashable = staking.getStake(did);
         (uint256 queued,) = staking.getPendingWithdrawal(did);
         slashable += queued;
-        vm.prank(committee);
+        vm.prank(admin);
         try staking.resolveDispute(did, uphold) {
             if (uphold) totalSlashedOut += slashable;
         } catch {}
@@ -159,6 +162,12 @@ contract StakingHandler is Test {
     function expireDispute(uint256 seed) external {
         (, bytes32 did) = _pick(seed);
         try staking.expireDispute(did) {} catch {}
+    }
+
+    /// A proposal nobody executed or cancelled lapses, so that path is reachable too.
+    function expireSlash(uint256 seed) external {
+        (, bytes32 did) = _pick(seed);
+        try staking.expireSlash(did) {} catch {}
     }
 
     function cancelSlash(uint256 seed) external {
@@ -246,7 +255,7 @@ contract StakingInvariantTest is Test, RegistrationHelper {
             dids[i] = registerSigned(identity, ops[i], agentPk, bytes32(uint256(i + 1)));
         }
 
-        handler = new StakingHandler(svr, identity, staking, committee, ops, dids);
+        handler = new StakingHandler(svr, identity, staking, committee, admin, ops, dids);
 
         // Bond every agent before fuzzing. Registration now leaves them PendingBond,
         // which is not Active and so trivially satisfies
@@ -255,7 +264,7 @@ contract StakingInvariantTest is Test, RegistrationHelper {
         // the handler so its deposit accounting stays authoritative for conservation.
         handler.seedBonds(MIN_STAKE);
 
-        // The handler impersonates the committee, so it needs no role of its own.
+        // The handler impersonates the committee and the admin, so it needs no role of its own.
         targetContract(address(handler));
     }
 

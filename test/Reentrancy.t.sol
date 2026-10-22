@@ -191,7 +191,7 @@ contract StakingReentrancyTest is Test, RegistrationHelper {
         );
 
         vm.expectRevert(REENTRANCY);
-        vm.prank(committee);
+        vm.prank(admin);
         staking.resolveDispute(didHash, true);
     }
 

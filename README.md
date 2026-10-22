@@ -190,7 +190,7 @@ stateDiagram-v2
     PendingBond --> Active : depositStake() reaches minimumStake
 
     Active --> Suspended : operator.updateStatus()\nor StakingCore.initiateSlash()
-    Suspended --> Active : operator.updateStatus()\nor resolveDispute(false)\nor cancelSlash() / vetoSlash() / expireDispute()
+    Suspended --> Active : operator.updateStatus()\nor resolveDispute(false)\nor cancelSlash() / vetoSlash() / expireDispute() / expireSlash()
 
     Active --> Slashed : StakingCore.executeSlash()
     Suspended --> Slashed : StakingCore.executeSlash()
@@ -245,6 +245,7 @@ One slash has been executed end to end on Arc testnet, as a scheduled drill; see
 sequenceDiagram
     participant V as Victim
     participant CM as Slashing committee
+    participant AD as Admin Safe
     participant ST as SigvaraStaking
     participant ID as SigvaraIdentity
     participant REP as SigvaraReputation
@@ -257,8 +258,8 @@ sequenceDiagram
     alt Operator disputes within window
         Op->>ST: disputeSlash(didHash)
         Note over ST: Proposal → Disputed. Bond stays frozen,<br/>agent stays Suspended
-        CM->>ST: resolveDispute(didHash, uphold)
-        Note over ST: Upheld slashes; rejected cancels and reinstates.<br/>Unresolved after 14 days, anyone may expireDispute()
+        AD->>ST: resolveDispute(didHash, uphold)
+        Note over ST: Upheld slashes; rejected cancels and reinstates.<br/>Unruled after 14 days, anyone may expireDispute()
     else Challenge period elapses undisputed
         Anyone->>ST: executeSlash(didHash)
         ST->>ID: updateStatus(didHash, Slashed)
@@ -266,6 +267,7 @@ sequenceDiagram
         ST-->>0xdead: 50% burned
         ST-->>V: 25% credited to victim (claimSlashProceeds)
         ST-->>CM: 25% credited to reporter (claimSlashProceeds)
+        Note over ST: Not executed within 14 days of the deadline,<br/>anyone may expireSlash()
     end
 ```
 
@@ -277,9 +279,11 @@ sequenceDiagram
 | Victim | 25% | Recourse for the harmed party, credited and withdrawn with `claimSlashProceeds()` |
 | Committee reporter | 25% | Incentivizes accurate reporting, credited and withdrawn with `claimSlashProceeds()` |
 
-The committee files and rules on slashes, and a quarter of the bond goes to whoever filed it,
-so a second key can stop one: the admin can `vetoSlash(didHash)` while the proposal is
-Pending, including after its challenge deadline and before anyone executes it, or Disputed.
+The committee files slashes, and a quarter of the bond goes to whoever filed it, so a second
+key keeps the check: the admin rules on every dispute and can `vetoSlash(didHash)` while the
+proposal is Pending, including after its challenge deadline and before anyone executes it, or
+Disputed. A proposal nobody executes or cancels lapses: 14 days after its deadline anyone can
+`expireSlash(didHash)`, so a bond is never frozen for good by silence.
 Whenever a proposal is dropped (cancelled, vetoed, expired, or resolved in the agent's
 favour) the committee has to wait one challenge period before it can file against the same
 agent again, so the operator always gets a window to act, and a queued withdrawal stays
@@ -590,12 +594,12 @@ Key scenarios tested:
 
 | Role | Holder (Testnet) | Mainnet target | Permissions |
 |---|---|---|---|
-| `DEFAULT_ADMIN_ROLE` | Deployer EOA `0x18CBcE50…` | Admin Safe | Grant and revoke every role except `UPGRADER_ROLE`, set parameters (each has a floor), veto a pending or disputed slash. It cannot wire the stake view or the oracle bond: those need `UPGRADER_ROLE` |
+| `DEFAULT_ADMIN_ROLE` | Deployer EOA `0x18CBcE50…` | Admin Safe | Grant and revoke every role except `UPGRADER_ROLE`, set parameters (each has a floor), rule on a disputed slash, veto a pending or disputed slash. It cannot wire the stake view or the oracle bond: those need `UPGRADER_ROLE` |
 | `UPGRADER_ROLE` | Deployer EOA `0x18CBcE50…` | Governance timelock (48 hours) | Authorize UUPS upgrades, and wire the stake view and the oracle bond (`setStakeView`, `setOperatorBond`). On a registry initialised by the current code it is administered by itself, so the admin cannot grant it |
 | `GUARDIAN_ROLE` | Not granted on the current testnet deployment | A separate, lighter key | Pause new inflows (registrations, stake deposits, score proposals, bond deposits) for three days at a time. Never exits, slash rulings or finalization, and the admin can revoke it at once |
 | `STAKING_CORE_ROLE` | `SigvaraStaking` `0xA69d62B2…` | `SigvaraStaking` | Suspend / slash agents, zero reputation, clear slash suspensions |
 | `ORACLE_ROLE` | Primary `0x6352b8FF…` + checker `0x989aabd6…`, both bonded | Multiple independently operated bonded operators, each signing with a key its cold bond owner has named | Propose reputation scores (and charge epoch fees on `SigvaraEpochFees`, which is not deployed at launch) |
-| `SLASHING_COMMITTEE_ROLE` | EOA `0x045d6c1D…` | 3-of-5 multisig | Initiate slash proposals, reject bad scores |
+| `SLASHING_COMMITTEE_ROLE` | EOA `0x045d6c1D…` | 3-of-5 multisig | Initiate and cancel slash proposals, reject bad scores. It does not rule on disputes |
 | Operator | Agent registrant | Agent registrant | Register, suspend, reinstate, rotate key, transfer the agent |
 
 Every privileged role on testnet is currently a single EOA, including the slashing
