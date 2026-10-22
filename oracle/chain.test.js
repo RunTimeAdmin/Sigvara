@@ -689,15 +689,66 @@ test('getAgentScore: a slashed counterparty has no standing', async () => {
   assert.equal(await chain.getAgentScore('0xSlashed'), 0);
 });
 
-test('getAgentScore: an unreachable counterparty reads as no standing, never throws', async () => {
-  // payerScoresFor awaits these together and relies on them not rejecting: one
-  // unreachable payer must cost a factor, not the epoch.
+test('getAgentScore: an error that is not the node\'s reads as no standing, never throws', async () => {
+  // A failure about the counterparty or the question, not about reaching the node, has always
+  // meant no standing. One such payer costs a factor, not the epoch.
   chain.init(CFG, {
     provider: makeFakeProvider(1),
     identityContract: { computeDidHash: async () => { throw new Error('rpc down'); }, getIdentity: async () => ({}) },
     reputationContract: { getReputation: async () => ({}), getTotalScore: async () => 0n },
   });
   assert.equal(await chain.getAgentScore('0xUnreachable'), 0);
+});
+
+// A failure of the node is not "no standing". Read as zero it lowers the score this oracle proposes,
+// and the checker, whose own reads succeeded, records a divergence against an honest primary. So a
+// throttled or dropped read is retried, and when it still fails the call rejects and the caller skips
+// the agent for this epoch.
+
+test('getAgentScore: a throttled read is retried and the standing comes back', async () => {
+  let calls = 0;
+  chain.init(CFG, {
+    provider: makeFakeProvider(1),
+    identityContract: {
+      computeDidHash: async () => '0xdeadbeef',
+      getIdentity: async () => {
+        if (++calls < 2) throw Object.assign(new Error('429 too many requests'), { code: 'SERVER_ERROR' });
+        return { registeredAt: 1n, status: 0 };
+      },
+    },
+    reputationContract: {
+      getReputation: async () => ({ externalScore: 20n }),
+      getTotalScore: async () => 60n,
+    },
+  });
+  assert.equal(await chain.getAgentScore('0xPayer'), 20, 'the real standing, not zero');
+  assert.equal(calls, 2);
+});
+
+test('getAgentScore: a node that keeps failing is not no standing, it rejects', async () => {
+  let calls = 0;
+  chain.init(CFG, {
+    provider: makeFakeProvider(1),
+    identityContract: {
+      computeDidHash: async () => '0xdeadbeef',
+      getIdentity: async () => { calls++; throw Object.assign(new Error('boom'), { code: 'SERVER_ERROR' }); },
+    },
+    reputationContract: { getReputation: async () => ({}), getTotalScore: async () => 0n },
+  });
+  await assert.rejects(() => chain.getAgentScore('0xPayer'), /boom/);
+  assert.equal(calls, 4, 'retried to the attempt cap first');
+});
+
+test('isTransientReadError: the node\'s failures, and only those', () => {
+  const callException = (data) => Object.assign(new Error('x'), { code: 'CALL_EXCEPTION', data });
+  for (const err of [
+    new Error('429 too many requests'), new Error('rate limit exceeded'), new Error('connect ETIMEDOUT'),
+    Object.assign(new Error('x'), { code: 'SERVER_ERROR' }), Object.assign(new Error('x'), { code: 'NETWORK_ERROR' }),
+    Object.assign(new Error('x'), { code: 'TIMEOUT' }), callException(null), callException(undefined),
+  ]) assert.equal(chain.isTransientReadError(err), true, String(err.code || err.message));
+  for (const err of [
+    callException('0x08c379a0'), new TypeError('bad argument'), new Error('rpc down'), Object.assign(new Error('x'), { code: 'BAD_DATA' }),
+  ]) assert.equal(chain.isTransientReadError(err), false, String(err.code || err.message));
 });
 
 // Throttling is not a failure to propose, and must not be counted as one.

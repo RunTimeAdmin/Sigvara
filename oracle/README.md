@@ -800,6 +800,14 @@ with it off, the largest factor in the score is a count of HTTP requests.
 Amounts are base units and handled as BigInt throughout, so an 18-decimal token does not
 lose precision.
 
+A payer's standing is read from the chain once per epoch. A payer that is not registered, or is
+slashed, has none. A payer the node could not answer for, because the read was throttled or dropped
+and still failed after its retries, is not read as having none: that would lower the score this
+operator proposes, and a checker whose read succeeded would record a divergence against an honest
+primary. The agent is skipped for that epoch and scored at the next (counted with the other
+propose errors, or with the throttled ones), and `GET /score/:didHash` answers 502 `rpc_error`
+rather than a number it could not stand behind.
+
 ### Payment evidence by pull (ADR 0003)
 
 | Variable | Default | Meaning |

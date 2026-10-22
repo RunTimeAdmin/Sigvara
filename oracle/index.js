@@ -306,12 +306,16 @@ async function payerScoresFor(didHash) {
   // a for-loop with an await inside defeats completely. Measured against Arc testnet:
   // twelve calls take 1,491 ms sequentially and 118 ms concurrently.
   //
-  // getAgentScore swallows its own failures and returns 0, so this cannot reject: an
-  // unreachable counterparty reads as "no standing", which is what it already meant.
+  // getAgentScore retries a throttled or dropped read, and still rejects when the node cannot be
+  // reached, because a counterparty the node could not answer for is not one with no standing. What was
+  // read is kept either way, so the next try asks only for what is missing. The rejection reaches the
+  // agent's own handler, which skips the agent for this epoch.
   const misses = [...unique].filter(([key]) => !payerScoreCache.has(key));
   if (misses.length > 0) {
-    const scores = await Promise.all(misses.map(([, addr]) => chain.getAgentScore(addr)));
-    misses.forEach(([key], i) => payerScoreCache.set(key, scores[i]));
+    const settled = await Promise.allSettled(misses.map(([, addr]) => chain.getAgentScore(addr)));
+    misses.forEach(([key], i) => { if (settled[i].status === 'fulfilled') payerScoreCache.set(key, settled[i].value); });
+    const failed = settled.find((s) => s.status === 'rejected');
+    if (failed) throw failed.reason;
   }
 
   const out = {};
@@ -1980,6 +1984,13 @@ async function handleRequest(req, res) {
         erc8004AgentId: linkedId ?? null,
       });
     } catch (err) {
+      // The node could not answer for a payer, after retries. An upstream failure like the one above,
+      // not a bug in this oracle.
+      if (chain.isTransientReadError(err)) {
+        metrics.inc('scoreRpcErrors');
+        console.warn(`[oracle] /score chain read failed for ${didHash}: ${err.message}`);
+        return json(res, 502, { error: 'could not read the chain', code: 'rpc_error' });
+      }
       /* Anything reaching here is a bug or an upstream failure outside the guarded
        * read above, so it is logged in full and reported generically.
        *

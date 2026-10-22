@@ -13,6 +13,7 @@
 //     receipts:  { "<txhash>": { status, blockNumber, logs: [{ address, topics, data }] } }
 //     agents:    { "<didhash>": { operator, agentAddress, registeredAt, status } }
 //     standing:  { "<address>": hard score of a counterparty }
+//     standingFails: { "<address>": true } counterparties the node cannot answer for: the read is throttled
 //     explodeHealth: when true, the /health route throws
 //     chainId:   the chain id the fake node reports (default 5042)
 //     nonceGap:  how many of the wallet's transactions the node holds pending (default 0)
@@ -95,7 +96,13 @@ const chain = {
   verifyDidHashDerivation: async () => false,
   operatorStanding: async () => world().operatorStanding ?? ({ enforced: false }),
   getLatestBlockTimestamp: async () => world().nowSec,
-  getAgentScore: async (address) => world().standing[String(address).toLowerCase()] ?? 0,
+  getAgentScore: async (address) => {
+    const key = String(address).toLowerCase();
+    if (world().standingFails?.[key]) {
+      throw Object.assign(new Error('429 too many requests'), { code: 'SERVER_ERROR' });
+    }
+    return world().standing[key] ?? 0;
+  },
   readWithBackoff: (_label, fn) => fn(),
 
   // The chain check runs at boot and before every epoch.
@@ -104,6 +111,7 @@ const chain = {
   isFeeCap: real.isFeeCap,
   isProposerNotAuthorized: real.isProposerNotAuthorized,
   isAlreadyCharged: real.isAlreadyCharged,
+  isTransientReadError: real.isTransientReadError,
   getChainId: async () => world().chainId ?? 5042,
   assertChainId: async (expected = null) => {
     const actual = world().chainId ?? 5042;
