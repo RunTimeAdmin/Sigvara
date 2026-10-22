@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import "forge-std/Test.sol";
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import "@openzeppelin/contracts/access/IAccessControl.sol";
+import "@openzeppelin/contracts/access/AccessControl.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 
 // Named, because the script declares its own file-level IAccessControl, which would clash with the library one.
@@ -38,6 +39,24 @@ contract MockSafe {
     }
 }
 
+/// A registry set up the way the older code did it: UPGRADER_ROLE and every other role are administered by
+/// DEFAULT_ADMIN_ROLE, so the Safe that holds admin can grant itself upgrade rights and the slasher role.
+contract LegacyRegistry is AccessControl {
+    constructor(address admin) {
+        _grantRole(DEFAULT_ADMIN_ROLE, admin);
+        _grantRole(keccak256("UPGRADER_ROLE"), admin);
+    }
+}
+
+/// Half way: the upgrader role administers itself, and every other role is still the admin's to grant.
+contract HalfwayRegistry is AccessControl {
+    constructor(address admin) {
+        _grantRole(DEFAULT_ADMIN_ROLE, admin);
+        _grantRole(keccak256("UPGRADER_ROLE"), admin);
+        _setRoleAdmin(keccak256("UPGRADER_ROLE"), keccak256("UPGRADER_ROLE"));
+    }
+}
+
 /// A contract from before UPGRADER_ROLE administered itself: getRoleAdmin answers zero.
 contract LegacyRoles {
     function getRoleAdmin(bytes32) external pure returns (bytes32) { return bytes32(0); }
@@ -45,6 +64,12 @@ contract LegacyRoles {
 
 contract SplitAuthority_Harness is SplitAuthority {
     function adminIsSelf(address target) external view returns (bool) { return _upgraderAdminIsSelf(target); }
+    function timelockedRoles(string memory name) external pure returns (bytes32[] memory) {
+        return _timelockedRoles(name);
+    }
+    function firstOpenRole(string memory name, address target) external view returns (bool, bytes32) {
+        return _firstRoleTheAdminCanGrant(name, target);
+    }
     function revokeDeployerAdminCall(address d) external pure returns (bytes memory) { return _revokeDeployerAdminCall(d); }
 }
 
@@ -226,6 +251,78 @@ contract SplitAuthorityTest is Test {
 
         // After the handover, the thing the migration is for.
         _afterTheHandover(safe, timelock);
+
+        // And what it refuses to do on a registry that would leave the Safe a way round the timelock.
+        _renounceRefusesRegistriesThatWouldLeaveAWayRound();
+    }
+
+    MockSafe internal mSafe;
+    TimelockController internal mTimelock;
+    SplitAuthority internal mScript;
+
+    /// The grant phase, then the Safe removing the deployer's admin: everything the renounce phase checks
+    /// for, short of the renounce itself.
+    function _handoverUpToTheRenounce() internal {
+        _writeArtifact();
+        address[] memory owners = new address[](2);
+        owners[0] = makeAddr("owner1");
+        owners[1] = makeAddr("owner2");
+        mSafe = new MockSafe(owners, 2);
+        address[] memory proposers = new address[](1);
+        proposers[0] = address(mSafe);
+        address[] memory executors = new address[](1);
+        mTimelock = new TimelockController(48 hours, proposers, executors, address(0));
+        mScript = new SplitAuthority();
+
+        _env("grant", address(mSafe), address(mTimelock), "");
+        mScript.run();
+        for (uint256 i = 0; i < targets.length; i++) {
+            mSafe.exec(targets[i], abi.encodeCall(IAccessControl.revokeRole, (ADMIN_ROLE, deployer)));
+        }
+    }
+
+    /// Phase 5 cannot be undone, so it reads the chain and refuses unless the arrangement the timelock exists
+    /// for is the one in place. It used to print a warning afterwards, once the deployer had already gone.
+    /// Run from the migration test, because the environment is process-wide.
+    function _renounceRefusesRegistriesThatWouldLeaveAWayRound() internal {
+        // 1. oracleBond is set up the way older code did it: the Safe could grant itself upgrade rights.
+        vm.chainId(7777002);
+        _deployRegistries();
+        targets[3] = address(new LegacyRegistry(deployer));
+        _handoverUpToTheRenounce();
+        _env("renounce", address(mSafe), address(mTimelock), "yes-drop-the-deployer");
+        vm.expectRevert(abi.encodeWithSelector(SplitAuthority.UpgraderRoleNotSelfAdministered.selector, "oracleBond"));
+        mScript.run();
+        assertTrue(IAccessControl(targets[3]).hasRole(UPGRADER_ROLE, deployer), "nothing was dropped");
+        _clearEnv();
+        vm.removeFile(_artifactPath());
+
+        // 2. The upgrader role administers itself there, but the slasher role is still the admin's to grant.
+        vm.chainId(7777003);
+        _deployRegistries();
+        targets[3] = address(new HalfwayRegistry(deployer));
+        _handoverUpToTheRenounce();
+        _env("renounce", address(mSafe), address(mTimelock), "yes-drop-the-deployer");
+        vm.expectRevert(abi.encodeWithSelector(
+            SplitAuthority.RoleNotTimelocked.selector, "oracleBond", keccak256("SLASHER_ROLE")
+        ));
+        mScript.run();
+        assertTrue(IAccessControl(targets[3]).hasRole(UPGRADER_ROLE, deployer), "nothing was dropped");
+        _clearEnv();
+        vm.removeFile(_artifactPath());
+
+        // 3. The same sequence on current registries goes through, so the refusals above are about the roles
+        //    and not about the setup.
+        vm.chainId(7777004);
+        _deployRegistries();
+        _handoverUpToTheRenounce();
+        _env("renounce", address(mSafe), address(mTimelock), "yes-drop-the-deployer");
+        mScript.run();
+        for (uint256 i = 0; i < targets.length; i++) {
+            assertFalse(IAccessControl(targets[i]).hasRole(UPGRADER_ROLE, deployer), names[i]);
+        }
+        _clearEnv();
+        vm.removeFile(_artifactPath());
     }
 
     function _afterTheHandover(MockSafe safe, TimelockController timelock) internal {
@@ -390,6 +487,43 @@ contract SplitAuthorityTest is Test {
     // -------------------------------------------------------------------------
     // The check that tells the two kinds of proxy apart
     // -------------------------------------------------------------------------
+
+    /// What the script believes the timelock protects must be what the contracts actually do. For each
+    /// registry as it initializes now, a role is administered by the upgrader exactly when the script lists
+    /// it, so a contract that moves another role under the timelock, or drops one, fails here until the
+    /// script's table is updated with it.
+    function test_theTimelockedRolesTableIsExactlyWhatTheContractsDo() public {
+        _deployRegistries();
+        SplitAuthority_Harness h = new SplitAuthority_Harness();
+        bytes32[6] memory candidates = [
+            keccak256("STAKING_CORE_ROLE"), keccak256("SLASHING_COMMITTEE_ROLE"), keccak256("SLASHER_ROLE"),
+            keccak256("ORACLE_ROLE"), keccak256("GUARDIAN_ROLE"), ADMIN_ROLE
+        ];
+        for (uint256 i = 0; i < targets.length; i++) {
+            bytes32[] memory listed = h.timelockedRoles(names[i]);
+            for (uint256 j = 0; j < candidates.length; j++) {
+                bool administeredByUpgrader = IAccessControl(targets[i]).getRoleAdmin(candidates[j]) == UPGRADER_ROLE;
+                bool inTable;
+                for (uint256 k = 0; k < listed.length; k++) if (listed[k] == candidates[j]) inTable = true;
+                assertEq(inTable, administeredByUpgrader, string.concat(names[i], " role ", vm.toString(candidates[j])));
+            }
+            (bool open,) = h.firstOpenRole(names[i], targets[i]);
+            assertFalse(open, string.concat(names[i], ": nothing is left to the admin"));
+        }
+        assertEq(h.timelockedRoles("not a registry").length, 0);
+    }
+
+    function test_aRegistryFromTheOlderCodeIsReportedAsOpen() public {
+        SplitAuthority_Harness h = new SplitAuthority_Harness();
+        address legacy = address(new LegacyRegistry(deployer));
+        (bool open, bytes32 role) = h.firstOpenRole("oracleBond", legacy);
+        assertTrue(open);
+        assertEq(role, keccak256("SLASHER_ROLE"));
+
+        // A registry whose roles cannot be read is not assumed safe either.
+        (open,) = h.firstOpenRole("oracleBond", address(0xABCD));
+        assertTrue(open);
+    }
 
     function test_upgraderAdminIsSelf_readsTheContract() public {
         _deployRegistries();
