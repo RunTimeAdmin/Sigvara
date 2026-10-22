@@ -25,7 +25,8 @@ import "../src/SigvaraOracleBond.sol";
  * Optional env (default to the deployer):
  *   SLASHER_ADDRESS       — granted SLASHER_ROLE (governance/committee)
  *   SLASH_BENEFICIARY     — destination for slashed bonds (defaults to deployer)
- *   ORACLE_BOND_AMOUNT    — minimum bond in wei (default 1,000 SVR)
+ *   ORACLE_BOND_AMOUNT    — minimum bond in wei (default 1,000 SVR; the default is refused on
+ *                           mainnet, so state the number there)
  *   ORACLE_UNBONDING      — unbonding cooldown seconds (default 7 days)
  *
  * Writes the proxy address into deployments/{chainId}.json under "oracleBond", so the
@@ -37,6 +38,7 @@ contract DeployOracleBond is Script {
     uint256 constant ARC_MAINNET = 5042;
 
     error RolesNotSeparated(address deployer, address slasher, address beneficiary);
+    error DefaultAmountOnMainnet(string name, uint256 value);
 
     function run() external {
         uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
@@ -49,6 +51,7 @@ contract DeployOracleBond is Script {
         uint256 unbonding   = vm.envOr("ORACLE_UNBONDING", DEFAULT_UNBONDING);
 
         _checkRoleSeparation(deployer, slasher, beneficiary);
+        _checkMainnetBondAmount(bondAmount);
 
         vm.startBroadcast(deployerKey);
 
@@ -78,6 +81,16 @@ contract DeployOracleBond is Script {
         console2.log("SVR:              ", svr);
 
         _recordAddress(address(bond));
+    }
+
+    /// @dev Mainnet only. A forgotten ORACLE_BOND_AMOUNT leaves the testnet default, which is a
+    ///      valid number and a very different deployment from the one intended: the bond is what
+    ///      an operator stands to lose, so a figure far too low weakens the deterrent. The
+    ///      admin can raise it with a setter afterwards, but the first weeks would run on the
+    ///      wrong figure, so the default is refused and the number has to be stated.
+    function _checkMainnetBondAmount(uint256 bondAmount) internal view {
+        if (block.chainid != ARC_MAINNET) return;
+        if (bondAmount == DEFAULT_BOND) revert DefaultAmountOnMainnet("ORACLE_BOND_AMOUNT", bondAmount);
     }
 
     /// @dev The deployer keeps DEFAULT_ADMIN_ROLE and UPGRADER_ROLE. If it is also the
