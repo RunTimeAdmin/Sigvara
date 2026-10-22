@@ -385,6 +385,22 @@ contract SigvaraOracleBondTest is Test {
         assertFalse(bond.hasRole(role, slasher));
     }
 
+    /// Only the slasher role is kept from the beneficiary. The payee can hold every other role, and the rule
+    /// has to stay that narrow: a check on the account alone would refuse the beneficiary the admin and
+    /// upgrader roles too, which a few deployments and fixtures give to the same address.
+    function test_theBeneficiaryMayHoldEveryOtherRole() public {
+        bytes32 guardian = bond.GUARDIAN_ROLE();
+        bytes32 upgrader = bond.UPGRADER_ROLE();
+        vm.startPrank(admin);
+        bond.grantRole(guardian, beneficiary);
+        bond.grantRole(upgrader, beneficiary);
+        bond.grantRole(bond.DEFAULT_ADMIN_ROLE(), beneficiary);
+        vm.stopPrank();
+        assertTrue(bond.hasRole(guardian, beneficiary));
+        assertTrue(bond.hasRole(upgrader, beneficiary));
+        assertTrue(bond.hasRole(bond.DEFAULT_ADMIN_ROLE(), beneficiary));
+    }
+
     // -------------------------------------------------------------------------
     // Floors: a bond requirement of zero, and an exit with no delay
     // -------------------------------------------------------------------------
