@@ -150,6 +150,11 @@ contract SigvaraReputation is Initializable, TimelockedGrants, UUPSUpgradeable, 
         // was already pending when this field was added reads address(0) here, and is
         // treated as it was before: live, with nobody to ask.
         address proposer;
+        // When it can first be finalized, and the last moment it can still be rejected, fixed at
+        // proposal time: the time of the proposal plus the window in force then. Appended for the
+        // same reason as the fields above. A proposal that was already pending when this field was
+        // added reads zero here, and is judged against the live window, as it always was.
+        uint256 finalizableAt;
     }
 
     // -------------------------------------------------------------------------
@@ -417,7 +422,8 @@ contract SigvaraReputation is Initializable, TimelockedGrants, UUPSUpgradeable, 
             proposedAt: block.timestamp,
             exists: true,
             evidenceRoot: evidenceRoot,
-            proposer: msg.sender
+            proposer: msg.sender,
+            finalizableAt: block.timestamp + challengeWindow
         });
 
         emit ScoreProposed(didHash, block.timestamp, evidenceRoot);
@@ -435,7 +441,7 @@ contract SigvaraReputation is Initializable, TimelockedGrants, UUPSUpgradeable, 
         PendingScore storage pending = pendingScores[didHash];
         if (!pending.exists) revert NoScorePending(didHash);
 
-        uint256 finalizableAt = pending.proposedAt + challengeWindow;
+        uint256 finalizableAt = _finalizableAt(pending);
         if (block.timestamp < finalizableAt) revert ChallengeWindowActive(didHash, finalizableAt);
 
         // Finalization stays permissionless, so nothing is asked of whoever calls it. What
@@ -490,12 +496,23 @@ contract SigvaraReputation is Initializable, TimelockedGrants, UUPSUpgradeable, 
         PendingScore storage pending = pendingScores[didHash];
         if (!pending.exists) revert NoScorePending(didHash);
 
-        uint256 finalizableAt = pending.proposedAt + challengeWindow;
+        uint256 finalizableAt = _finalizableAt(pending);
         if (block.timestamp >= finalizableAt) revert ChallengeWindowExpired(didHash, finalizableAt);
 
         delete pendingScores[didHash];
 
         emit ScoreRejected(didHash, msg.sender);
+    }
+
+    /// @dev The end of a proposal's review window: the one it was made under, and not the one now in
+    ///      force. Reading the live window let an admin move the end of every proposal already
+    ///      pending, shortening the time the committee had to reject a score or letting it finalize
+    ///      sooner than anyone expected. SigvaraStaking snapshots its challenge deadline for the same
+    ///      reason. A proposal written before finalizableAt existed reads zero and is judged against
+    ///      the live window, as it always was.
+    function _finalizableAt(PendingScore storage pending) internal view returns (uint256 at) {
+        at = pending.finalizableAt;
+        if (at == 0) at = pending.proposedAt + challengeWindow;
     }
 
     /**
