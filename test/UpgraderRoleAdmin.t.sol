@@ -125,16 +125,24 @@ contract UpgraderRoleAdminTest is Test {
         }
     }
 
-    /// Only that one role moved. Admin still administers every other role, and itself.
-    function test_everyOtherRoleIsStillAdministeredByAdmin() public view {
+    /// The admin still administers itself, the oracle role and the guardian. The roles that move
+    /// funds or change an agent's standing moved to the upgrader as well (test/TimelockedGrants.t.sol).
+    function test_theAdminStillAdministersItselfTheOracleAndTheGuardian() public view {
         for (uint256 i = 0; i < proxies.length; i++) {
             assertEq(IAccessControl(proxies[i]).getRoleAdmin(ADMIN_ROLE), ADMIN_ROLE, names[i]);
+            assertEq(IAccessControl(proxies[i]).getRoleAdmin(keccak256("GUARDIAN_ROLE")), ADMIN_ROLE, names[i]);
         }
         assertEq(IAccessControl(proxies[1]).getRoleAdmin(keccak256("ORACLE_ROLE")), ADMIN_ROLE);
-        assertEq(IAccessControl(proxies[1]).getRoleAdmin(keccak256("SLASHING_COMMITTEE_ROLE")), ADMIN_ROLE);
-        assertEq(IAccessControl(proxies[1]).getRoleAdmin(keccak256("STAKING_CORE_ROLE")), ADMIN_ROLE);
-        assertEq(IAccessControl(proxies[3]).getRoleAdmin(keccak256("SLASHER_ROLE")), ADMIN_ROLE);
         assertEq(IAccessControl(proxies[4]).getRoleAdmin(keccak256("ORACLE_ROLE")), ADMIN_ROLE);
+    }
+
+    /// And the fund-moving roles are the upgrader's to grant, on every contract that has one.
+    function test_theFundMovingRolesMovedToTheUpgrader() public view {
+        assertEq(IAccessControl(proxies[0]).getRoleAdmin(keccak256("STAKING_CORE_ROLE")), UPGRADER_ROLE);
+        assertEq(IAccessControl(proxies[1]).getRoleAdmin(keccak256("STAKING_CORE_ROLE")), UPGRADER_ROLE);
+        assertEq(IAccessControl(proxies[1]).getRoleAdmin(keccak256("SLASHING_COMMITTEE_ROLE")), UPGRADER_ROLE);
+        assertEq(IAccessControl(proxies[2]).getRoleAdmin(keccak256("SLASHING_COMMITTEE_ROLE")), UPGRADER_ROLE);
+        assertEq(IAccessControl(proxies[3]).getRoleAdmin(keccak256("SLASHER_ROLE")), UPGRADER_ROLE);
     }
 
     /// A deployer that renounces upgrader leaves nobody able to grant it but its holders:

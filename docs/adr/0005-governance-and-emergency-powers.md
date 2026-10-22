@@ -11,6 +11,9 @@ was not:
 - the admin Safe could repoint what decides who counts as bonded (`setStakeView`) or switch the
   bonded-operator check off (`setOperatorBond(0)`) in one transaction, which changes behaviour
   about as much as an upgrade;
+- the admin Safe could grant itself `SLASHER_ROLE`, point the slash beneficiary at itself and slash every
+  operator's bond in one batch. None of that is an upgrade, so the timelock never saw it, and neither
+  did the challenge period, because the bond registry slashes at once;
 - the committee both filed slashes and was the only party that could drop one, and a slash pays a
   quarter of the bond to whoever filed it and a quarter to the victim it names;
 - the committee could drop a proposal and file the next in the same block, so a stake could be held
@@ -30,10 +33,12 @@ This ADR records what was decided about each, and what was left as a stated trus
 
 ## Decisions
 
-1. **Wiring that decides who counts as bonded is upgrade-class.** `SigvaraIdentity.setStakeView` and
-   `SigvaraReputation.setOperatorBond` require `UPGRADER_ROLE`, which the timelock holds, instead of
-   the admin role. After the handover the admin Safe cannot make either call; it schedules it on the
-   timelock and it executes after the delay. Both are tested through a real `TimelockController`.
+1. **Wiring that decides who counts as bonded, and where slashed funds go, is upgrade-class.**
+   `SigvaraIdentity.setStakeView`, `SigvaraReputation.setOperatorBond` and
+   `SigvaraOracleBond.setSlashBeneficiary` require `UPGRADER_ROLE`, which the timelock holds, instead
+   of the admin role. After the handover the admin Safe cannot make any of these calls; it schedules
+   it on the timelock and it executes after the delay. Each is tested through a real
+   `TimelockController`.
 2. **A second key stops a slash and rules on disputes.** `SigvaraStaking.vetoSlash(didHash)` lets the
    admin drop a Pending proposal, including after its challenge deadline and before anyone executes
    it, or a Disputed one. `resolveDispute` is the admin's too: the committee files a slash and no longer
@@ -79,24 +84,47 @@ This ADR records what was decided about each, and what was left as a stated trus
    purpose: a withdrawal queued after a drop stays slashable until it is claimed, so a cancelled slash
    cannot become a way to exit before the committee can re-file. What bounds a freeze is the lapse, not
    a longer cooldown.
+8. **Roles that move funds or change an agent's standing are granted through the timelock.**
+   `SLASHER_ROLE` on the bond registry, `SLASHING_COMMITTEE_ROLE` on staking and reputation, and
+   `STAKING_CORE_ROLE` on identity and reputation are administered by `UPGRADER_ROLE`, as the upgrader
+   role itself is, so granting one takes the 48 hour delay and the admin Safe cannot install a slasher
+   or a committee member in the next transaction. The other direction stays instant: the admin can
+   revoke any of them at once. The registries allow that through a small shared base,
+   `TimelockedGrants`, which lets `DEFAULT_ADMIN_ROLE` revoke any role the upgrader administers, except
+   `UPGRADER_ROLE` itself. Without it a compromised slasher would have to be removed through the same
+   48 hours it needs to do its damage. `ORACLE_ROLE` and `GUARDIAN_ROLE` grants stay with the admin,
+   for the reasons below.
 
 ## What stays on the admin Safe, and why
 
-Role grants and revocations, and every parameter that now has a floor, stay on the admin Safe and are
-not delayed. A compromised admin Safe can therefore still grant itself the committee, slasher or
-oracle role at once. That is a stated trust assumption, not an oversight:
+The admin Safe grants `ORACLE_ROLE` and `GUARDIAN_ROLE`, revokes any role except `UPGRADER_ROLE`, and
+sets every parameter that has a floor. None of that is delayed. A compromised admin Safe can therefore
+still grant itself the oracle or guardian role at once, and move a parameter inside its floor. That is a
+stated trust assumption, not an oversight:
 
-- Delaying grants would mean a 48 hour wait before a replacement oracle key could be enabled in an
-  incident, which is the moment it is needed.
+- Delaying the oracle grant would mean a 48 hour wait before a replacement oracle key could be enabled
+  in an incident, which is the moment it is needed. Neither role takes funds: a score sits in a
+  challenge window the committee can reject and dies when its proposer loses its role, and a guardian
+  can only pause inflows, for three days at a time.
 - Revocation is instant and must stay so.
-- The remaining protection is the committee's challenge period on every slash, the admin veto above,
-  the floors, and the Safe itself: its threshold and owners are verified on chain before launch and
-  published.
+- The roles that can take funds or change an agent's standing are no longer on this list (decision 8).
+  A compromised admin Safe cannot install a slasher or a committee member, or route slashed funds,
+  without 48 hours of public notice.
+- The remaining protection is the committee's challenge period on every slash, the admin's veto and
+  ruling above, the floors, and the Safe itself: its threshold and owners are verified on chain before
+  launch and published.
 
 ## Consequences
 
-- A change of stake view or operator registry takes 48 hours of notice. A redeployed staking
-  contract is therefore a scheduled operation, not an instant one.
+- A change of stake view, operator registry or slash beneficiary takes 48 hours of notice. A
+  redeployed staking contract is therefore a scheduled operation, not an instant one, and so is
+  replacing the committee or the slasher. Taking a role away is immediate.
+- A delay protects funds only as far as notice helps: an agent's stake takes 21 days to leave and an
+  operator's bond 7, and both stay slashable while they wait, so the 48 hours is time to see and
+  respond, not time to get out.
+- Proxies initialised by the older code, the Arc testnet ones among them, keep the admin as the
+  grantor of these roles. Mainnet is a fresh deployment, and `scripts/check-mainnet.sh` reads the
+  role admins to confirm the arrangement.
 - The audit pack lists the veto and the dispute ruling as admin powers, the two setters as upgrade-class,
   and the guardian.
 - A slash that is legitimate has to be executed within 14 days of its deadline, or it lapses and has to

@@ -124,6 +124,12 @@ check_core() {
   has $IDENTITY   $GUARDIAN_ROLE     $GUARDIAN  true "identity: guardian holds GUARDIAN"
   has $REPUTATION $GUARDIAN_ROLE     $GUARDIAN  true "reputation: guardian holds GUARDIAN"
   has $STAKING    $GUARDIAN_ROLE     $GUARDIAN  true "staking: guardian holds GUARDIAN"
+  # The roles that move funds or change an agent's standing are granted by the upgrader, which is
+  # the timelock, and not by the admin Safe (docs/adr/0005, decision 8). The admin can still revoke.
+  expect "identity: STAKING_CORE is granted by UPGRADER"       "$UPGRADER_ROLE" "$(val $IDENTITY   'getRoleAdmin(bytes32)(bytes32)' $STAKING_CORE_ROLE)"
+  expect "reputation: STAKING_CORE is granted by UPGRADER"     "$UPGRADER_ROLE" "$(val $REPUTATION 'getRoleAdmin(bytes32)(bytes32)' $STAKING_CORE_ROLE)"
+  expect "reputation: SLASHING_COMMITTEE is granted by UPGRADER" "$UPGRADER_ROLE" "$(val $REPUTATION 'getRoleAdmin(bytes32)(bytes32)' $COMMITTEE_ROLE)"
+  expect "staking: SLASHING_COMMITTEE is granted by UPGRADER"  "$UPGRADER_ROLE" "$(val $STAKING    'getRoleAdmin(bytes32)(bytes32)' $COMMITTEE_ROLE)"
   # A reachable inflowsPaused() also shows the deployed code has the pause at all. Nothing is
   # paused at launch.
   expect "identity: inflows are open"     false "$(val $IDENTITY   'inflowsPaused()(bool)')"
@@ -154,6 +160,7 @@ check_bond_and_fees() {
   has $BOND $SLASHER_ROLE $DEPLOYER  false "oracleBond: deployer does not hold SLASHER"
   has $BOND $GUARDIAN_ROLE $GUARDIAN true  "oracleBond: guardian holds GUARDIAN"
   has $BOND $GUARDIAN_ROLE $DEPLOYER false "oracleBond: deployer does not hold GUARDIAN"
+  expect "oracleBond: SLASHER is granted by UPGRADER"          "$UPGRADER_ROLE" "$(val $BOND 'getRoleAdmin(bytes32)(bytes32)' $SLASHER_ROLE)"
   expect "oracleBond: inflows are open"       false               "$(val $BOND 'inflowsPaused()(bool)')"
   if [ -n "$FEES" ]; then
     expect "epochFees: initialized once (1)"     1              "$(initialized $FEES)"

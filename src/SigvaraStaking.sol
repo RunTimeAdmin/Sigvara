@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
@@ -9,6 +8,7 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 import "./InflowGuard.sol";
+import "./TimelockedGrants.sol";
 import "./SigvaraIdentity.sol";
 
 /**
@@ -44,7 +44,7 @@ interface IReputationZero {
  */
 contract SigvaraStaking is
     Initializable,
-    AccessControlUpgradeable,
+    TimelockedGrants,
     UUPSUpgradeable,
     ReentrancyGuard,
     InflowGuard
@@ -238,6 +238,10 @@ contract SigvaraStaking is
         // timelock that holds UPGRADER_ROLE a delay on the honest path and nothing on a
         // compromised admin.
         _setRoleAdmin(UPGRADER_ROLE, UPGRADER_ROLE);
+        // The committee files slashes, so installing one is as consequential as an upgrade. Its role is
+        // granted by upgraders too, so the admin Safe cannot put a holder there in the next
+        // transaction. It can still revoke one at once (TimelockedGrants).
+        _setRoleAdmin(SLASHING_COMMITTEE_ROLE, UPGRADER_ROLE);
 
         identityRegistry = SigvaraIdentity(identityRegistry_);
         reputationRegistry = IReputationZero(reputationRegistry_);

@@ -12,12 +12,14 @@ import {TimelockController} from "@openzeppelin/contracts/governance/TimelockCon
  * The other roles are already split. As deployed on Arc testnet the oracle key holds
  * only `reputation:ORACLE`, and the committee key holds the two committee roles plus
  * `oracleBond:SLASHER`. What is still concentrated is admin and upgrader, both on the
- * deployer, on every contract. Admin can grant itself SLASHING_COMMITTEE_ROLE, so that
- * one key can cancel a slash filed against it, and upgrader can replace any
- * implementation outright. Splitting those two is the whole job.
+ * deployer, on every contract. On a proxy deployed before the review fixes, admin can
+ * grant itself SLASHING_COMMITTEE_ROLE, so that one key can cancel a slash filed against
+ * it, and upgrader can replace any implementation outright. Splitting those two is the
+ * whole job.
  *
  * Afterwards:
- *   DEFAULT_ADMIN_ROLE  -> Safe                (role grants, parameter changes)
+ *   DEFAULT_ADMIN_ROLE  -> Safe                (oracle and guardian grants, any revocation,
+ *                                               parameter changes, the veto and dispute rulings)
  *   UPGRADER_ROLE       -> TimelockController  (Safe proposes, delay runs, anyone executes)
  *   everything else     -> unchanged
  *
@@ -35,9 +37,13 @@ import {TimelockController} from "@openzeppelin/contracts/governance/TimelockCon
  * could grant itself the role in one transaction and upgrade in the next (checked on a
  * fork). Proxies deployed before the change, the Arc testnet ones among them, are still
  * like that. `plan` and `renounce` say which case each contract is, rather than leave it to
- * be assumed. What the Safe can still do with no delay is everything else DEFAULT_ADMIN_ROLE
- * administers: role grants, setStakeView, setOperatorBond and the other setters. So the
- * Safe's owners and threshold matter as much as the timelock does.
+ * be assumed. The same holds for the roles that take funds or change an agent's standing
+ * (SLASHER, SLASHING_COMMITTEE, STAKING_CORE), the slash beneficiary, setStakeView and
+ * setOperatorBond: on a registry initialized by the current code they need the timelock, and
+ * the Safe can only revoke. What the Safe can still do with no delay is what DEFAULT_ADMIN_ROLE
+ * administers: granting the oracle and guardian roles, revoking any role, the parameter
+ * setters, and ruling on or vetoing a slash. So the Safe's owners and threshold matter as much
+ * as the timelock does.
  *
  * ## Why this runs in phases
  *
@@ -194,10 +200,11 @@ contract SplitAuthority is Script {
                 }
             }
             if (threshold <= 1 || owners.length <= 1) {
-                console2.log("NOTE: 1-of-1. The timelock still delays upgrades, but DEFAULT_ADMIN");
-                console2.log("      grants roles with no delay at all, so a single compromised owner");
-                console2.log("      can still put itself on the slashing committee. Only a threshold");
-                console2.log("      above one closes that path.");
+                console2.log("NOTE: 1-of-1. The timelock still delays upgrades, but DEFAULT_ADMIN acts with");
+                console2.log("      no delay at all (the oracle and guardian grants, any revocation, the");
+                console2.log("      parameters, the veto), and on a proxy deployed before the review fixes it");
+                console2.log("      can also put itself on the slashing committee. A single compromised owner");
+                console2.log("      can do all of it. Only a threshold above one closes that path.");
             }
         } catch {
             console2.log("NOTE: SAFE has code but is not a Safe (no getThreshold). Check the address.");
