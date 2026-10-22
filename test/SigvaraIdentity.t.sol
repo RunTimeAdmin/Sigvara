@@ -928,4 +928,61 @@ contract SigvaraIdentityTest is Test, RegistrationHelper {
         bytes32 slot = keccak256(abi.encode(didHash, uint256(2)));
         assertEq(uint256(vm.load(address(identity), slot)), 1);
     }
+
+    // -------------------------------------------------------------------------
+    // setStakeView is held behind the timelock
+    // -------------------------------------------------------------------------
+
+    /// Repointing the collateral view decides who counts as bonded, and a contract of the
+    /// caller's choosing can answer yes for everyone. That is about as consequential as an
+    /// upgrade, so it takes the same key: UPGRADER_ROLE, which the timelock holds. Holding the
+    /// admin role alone is not enough.
+    function test_setStakeView_needsTheUpgraderRoleNotJustAdmin() public {
+        address adminOnly = makeAddr("adminOnly");
+        bytes32 adminRole = identity.DEFAULT_ADMIN_ROLE();
+        vm.prank(admin);
+        identity.grantRole(adminRole, adminOnly);
+        assertFalse(identity.hasRole(identity.UPGRADER_ROLE(), adminOnly));
+
+        StakeViewMock other = new StakeViewMock();
+        bytes32 upgraderRole = identity.UPGRADER_ROLE();
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControl.AccessControlUnauthorizedAccount.selector, adminOnly, upgraderRole
+        ));
+        vm.prank(adminOnly);
+        identity.setStakeView(address(other));
+
+        assertEq(address(identity.stakeView()), address(stakeView), "unchanged after the refusal");
+    }
+
+    function test_setStakeView_worksForAnUpgrader() public {
+        address upgrader = makeAddr("upgraderOnly");
+        bytes32 upgraderRole = identity.UPGRADER_ROLE();
+        vm.prank(admin);
+        identity.grantRole(upgraderRole, upgrader);
+
+        StakeViewMock other = new StakeViewMock();
+        vm.expectEmit(address(identity));
+        emit SigvaraIdentity.StakeViewSet(address(other));
+        vm.prank(upgrader);
+        identity.setStakeView(address(other));
+
+        assertEq(address(identity.stakeView()), address(other));
+    }
+
+    function test_setStakeView_stillRefusesZero() public {
+        vm.expectRevert(SigvaraIdentity.StakeViewNotSet.selector);
+        vm.prank(admin);
+        identity.setStakeView(address(0));
+    }
+
+    function test_setStakeView_strangersAreRefused() public {
+        StakeViewMock other = new StakeViewMock();
+        bytes32 upgraderRole = identity.UPGRADER_ROLE();
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, upgraderRole
+        ));
+        vm.prank(stranger);
+        identity.setStakeView(address(other));
+    }
 }

@@ -515,8 +515,13 @@ contract SigvaraIdentity is Initializable, AccessControlUpgradeable, UUPSUpgrade
      *         Zero is refused: an unset stake view fails every activation closed, which
      *         is safe, but silently disabling the collateral gate is not something an
      *         admin should be able to do by passing an empty argument.
+     *
+     *         Held behind UPGRADER_ROLE, the timelock's role, and not the admin role. What this
+     *         points at decides who counts as bonded, and a contract of the caller's choosing can
+     *         answer yes for everyone, so the call is about as consequential as an upgrade and gets
+     *         the same notice: it is scheduled on the timelock and executes after its delay.
      */
-    function setStakeView(address stakeView_) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function setStakeView(address stakeView_) external onlyRole(UPGRADER_ROLE) {
         if (stakeView_ == address(0)) revert StakeViewNotSet();
         stakeView = IStakeView(stakeView_);
         emit StakeViewSet(stakeView_);

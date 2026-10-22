@@ -1468,6 +1468,55 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
         rep.setOperatorBond(address(1));
     }
 
+    /// Passing zero switches the bonded-operator check off, and any other address decides who may
+    /// score every agent. Either changes the protocol about as much as an upgrade, so it takes the
+    /// same key: UPGRADER_ROLE, which the timelock holds. The admin role alone is not enough.
+    function test_operatorBond_needsTheUpgraderRoleNotJustAdmin() public {
+        address adminOnly = makeAddr("adminOnly");
+        bytes32 adminRole = rep.DEFAULT_ADMIN_ROLE();
+        vm.prank(admin);
+        rep.grantRole(adminRole, adminOnly);
+        assertFalse(rep.hasRole(rep.UPGRADER_ROLE(), adminOnly));
+
+        OperatorSetMock set = new OperatorSetMock();
+        vm.prank(admin);
+        rep.setOperatorBond(address(set));
+
+        bytes32 upgraderRole = rep.UPGRADER_ROLE();
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControl.AccessControlUnauthorizedAccount.selector, adminOnly, upgraderRole
+        ));
+        vm.prank(adminOnly);
+        rep.setOperatorBond(address(0));
+
+        OperatorSetMock other = new OperatorSetMock();
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControl.AccessControlUnauthorizedAccount.selector, adminOnly, upgraderRole
+        ));
+        vm.prank(adminOnly);
+        rep.setOperatorBond(address(other));
+
+        assertEq(address(rep.operatorBond()), address(set), "unchanged after the refusals");
+    }
+
+    function test_operatorBond_worksForAnUpgrader() public {
+        address upgrader = makeAddr("upgraderOnly");
+        bytes32 upgraderRole = rep.UPGRADER_ROLE();
+        vm.prank(admin);
+        rep.grantRole(upgraderRole, upgrader);
+
+        OperatorSetMock set = new OperatorSetMock();
+        vm.expectEmit(address(rep));
+        emit SigvaraReputation.OperatorBondSet(address(set));
+        vm.prank(upgrader);
+        rep.setOperatorBond(address(set));
+        assertEq(address(rep.operatorBond()), address(set));
+
+        vm.prank(upgrader);
+        rep.setOperatorBond(address(0));
+        assertEq(address(rep.operatorBond()), address(0));
+    }
+
     /// Registration costs only gas, so an unbonded agent must not be scoreable. It
     /// also cannot be slashed, since slashing needs stake to take, which is what made
     /// bulk identity creation the cheapest attack on the score.
