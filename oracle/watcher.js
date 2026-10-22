@@ -29,7 +29,9 @@
  */
 
 const { ethers } = require('ethers');
-const { checkerStatus, triage, alertKey, webhookPayload } = require('./watcher-policy');
+const {
+  checkerStatus, triage, alertKey, webhookPayload, describeDivergence, trackPollOutcome,
+} = require('./watcher-policy');
 
 const cfg = {
   checkerUrl: (process.env.CHECKER_URL || '').replace(/\/+$/, ''),
@@ -70,8 +72,11 @@ const reputation = new ethers.Contract(cfg.reputationAddress, ABI, provider);
 const sent = new Map();
 let checkerWasOk = true;
 
+// redirect: 'error'. The checker is somebody else's server, and following a redirect it
+// chooses would let it point this watcher at an address it could not reach itself, such as
+// the cloud metadata service on this host.
 async function getJson(path) {
-  const res = await fetch(`${cfg.checkerUrl}${path}`, { signal: AbortSignal.timeout(20_000) });
+  const res = await fetch(`${cfg.checkerUrl}${path}`, { signal: AbortSignal.timeout(20_000), redirect: 'error' });
   if (!res.ok) throw new Error(`${path} returned ${res.status}`);
   return res.json();
 }
@@ -92,6 +97,7 @@ async function notify(level, title, lines) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(20_000),
+      redirect: 'error',
     });
     // fetch only rejects on transport failure, so without this a 400 from a malformed
     // payload or a revoked webhook counts as delivered. That is the exact failure this
@@ -106,29 +112,31 @@ async function notify(level, title, lines) {
   }
 }
 
-function describe(d) {
-  const factors = Object.entries(d.factors ?? {})
-    .map(([f, v]) => `${f} proposed=${v.pending} checker=${v.own}`)
-    .join(', ');
-  return `${d.didHash} proposed total ${d.pendingTotal}, checker computes ${d.ownTotal}${factors ? ` (${factors})` : ''}`;
-}
-
 function hhmm(sec) {
   const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
   return h ? `${h}h ${m}m` : `${m}m`;
 }
 
 async function poll() {
-  let health = null, payload = null;
+  // Two fetches that can fail separately, and the second one is the one that is metered.
+  // They used to share a try block that logged only when /health failed, so a /divergence
+  // that was refused left no trace anywhere and the poll carried on as if all were well.
+  let health = null, payload = null, payloadError = null;
   try {
     health = await getJson('/health');
-    payload = await getJson('/divergence');
   } catch (err) {
-    // Leave health/payload as whatever was fetched; checkerStatus decides what that means.
-    if (!health) console.error(`[watcher] checker fetch failed: ${err.message}`);
+    console.error(`[watcher] checker fetch failed: ${err.message}`);
+  }
+  if (health) {
+    try {
+      payload = await getJson('/divergence');
+    } catch (err) {
+      payloadError = err.message;
+      console.error(`[watcher] divergence fetch failed: ${err.message}`);
+    }
   }
 
-  const status = checkerStatus(health, payload, Date.now(), cfg.maxSilenceMs);
+  const status = checkerStatus(health, payload, Date.now(), cfg.maxSilenceMs, payloadError);
   if (!status.ok) {
     // Only on the transition, so an outage is one page rather than one per poll.
     if (checkerWasOk) {
@@ -174,7 +182,7 @@ async function poll() {
   for (const a of alerts) {
     sent.set(a.key, 0);
     await notify('alert', `checker disputes a score, ${hhmm(a.secondsLeft)} left to reject it`, [
-      describe(a.divergence),
+      describeDivergence(a.divergence),
       `rejectReputation(${a.didHash}) from the committee wallet, before the window closes.`,
     ]);
   }
@@ -189,7 +197,7 @@ async function poll() {
     if (left > 0 && left <= cfg.finalWarningSeconds) {
       sent.set(key, 1);
       await notify('alert', `LAST CALL: ${hhmm(left)} to reject a disputed score`, [
-        describe(d),
+        describeDivergence(d),
         'After this window closes anyone can finalize it and the committee cannot stop it.',
       ]);
     }
@@ -206,5 +214,36 @@ console.log(
   `[watcher] watching ${cfg.checkerUrl} every ${cfg.pollSeconds}s, ` +
   `webhook ${cfg.webhookUrl ? 'on' : 'off'}, read-only (no key)`,
 );
-poll().catch(err => console.error(`[watcher] poll error: ${err.message}`));
-setInterval(() => poll().catch(err => console.error(`[watcher] poll error: ${err.message}`)), cfg.pollSeconds * 1000);
+// A poll that throws was logged and forgotten, so a watcher that could no longer do its job,
+// its own RPC down for one, looked from outside like a watcher with nothing to report. Three
+// failures in a row raise an alert, and recovery says so. See trackPollOutcome.
+let pollHealth = { failures: 0, alerted: false };
+
+async function runPoll() {
+  let ok = true;
+  let failure = '';
+  try {
+    await poll();
+  } catch (err) {
+    ok = false;
+    failure = err.message;
+    console.error(`[watcher] poll error: ${err.message}`);
+  }
+  const { state, action } = trackPollOutcome(pollHealth, ok);
+  pollHealth = state;
+  if (action === 'alert') {
+    await notify('alert', 'the watcher cannot complete its checks', [
+      `${state.failures} polls in a row failed; the last error: ${String(failure).slice(0, 200)}`,
+      `checker: ${cfg.checkerUrl}`,
+      'Until this clears, nothing is being checked and silence means nothing.',
+    ]);
+  } else if (action === 'recovered') {
+    await notify('ok', 'the watcher is checking again', [`checker: ${cfg.checkerUrl}`]);
+  }
+}
+
+// runPoll handles its own failures; this is for the one it cannot, so a bug here costs a poll
+// and not the process.
+const tick = () => runPoll().catch((err) => console.error(`[watcher] unexpected error: ${err.message}`));
+tick();
+setInterval(tick, cfg.pollSeconds * 1000);

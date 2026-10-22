@@ -13,6 +13,7 @@
 
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
+const http = require('node:http');
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
@@ -83,6 +84,12 @@ class World {
   /** Hard standing of a counterparty, as the registry would report it. */
   setStanding(address, score) {
     this.data.standing[address.toLowerCase()] = score;
+    this.flush();
+  }
+
+  /** A top-level setting the stub chain reads, such as explodeHealth. */
+  set(key, value) {
+    this.data[key] = value;
     this.flush();
   }
 }
@@ -162,14 +169,15 @@ async function startOracle({ world, env = {} }) {
     throw new Error(`the oracle did not start (exit ${out.code}):\n${out.log}`);
   }
 
-  // Every request carries its own forwarded-for address. The peer is loopback, so the
-  // oracle trusts the header, and each call gets a rate-limit bucket of its own.
+  // Every request carries its own forwarded-for address unless the test names a client. The
+  // peer is loopback, so the oracle trusts the header, and each call gets a rate-limit bucket
+  // of its own; naming a client puts several calls in one bucket on purpose.
   let hop = 0;
-  async function call(method, urlPath, body, token) {
+  async function call(method, urlPath, body, token, { client } = {}) {
     hop += 1;
     const headers = {
       'content-type': 'application/json',
-      'x-forwarded-for': `10.1.${(hop >> 8) & 255}.${hop & 255}`,
+      'x-forwarded-for': client ?? `10.1.${(hop >> 8) & 255}.${hop & 255}`,
     };
     if (token) headers.authorization = `Bearer ${token}`;
     const res = await fetch(`http://127.0.0.1:${port}${urlPath}`, {
@@ -183,10 +191,27 @@ async function startOracle({ world, env = {} }) {
     return { status: res.status, body: json, text };
   }
 
+  // A request written by hand, for the cases an HTTP client will not send: a request target
+  // that is not a path, or one with a doubled slash. Resolves to the status line, or to the
+  // error code when the oracle drops the connection.
+  function raw(requestLine) {
+    return new Promise((resolve) => {
+      const socket = net.connect(port, '127.0.0.1', () => {
+        socket.end(`${requestLine}\r\nHost: localhost\r\nConnection: close\r\n\r\n`);
+      });
+      let data = '';
+      socket.on('data', (d) => { data += d; });
+      socket.on('close', () => resolve(data.split('\r\n')[0] || 'closed with no response'));
+      socket.on('error', (err) => resolve(`error ${err.code}`));
+    });
+  }
+
   return {
     port,
     call,
+    raw,
     logs: () => out.log,
+    alive: () => out.code === null,
     async stop() {
       child.kill();
       await exited;
@@ -213,4 +238,61 @@ async function runToExit({ world, env = {} }) {
   return { code: out.code, log: out.log };
 }
 
-module.exports = { World, startOracle, runToExit, wallet, ASSET };
+/**
+ * A webhook that records what it is sent, for tests of the watcher. Answers 204 to anything.
+ * Resolves to { url, received, close }; `received` is filled as requests arrive.
+ */
+function webhookSink() {
+  const received = [];
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (d) => { body += d; });
+    req.on('end', () => {
+      received.push({ method: req.method, url: req.url, body });
+      res.writeHead(204);
+      res.end();
+    });
+  });
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => resolve({
+      url: `http://127.0.0.1:${server.address().port}/hook`,
+      received,
+      close: () => new Promise((r) => server.close(r)),
+    }));
+  });
+}
+
+/**
+ * Run the real watcher.js as a child process. It signs nothing and needs no chain for a poll
+ * that finds no divergence, so the only thing to supply is where to look and where to speak:
+ * `CHECKER_URL` and `WEBHOOK_URL` in `env`. The first poll runs at once, which is all a test
+ * needs; the interval is the minimum the watcher accepts.
+ */
+function startWatcher({ env = {} }) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sigvara-e2e-'));
+  const child = spawn(process.execPath, [path.join(ORACLE_DIR, 'watcher.js')], {
+    cwd: dir,
+    env: {
+      PATH: process.env.PATH,
+      SystemRoot: process.env.SystemRoot,
+      RPC_URL: 'http://127.0.0.1:9',
+      REPUTATION_ADDRESS: `0x${'33'.repeat(20)}`,
+      POLL_SECONDS: '30',
+      ...env,
+    },
+  });
+  const out = { log: '', code: null };
+  child.stdout.on('data', (d) => { out.log += d; });
+  child.stderr.on('data', (d) => { out.log += d; });
+  const exited = new Promise((resolve) => child.on('exit', (code) => { out.code = code; resolve(code); }));
+  return {
+    logs: () => out.log,
+    async stop() {
+      child.kill();
+      await exited;
+      fs.rmSync(dir, { recursive: true, force: true });
+    },
+  };
+}
+
+module.exports = { World, startOracle, runToExit, startWatcher, webhookSink, wallet, ASSET };

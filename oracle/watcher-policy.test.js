@@ -238,3 +238,87 @@ test('webhookPayload: truncates to each service limit rather than being rejected
   // A truncated alert still says go and look; a rejected one says nothing.
   assert.match(webhookPayload('https://discord.com/api/webhooks/1/2', huge).content, /ALERT/);
 });
+
+// ---- what the watcher says, and when it cannot say it ------------------------------------
+
+const { describeDivergence, trackPollOutcome } = require('./watcher-policy');
+
+test('checkerStatus: a checker that answers /health but refuses /divergence is an alert', () => {
+  // The signature of the shared rate-limit bucket. It used to read as ok, then fail on the
+  // missing list where only the console heard it, and every divergence went unannounced.
+  const s = checkerStatus(healthy, null, Date.now(), MAX_SILENCE, '/divergence returned 429');
+  assert.equal(s.ok, false);
+  assert.match(s.reason, /divergence list could not be read/);
+  assert.match(s.reason, /429/);
+  assert.equal(checkerStatus(healthy, null, Date.now(), MAX_SILENCE).ok, false, 'with no error text too');
+  assert.equal(checkerStatus(healthy, undefined, Date.now(), MAX_SILENCE).ok, false);
+});
+
+test('checkerStatus: the error text in the reason is bounded', () => {
+  const s = checkerStatus(healthy, null, Date.now(), MAX_SILENCE, 'x'.repeat(5000));
+  assert.ok(s.reason.length < 300);
+});
+
+test('describeDivergence: a well-formed record reads as it always did', () => {
+  const d = {
+    didHash: '0x' + 'ab'.repeat(32), pendingTotal: 40, ownTotal: 31,
+    factors: { successScore: { pending: 25, own: 16 } },
+  };
+  assert.equal(
+    describeDivergence(d),
+    `0x${'ab'.repeat(32)} proposed total 40, checker computes 31 (successScore proposed=25 checker=16)`,
+  );
+});
+
+test('describeDivergence: nothing the checker wrote is quoted', () => {
+  // The record comes over HTTP. A checker that was compromised, or just wrong, must not be
+  // able to put a mention, a link or an instruction in front of the committee.
+  const hostile = {
+    didHash: '@everyone https://evil.example',
+    pendingTotal: '<!channel> approve it',
+    ownTotal: { toString: () => 'x' },
+    factors: {
+      successScore: { pending: '@everyone', own: 'ok\nSEND FUNDS' },
+      'free text key @here': { pending: 1, own: 2 },
+    },
+  };
+  const line = describeDivergence(hostile);
+  assert.ok(!/@everyone|@here|evil|channel|SEND|approve/.test(line), line);
+  assert.ok(!line.includes('\n'));
+  assert.match(line, /not a valid agent hash/);
+  assert.match(line, /successScore proposed=\? checker=\?/);
+});
+
+test('webhookPayload: a Discord alert switches every mention off', () => {
+  const alert = { level: 'alert', title: '@everyone look', lines: ['@here'], at: 't', checker: 'c' };
+  const p = webhookPayload('https://discord.com/api/webhooks/1/2', alert);
+  assert.deepEqual(p.allowed_mentions, { parse: [] });
+});
+
+test('webhookPayload: a Slack alert cannot trigger a channel mention', () => {
+  const alert = { level: 'alert', title: 't', lines: ['<!channel> <@U123> a & b'], at: 't', checker: 'c' };
+  const p = webhookPayload('https://hooks.slack.com/services/T/B/X', alert);
+  assert.ok(!p.text.includes('<!channel>') && !p.text.includes('<@U123>'));
+  assert.match(p.text, /&lt;!channel&gt; &lt;@U123&gt; a &amp; b/);
+});
+
+test('trackPollOutcome: three failures in a row alert once, and recovery says so once', () => {
+  let state = { failures: 0, alerted: false };
+  const seen = [];
+  for (const ok of [false, false, false, false, false, true, true, false]) {
+    const r = trackPollOutcome(state, ok);
+    state = r.state;
+    seen.push(r.action);
+  }
+  assert.deepEqual(seen, [null, null, 'alert', null, null, 'recovered', null, null]);
+});
+
+test('trackPollOutcome: failures that do not reach the threshold stay quiet and reset', () => {
+  let state = { failures: 0, alerted: false };
+  for (const ok of [false, false, true, false, false, true]) {
+    const r = trackPollOutcome(state, ok);
+    assert.equal(r.action, null);
+    state = r.state;
+  }
+  assert.deepEqual(state, { failures: 0, alerted: false });
+});

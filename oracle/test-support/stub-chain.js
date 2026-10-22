@@ -13,6 +13,7 @@
 //     receipts:  { "<txhash>": { status, blockNumber, logs: [{ address, topics, data }] } }
 //     agents:    { "<didhash>": { operator, agentAddress, registeredAt, status } }
 //     standing:  { "<address>": hard score of a counterparty }
+//     explodeHealth: when true, the /health route throws
 //   }
 //
 // Keys are lowercase. Epochs are switched off: the fake registry read throws, which the
@@ -51,7 +52,12 @@ const external = {
   init() {},
   refreshChainId: async () => null,
   configured: () => false,
-  chainState: () => ({ status: 'disabled', chainId: null }),
+  // world.explodeHealth makes the /health route throw, which is how a test proves that a
+  // handler error costs one request and not the process.
+  chainState: () => {
+    if (world().explodeHealth) throw new Error('stub: the health route was told to fail');
+    return { status: 'disabled', chainId: null };
+  },
   externalScoreFor: async () => 0,
   verifyOwnership: async () => false,
 };
