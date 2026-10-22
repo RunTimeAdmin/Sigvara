@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Fixed: a challenge dated in the future never expired
+
+`isChallengeExpired`, and with it `verifySignature` and `SigvaraGate.admit`, compared only
+a challenge's age. A payload dated ahead of the verifier's clock counted as fresh for as
+long as the date stayed ahead, so a signature over one dated ten years out worked for ten
+years. That is how audience binding was defeated in practice: a peer the agent
+authenticates to can hand it a payload naming a different verifier, and the agent signs
+it (`signChallenge` does not inspect what it signs). A gate also kept such a nonce until
+its far-off expiry, which stalled its pruning behind it.
+
+A payload dated more than 60 seconds (`MAX_FUTURE_SKEW_SECONDS`) ahead is now refused as
+not fresh. Challenges a gate issues itself are dated by its own clock and are unaffected.
+
+Still open: the agent signs whatever it is handed, and a gate admits a challenge it did not
+issue. Both need a decision on the API and are not changed here.
+
 ## 1.0.0-alpha.9
 
 ### New: `SigvaraGate`

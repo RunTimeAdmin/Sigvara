@@ -89,8 +89,9 @@ class MemoryNonceStore implements NonceStore {
    * the head is the oldest and stopping at the first live entry is enough. Insertion
    * order is not exactly expiry order, because `expiresAt` derives from the timestamp
    * inside the signed payload and a caller may present an older challenge after a newer
-   * one, but any such disorder is bounded by the TTL: a straggler is skipped now and
-   * collected on a later pass once the head moves past it. Pruning is a memory
+   * one, but any such disorder is bounded by the TTL plus MAX_FUTURE_SKEW_SECONDS, since
+   * no payload dated further ahead verifies: a straggler is skipped now and collected on a
+   * later pass once the head moves past it. Pruning is a memory
    * optimisation, never the replay check, so best-effort here costs nothing in safety.
    */
   prune(nowSeconds: number): void {
