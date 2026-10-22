@@ -820,7 +820,7 @@ The verdict is logged and counted (`sigvara_oracle_payment_scan_canary_failures_
 | Verdict | Meaning |
 |---|---|
 | `passed` | The query works, so the empty range really was empty. |
-| `failed` | The query did not find a settlement known to exist. **The range is unverified, not quiet.** |
+| `failed` | The query did not find a settlement known to exist. **The range is unverified, not quiet**: the checkpoint is held where it was and the whole range is scanned again at the next epoch. |
 | `unavailable` | No prior payment to point at, or the RPC could not answer. Never reported as `passed`. |
 
 A probe without the recipient filter would not do: it proves the asset and chain are

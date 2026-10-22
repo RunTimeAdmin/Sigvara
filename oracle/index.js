@@ -567,14 +567,15 @@ async function runPaymentScan(agents) {
       metrics.inc('paymentScanCanaryFailures');
       console.error(
         '[oracle] payment scan canary FAILED: a known settlement was not found by the ' +
-        'same filter the scan uses. Treat this range as unverified, not as quiet.',
+        'same filter the scan uses. Treat this range as unverified, not as quiet; the checkpoint ' +
+        `stays at ${from - 1} and the range is scanned again next epoch.`,
       );
     }
   }
 
-  // Never past a block still unresolved. The scan only moves forward, so advancing over
-  // one would lose that payment for good.
-  const nextCheckpoint = paymentScan.checkpointAfter(unresolved, from, to);
+  // Never past a block still unresolved, and not at all after a failed canary. The scan only moves
+  // forward, so advancing over either would lose a payment for good.
+  const nextCheckpoint = paymentScan.checkpointAfter(unresolved, from, to, canary);
   if (nextCheckpoint !== null) setPaymentScanState({ lastBlock: nextCheckpoint, at: Date.now() });
   metrics.inc('paymentScans');
   if (credited) metrics.inc('paymentsPulled', credited);

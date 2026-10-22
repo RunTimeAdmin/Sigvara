@@ -343,7 +343,13 @@ function safeHead(head, confirmations) {
 /**
  * How far the checkpoint may advance after processing a range.
  *
- * Not simply `to`. A credit whose block timestamp could not be read is left uncredited,
+ * Not at all after a failed canary. The canary fails when the scan's own query cannot find a settlement
+ * this operator already holds, so an empty result for the range proves nothing: payments may be sitting
+ * in it. Returning null commits nothing and the whole range is scanned again at the next epoch, which is
+ * what the log line promises ("unverified, not quiet"). An `unavailable` canary does not hold it, or an
+ * operator with no payment yet to point at would never advance.
+ *
+ * Otherwise not simply `to`. A credit whose block timestamp could not be read is left uncredited,
  * and if the checkpoint moved past it anyway that payment would never be looked at
  * again: the scan only ever moves forward. The first version of this carried a comment
  * saying such a credit was "left for next time" while advancing the checkpoint past it,
@@ -354,8 +360,10 @@ function safeHead(head, confirmations) {
  * which is the case where the very first block of the range is the unresolved one.
  *
  * @param {Array<{blockNumber:number}>} unresolved credits with no usable timestamp
+ * @param {string} [canary] the verdict of runScanCanary, or 'not_run'
  */
-function checkpointAfter(unresolved, from, to) {
+function checkpointAfter(unresolved, from, to, canary = 'not_run') {
+  if (canary === 'failed') return null;
   if (!unresolved.length) return to;
   const earliest = unresolved.reduce((m, c) => Math.min(m, c.blockNumber), Infinity);
   const candidate = earliest - 1;

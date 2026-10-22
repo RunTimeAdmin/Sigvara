@@ -301,6 +301,22 @@ test('the checkpoint stops one block short of the earliest unresolved block', ()
     'the earliest one decides, not the last seen');
 });
 
+test('a failed canary commits nothing, so the whole range is scanned again', () => {
+  // The canary fails when the scan's own query cannot find a settlement already held, so an empty
+  // result proves nothing about the range. Advancing over it would lose any payment in it for good.
+  assert.equal(scan.checkpointAfter([], 100, 200, 'failed'), null);
+  assert.equal(scan.checkpointAfter([{ blockNumber: 150 }], 100, 200, 'failed'), null);
+});
+
+test('a canary that passed, was unavailable or did not run changes nothing', () => {
+  // `unavailable` must not hold the checkpoint: an operator with no payment yet to point at, or an RPC
+  // that could not answer the probe, would otherwise never advance.
+  for (const verdict of ['passed', 'unavailable', 'not_run', undefined]) {
+    assert.equal(scan.checkpointAfter([], 100, 200, verdict), 200, String(verdict));
+    assert.equal(scan.checkpointAfter([{ blockNumber: 150 }], 100, 200, verdict), 149, String(verdict));
+  }
+});
+
 test('nothing is committed when the first block of the range is unresolved', () => {
   // from - 1 would move the checkpoint backwards. Null means the whole range is retried.
   assert.equal(scan.checkpointAfter([{ blockNumber: 100 }], 100, 200), null);

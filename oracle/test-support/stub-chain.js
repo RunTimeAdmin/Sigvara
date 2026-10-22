@@ -19,6 +19,8 @@
 //     operatorStanding: { enforced, allowed, operatorBond } what the boot check finds (default not enforced)
 //     jobs:      { head, logs } what the ERC-8183 job registry's node answers, when the oracle
 //                is given JOBS_REGISTRY_ADDRESS (head defaults to `head`, logs to none)
+//     scanLogs, canaryLogs: what the payment scan's getLogs finds. A range is the scan, a single
+//                block is its canary (the block a known settlement sits in); each defaults to none
 //   }
 //
 // Keys are lowercase. Unless the world lists agents to score, epochs are switched off: the
@@ -67,6 +69,7 @@ const provider = {
   getTransactionReceipt: async (hash) => world().receipts[String(hash).toLowerCase()] ?? null,
   getBlockNumber: async () => world().head,
   getBlock: async () => ({ timestamp: world().nowSec - 60 }),
+  getLogs: async (filter) => (filter.fromBlock === filter.toBlock ? world().canaryLogs : world().scanLogs) ?? [],
 };
 
 const chain = {
