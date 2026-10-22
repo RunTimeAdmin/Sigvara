@@ -40,13 +40,13 @@ break `forge script`.
 
 ## 1. Prerequisites
 
-Foundry (`forge`, `cast`), the Solidity libs cloned into `lib/` (gitignored, same
-as CI), and `DEPLOYER_PRIVATE_KEY` exported in your shell (never commit it):
+Foundry (`forge`, `cast`), the Solidity libs fetched into `lib/` (gitignored, same
+as CI), and `DEPLOYER_PRIVATE_KEY` exported in your shell (never commit it). The libs
+are fetched by commit (OpenZeppelin v5.6.1 and the forge-std commit the suite was run
+against), so a moved tag cannot change what you build:
 
 ```bash
-git clone --depth 1 --branch v5.6.1 https://github.com/OpenZeppelin/openzeppelin-contracts.git lib/openzeppelin-contracts
-git clone --depth 1 --branch v5.6.1 https://github.com/OpenZeppelin/openzeppelin-contracts-upgradeable.git lib/openzeppelin-contracts-upgradeable
-git clone --depth 1 https://github.com/foundry-rs/forge-std.git lib/forge-std
+sh scripts/fetch-deps.sh
 ```
 
 Then confirm the chain and fund the deployer:

@@ -16,14 +16,10 @@ jobs:
         uses: foundry-rs/foundry-toolchain@v1
 
       # lib/ is gitignored (not vendored, not submodules), so CI fetches the
-      # Solidity deps at the versions foundry.toml's remappings expect.
-      # OZ is pinned to v5.6.1; forge-std tracks its default branch (test-only
-      # scaffolding, stable cheatcode API).
+      # Solidity deps at the versions foundry.toml's remappings expect. Each is
+      # fetched by commit, and the commits live in scripts/fetch-deps.sh.
       - name: Fetch Solidity dependencies
-        run: |
-          git clone --depth 1 --branch v5.6.1 https://github.com/OpenZeppelin/openzeppelin-contracts.git lib/openzeppelin-contracts
-          git clone --depth 1 --branch v5.6.1 https://github.com/OpenZeppelin/openzeppelin-contracts-upgradeable.git lib/openzeppelin-contracts-upgradeable
-          git clone --depth 1 https://github.com/foundry-rs/forge-std.git lib/forge-std
+        run: sh scripts/fetch-deps.sh
 
       - name: Build
         run: forge build --sizes
@@ -93,10 +89,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Fetch Solidity dependencies
-        run: |
-          git clone --depth 1 --branch v5.6.1 https://github.com/OpenZeppelin/openzeppelin-contracts.git lib/openzeppelin-contracts
-          git clone --depth 1 --branch v5.6.1 https://github.com/OpenZeppelin/openzeppelin-contracts-upgradeable.git lib/openzeppelin-contracts-upgradeable
-          git clone --depth 1 https://github.com/foundry-rs/forge-std.git lib/forge-std
+        run: sh scripts/fetch-deps.sh
 
       # Fails the build on High findings only. Medium/Low are reviewed by hand;
       # the accepted ones are recorded in docs/adr/0002-analyzer-accepted-findings.md.

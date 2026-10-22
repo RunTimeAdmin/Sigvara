@@ -10,6 +10,9 @@ remappings = [
 optimizer = true
 optimizer_runs = 200
 solc_version = "0.8.24"
+# Explicit, so a Foundry upgrade cannot change what is compiled. Arc runs Osaka, and
+# cancun bytecode runs there.
+evm_version = "cancun"
 
 fs_permissions = [{ access = "read-write", path = "./deployments" }]
 
