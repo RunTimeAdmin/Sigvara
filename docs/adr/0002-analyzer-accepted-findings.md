@@ -71,6 +71,23 @@ event-signature change.
   `unbondingAt`, and treats a read of any field as a read of the timestamp.
   False positives, listed so that nobody has to re-derive that.
 
+### Added with the review fixes
+
+- `timestamp` (Low), `InflowGuard.pauseInflows`, `resumeInflows`, `inflowsPaused`
+  and the `whenInflowsOpen` modifier: a pause lasts three days and the cooldown
+  before the next one is a day. The shortest window is a day, several orders of
+  magnitude above the skew a block producer controls, and a few seconds either
+  way moves the end of a pause by a few seconds. Reconsider if either figure is
+  ever set below a few minutes.
+- `timestamp` (Low), `SigvaraStaking.initiateSlash`: the re-file cooldown
+  compares the clock with the time of the last dropped proposal plus one
+  challenge period, which has a floor of three days. Same disposition as the
+  challenge period above.
+- `assembly` (Informational), `InflowGuard._inflowGuard`: one line that points a
+  storage struct at the ERC-7201 slot, the pattern OpenZeppelin's upgradeable
+  contracts use for namespaced storage. A test recomputes the slot from the
+  namespace string.
+
 ## Fixed
 
 ### `uninitialized-local` (Medium, 1 site)
