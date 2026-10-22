@@ -154,6 +154,13 @@ interface ISigvaraReader {
         /// new one asks. This is the field that says so. Appended last, so a caller built
         /// against the struct without it still decodes the rest.
         bool collateralized;
+        /// When the score was last written: the time the latest proposal finalized, or the score was
+        /// zeroed. Zero for an agent that has never been scored. Nothing decays a score on chain, so one
+        /// left over from before an oracle outage, or from while proposals were paused, keeps its old time
+        /// here and keeps satisfying `score` until the oracle writes again. A consumer that cannot accept
+        /// that compares this with block.timestamp, or calls isTrustedFresh. Appended last, like the field
+        /// before it.
+        uint256 scoreUpdatedAt;
     }
 
     /// @notice The didHash for an agent address on this chain.
@@ -169,4 +176,12 @@ interface ISigvaraReader {
     ///         minimum, and its spendable score is at least `minScore`. False for an address
     ///         that was never registered, whatever the threshold.
     function isTrusted(address agent, uint8 minScore) external view returns (bool);
+
+    /// @notice isTrusted, and the score was written no more than `maxAgeSeconds` ago. False for an agent
+    ///         that has never been scored, whatever the age: a score that was never written is not a
+    ///         fresh one. A maximum age of zero asks for a score written in this very second. Use this
+    ///         instead of isTrusted wherever an oracle outage, or a pause on proposals, should not leave a
+    ///         stale score admitting an agent. Pick the age against the oracle's epoch length, which is
+    ///         how often a live oracle writes.
+    function isTrustedFresh(address agent, uint8 minScore, uint256 maxAgeSeconds) external view returns (bool);
 }
