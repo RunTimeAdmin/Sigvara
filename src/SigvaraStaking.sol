@@ -99,12 +99,6 @@ contract SigvaraStaking is
     // Storage
     // -------------------------------------------------------------------------
 
-    /// @dev Assumed to move exactly `amount` on transfer: no fee on transfer, no rebasing.
-    ///      depositStake credits the requested amount rather than the observed balance
-    ///      delta, so a token that deducts on transfer would over-credit every deposit and
-    ///      leave the last withdrawer unable to claim. SVR is a plain fixed-supply ERC-20,
-    ///      but this contract accepts any IERC20 at deploy and the README says as much, so
-    ///      the requirement belongs where the assumption is made rather than in prose.
     /**
      * @notice The bond token. Set once at initialize and treated as a plain ERC20.
      * @dev    Deposits credit the measured balance delta, so a fee-on-transfer token
@@ -235,15 +229,21 @@ contract SigvaraStaking is
      * @dev    The live proxy already consumed initializer version 1, so the new
      *         initialize() can never run there — without this, unbondingPeriod would
      *         silently stay 0 after the upgrade and withdrawals would be instantly
-     *         claimable. Call via upgradeToAndCall so upgrade + config are atomic.
+     *         claimable. Call via upgradeToAndCall so upgrade + config are atomic, when
+     *         the caller holds both DEFAULT_ADMIN_ROLE and UPGRADER_ROLE (the testnet
+     *         deployer does). Behind a timelock the upgrade lands with empty data and
+     *         the admin makes this call in a second transaction.
      *         Admin-gated because on FRESH deployments version 2 is still unconsumed
      *         after initialize(), and this must not be callable by a stranger.
+     *         Held to the same floor as setUnbondingPeriod, so the one free call a
+     *         fresh deployment leaves cannot set a shorter period than the setter would.
      */
     function initializeV2(uint256 unbondingPeriod_)
         external
         onlyRole(DEFAULT_ADMIN_ROLE)
         reinitializer(2)
     {
+        if (unbondingPeriod_ < MIN_UNBONDING_PERIOD) revert PeriodTooShort(unbondingPeriod_, MIN_UNBONDING_PERIOD);
         unbondingPeriod = unbondingPeriod_;
         emit UnbondingPeriodUpdated(unbondingPeriod_);
     }

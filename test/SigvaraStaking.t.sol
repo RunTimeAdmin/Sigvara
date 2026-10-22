@@ -798,6 +798,30 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
         staking.initializeV2(30 days);
     }
 
+    /// On a fresh deployment initializeV2 is still unconsumed after initialize, and it used to
+    /// take any value: the admin could set a zero unbonding period once, around the one day
+    /// floor that setUnbondingPeriod enforces.
+    function test_initializeV2_reverts_belowTheUnbondingFloor() public {
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.PeriodTooShort.selector, 0, 1 days));
+        vm.prank(admin);
+        staking.initializeV2(0);
+
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.PeriodTooShort.selector, 1 days - 1, 1 days));
+        vm.prank(admin);
+        staking.initializeV2(1 days - 1);
+    }
+
+    /// The floor itself is accepted, and a refused call did not use the version up.
+    function test_initializeV2_acceptsTheFloor_afterARefusedCall() public {
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.PeriodTooShort.selector, 1 hours, 1 days));
+        vm.prank(admin);
+        staking.initializeV2(1 hours);
+
+        vm.prank(admin);
+        staking.initializeV2(1 days);
+        assertEq(staking.unbondingPeriod(), 1 days);
+    }
+
     function test_claimWithdrawal_reverts_pendingSlash_evenAfterUnbondingElapsed() public {
         // Make unbonding shorter than the 7-day challenge period so the claim
         // window opens while the slash is still pending. Without the guard in
