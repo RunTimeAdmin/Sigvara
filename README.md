@@ -525,11 +525,11 @@ Everything below runs offline, with no network access and no deployed contracts,
 
 | Suite | Count | Command |
 |---|---|---|
-| Contracts — unit, fuzz, E2E, upgrade and 6 invariants | 379 | `forge test` |
+| Contracts — unit, fuzz, E2E, upgrade, deploy-script and 6 invariants | 397 | `forge test` |
 | Oracle | 509 | `cd oracle && node --test` |
 | SDK | 140 | `cd packages/sdk && npx vitest run` |
 
-Counts are test functions, so each of the 6 invariants counts once. CI's Foundry runs those 6 as a single campaign, so its summary reads 374 total tests: 368 run and 6 skipped, the six in `test/SplitAuthorityFork.t.sol`. The SDK's 140 includes 8 integration tests that skip without a live deployment.
+Counts are test functions, so each of the 6 invariants counts once. CI's Foundry runs those 6 as a single campaign, so its summary reads 392 total tests: 386 run and 6 skipped, the six in `test/SplitAuthorityFork.t.sol`. The SDK's 140 includes 8 integration tests that skip without a live deployment.
 
 ### Unit Tests (default)
 
@@ -656,6 +656,7 @@ require(ISigvaraReader(READER).isTrusted(agent, 60), "agent not in good standing
 | Sybil resistance | Q4 2026 | ~~payment-backed attestations~~ · ~~half-life decay + shrinkage prior~~ · ~~bond required before scoring~~ · ~~self-payment and per-payer diversity caps~~ · ~~tenure in place of calendar age~~ · ~~maturity time-lock~~ · ~~two-step operator transfer~~ · ~~on-chain evidence roots~~ — all **done**, see [payment-backed attestations](docs/payment-backed-attestations.md) |
 | Oracle decentralization | Q1 2027 | ~~oracle operator bonds deployed and wired~~ **done** · ~~a second bonded operator with challenge-based disagreement~~ **done** (checker mode, `activeCount` 2, separate host and RPC provider) · ~~public challenge watcher~~ **done** (third host, holds no key) · deterministic scoring off the chain clock · operators run by *independent parties*, which is the part that still matters |
 | Mainnet Registries | Q1 2027 | Tier-1 security audit · admin and upgrade roles onto a timelock or Safe · ~~one documented end-to-end testnet slash~~ **done** · registry deployment on Arc mainnet (`5042`) with bonds and scoring fees in SVR |
+| Delivery and disputes | After the first audit | not started · outcomes bound to a settled payment by a payer signature (EIP-712), in place of a trusted attester · a payer-initiated challenge against the agent's bond · an arbiter path beyond the committee · built to plug into x402's escrow and delivery-receipt work, so Sigvara supplies the bonded verifier and the seller's standing rather than a payment scheme |
 | Cross-Chain | Q2 2027 | Solana + Base state mirroring via LayerZero |
 
 The token-launch contract set (fixed-supply `SVR`, vesting, public sale) and the earlier tokenomics and oracle-first direction docs live under [`archive/token-launch/`](archive/token-launch/). They are out of the build; SVR will launch through Tolly rather than these contracts.

@@ -8,6 +8,7 @@ import "../src/SigvaraIdentity.sol";
 import "../src/SigvaraReputation.sol";
 import "../src/SigvaraStaking.sol";
 import "../src/SVRToken.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 
 /**
  * @title Deploy
@@ -19,14 +20,26 @@ import "../src/SVRToken.sol";
  *   forge script script/Deploy.s.sol --rpc-url arc_testnet --broadcast -vvvv  # deploy
  *   # writes deployments/5042002.json; add --legacy if fee estimation fails
  *
- * Usage — Arc mainnet (chain ID 5042): same command with --rpc-url arc_mainnet.
+ * Usage — Arc mainnet (chain ID 5042): same command with --rpc-url arc_mainnet, plus the
+ * mainnet inputs below. On chain 5042 the script refuses to run without SVR_ADDRESS, with
+ * a bond token that has no code or is not 18 decimals, with the oracle or committee equal
+ * to the deployer or to each other, or with periods under the floors the contracts'
+ * setters enforce.
+ *
+ * Forge runs the script locally before it sends anything, so deployments/{chainId}.json is
+ * written at that point, not after the transactions confirm. A broadcast that fails or is
+ * interrupted leaves the file naming contracts that may not exist, and `--resume` rewrites
+ * it with addresses computed from the new nonce. Do not resume. After any broadcast, check
+ * the chain (`node scripts/record-implementations.mjs` fails on an address that is not a
+ * proxy) before the file is committed or trusted.
  *
  * Required env vars:
  *   DEPLOYER_PRIVATE_KEY   — deployer key (used for broadcast)
  *
  * Optional env vars:
- *   SVR_ADDRESS            — existing ERC-20 to use as the bond token (mainnet). When unset,
- *                            the script deploys the SVRToken testnet faucet token instead.
+ *   SVR_ADDRESS            — existing ERC-20 to use as the bond token. Required on mainnet.
+ *                            When unset elsewhere, the script deploys the SVRToken testnet
+ *                            faucet token instead.
  *   ORACLE_ADDRESS         — address that may call updateReputation() on the oracle network
  *                            defaults to deployer
  *   COMMITTEE_ADDRESS      — initial SLASHING_COMMITTEE_ROLE holder (testnet 3-of-5 multisig)
@@ -57,7 +70,16 @@ contract Deploy is Script {
 
     uint256 constant ARC_MAINNET = 5042;
 
+    /// The floors SigvaraStaking.setChallengePeriod and setUnbondingPeriod enforce. initialize
+    /// and initializeV2 enforce nothing, so on mainnet this script holds the line itself.
+    /// test/DeployScripts.t.sol pins both to the contract's own constants.
+    uint256 constant MIN_CHALLENGE_PERIOD = 3 days;
+    uint256 constant MIN_UNBONDING_PERIOD = 1 days;
+
     error RolesNotSeparated(address deployer, address oracle, address committee);
+    error BondTokenNotSet();
+    error BondTokenInvalid(address token);
+    error PeriodBelowFloor(string name, uint256 value, uint256 floor);
 
     function run() external {
         uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
@@ -71,6 +93,8 @@ contract Deploy is Script {
         uint256 unbondPeriod  = vm.envOr("UNBONDING_PERIOD",      DEFAULT_UNBONDING_PERIOD);
 
         _checkRoleSeparation(deployer, oracle, committee);
+        _checkMainnetToken(vm.envOr("SVR_ADDRESS", address(0)));
+        _checkMainnetPeriods(period, unbondPeriod, scoreWindow);
 
         vm.startBroadcast(deployerKey);
 
@@ -108,6 +132,11 @@ contract Deploy is Script {
                 unbondPeriod
             ))
         )));
+        // SigvaraStaking.initializeV2 was written for proxies that predate unbonding, and this
+        // script used to leave it alone. On a fresh deployment its version is still unused
+        // after initialize, so the admin could call it once, later, with any value, and walk
+        // around setUnbondingPeriod's one day floor. Use it up now with the period just set.
+        staking.initializeV2(unbondPeriod);
 
         // 5. Wire cross-contract roles
         // Identity checks collateral before letting an operator return an agent to
@@ -168,13 +197,58 @@ contract Deploy is Script {
         console2.log("!! One key can score, slash and upgrade. Acceptable on testnet only.");
     }
 
+    /// @dev Mainnet only. The bond token is fixed at initialize with no setter, so a wrong
+    ///      one is a redeployment. With SVR_ADDRESS unset this script deploys the faucet token
+    ///      and carries on, which is right on a testnet and a disaster here, since every
+    ///      address could then mint the bond. Every amount in the protocol is written for 18
+    ///      decimals, so a token with any other count is refused too.
+    function _checkMainnetToken(address token) internal view {
+        if (block.chainid != ARC_MAINNET) return;
+        if (token == address(0)) revert BondTokenNotSet();
+        if (token.code.length == 0) revert BondTokenInvalid(token);
+        // A low-level call, not try/catch: a try cannot catch a return value that fails to
+        // decode, so an address that answers every call with nothing (a permissive fallback,
+        // or an account with delegated code, as several well-known test accounts have on Arc)
+        // would revert with no reason at all.
+        (bool ok, bytes memory ret) = token.staticcall(abi.encodeWithSelector(IERC20Metadata.decimals.selector));
+        if (!ok || ret.length != 32 || abi.decode(ret, (uint256)) != 18) revert BondTokenInvalid(token);
+    }
+
+    /// @dev Mainnet only. initialize and initializeV2 accept any period, where the setters
+    ///      refuse anything under the floors, so a mistyped value here would become the live
+    ///      setting. A zero score window lets a proposal finalize in the block it is made.
+    function _checkMainnetPeriods(uint256 period, uint256 unbondPeriod, uint256 scoreWindow) internal view {
+        if (block.chainid != ARC_MAINNET) return;
+        if (period < MIN_CHALLENGE_PERIOD) revert PeriodBelowFloor("CHALLENGE_PERIOD", period, MIN_CHALLENGE_PERIOD);
+        if (unbondPeriod < MIN_UNBONDING_PERIOD) {
+            revert PeriodBelowFloor("UNBONDING_PERIOD", unbondPeriod, MIN_UNBONDING_PERIOD);
+        }
+        if (scoreWindow == 0) revert PeriodBelowFloor("SCORE_CHALLENGE_WINDOW", scoreWindow, 1);
+    }
+
     // SVR_ADDRESS points at an existing ERC-20 (the mainnet bond asset). When unset,
     // deploy the SVRToken testnet faucet token. Kept out of run() to stay under the
     // stack limit.
     function _bondToken(address deployer) internal returns (SVRToken) {
         address existing = vm.envOr("SVR_ADDRESS", address(0));
-        if (existing != address(0)) return SVRToken(existing);
+        if (existing != address(0)) {
+            _logToken(existing);
+            return SVRToken(existing);
+        }
         return new SVRToken(deployer);
+    }
+
+    /// What to compare by eye with the published token before anything is sent. The
+    /// simulation prints it.
+    function _logToken(address token) internal view {
+        _logUint("Bond token decimals:", token, IERC20Metadata.decimals.selector);
+        _logUint("Bond token supply (wei):", token, IERC20.totalSupply.selector);
+    }
+
+    function _logUint(string memory label, address token, bytes4 selector) internal view {
+        (bool ok, bytes memory ret) = token.staticcall(abi.encodeWithSelector(selector));
+        if (ok && ret.length == 32) console2.log(label, abi.decode(ret, (uint256)));
+        else console2.log(label, "(unreadable)");
     }
 
     function _writeAddresses(
@@ -192,11 +266,13 @@ contract Deploy is Script {
         vm.serializeAddress(key, "reputation", reputation);
         string memory json = vm.serializeAddress(key, "staking", staking);
 
-        // Only on a real broadcast. A dry run mints addresses that exist nowhere, and
-        // writing them left the artifact one `git commit` away from publishing
-        // contracts that were never deployed. docs/deploy-testnet.md used to tell you
-        // to delete the file between the simulate and the broadcast; not writing it in
-        // the first place removes the step and the mistake.
+        // Only under --broadcast or --resume, so a dry run does not leave the artifact naming
+        // addresses that exist nowhere. That is not the same as after the transactions
+        // confirm: forge executes this script locally before it sends anything, so the file
+        // is written first. If the broadcast then fails, the file names contracts that may
+        // not exist, and --resume runs this again from the new nonce and rewrites it with
+        // addresses that were never deployed. Check the chain before trusting or committing
+        // it (node scripts/record-implementations.mjs fails on an address that is not a proxy).
         if (!vm.isContext(VmSafe.ForgeContext.ScriptBroadcast)
             && !vm.isContext(VmSafe.ForgeContext.ScriptResume)) {
             console2.log("Dry run: deployments artifact not written.");

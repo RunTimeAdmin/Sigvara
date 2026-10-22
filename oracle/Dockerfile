@@ -1,4 +1,10 @@
-FROM node:20-alpine
+# Node 24 (LTS), pinned by digest. A tag moves; a digest is the bytes that were reviewed.
+# Node 20 reached end of life on 30 April 2026 and the VPS compose files still run it.
+# To move to a newer base: pull it, read the release notes, then change this line and the
+# comment together.
+FROM node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53
+
+ENV NODE_ENV=production
 
 WORKDIR /app
 
@@ -9,8 +15,12 @@ WORKDIR /app
 # CI installs from it, so the production image was the one artifact in the pipeline not
 # built from the reviewed tree. npm ci also fails loudly when the lockfile and manifest
 # have drifted, where install would quietly reconcile them.
+#
+# --ignore-scripts: no dependency runs code at install time. None of the locked packages
+# has an install script today, so this costs nothing and keeps it that way when a future
+# upgrade adds one.
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+RUN npm ci --omit=dev --ignore-scripts
 
 # Copy the source wholesale rather than naming each file.
 #
@@ -39,5 +49,30 @@ for (const f of fs.readdirSync('.').filter(n => n.endsWith('.js'))) { \
 if (missing.length) { console.error('unresolved local requires:', missing); process.exit(1); } \
 console.log('module graph ok'); \
 "
+
+# The commit this image was built from, so /health can say which code is running. The
+# mainnet compose passes the pinned commit for both the build context and this argument.
+# When given, it must be a full 40-character commit: a branch name or an abbreviation
+# here means the context was not pinned, and the build stops rather than report a commit
+# that says nothing.
+ARG SIGVARA_COMMIT=
+RUN if [ -n "$SIGVARA_COMMIT" ] && ! printf '%s' "$SIGVARA_COMMIT" | grep -Eq '^[0-9a-f]{40}$'; then \
+      echo "SIGVARA_COMMIT must be a full 40-character lowercase commit hash, got: $SIGVARA_COMMIT" >&2; exit 1; \
+    fi
+ENV SIGVARA_COMMIT=$SIGVARA_COMMIT
+
+# State lives on a mounted volume at /data. Created here and owned by the unprivileged
+# user so that a fresh named volume inherits that ownership; a volume Docker creates
+# from a path that does not exist in the image is root-owned and the oracle could not
+# write to it. An existing root-owned volume from an older image needs a one-time chown.
+# /app stays root-owned, so the process cannot rewrite its own code.
+RUN mkdir -p /data && chown node:node /data
+
+USER node
+
+# /health answers 503 when the state path is not writable and 200 otherwise. The watcher
+# runs from this image with no HTTP server, so its service turns this check off.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:' + (process.env.PORT || 3030) + '/health').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"
 
 CMD ["node", "index.js"]

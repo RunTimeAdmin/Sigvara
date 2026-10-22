@@ -1,0 +1,141 @@
+# The Sigvara oracle on Arc mainnet: primary, checker and watcher, built from one reviewed
+# commit and run with the key outside the container's environment.
+#
+# One file, three roles. A host runs exactly one of them, chosen by COMPOSE_PROFILES in
+# that host's .env: `oracle`, `checker` or `watcher`. The three belong on three separate
+# hosts (see oracle/.env.mainnet.example and its checker and watcher siblings).
+#
+#   mkdir -p /docker/sigvara-mainnet/secrets && cd /docker/sigvara-mainnet
+#   # copy this file and the matching oracle/.env.mainnet*.example to .env, fill it in
+#   # put the key in secrets/oracle_key (oracle and checker only), owner uid 1000, mode 0400
+#   docker compose up -d
+#
+# What this file does that docker-compose.*.vps.yml does not, and why:
+#
+# - It builds from SIGVARA_REF, a full commit hash, not from `main`, which the VPS files
+#   clone on every start. A deploy is a decision here: change SIGVARA_REF in .env, run
+#   `docker compose up -d`, and the new image is built from exactly that commit. A restart
+#   reruns the same image and fetches nothing. The Dockerfile refuses a SIGVARA_REF that is
+#   not 40 hex characters, so a branch name cannot slip in.
+# - The build runs with no key anywhere in its environment, and the running container has no
+#   git, no package manager and no network step at start.
+# - The key is a file secret, read by the oracle from ORACLE_PRIVATE_KEY_FILE. It does not
+#   appear in `docker inspect`, in the environment, or in any child process.
+# - The container runs as an unprivileged user on a read-only root filesystem, with every
+#   capability dropped. Its only writable places are /data (the state volume) and /tmp.
+# - Nothing is baked into /app that a restart could leave behind: there is no /app volume.
+#
+# SIGVARA_REF stops the code moving under the key; it does not make the commit good, so
+# review what you pin. Give the primary and the checker the same commit unless you are
+# rolling a change out one operator at a time: the checker recomputes the primary's scores,
+# so differing scoring code shows up as divergence.
+
+name: sigvara-mainnet
+
+x-hardened: &hardened
+  restart: unless-stopped
+  init: true
+  read_only: true
+  tmpfs:
+    - /tmp
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  pids_limit: 256
+  mem_limit: 768m
+  cpus: 1.0
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
+x-build: &build
+  context: https://github.com/RunTimeAdmin/Sigvara.git#${SIGVARA_REF:?set SIGVARA_REF to the full 40-character commit hash to deploy}:oracle
+  args:
+    SIGVARA_COMMIT: ${SIGVARA_REF}
+
+services:
+  # The primary operator. The only service that joins the edge network, so the reverse
+  # proxy can reach it without a host port. Nothing else should be on that network.
+  oracle:
+    <<: *hardened
+    profiles: ["oracle"]
+    build: *build
+    image: sigvara-oracle:${SIGVARA_REF}
+    container_name: sigvara-mainnet-oracle
+    env_file: .env
+    environment:
+      # Fixed here so .env cannot change them. HOST has to be 0.0.0.0 inside the
+      # container for the published port to reach it; the mapping below is what keeps it
+      # off the network.
+      HOST: 0.0.0.0
+      PORT: "3030"
+      ORACLE_STATE_PATH: /data/oracle-state.json
+      ORACLE_PRIVATE_KEY_FILE: /run/secrets/oracle_key
+    secrets:
+      - oracle_key
+    ports:
+      - "127.0.0.1:${HOST_PORT:-3030}:3030"
+    networks:
+      - default
+      - edge
+    volumes:
+      # paymentEvents live only here: attestations arrive over HTTP and a rescan cannot
+      # rebuild them. The volume outlives container recreates on purpose.
+      - oracle_state:/data
+
+  # The second bonded operator, in checker mode. Its own host, key, bond, RPC provider
+  # and state. Published to loopback only; whatever terminates TLS on that box serves
+  # /health and /divergence to the watcher (oracle/nginx-checker.conf.example).
+  checker:
+    <<: *hardened
+    profiles: ["checker"]
+    build: *build
+    image: sigvara-oracle:${SIGVARA_REF}
+    container_name: sigvara-mainnet-checker
+    env_file: .env
+    environment:
+      HOST: 0.0.0.0
+      PORT: "3030"
+      ORACLE_STATE_PATH: /data/oracle-state.json
+      ORACLE_PRIVATE_KEY_FILE: /run/secrets/oracle_key
+    secrets:
+      - oracle_key
+    ports:
+      - "127.0.0.1:${HOST_PORT:-3031}:3030"
+    volumes:
+      # Its own state. Sharing the primary's would share the payment observations the
+      # score is computed from, which is most of what is being checked.
+      - checker_state:/data
+
+  # The divergence watcher. A third host, no key, no state, no inbound port. It reads the
+  # checker and the chain and posts to a webhook; the worst a compromise can do is lie to
+  # you, so it gets the same image and none of the privileges.
+  watcher:
+    <<: *hardened
+    profiles: ["watcher"]
+    build: *build
+    image: sigvara-oracle:${SIGVARA_REF}
+    container_name: sigvara-mainnet-watcher
+    command: ["node", "watcher.js"]
+    env_file: .env
+    # The image's health check probes the oracle's HTTP port; the watcher has none.
+    healthcheck:
+      disable: true
+
+secrets:
+  oracle_key:
+    # Owner uid 1000 (the image's `node` user) and mode 0400. A compose file secret is a
+    # bind mount, so the container sees the host file's owner and mode as they are.
+    file: ${ORACLE_KEY_FILE:-./secrets/oracle_key}
+
+networks:
+  edge:
+    external: true
+    name: ${EDGE_NETWORK:-sigvara-edge}
+
+volumes:
+  oracle_state:
+  checker_state:

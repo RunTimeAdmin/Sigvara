@@ -15,18 +15,32 @@ import "../src/SigvaraEpochFees.sol";
  *         activate coverage checks once a non-zero fee is set.
  *
  * Usage:
- *   forge script script/DeployEpochFees.s.sol --rpc-url $RPC --broadcast --verify -vvvv
+ *   forge script script/DeployEpochFees.s.sol --rpc-url $RPC --broadcast -vvvv
+ *
+ * Do not pass --verify. Arc has no explorer entry in foundry.toml, and adding one breaks
+ * forge script (docs/arc.md).
  *
  * Required env:
  *   DEPLOYER_PRIVATE_KEY
  *   SVR_ADDRESS      — stake-token token
  *   IDENTITY_ADDRESS  — SigvaraIdentity proxy
- * Optional env (default to the deployer):
+ * Optional env (default to the deployer; on mainnet neither may be the deployer):
  *   ORACLE_ADDRESS    — granted ORACLE_ROLE (the oracle wallet)
  *   REWARD_POOL       — validator/oracle reward destination
  *   EPOCH_FEE         — initial per-epoch fee in wei (default 0 = gating disabled)
+ *
+ * Writes the proxy address into deployments/{chainId}.json under "epochFees", the way
+ * DeployOracleBond does for "oracleBond". script/SplitAuthority.s.sol reads that key and
+ * skips a contract that is missing from the artifact without a word, which would leave the
+ * deployer as its admin and upgrader. As with the other scripts the file is written when
+ * forge runs the script locally, before the transaction confirms, so check the chain
+ * before trusting it, and do not use --resume.
  */
 contract DeployEpochFees is Script {
+    uint256 constant ARC_MAINNET = 5042;
+
+    error RolesNotSeparated(address deployer, address oracle, address rewardPool);
+
     function run() external {
         uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
         address deployer = vm.addr(deployerKey);
@@ -36,6 +50,8 @@ contract DeployEpochFees is Script {
         address oracle     = vm.envOr("ORACLE_ADDRESS", deployer);
         address rewardPool = vm.envOr("REWARD_POOL", deployer);
         uint256 epochFee   = vm.envOr("EPOCH_FEE", uint256(0));
+
+        _checkRoleSeparation(deployer, oracle, rewardPool);
 
         vm.startBroadcast(deployerKey);
 
@@ -64,5 +80,48 @@ contract DeployEpochFees is Script {
         console2.log("Epoch fee (wei): ", epochFee);
         console2.log("SVR:            ", svr);
         console2.log("Identity:        ", identity);
+
+        _recordAddress(address(fees));
+    }
+
+    /// @dev The deployer keeps DEFAULT_ADMIN_ROLE and UPGRADER_ROLE. Left as the oracle it
+    ///      also keeps ORACLE_ROLE, which the handover never takes from it, and left as the
+    ///      reward pool it receives the fees. Tolerated on a testnet with a valueless faucet
+    ///      token, refused on mainnet, matching the other deploy scripts.
+    function _checkRoleSeparation(address deployer, address oracle, address rewardPool) internal view {
+        bool oracleIsDeployer = oracle == deployer;
+        bool poolIsDeployer = rewardPool == deployer;
+        if (!oracleIsDeployer && !poolIsDeployer) return;
+
+        if (block.chainid == ARC_MAINNET) {
+            revert RolesNotSeparated(deployer, oracle, rewardPool);
+        }
+        console2.log("!! WARNING: roles are not separated.");
+        if (oracleIsDeployer) console2.log("!!   ORACLE_ADDRESS is the deployer");
+        if (poolIsDeployer)   console2.log("!!   REWARD_POOL is the deployer");
+        console2.log("!! Acceptable on testnet only.");
+    }
+
+    /// @dev Merges into the existing artifact rather than replacing it, so the addresses
+    ///      written by Deploy.s.sol and DeployOracleBond.s.sol survive. Only under
+    ///      --broadcast or --resume, as in the other scripts.
+    function _recordAddress(address fees) internal {
+        if (!_broadcasting()) {
+            console2.log("Dry run: artifact not written. Re-run with --broadcast to record.");
+            return;
+        }
+
+        string memory path = string.concat("deployments/", vm.toString(block.chainid), ".json");
+        if (!vm.exists(path)) {
+            console2.log("!! no deployments artifact at", path, "- record the address by hand");
+            return;
+        }
+        vm.writeJson(string.concat("\"", vm.toString(fees), "\""), path, ".epochFees");
+        console2.log("Recorded in:      ", path);
+    }
+
+    function _broadcasting() internal view returns (bool) {
+        return vm.isContext(VmSafe.ForgeContext.ScriptBroadcast)
+            || vm.isContext(VmSafe.ForgeContext.ScriptResume);
     }
 }

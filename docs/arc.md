@@ -70,7 +70,9 @@ forge script script/Deploy.s.sol --rpc-url arc_testnet --broadcast -vvvv
 ```
 
 Note: the simulate step writes nothing. Only `--broadcast` writes
-`deployments/5042002.json`; commit the file it produces.
+`deployments/5042002.json`, and it writes it before the transactions confirm, so check
+the chain before committing the file ([deploy-testnet.md](deploy-testnet.md), sections 3
+and 5). Never use `--resume`.
 
 Optional role overrides (`ORACLE_ADDRESS`, `COMMITTEE_ADDRESS`, `MINIMUM_STAKE`,
 `CHALLENGE_PERIOD`, `SCORE_CHALLENGE_WINDOW`, `UNBONDING_PERIOD`) are documented
@@ -286,9 +288,9 @@ forge script script/DeployOracleBond.s.sol --rpc-url arc_testnet -vvvv          
 forge script script/DeployOracleBond.s.sol --rpc-url arc_testnet --broadcast -vvvv
 ```
 
-A dry run prints the address it would have used and writes nothing. The artifact is
-only touched on a real broadcast, so there is no cleanup step between the two and no
-way to commit an address that does not exist. Commit what the broadcast produced.
+A dry run prints the address it would have used and writes nothing. A broadcast writes
+the artifact before the transaction confirms, so check the chain before committing what
+it produced (see the note in section 2).
 
 ### Making the bond bite
 

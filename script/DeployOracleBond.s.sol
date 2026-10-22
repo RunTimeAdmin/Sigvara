@@ -14,7 +14,10 @@ import "../src/SigvaraOracleBond.sol";
  *         isActiveOperator().
  *
  * Usage:
- *   forge script script/DeployOracleBond.s.sol --rpc-url $RPC --broadcast --verify -vvvv
+ *   forge script script/DeployOracleBond.s.sol --rpc-url $RPC --broadcast -vvvv
+ *
+ * Do not pass --verify. Arc has no explorer entry in foundry.toml, and adding one breaks
+ * forge script (docs/arc.md).
  *
  * Required env:
  *   DEPLOYER_PRIVATE_KEY
@@ -101,10 +104,13 @@ contract DeployOracleBond is Script {
     /// @dev Merges into the existing artifact rather than replacing it, so the registry
     ///      addresses written by script/Deploy.s.sol survive.
     ///
-    ///      Only on a real broadcast. A dry run produces an address that exists nowhere,
-    ///      and writing it left the artifact holding a contract that was never deployed,
-    ///      one `git commit` away from becoming the address everything trusts. The
-    ///      runbook used to tell you to undo it by hand; not doing it is better.
+    ///      Only under --broadcast or --resume, so a dry run does not leave the artifact
+    ///      holding a contract that was never deployed. That is not the same as after the
+    ///      transactions confirm: forge executes this script locally before it sends
+    ///      anything, so the file is written first. If the broadcast then fails, the file
+    ///      names a contract that may not exist, and --resume runs this again from the new
+    ///      nonce and rewrites it with an address that was never deployed. Check the chain
+    ///      before trusting or committing it.
     function _recordAddress(address bond) internal {
         if (!_broadcasting()) {
             console2.log("Dry run: artifact not written. Re-run with --broadcast to record.");

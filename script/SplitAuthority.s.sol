@@ -24,10 +24,16 @@ import {TimelockController} from "@openzeppelin/contracts/governance/TimelockCon
  * ## Why the timelock and not just the Safe
  *
  * A Safe with one signer separates nothing; it is the same key with extra steps. A
- * timelock is worth something even at one signer, because the property it provides is
- * not "several people agreed", it is "the code cannot change without N hours of public
- * notice". That holds however many owners the Safe has. If a second signer is added
- * later the Safe starts providing its own guarantee on top, and nothing here changes.
+ * timelock is meant to add a different property: not "several people agreed" but "an
+ * upgrade made through it cannot land without N hours of public notice". That holds
+ * however many owners the Safe has.
+ *
+ * It does not bind the Safe itself. DEFAULT_ADMIN_ROLE administers UPGRADER_ROLE, because
+ * no contract names another admin for it, so the Safe can grant itself UPGRADER_ROLE in one
+ * transaction and upgrade in the next with no delay. Checked on a fork. The delay below
+ * therefore guards the honest path and not a compromised Safe. Closing that takes either
+ * admin behind the timelock as well, which this script does not do, or a contract change
+ * that makes UPGRADER_ROLE its own admin. Neither is done here.
  *
  * ## Why this runs in phases
  *
@@ -226,7 +232,8 @@ contract SplitAuthority is Script {
         console2.log("proposer     ", safe);
         console2.log("executors     open");
         console2.log("");
-        console2.log("export TIMELOCK=", address(timelock));
+        // One string, so the line pastes into a shell. Two arguments print a space after the =.
+        console2.log(string.concat("export TIMELOCK=", vm.toString(address(timelock))));
     }
 
     // -------------------------------------------------------------------------

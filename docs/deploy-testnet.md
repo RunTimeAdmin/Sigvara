@@ -93,9 +93,12 @@ in PowerShell, `unset DEPLOYER_PRIVATE_KEY` in bash.
 Check the printed roles and periods, and confirm there is no role-separation
 warning.
 
-A simulate run prints the addresses it would have used and writes nothing. The
-artifact is only touched on a real broadcast, so there is no file to clean up
-between the two runs and no way to commit an address that does not exist.
+A simulate run prints the addresses it would have used and writes nothing. A
+broadcast writes the artifact when forge runs the script locally, which is before the
+transactions confirm. If a broadcast fails or is interrupted, the file can name
+contracts that were never deployed, so section 5 ends with a check against the chain.
+Do not use `--resume`: it runs the script again from the new nonce and rewrites the file
+with addresses that do not exist. Start again instead.
 
 ## 4. Broadcast
 
@@ -128,6 +131,14 @@ cast call <identity>   "hasRole(bytes32,address)(bool)" $(cast keccak "STAKING_C
 cast call <reputation> "hasRole(bytes32,address)(bool)" $(cast keccak "STAKING_CORE_ROLE") <staking> --rpc-url arc_testnet
 cast call <reputation> "hasRole(bytes32,address)(bool)" $(cast keccak "ORACLE_ROLE") <oracle> --rpc-url arc_testnet
 cast call <staking>    "hasRole(bytes32,address)(bool)" $(cast keccak "SLASHING_COMMITTEE_ROLE") <committee> --rpc-url arc_testnet
+```
+
+Check that every address in the artifact is a contract on this chain. The script reads
+each proxy's implementation slot, exits non-zero on any address that is not a proxy, and
+records which implementation is live:
+
+```bash
+node scripts/record-implementations.mjs
 ```
 
 Then commit the artifact produced by the **broadcast** run:

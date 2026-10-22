@@ -572,7 +572,7 @@ before reaching the service.
 charged. The app disables every fee control rather than pointing at an address with no
 code.
 
-**Test coverage**, all passing: 379 contract tests across 21 Foundry suites including
+**Test coverage**, all passing: 397 contract tests across 23 Foundry suites including
 fuzz and invariant tests (6 skipped in CI), 509 oracle tests and 140 in the SDK (8 of them
 need a live deployment and skip without one). CI runs Foundry, the oracle and
 SDK suites, and Slither static analysis on every push, plus a documentation check that
@@ -634,6 +634,15 @@ Ordered by what unblocks what, not by difficulty.
 5. **A reward distributor.** Replaces `rewardPool` as a plain address with a contract
    paying operators for epochs served.
 6. **External audit**, then Arc mainnet with a committee multisig.
+7. **Delivery and disputes for x402 payments.** Not started, and outside the first audit.
+   Money moving is verified from the chain today, but whether the work was delivered arrives
+   as an attestation from a trusted service, so a payer that was not delivered what it paid
+   for has no recourse of its own. The plan is outcomes bound to the settled payment by a
+   payer signature, a payer-initiated challenge against the agent's bond, and an arbiter
+   path beyond the committee. x402 now has an authorize, capture and refund scheme and open
+   escrow and delivery-receipt proposals, so the aim is to supply the bonded verifier and
+   the seller's standing to those, not to add a competing payment scheme. Order and scope
+   follow what the x402 Foundation takes into the standard.
 
 ---
 

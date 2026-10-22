@@ -8,3 +8,6 @@ node_modules/
 
 # Tests and their fixtures are not needed to run the oracle.
 *.test.js
+
+# Measurement and probe scripts are run by hand, never by the service.
+experiments/
