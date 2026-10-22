@@ -92,6 +92,18 @@ event-signature change.
   fortnight, far above the skew a block producer controls, and a few seconds
   either way moves the end of it by a few seconds.
 
+### Added with the fourth review's fixes
+
+- `timestamp` (Low), `SigvaraStaking.resolveDispute`: an upheld ruling is refused until the
+  challenge deadline fixed when the slash was filed, the moment `executeSlash` opens for an
+  undisputed one. The deadline is at least three days out, far above the skew a block producer
+  controls, and a few seconds either way moves it by a few seconds. Same disposition as the
+  challenge period above.
+- `timestamp` (Low), `SigvaraReader.isTrustedFresh`: the time since the score was last written
+  is compared with the age the caller will accept. The caller chooses the age, and anything
+  shorter than a few minutes is a poor choice whatever the skew, so a few seconds of it do not
+  change an answer a caller can rely on.
+
 ## Fixed
 
 ### `uninitialized-local` (Medium, 1 site)
