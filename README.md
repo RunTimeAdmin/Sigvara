@@ -651,7 +651,7 @@ import {ISigvaraReader} from "sigvara/src/interfaces/ISigvara.sol";
 require(ISigvaraReader(READER).isTrusted(agent, 60), "agent not in good standing");
 ```
 
-`isTrusted` checks that the agent is Active and that its spendable score is at least the threshold. `SigvaraReputation.meetsThreshold` compares the score alone, so a suspended agent passes it. The [integration guide](docs/integration.md) covers the full read, the registry interfaces and a worked example.
+`isTrusted` checks that the agent is Active, that the bond it holds now meets the current minimum stake, and that its spendable score is at least the threshold. `SigvaraReputation.meetsThreshold` compares the score alone, so a suspended agent passes it. The [integration guide](docs/integration.md) covers the full read, the registry interfaces and a worked example.
 
 ---
 

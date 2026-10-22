@@ -70,9 +70,10 @@ interface ISigvaraReputation {
     function getEarnedScore(bytes32 didHash) external view returns (uint8);
 
     /// @notice getTotalScore(didHash) >= threshold. It does not look at the agent's
-    ///         status: a Suspended agent keeps its score, and a threshold of zero is
+    ///         status or its bond: a Suspended agent keeps its score, an agent that holds
+    ///         less than a raised minimum stake keeps its score, and a threshold of zero is
     ///         met by an address that was never registered. SigvaraReader.isTrusted
-    ///         adds the status check.
+    ///         adds the status and the bond.
     function meetsThreshold(bytes32 didHash, uint8 threshold) external view returns (bool);
 
     /// @notice The six factors behind the earned score.
@@ -147,6 +148,12 @@ interface ISigvaraReader {
         /// Where the latest slash proposal stands. Pending and Disputed mean one is open
         /// now, Executed means the agent was slashed, and Cancelled means one was dropped.
         ISigvaraStaking.SlashState slash;
+        /// The bond held now meets the staking contract's current minimum. `active` is a
+        /// stored status and does not change when the minimum is raised, so an agent admitted
+        /// at the old minimum stays Active and keeps its score while holding less than the
+        /// new one asks. This is the field that says so. Appended last, so a caller built
+        /// against the struct without it still decodes the rest.
+        bool collateralized;
     }
 
     /// @notice The didHash for an agent address on this chain.
@@ -158,8 +165,8 @@ interface ISigvaraReader {
     /// @notice Same as trust, for a caller that already holds the didHash.
     function trustByDid(bytes32 didHash) external view returns (Trust memory);
 
-    /// @notice True when the agent is Active and its spendable score is at least
-    ///         `minScore`. False for an address that was never registered, whatever
-    ///         the threshold.
+    /// @notice True when the agent is Active, its bond meets the staking contract's current
+    ///         minimum, and its spendable score is at least `minScore`. False for an address
+    ///         that was never registered, whatever the threshold.
     function isTrusted(address agent, uint8 minScore) external view returns (bool);
 }
