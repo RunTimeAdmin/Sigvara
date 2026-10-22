@@ -144,6 +144,9 @@ jobs.
 | `SigvaraOracleBond.bondAmount` | 2,500,000 SVR | 0.25% |
 | `SigvaraStaking.minimumStake` | 10,000 SVR | 0.001% |
 
+The mainnet deploy scripts refuse less than either figure, and `scripts/check-docs.mjs` fails the
+build if this table, the scripts and `scripts/check-mainnet.sh` ever disagree.
+
 The operator bond is what a corrupt oracle loses. `slash()` can take up to the whole of
 it, so the deterrent is the full number rather than a fraction. The agent stake is a
 gate on who is worth scoring, and gating onboarding is a much smaller job than deterring

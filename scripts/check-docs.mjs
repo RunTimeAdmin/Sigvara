@@ -249,6 +249,41 @@ for (const f of docFiles()) {
 }
 
 // ---------------------------------------------------------------------------
+// The launch amounts
+//
+// The published figures for the minimum stake and the oracle bond are written in three places that
+// have to say the same thing: docs/token.md, which publishes them; the mainnet deploy scripts, which
+// refuse anything under them; and scripts/check-mainnet.sh, which expects them on chain after the
+// deploy. They were each right and nothing tied them together, so a change to one would have gone
+// unseen until a deploy refused, or passed, on the wrong number.
+// ---------------------------------------------------------------------------
+{
+  const whole = (text, re, where) => {
+    const m = text.match(re);
+    if (!m) { fail(where, `could not find the launch amount (${re})`); return null; }
+    return Number(m[1].replace(/[_,]/g, ''));
+  };
+  const token = read('docs/token.md');
+  const check = read('scripts/check-mainnet.sh');
+  const stake = {
+    'docs/token.md': whole(token, /`SigvaraStaking\.minimumStake`\s*\|\s*([\d,]+) SVR/, 'docs/token.md'),
+    'script/Deploy.s.sol': whole(read('script/Deploy.s.sol'), /MAINNET_MINIMUM_STAKE\s*=\s*([\d_]+)e18;/, 'script/Deploy.s.sol'),
+    'scripts/check-mainnet.sh': whole(check, /WANT_MIN_STAKE=\$\(cast to-wei (\d+)\)/, 'scripts/check-mainnet.sh'),
+  };
+  const bond = {
+    'docs/token.md': whole(token, /`SigvaraOracleBond\.bondAmount`\s*\|\s*([\d,]+) SVR/, 'docs/token.md'),
+    'script/DeployOracleBond.s.sol': whole(read('script/DeployOracleBond.s.sol'), /MAINNET_BOND_AMOUNT\s*=\s*([\d_]+)e18;/, 'script/DeployOracleBond.s.sol'),
+    'scripts/check-mainnet.sh': whole(check, /WANT_BOND=\$\(cast to-wei (\d+)\)/, 'scripts/check-mainnet.sh'),
+  };
+  for (const [label, figures] of [['minimum stake', stake], ['oracle bond', bond]]) {
+    const values = Object.values(figures);
+    if (values.every(v => v !== null) && new Set(values).size > 1) {
+      fail('launch amounts', `the ${label} is ${Object.entries(figures).map(([f, v]) => `${v} in ${f}`).join(', ')}`);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 if (problems.length === 0) {
   console.log('docs check: ok');
   process.exit(0);
