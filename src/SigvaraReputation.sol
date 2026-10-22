@@ -90,6 +90,11 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
     /// Granted to admin/governance timelock for upgrades.
     bytes32 public constant UPGRADER_ROLE = keccak256("UPGRADER_ROLE");
 
+    /// Shortest challenge window the contract will hold. With a window of zero a proposal can
+    /// finalize in the block it was made, and rejectReputation refuses once the window has
+    /// elapsed, so the committee would have no moment in which to object.
+    uint256 public constant MIN_CHALLENGE_WINDOW = 1 hours;
+
     // -------------------------------------------------------------------------
     // Score caps (sum to 100)
     //
@@ -228,6 +233,7 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
     error AgentSlashed(bytes32 didHash);
     error AgentNotBonded(bytes32 didHash);
     error MaturityRateZero();
+    error ChallengeWindowTooShort(uint256 provided, uint256 minimum);
     error OracleNotBonded(address oracle);
     /// The proposer of a pending score no longer holds ORACLE_ROLE or, when an operator set
     /// is configured, is no longer an active operator in it. Its proposal will not be made
@@ -259,6 +265,10 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
         address slashingCommittee,
         uint256 challengeWindow_
     ) external initializer {
+        if (challengeWindow_ < MIN_CHALLENGE_WINDOW) {
+            revert ChallengeWindowTooShort(challengeWindow_, MIN_CHALLENGE_WINDOW);
+        }
+
         __AccessControl_init();
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
@@ -291,6 +301,9 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
         onlyRole(DEFAULT_ADMIN_ROLE)
         reinitializer(2)
     {
+        if (challengeWindow_ < MIN_CHALLENGE_WINDOW) {
+            revert ChallengeWindowTooShort(challengeWindow_, MIN_CHALLENGE_WINDOW);
+        }
         if (slashingCommittee != address(0)) _grantRole(SLASHING_COMMITTEE_ROLE, slashingCommittee);
         challengeWindow = challengeWindow_;
         emit ChallengeWindowUpdated(challengeWindow_);
@@ -597,6 +610,7 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
     }
 
     function setChallengeWindow(uint256 newWindow) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (newWindow < MIN_CHALLENGE_WINDOW) revert ChallengeWindowTooShort(newWindow, MIN_CHALLENGE_WINDOW);
         challengeWindow = newWindow;
         emit ChallengeWindowUpdated(newWindow);
     }

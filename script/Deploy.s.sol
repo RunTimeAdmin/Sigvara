@@ -71,11 +71,13 @@ contract Deploy is Script {
 
     uint256 constant ARC_MAINNET = 5042;
 
-    /// The floors SigvaraStaking.setChallengePeriod and setUnbondingPeriod enforce. initialize
-    /// and initializeV2 enforce nothing, so on mainnet this script holds the line itself.
-    /// test/DeployScripts.t.sol pins both to the contract's own constants.
+    /// The floors the contracts enforce in their initializers and setters: staking's challenge
+    /// and unbonding periods, and the reputation registry's challenge window. The script checks
+    /// them first on mainnet so a mistyped value is refused with its name before anything is sent.
+    /// test/DeployScripts.t.sol pins all three to the contracts' own constants.
     uint256 constant MIN_CHALLENGE_PERIOD = 3 days;
     uint256 constant MIN_UNBONDING_PERIOD = 1 days;
+    uint256 constant MIN_CHALLENGE_WINDOW = 1 hours;
 
     error RolesNotSeparated(address deployer, address oracle, address committee);
     error BondTokenNotSet();
@@ -217,16 +219,19 @@ contract Deploy is Script {
         if (!ok || ret.length != 32 || abi.decode(ret, (uint256)) != 18) revert BondTokenInvalid(token);
     }
 
-    /// @dev Mainnet only. initialize and initializeV2 accept any period, where the setters
-    ///      refuse anything under the floors, so a mistyped value here would become the live
-    ///      setting. A zero score window lets a proposal finalize in the block it is made.
+    /// @dev Mainnet only. The contracts refuse these values themselves, in the initializers as
+    ///      well as the setters, but a refusal there reverts the whole transaction with the
+    ///      contract's error. This names the variable and fails before anything is sent. A
+    ///      score window under the floor lets a proposal finalize before anyone can object.
     function _checkMainnetPeriods(uint256 period, uint256 unbondPeriod, uint256 scoreWindow) internal view {
         if (block.chainid != ARC_MAINNET) return;
         if (period < MIN_CHALLENGE_PERIOD) revert PeriodBelowFloor("CHALLENGE_PERIOD", period, MIN_CHALLENGE_PERIOD);
         if (unbondPeriod < MIN_UNBONDING_PERIOD) {
             revert PeriodBelowFloor("UNBONDING_PERIOD", unbondPeriod, MIN_UNBONDING_PERIOD);
         }
-        if (scoreWindow == 0) revert PeriodBelowFloor("SCORE_CHALLENGE_WINDOW", scoreWindow, 1);
+        if (scoreWindow < MIN_CHALLENGE_WINDOW) {
+            revert PeriodBelowFloor("SCORE_CHALLENGE_WINDOW", scoreWindow, MIN_CHALLENGE_WINDOW);
+        }
     }
 
     /// @dev Mainnet only. A forgotten MINIMUM_STAKE leaves the testnet default, which is a valid

@@ -59,6 +59,11 @@ contract SigvaraOracleBond is
     bytes32 public constant SLASHER_ROLE = keccak256("SLASHER_ROLE");
     bytes32 public constant UPGRADER_ROLE = keccak256("UPGRADER_ROLE");
 
+    /// Shortest unbonding cooldown the contract will hold. With none, an operator can start to
+    /// leave and withdraw in the same second, before the slasher has any window to act on what
+    /// it did.
+    uint256 public constant MIN_UNBONDING_PERIOD = 1 days;
+
     // -------------------------------------------------------------------------
     // Types
     // -------------------------------------------------------------------------
@@ -114,6 +119,7 @@ contract SigvaraOracleBond is
 
     error ZeroAddress();
     error ZeroAmount();
+    error PeriodTooShort(uint256 provided, uint256 minimum);
     error WrongStatus(address operator, Status current);
     error InsufficientBond(address operator, uint256 have, uint256 required);
     error SlashExceedsBond(address operator, uint256 amount, uint256 bond);
@@ -146,6 +152,13 @@ contract SigvaraOracleBond is
     ) external initializer {
         if (admin == address(0) || svrToken == address(0) || slashBeneficiary_ == address(0)) {
             revert ZeroAddress();
+        }
+        // The same two refusals the setters make. Left to the setters alone, a deployment that
+        // did not go through the script could start with a bond requirement of zero, which puts
+        // nothing at risk, or with no exit delay.
+        if (bondAmount_ == 0) revert ZeroAmount();
+        if (unbondingPeriod_ < MIN_UNBONDING_PERIOD) {
+            revert PeriodTooShort(unbondingPeriod_, MIN_UNBONDING_PERIOD);
         }
 
         __AccessControl_init();
@@ -369,6 +382,7 @@ contract SigvaraOracleBond is
     }
 
     function setUnbondingPeriod(uint256 newPeriod) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (newPeriod < MIN_UNBONDING_PERIOD) revert PeriodTooShort(newPeriod, MIN_UNBONDING_PERIOD);
         unbondingPeriod = newPeriod;
         emit UnbondingPeriodUpdated(newPeriod);
     }

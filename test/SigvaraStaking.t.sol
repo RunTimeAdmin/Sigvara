@@ -822,6 +822,73 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
         assertEq(staking.unbondingPeriod(), 1 days);
     }
 
+    // -------------------------------------------------------------------------
+    // initialize and the setters hold the same floors
+    // -------------------------------------------------------------------------
+
+    function _expectStakingInit(uint256 minStake, uint256 challenge, uint256 unbonding, bytes memory err) internal {
+        address impl = address(new SigvaraStaking());
+        vm.expectRevert(err);
+        new ERC1967Proxy(impl, abi.encodeCall(SigvaraStaking.initialize, (
+            admin, address(identity), address(rep), address(svr), minStake, challenge, unbonding
+        )));
+    }
+
+    /// The setters refuse a challenge period under three days, and initialize took any value, so
+    /// a deployment that did not go through the script could start below the floor.
+    function test_initialize_refusesAChallengePeriodUnderTheFloor() public {
+        _expectStakingInit(
+            MIN_STAKE, 3 days - 1, UNBONDING,
+            abi.encodeWithSelector(SigvaraStaking.PeriodTooShort.selector, 3 days - 1, 3 days)
+        );
+        _expectStakingInit(
+            MIN_STAKE, 0, UNBONDING,
+            abi.encodeWithSelector(SigvaraStaking.PeriodTooShort.selector, 0, 3 days)
+        );
+    }
+
+    function test_initialize_refusesAnUnbondingPeriodUnderTheFloor() public {
+        _expectStakingInit(
+            MIN_STAKE, CHALLENGE, 1 days - 1,
+            abi.encodeWithSelector(SigvaraStaking.PeriodTooShort.selector, 1 days - 1, 1 days)
+        );
+        _expectStakingInit(
+            MIN_STAKE, CHALLENGE, 0,
+            abi.encodeWithSelector(SigvaraStaking.PeriodTooShort.selector, 0, 1 days)
+        );
+    }
+
+    /// A minimum stake of zero is met by an agent with nothing staked: hasMinimumStake is true
+    /// for everyone, so the bond that backs a score and a slash is not there.
+    function test_initialize_refusesAZeroMinimumStake() public {
+        _expectStakingInit(0, CHALLENGE, UNBONDING, abi.encodeWithSelector(SigvaraStaking.MinimumStakeZero.selector));
+    }
+
+    function test_initialize_acceptsTheFloors() public {
+        SigvaraStaking s = SigvaraStaking(address(new ERC1967Proxy(
+            address(new SigvaraStaking()),
+            abi.encodeCall(SigvaraStaking.initialize, (
+                admin, address(identity), address(rep), address(svr), 1, 3 days, 1 days
+            ))
+        )));
+        assertEq(s.minimumStake(), 1);
+        assertEq(s.challengePeriod(), 3 days);
+        assertEq(s.unbondingPeriod(), 1 days);
+    }
+
+    function test_setMinimumStake_refusesZero() public {
+        vm.expectRevert(SigvaraStaking.MinimumStakeZero.selector);
+        vm.prank(admin);
+        staking.setMinimumStake(0);
+        assertEq(staking.minimumStake(), MIN_STAKE, "unchanged after the refusal");
+    }
+
+    function test_setMinimumStake_stillAcceptsAnyPositiveValue() public {
+        vm.prank(admin);
+        staking.setMinimumStake(1);
+        assertEq(staking.minimumStake(), 1);
+    }
+
     function test_claimWithdrawal_reverts_pendingSlash_evenAfterUnbondingElapsed() public {
         // Make unbonding shorter than the 7-day challenge period so the claim
         // window opens while the slash is still pending. Without the guard in

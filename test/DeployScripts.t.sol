@@ -29,11 +29,15 @@ contract Deploy_Harness is Deploy {
     function checkToken(address t) external view { _checkMainnetToken(t); }
     function checkPeriods(uint256 a, uint256 b, uint256 c) external view { _checkMainnetPeriods(a, b, c); }
     function checkMinimumStake(uint256 m) external view { _checkMainnetMinimumStake(m); }
-    function floors() external pure returns (uint256, uint256) { return (MIN_CHALLENGE_PERIOD, MIN_UNBONDING_PERIOD); }
+    function floors() external pure returns (uint256, uint256, uint256) {
+        return (MIN_CHALLENGE_PERIOD, MIN_UNBONDING_PERIOD, MIN_CHALLENGE_WINDOW);
+    }
 }
 
 contract DeployOracleBond_Harness is DeployOracleBond {
     function checkBondAmount(uint256 a) external view { _checkMainnetBondAmount(a); }
+    function checkUnbonding(uint256 u) external view { _checkMainnetUnbonding(u); }
+    function floor() external pure returns (uint256) { return MIN_UNBONDING; }
 }
 
 contract DeployEpochFees_Harness is DeployEpochFees {
@@ -125,15 +129,22 @@ contract DeployScriptGuardsTest is Test {
         h.checkPeriods(7 days, 0, 6 hours);
     }
 
-    function test_mainnet_refusesAZeroScoreWindow() public {
+    function test_mainnet_refusesAScoreWindowUnderTheFloor() public {
         vm.chainId(5042);
-        vm.expectRevert(abi.encodeWithSelector(Deploy.PeriodBelowFloor.selector, "SCORE_CHALLENGE_WINDOW", 0, 1));
+        vm.expectRevert(
+            abi.encodeWithSelector(Deploy.PeriodBelowFloor.selector, "SCORE_CHALLENGE_WINDOW", 0, 1 hours)
+        );
         h.checkPeriods(7 days, 21 days, 0);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(Deploy.PeriodBelowFloor.selector, "SCORE_CHALLENGE_WINDOW", 1 hours - 1, 1 hours)
+        );
+        h.checkPeriods(7 days, 21 days, 1 hours - 1);
     }
 
     function test_mainnet_acceptsTheFloorsThemselves() public {
         vm.chainId(5042);
-        h.checkPeriods(3 days, 1 days, 1);
+        h.checkPeriods(3 days, 1 days, 1 hours);
     }
 
     function test_testnet_stillAcceptsShortPeriods() public {
@@ -141,13 +152,38 @@ contract DeployScriptGuardsTest is Test {
         h.checkPeriods(1 hours, 0, 0);
     }
 
-    /// The script cannot read the contract's constants before the contract exists, so it
+    /// The script cannot read the contracts' constants before the contracts exist, so it
     /// carries copies. This is what stops them drifting.
-    function test_floorsMatchTheStakingContract() public {
+    function test_floorsMatchTheContracts() public {
         SigvaraStaking s = new SigvaraStaking();
-        (uint256 challenge, uint256 unbonding) = h.floors();
+        (uint256 challenge, uint256 unbonding, uint256 window) = h.floors();
         assertEq(challenge, s.MIN_CHALLENGE_PERIOD());
         assertEq(unbonding, s.MIN_UNBONDING_PERIOD());
+        assertEq(window, new SigvaraReputation().MIN_CHALLENGE_WINDOW());
+        assertEq(b.floor(), new SigvaraOracleBond().MIN_UNBONDING_PERIOD());
+    }
+
+    function test_oracleBond_mainnet_refusesAnUnbondingPeriodUnderTheFloor() public {
+        vm.chainId(5042);
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployOracleBond.PeriodBelowFloor.selector, "ORACLE_UNBONDING", 0, 1 days)
+        );
+        b.checkUnbonding(0);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployOracleBond.PeriodBelowFloor.selector, "ORACLE_UNBONDING", 1 days - 1, 1 days)
+        );
+        b.checkUnbonding(1 days - 1);
+    }
+
+    function test_oracleBond_mainnet_acceptsTheUnbondingFloor() public {
+        vm.chainId(5042);
+        b.checkUnbonding(1 days);
+    }
+
+    function test_oracleBond_testnet_stillAcceptsAShortUnbonding() public {
+        vm.chainId(5042002);
+        b.checkUnbonding(0);
     }
 
     // ---- the amounts
@@ -378,7 +414,15 @@ contract DeployScriptRunTest is Test {
         );
         ob.run();
 
+        // A stated bond amount with an unbonding period under the floor: refused, by name.
         vm.setEnv("ORACLE_BOND_AMOUNT", vm.toString(uint256(2_500_000e18)));
+        vm.setEnv("ORACLE_UNBONDING", "3600");
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployOracleBond.PeriodBelowFloor.selector, "ORACLE_UNBONDING", 3600, 1 days)
+        );
+        ob.run();
+        vm.setEnv("ORACLE_UNBONDING", "");
+
         vm.recordLogs();
         ob.run();
         address obProxy = _emitterOf(vm.getRecordedLogs(), keccak256("RoleGranted(bytes32,address,address)"));

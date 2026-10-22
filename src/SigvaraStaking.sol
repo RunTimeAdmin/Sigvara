@@ -172,6 +172,7 @@ contract SigvaraStaking is
     error UnbondingPeriodActive(bytes32 didHash, uint256 claimableAt);
     error VictimIsReporter(address victim);
     error PeriodTooShort(uint256 provided, uint256 minimum);
+    error MinimumStakeZero();
     error SlashNotDisputed(bytes32 didHash);
     error DisputeResolutionActive(bytes32 didHash, uint256 expiresAt);
     error NothingClaimable(address account);
@@ -205,6 +206,12 @@ contract SigvaraStaking is
     ) external initializer {
         if (admin == address(0) || svrToken_ == address(0)) revert ZeroAddress();
         if (identityRegistry_ == address(0) || reputationRegistry_ == address(0)) revert ZeroAddress();
+        // The refusals the setters make, held here too. Left to the setters alone, a deployment
+        // that did not go through the script could start below the floors, and a minimum stake
+        // of zero is met by an agent with nothing staked.
+        if (minimumStake_ == 0) revert MinimumStakeZero();
+        if (challengePeriod_ < MIN_CHALLENGE_PERIOD) revert PeriodTooShort(challengePeriod_, MIN_CHALLENGE_PERIOD);
+        if (unbondingPeriod_ < MIN_UNBONDING_PERIOD) revert PeriodTooShort(unbondingPeriod_, MIN_UNBONDING_PERIOD);
 
         __AccessControl_init();
 
@@ -611,6 +618,7 @@ contract SigvaraStaking is
     // -------------------------------------------------------------------------
 
     function setMinimumStake(uint256 newMinimum) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (newMinimum == 0) revert MinimumStakeZero();
         minimumStake = newMinimum;
         emit MinimumStakeUpdated(newMinimum);
     }

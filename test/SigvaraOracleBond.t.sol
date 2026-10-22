@@ -332,6 +332,61 @@ contract SigvaraOracleBondTest is Test {
     }
 
     // -------------------------------------------------------------------------
+    // Floors: a bond requirement of zero, and an exit with no delay
+    // -------------------------------------------------------------------------
+
+    function _expectInit(uint256 bondAmount_, uint256 unbonding_, bytes memory err) internal {
+        address impl = address(new SigvaraOracleBond());
+        vm.expectRevert(err);
+        new ERC1967Proxy(impl, abi.encodeCall(
+            SigvaraOracleBond.initialize, (admin, slasher, address(svr), bondAmount_, unbonding_, beneficiary)
+        ));
+    }
+
+    /// A requirement of zero puts nothing at risk, which is the mode setBondAmount already
+    /// refuses to reach. The initializer is the other way in.
+    function test_initialize_refusesAZeroBondRequirement() public {
+        _expectInit(0, UNBOND, abi.encodeWithSelector(SigvaraOracleBond.ZeroAmount.selector));
+    }
+
+    /// With no unbonding delay an operator can start to leave and withdraw in the same second,
+    /// before the slasher has any window to act.
+    function test_initialize_refusesAnUnbondingPeriodUnderTheFloor() public {
+        _expectInit(BOND, 0, abi.encodeWithSelector(SigvaraOracleBond.PeriodTooShort.selector, 0, 1 days));
+        _expectInit(
+            BOND, 1 days - 1,
+            abi.encodeWithSelector(SigvaraOracleBond.PeriodTooShort.selector, 1 days - 1, 1 days)
+        );
+    }
+
+    function test_initialize_acceptsTheUnbondingFloor() public {
+        SigvaraOracleBond b = SigvaraOracleBond(address(new ERC1967Proxy(
+            address(new SigvaraOracleBond()),
+            abi.encodeCall(SigvaraOracleBond.initialize, (admin, slasher, address(svr), 1, 1 days, beneficiary))
+        )));
+        assertEq(b.unbondingPeriod(), 1 days);
+        assertEq(b.bondAmount(), 1);
+    }
+
+    function test_setUnbondingPeriod_refusesBelowTheFloor() public {
+        vm.expectRevert(abi.encodeWithSelector(SigvaraOracleBond.PeriodTooShort.selector, 0, 1 days));
+        vm.prank(admin);
+        bond.setUnbondingPeriod(0);
+
+        vm.expectRevert(abi.encodeWithSelector(SigvaraOracleBond.PeriodTooShort.selector, 1 days - 1, 1 days));
+        vm.prank(admin);
+        bond.setUnbondingPeriod(1 days - 1);
+
+        assertEq(bond.unbondingPeriod(), UNBOND, "unchanged after the refusals");
+    }
+
+    function test_setUnbondingPeriod_acceptsTheFloor() public {
+        vm.prank(admin);
+        bond.setUnbondingPeriod(1 days);
+        assertEq(bond.unbondingPeriod(), 1 days);
+    }
+
+    // -------------------------------------------------------------------------
     // Status guards
     // -------------------------------------------------------------------------
 
