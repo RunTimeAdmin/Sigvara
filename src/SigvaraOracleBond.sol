@@ -8,6 +8,7 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
+import "./InflowGuard.sol";
 import "./interfaces/IOperatorSet.sol";
 
 /**
@@ -47,7 +48,8 @@ contract SigvaraOracleBond is
     AccessControlUpgradeable,
     UUPSUpgradeable,
     ReentrancyGuard,
-    IOperatorSet
+    IOperatorSet,
+    InflowGuard
 {
     using SafeERC20 for IERC20;
 
@@ -187,7 +189,7 @@ contract SigvaraOracleBond is
      *         (pending governance admission). Not allowed while Exiting — claim the
      *         withdrawal first. Caller must approve this contract for `amount`.
      */
-    function depositBond(uint256 amount) external nonReentrant {
+    function depositBond(uint256 amount) external nonReentrant whenInflowsOpen {
         if (amount == 0) revert ZeroAmount();
         if (operatorOfSigner[msg.sender] != address(0)) revert AlreadySigner(msg.sender);
         Operator storage op = operators[msg.sender];
@@ -441,6 +443,18 @@ contract SigvaraOracleBond is
         return operators[account].status == Status.None
             && signerOf[account] == address(0)
             && operatorOfSigner[account] == address(0);
+    }
+
+    // -------------------------------------------------------------------------
+    // Inflow pause (see InflowGuard)
+    // -------------------------------------------------------------------------
+
+    function _checkGuardian() internal view override {
+        _checkRole(GUARDIAN_ROLE);
+    }
+
+    function _checkGuardianOrAdmin() internal view override {
+        if (!hasRole(GUARDIAN_ROLE, msg.sender)) _checkRole(DEFAULT_ADMIN_ROLE);
     }
 
     // -------------------------------------------------------------------------

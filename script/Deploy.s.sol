@@ -50,6 +50,10 @@ import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
  *   SCORE_CHALLENGE_WINDOW — reputation-score challenge window in seconds (default: 6 hours)
  *   UNBONDING_PERIOD       — seconds a queued withdrawal is still slashable before claim (default: 21 days)
  *   MATURITY_RATE_PER_DAY  — points of score released per day (default: 4, so 100 takes 25 days)
+ *   GUARDIAN_ADDRESS         the key granted GUARDIAN_ROLE on identity, reputation and staking.
+ *                            It can pause new inflows for three days at a time, and nothing
+ *                            else. Required on mainnet, where it may not be the deployer, the
+ *                            oracle or the committee. Unset elsewhere means no guardian.
  */
 contract Deploy is Script {
     /// 1,000 whole units of an 18-decimal bond token.
@@ -84,6 +88,8 @@ contract Deploy is Script {
     error BondTokenInvalid(address token);
     error PeriodBelowFloor(string name, uint256 value, uint256 floor);
     error DefaultAmountOnMainnet(string name, uint256 value);
+    error GuardianNotSet();
+    error GuardianNotSeparated(address guardian);
 
     function run() external {
         uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
@@ -100,6 +106,7 @@ contract Deploy is Script {
         _checkMainnetToken(vm.envOr("SVR_ADDRESS", address(0)));
         _checkMainnetPeriods(period, unbondPeriod, scoreWindow);
         _checkMainnetMinimumStake(minStake);
+        _checkMainnetGuardian(deployer, oracle, committee, vm.envOr("GUARDIAN_ADDRESS", address(0)));
 
         vm.startBroadcast(deployerKey);
 
@@ -154,6 +161,9 @@ contract Deploy is Script {
         reputation.grantRole(reputation.SLASHING_COMMITTEE_ROLE(), committee);
         staking.grantRole(staking.SLASHING_COMMITTEE_ROLE(), committee);
 
+        // 6. The pause guardian, if there is one: a different, lighter key than the ones above.
+        _grantGuardian(identity, reputation, staking);
+
         vm.stopBroadcast();
 
         // Log the deployed addresses to stdout
@@ -172,6 +182,7 @@ contract Deploy is Script {
         console2.log("---");
         console2.log("Oracle:          ", oracle);
         console2.log("Committee:       ", committee);
+        console2.log("Guardian:        ", vm.envOr("GUARDIAN_ADDRESS", address(0)));
         console2.log("Min stake (wei): ", minStake);
         console2.log("Challenge period:", period);
         console2.log("Score chal. win.:", scoreWindow);
@@ -241,6 +252,36 @@ contract Deploy is Script {
     function _checkMainnetMinimumStake(uint256 minStake) internal view {
         if (block.chainid != ARC_MAINNET) return;
         if (minStake == DEFAULT_MINIMUM_STAKE) revert DefaultAmountOnMainnet("MINIMUM_STAKE", minStake);
+    }
+
+    /// @dev Mainnet only. The pause guardian is the only fast response to a live bug, since the
+    ///      other one is an upgrade 48 hours away, so a mainnet deployment without one is refused.
+    ///      It must be its own key: if it were the deployer, the oracle or the committee, the
+    ///      separation between the key that can stop inflows and the keys that hold the roles
+    ///      would be nominal.
+    function _checkMainnetGuardian(address deployer, address oracle, address committee, address guardian)
+        internal
+        view
+    {
+        if (block.chainid != ARC_MAINNET) return;
+        if (guardian == address(0)) revert GuardianNotSet();
+        if (guardian == deployer || guardian == oracle || guardian == committee) {
+            revert GuardianNotSeparated(guardian);
+        }
+    }
+
+    /// @dev Granted while the deployer still holds the admin role, so it needs no later step. The
+    ///      admin Safe can grant and revoke it after the handover.
+    function _grantGuardian(
+        SigvaraIdentity identity,
+        SigvaraReputation reputation,
+        SigvaraStaking staking
+    ) internal {
+        address guardian = vm.envOr("GUARDIAN_ADDRESS", address(0));
+        if (guardian == address(0)) return;
+        identity.grantRole(identity.GUARDIAN_ROLE(), guardian);
+        reputation.grantRole(reputation.GUARDIAN_ROLE(), guardian);
+        staking.grantRole(staking.GUARDIAN_ROLE(), guardian);
     }
 
     // SVR_ADDRESS points at an existing ERC-20 (the mainnet bond asset). When unset,

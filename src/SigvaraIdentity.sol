@@ -7,6 +7,8 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
 import "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
+import "./InflowGuard.sol";
+
 /**
  * @notice The slice of SigvaraStaking this contract needs.
  * @dev    Declared as an interface rather than importing SigvaraStaking, which
@@ -27,7 +29,7 @@ interface IStakeView {
  *         This makes the DID trustlessly reproducible off-chain without querying the contract.
  *         The Ed25519 public key (raw 32 bytes) is stored for off-chain challenge-response auth.
  */
-contract SigvaraIdentity is Initializable, AccessControlUpgradeable, UUPSUpgradeable {
+contract SigvaraIdentity is Initializable, AccessControlUpgradeable, UUPSUpgradeable, InflowGuard {
     // -------------------------------------------------------------------------
     // Roles
     // -------------------------------------------------------------------------
@@ -288,6 +290,7 @@ contract SigvaraIdentity is Initializable, AccessControlUpgradeable, UUPSUpgrade
      */
     function registerAgent(address agentAddress, bytes32 ed25519PubKey, bytes calldata signature)
         external
+        whenInflowsOpen
         returns (bytes32 didHash)
     {
         if (agentAddress == address(0)) revert ZeroAgentAddress();
@@ -617,6 +620,18 @@ contract SigvaraIdentity is Initializable, AccessControlUpgradeable, UUPSUpgrade
 
     function _requireOperator(AgentIdentity storage id, bytes32 didHash) internal view {
         if (id.operator != msg.sender) revert NotOperator(didHash, msg.sender);
+    }
+
+    // -------------------------------------------------------------------------
+    // Inflow pause (see InflowGuard)
+    // -------------------------------------------------------------------------
+
+    function _checkGuardian() internal view override {
+        _checkRole(GUARDIAN_ROLE);
+    }
+
+    function _checkGuardianOrAdmin() internal view override {
+        if (!hasRole(GUARDIAN_ROLE, msg.sender)) _checkRole(DEFAULT_ADMIN_ROLE);
     }
 
     // -------------------------------------------------------------------------

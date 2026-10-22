@@ -590,8 +590,9 @@ Key scenarios tested:
 
 | Role | Holder (Testnet) | Mainnet target | Permissions |
 |---|---|---|---|
-| `DEFAULT_ADMIN_ROLE` | Deployer EOA `0x18CBcE50…` | Governance timelock | Grant/revoke all roles, set maturity rate, wire the stake view and oracle bond |
-| `UPGRADER_ROLE` | Deployer EOA `0x18CBcE50…` | Governance timelock | Authorize UUPS upgrades. On a registry initialised by the current code it is administered by itself, so the admin cannot grant it |
+| `DEFAULT_ADMIN_ROLE` | Deployer EOA `0x18CBcE50…` | Admin Safe | Grant and revoke every role except `UPGRADER_ROLE`, set parameters (each has a floor), veto a pending or disputed slash. It cannot wire the stake view or the oracle bond: those need `UPGRADER_ROLE` |
+| `UPGRADER_ROLE` | Deployer EOA `0x18CBcE50…` | Governance timelock (48 hours) | Authorize UUPS upgrades, and wire the stake view and the oracle bond (`setStakeView`, `setOperatorBond`). On a registry initialised by the current code it is administered by itself, so the admin cannot grant it |
+| `GUARDIAN_ROLE` | Not granted on the current testnet deployment | A separate, lighter key | Pause new inflows (registrations, stake deposits, score proposals, bond deposits) for three days at a time. Never exits, slash rulings or finalization, and the admin can revoke it at once |
 | `STAKING_CORE_ROLE` | `SigvaraStaking` `0xA69d62B2…` | `SigvaraStaking` | Suspend / slash agents, zero reputation, clear slash suspensions |
 | `ORACLE_ROLE` | Primary `0x6352b8FF…` + checker `0x989aabd6…`, both bonded | Multiple independently operated bonded operators, each signing with a key its cold bond owner has named | Propose reputation scores; charge epoch fees |
 | `SLASHING_COMMITTEE_ROLE` | EOA `0x045d6c1D…` | 3-of-5 multisig | Initiate slash proposals, reject bad scores |

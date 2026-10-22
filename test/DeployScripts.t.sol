@@ -29,6 +29,9 @@ contract Deploy_Harness is Deploy {
     function checkToken(address t) external view { _checkMainnetToken(t); }
     function checkPeriods(uint256 a, uint256 b, uint256 c) external view { _checkMainnetPeriods(a, b, c); }
     function checkMinimumStake(uint256 m) external view { _checkMainnetMinimumStake(m); }
+    function checkGuardian(address d, address o, address c, address g) external view {
+        _checkMainnetGuardian(d, o, c, g);
+    }
     function floors() external pure returns (uint256, uint256, uint256) {
         return (MIN_CHALLENGE_PERIOD, MIN_UNBONDING_PERIOD, MIN_CHALLENGE_WINDOW);
     }
@@ -37,6 +40,7 @@ contract Deploy_Harness is Deploy {
 contract DeployOracleBond_Harness is DeployOracleBond {
     function checkBondAmount(uint256 a) external view { _checkMainnetBondAmount(a); }
     function checkUnbonding(uint256 u) external view { _checkMainnetUnbonding(u); }
+    function checkGuardian(address d, address s, address g) external view { _checkMainnetGuardian(d, s, g); }
     function floor() external pure returns (uint256) { return MIN_UNBONDING; }
 }
 
@@ -224,6 +228,58 @@ contract DeployScriptGuardsTest is Test {
         b.checkBondAmount(1_000e18);
     }
 
+    // ---- the pause guardian
+
+    /// The guardian is the only fast response to a live bug, since the other one is an upgrade 48
+    /// hours away. A mainnet deployment without one is refused, and so is one where the guardian is a
+    /// key that already holds a role, because then the key that can stop inflows is not a separate one.
+    function test_mainnet_refusesAnUnsetGuardian() public {
+        vm.chainId(5042);
+        address committee = makeAddr("committee");
+        vm.expectRevert(Deploy.GuardianNotSet.selector);
+        h.checkGuardian(deployer, oracle, committee, address(0));
+    }
+
+    function test_mainnet_refusesAGuardianThatHoldsAnotherRole() public {
+        vm.chainId(5042);
+        address committee = makeAddr("committee");
+        address[3] memory same = [deployer, oracle, committee];
+        for (uint256 i = 0; i < 3; i++) {
+            vm.expectRevert(abi.encodeWithSelector(Deploy.GuardianNotSeparated.selector, same[i]));
+            h.checkGuardian(deployer, oracle, committee, same[i]);
+        }
+    }
+
+    function test_mainnet_acceptsASeparateGuardian() public {
+        vm.chainId(5042);
+        h.checkGuardian(deployer, oracle, makeAddr("committee"), makeAddr("guardian"));
+    }
+
+    function test_testnet_stillAcceptsNoGuardian() public {
+        vm.chainId(5042002);
+        h.checkGuardian(deployer, oracle, makeAddr("committee"), address(0));
+        h.checkGuardian(deployer, oracle, makeAddr("committee"), deployer);
+    }
+
+    function test_oracleBond_mainnet_refusesAnUnsetOrUnseparatedGuardian() public {
+        vm.chainId(5042);
+        address slasher = makeAddr("slasher");
+        vm.expectRevert(DeployOracleBond.GuardianNotSet.selector);
+        b.checkGuardian(deployer, slasher, address(0));
+
+        vm.expectRevert(abi.encodeWithSelector(DeployOracleBond.GuardianNotSeparated.selector, deployer));
+        b.checkGuardian(deployer, slasher, deployer);
+        vm.expectRevert(abi.encodeWithSelector(DeployOracleBond.GuardianNotSeparated.selector, slasher));
+        b.checkGuardian(deployer, slasher, slasher);
+
+        b.checkGuardian(deployer, slasher, makeAddr("guardian"));
+    }
+
+    function test_oracleBond_testnet_stillAcceptsNoGuardian() public {
+        vm.chainId(5042002);
+        b.checkGuardian(deployer, makeAddr("slasher"), address(0));
+    }
+
     // ---- EpochFees roles
 
     function test_epochFees_mainnet_refusesTheDeployerAsOracle() public {
@@ -286,6 +342,7 @@ contract DeployScriptRunTest is Test {
         vm.setEnv("SCORE_CHALLENGE_WINDOW", "");
         vm.setEnv("MINIMUM_STAKE", "");
         vm.setEnv("MATURITY_RATE_PER_DAY", "");
+        vm.setEnv("GUARDIAN_ADDRESS", "");
     }
 
     /// The proxy that emitted UnbondingPeriodUpdated, which only initializeV2 and the setter
@@ -333,9 +390,20 @@ contract DeployScriptRunTest is Test {
         vm.expectRevert(abi.encodeWithSelector(Deploy.DefaultAmountOnMainnet.selector, "MINIMUM_STAKE", 1_000e18));
         d.run();
 
-        // Mainnet, valid inputs: runs, and uses up staking's initializeV2 with the period.
+        // A stated minimum stake and no guardian: refused, since there would be no way to pause.
         _env(svr, oracle, committee, 21 days);
         vm.setEnv("MINIMUM_STAKE", vm.toString(uint256(10_000e18)));
+        vm.expectRevert(Deploy.GuardianNotSet.selector);
+        d.run();
+
+        // A guardian that is also the oracle: refused, since the key that can stop inflows would
+        // not be a separate one.
+        vm.setEnv("GUARDIAN_ADDRESS", vm.toString(oracle));
+        vm.expectRevert(abi.encodeWithSelector(Deploy.GuardianNotSeparated.selector, oracle));
+        d.run();
+
+        // Mainnet, valid inputs: runs, and uses up staking's initializeV2 with the period.
+        vm.setEnv("GUARDIAN_ADDRESS", vm.toString(makeAddr("guardian")));
         vm.recordLogs();
         d.run();
         (address staking, uint256 period, uint256 n) = _stakingFrom(vm.getRecordedLogs());
@@ -344,6 +412,19 @@ contract DeployScriptRunTest is Test {
         assertEq(SigvaraStaking(staking).unbondingPeriod(), 21 days);
         assertEq(SigvaraStaking(staking).minimumStake(), 10_000e18, "the stated minimum stake is the one used");
         assertEq(address(SigvaraStaking(staking).svrToken()), svr, "the bond token is the one supplied");
+
+        // The guardian holds its role on the three registries the script deploys, and no other key does.
+        {
+            bytes32 guardianRole = keccak256("GUARDIAN_ROLE");
+            address guardian = makeAddr("guardian");
+            address identityProxy = address(SigvaraStaking(staking).identityRegistry());
+            address reputationProxy = address(SigvaraStaking(staking).reputationRegistry());
+            assertTrue(SigvaraStaking(staking).hasRole(guardianRole, guardian));
+            assertTrue(SigvaraIdentity(identityProxy).hasRole(guardianRole, guardian));
+            assertTrue(SigvaraReputation(reputationProxy).hasRole(guardianRole, guardian));
+            assertFalse(SigvaraStaking(staking).hasRole(guardianRole, oracle), "the oracle is not a guardian");
+            assertFalse(SigvaraStaking(staking).hasRole(guardianRole, committee), "nor is the committee");
+        }
 
         // The admin can no longer call it with another value, which is the point. A value that
         // would pass the floor, so that only the used-up version can be the reason for the revert.
@@ -423,11 +504,21 @@ contract DeployScriptRunTest is Test {
         ob.run();
         vm.setEnv("ORACLE_UNBONDING", "");
 
+        // Valid amounts and no guardian: refused.
+        vm.setEnv("GUARDIAN_ADDRESS", "");
+        vm.expectRevert(DeployOracleBond.GuardianNotSet.selector);
+        ob.run();
+
+        vm.setEnv("GUARDIAN_ADDRESS", vm.toString(makeAddr("guardian")));
         vm.recordLogs();
         ob.run();
         address obProxy = _emitterOf(vm.getRecordedLogs(), keccak256("RoleGranted(bytes32,address,address)"));
         assertTrue(obProxy != address(0), "the bond registry was deployed");
         assertEq(SigvaraOracleBond(obProxy).bondAmount(), 2_500_000e18, "the stated bond amount is the one used");
+        assertTrue(
+            SigvaraOracleBond(obProxy).hasRole(keccak256("GUARDIAN_ROLE"), makeAddr("guardian")),
+            "the guardian can pause new bonds"
+        );
 
         // Leave the process environment as found, except DEPLOYER_PRIVATE_KEY. forge runs test
         // contracts in parallel threads of one process, and test/SplitAuthority.t.sol sets that
@@ -447,5 +538,6 @@ contract DeployScriptRunTest is Test {
         vm.setEnv("ORACLE_UNBONDING", "");
         vm.setEnv("SLASHER_ADDRESS", "");
         vm.setEnv("SLASH_BENEFICIARY", "");
+        vm.setEnv("GUARDIAN_ADDRESS", "");
     }
 }
