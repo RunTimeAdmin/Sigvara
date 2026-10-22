@@ -232,7 +232,9 @@ cast send <staking> "disputeSlash(bytes32)" <TARGET_DID_HASH> \
 
 Disputing **freezes** the bond rather than releasing it, and does not un-suspend the agent.
 The admin then rules with `resolveDispute(didHash, uphold)`; the committee that filed the
-slash does not. If the admin never does, anyone may call `expireDispute` after
+slash does not. Upholding waits for `challengeDeadline`, the moment `executeSlash` opens for an
+undisputed slash (`ChallengePeriodActive` before it), so a dispute never speeds a slash up;
+dropping is open at any time. If the admin never rules, anyone may call `expireDispute` after
 `DISPUTE_RESOLUTION_PERIOD` (14 days), so an operator is never hostage to silence. A proposal
 nobody disputes, executes or cancels lapses the same way: anyone may call `expireSlash`
 14 days after its deadline. The admin can also drop a Pending or Disputed proposal with

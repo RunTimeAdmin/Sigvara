@@ -130,12 +130,14 @@ contract DisputeFreezeTest is Test, RegistrationHelper {
         staking.initiateSlash(didHash, victim, "");
     }
 
-    /// The admin upholds: the slash lands even though it was disputed.
+    /// The admin upholds: the slash lands even though it was disputed. A dispute never brings a slash
+    /// forward, so the ruling waits for the moment an undisputed slash would have been executable.
     function test_resolveDispute_upheld_slashes() public {
         vm.prank(committee);
         staking.initiateSlash(didHash, victim, "");
         vm.prank(operator);
         staking.disputeSlash(didHash);
+        vm.warp(block.timestamp + CHALLENGE + 1);
 
         vm.prank(admin);
         staking.resolveDispute(didHash, true);

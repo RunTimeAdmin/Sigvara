@@ -360,6 +360,12 @@ contract InflowGuardTest is StackFixture {
         staking.initiateSlash(didHash, victim, "stronger evidence");
         vm.prank(operator);
         staking.disputeSlash(didHash);
+
+        // An upheld ruling waits out the challenge period, which outlasts a pause, so the guardian
+        // pauses a third time before the admin rules.
+        vm.warp(block.timestamp + SLASH_WINDOW + 1);
+        _pause(address(staking));
+        assertTrue(IInflowGuardLike(address(staking)).inflowsPaused());
         vm.prank(admin);
         staking.resolveDispute(didHash, true); // upheld: executes
         assertEq(uint8(staking.getSlashProposal(didHash).state), uint8(SigvaraStaking.SlashState.Executed));

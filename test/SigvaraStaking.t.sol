@@ -1409,10 +1409,119 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
         staking.initiateSlash(didHash, victim, "evidence");
         vm.prank(operator);
         staking.disputeSlash(didHash);
+        vm.warp(block.timestamp + CHALLENGE + 1);
         vm.prank(admin);
         staking.resolveDispute(didHash, true);
         assertEq(uint8(staking.getSlashProposal(didHash).state), uint8(SigvaraStaking.SlashState.Executed));
         assertGt(staking.claimable(victim), 0);
+    }
+
+    // -------------------------------------------------------------------------
+    // A dispute never hurries a slash
+    // -------------------------------------------------------------------------
+
+    /// File a slash, note its snapshotted deadline, and have the operator dispute it at once.
+    function _filedAndDisputed() internal returns (uint256 deadline) {
+        _deposit();
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "evidence");
+        deadline = staking.getSlashProposal(didHash).challengeDeadline;
+        vm.prank(operator);
+        staking.disputeSlash(didHash);
+    }
+
+    /// A dispute used to be upheld in the block it was filed in, so disputing could bring a slash
+    /// forward: an undisputed one waits out the whole challenge period. A ruling to uphold now waits
+    /// for the same moment executeSlash does.
+    function test_resolveDispute_upholdInTheBlockOfTheDisputeIsRefused() public {
+        uint256 deadline = _filedAndDisputed();
+        uint256 staked = staking.getStake(didHash);
+
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.ChallengePeriodActive.selector, didHash, deadline));
+        vm.prank(admin);
+        staking.resolveDispute(didHash, true);
+
+        assertEq(uint8(staking.getSlashProposal(didHash).state), uint8(SigvaraStaking.SlashState.Disputed));
+        assertEq(staking.getStake(didHash), staked, "nothing was taken");
+        assertEq(staking.claimable(victim), 0, "nobody was credited");
+    }
+
+    /// The same boundary as executeSlash: refused up to and including the deadline, open after it.
+    function test_resolveDispute_upholdIsRefusedAtTheDeadlineAndOpenOneSecondAfter() public {
+        uint256 deadline = _filedAndDisputed();
+
+        vm.warp(deadline);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.ChallengePeriodActive.selector, didHash, deadline));
+        vm.prank(admin);
+        staking.resolveDispute(didHash, true);
+
+        vm.warp(deadline + 1);
+        vm.prank(admin);
+        staking.resolveDispute(didHash, true);
+        assertEq(uint8(staking.getSlashProposal(didHash).state), uint8(SigvaraStaking.SlashState.Executed));
+    }
+
+    /// Dropping is never gated: the admin can end a dispute the moment it is filed.
+    function test_resolveDispute_dropIsOpenInTheBlockOfTheDispute() public {
+        _filedAndDisputed();
+
+        vm.prank(admin);
+        staking.resolveDispute(didHash, false);
+
+        assertEq(uint8(staking.getSlashProposal(didHash).state), uint8(SigvaraStaking.SlashState.Cancelled));
+        assertTrue(identity.isActive(didHash), "reinstated");
+    }
+
+    /// The gate is the deadline fixed at filing. Neither direction of the admin's period setter
+    /// moves it, as for executeSlash.
+    function test_resolveDispute_theGateIsTheSnapshotNotTheLivePeriod() public {
+        uint256 deadline = _filedAndDisputed();
+
+        // Shortening the live period does not open the gate early.
+        uint256 shorter = staking.MIN_CHALLENGE_PERIOD();
+        vm.prank(admin);
+        staking.setChallengePeriod(shorter);
+        vm.warp(deadline - 1 days); // past the shortened period, short of the original deadline
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.ChallengePeriodActive.selector, didHash, deadline));
+        vm.prank(admin);
+        staking.resolveDispute(didHash, true);
+
+        // Lengthening it does not hold the gate shut.
+        vm.prank(admin);
+        staking.setChallengePeriod(20 days);
+        vm.warp(deadline + 1);
+        vm.prank(admin);
+        staking.resolveDispute(didHash, true);
+        assertEq(uint8(staking.getSlashProposal(didHash).state), uint8(SigvaraStaking.SlashState.Executed));
+    }
+
+    /// Whenever the operator disputes, and whenever the admin tries, an upheld ruling lands exactly
+    /// when the deadline has passed and not before.
+    function testFuzz_resolveDispute_upholdOpensOnlyAfterTheDeadline(uint256 disputeDelay, uint256 tryDelay) public {
+        _deposit();
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "evidence");
+        uint256 filedAt = block.timestamp;
+        uint256 deadline = staking.getSlashProposal(didHash).challengeDeadline;
+
+        // The operator may dispute up to and including the deadline.
+        disputeDelay = bound(disputeDelay, 0, CHALLENGE);
+        vm.warp(filedAt + disputeDelay);
+        vm.prank(operator);
+        staking.disputeSlash(didHash);
+
+        tryDelay = bound(tryDelay, disputeDelay, CHALLENGE + 7 days);
+        vm.warp(filedAt + tryDelay);
+        if (block.timestamp <= deadline) {
+            vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.ChallengePeriodActive.selector, didHash, deadline));
+        }
+        vm.prank(admin);
+        staking.resolveDispute(didHash, true);
+
+        SigvaraStaking.SlashState expected = block.timestamp <= deadline
+            ? SigvaraStaking.SlashState.Disputed
+            : SigvaraStaking.SlashState.Executed;
+        assertEq(uint8(staking.getSlashProposal(didHash).state), uint8(expected));
     }
 
     function test_expireDispute_reverts_notDisputed() public {

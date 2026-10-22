@@ -521,6 +521,11 @@ contract SigvaraStaking is
      *         veto relies on. The admin already holds the veto, so the ruling and the check on it
      *         sit with one key that is separate from the accuser. If the admin never rules, anyone
      *         can expire the dispute after DISPUTE_RESOLUTION_PERIOD and the agent keeps its stake.
+     *
+     *         A ruling to uphold waits for the challenge deadline fixed when the slash was filed,
+     *         the moment executeSlash opens for an undisputed one, so disputing can never bring a
+     *         slash forward. Dropping is open at any time. A dispute filed on the first day is
+     *         therefore upheld between the end of the challenge period and the dispute's expiry.
      */
     function resolveDispute(bytes32 didHash, bool uphold)
         external
@@ -531,6 +536,8 @@ contract SigvaraStaking is
         if (proposal.state != SlashState.Disputed) revert SlashNotDisputed(didHash);
 
         if (uphold) {
+            uint256 deadline = proposal.challengeDeadline;
+            if (block.timestamp <= deadline) revert ChallengePeriodActive(didHash, deadline);
             _settleSlash(didHash, proposal);
         } else {
             _dropProposal(didHash, proposal);
