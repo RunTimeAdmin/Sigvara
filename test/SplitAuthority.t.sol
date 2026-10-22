@@ -259,6 +259,10 @@ contract SplitAuthorityTest is Test {
             safe.exec(targets[i], abi.encodeCall(IAccessControl.revokeRole, (keccak256("SLASHING_COMMITTEE_ROLE"), probe)));
         }
 
+        // The two wiring setters are upgrade-class. The Safe holds admin and is refused, and the
+        // timelock holds the upgrader role and gets through, after its delay.
+        _wiringGoesThroughTheTimelock(safe, timelock);
+
         // An upgrade goes through the timelock, with its delay.
         address staking = targets[2];
         bytes memory upgradeCall = abi.encodeCall(IUUPSLike.upgradeToAndCall, (freshImpl, ""));
@@ -280,6 +284,47 @@ contract SplitAuthorityTest is Test {
         vm.prank(address(timelock));
         IAccessControl(staking).grantRole(UPGRADER_ROLE, address(0xCAFE));
         assertTrue(IAccessControl(staking).hasRole(UPGRADER_ROLE, address(0xCAFE)));
+    }
+
+    /// setStakeView decides who counts as bonded and setOperatorBond decides who may score, and
+    /// passing zero to either turns its check off. Each changes the protocol about as much as an
+    /// upgrade, so after the handover the Safe cannot make either call and the timelock can.
+    function _wiringGoesThroughTheTimelock(MockSafe safe, TimelockController timelock) internal {
+        address identity = targets[0];
+        address reputation = targets[1];
+        address newView = makeAddr("newStakeView");
+        address newSet = makeAddr("newOperatorSet");
+
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControl.AccessControlUnauthorizedAccount.selector, address(safe), UPGRADER_ROLE
+        ));
+        safe.exec(identity, abi.encodeCall(SigvaraIdentity.setStakeView, (newView)));
+
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControl.AccessControlUnauthorizedAccount.selector, address(safe), UPGRADER_ROLE
+        ));
+        safe.exec(reputation, abi.encodeCall(SigvaraReputation.setOperatorBond, (address(0))));
+
+        bytes memory viewCall = abi.encodeCall(SigvaraIdentity.setStakeView, (newView));
+        bytes memory bondCall = abi.encodeCall(SigvaraReputation.setOperatorBond, (newSet));
+        bytes32 salt = keccak256("wiring-rehearsal");
+        safe.exec(
+            address(timelock),
+            abi.encodeCall(TimelockController.schedule, (identity, 0, viewCall, bytes32(0), salt, 48 hours))
+        );
+        safe.exec(
+            address(timelock),
+            abi.encodeCall(TimelockController.schedule, (reputation, 0, bondCall, bytes32(0), salt, 48 hours))
+        );
+
+        vm.expectRevert();
+        timelock.execute(identity, 0, viewCall, bytes32(0), salt);
+
+        vm.warp(block.timestamp + 48 hours);
+        timelock.execute(identity, 0, viewCall, bytes32(0), salt);
+        timelock.execute(reputation, 0, bondCall, bytes32(0), salt);
+        assertEq(address(SigvaraIdentity(identity).stakeView()), newView, "stake view moved through the timelock");
+        assertEq(address(SigvaraReputation(reputation).operatorBond()), newSet, "operator bond moved through it too");
     }
 
     bytes32 constant IMPL_SLOT = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;

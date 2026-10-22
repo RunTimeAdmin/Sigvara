@@ -321,6 +321,13 @@ cast send <reputation proxy> "setOperatorBond(address)" <oracleBond proxy>   --p
 Passing the zero address turns the requirement back off, which is why this is a plain
 setter and not another initializer: unset is a safe working state.
 
+This call, and `setStakeView` on the identity registry, need `UPGRADER_ROLE`, not the admin
+role: what they point at decides who counts as bonded and who may score, so they get the
+notice an upgrade does. After the handover the timelock holds that role, so the Safe
+schedules the call on the timelock and it executes once the 48 hour delay has passed. On a
+fresh testnet deployment the deployer holds both roles until the handover, so the command
+above works as written.
+
 Check where you stand before flipping it. `bondOf` being non-zero is not the same as
 being admitted, and only the second one lets an oracle propose:
 

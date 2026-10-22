@@ -597,8 +597,13 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
      *
      *         Turning this on stops every oracle that has not bonded and been admitted,
      *         so set it after the operators are in the registry, not before.
+     *
+     *         Held behind UPGRADER_ROLE, the timelock's role, and not the admin role. Passing zero
+     *         switches the bonded-operator check off and any other address decides who may score
+     *         every agent, so the call is about as consequential as an upgrade and gets the same
+     *         notice: it is scheduled on the timelock and executes after its delay.
      */
-    function setOperatorBond(address operatorBond_) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function setOperatorBond(address operatorBond_) external onlyRole(UPGRADER_ROLE) {
         operatorBond = IOperatorSet(operatorBond_);
         emit OperatorBondSet(operatorBond_);
     }
