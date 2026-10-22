@@ -416,6 +416,19 @@ contract UpgradeDependencyTest is Test {
         }
     }
 
+    /// The check is in run(), not only in the helper: a staking upgrade pointed at an identity proxy stops
+    /// before the key is read or anything is sent. TARGET and PROXY are read by this script alone.
+    function test_run_refusesAProxyOfAnotherKind() public {
+        (address[5] memory p,) = _proxies();
+        vm.setEnv("TARGET", "staking");
+        vm.setEnv("PROXY", vm.toString(p[0])); // an identity proxy
+        Upgrade script_ = new Upgrade();
+        vm.expectRevert(abi.encodeWithSelector(Upgrade.ProxyIsNotTheTarget.selector, "staking", p[0]));
+        script_.run();
+        vm.setEnv("TARGET", "");
+        vm.setEnv("PROXY", "");
+    }
+
     function test_shape_refusesAnAddressWithNoCodeOrAnotherKindOfContract() public {
         vm.expectRevert(abi.encodeWithSelector(Upgrade.ProxyIsNotTheTarget.selector, "staking", address(0xABCD)));
         harness.shape("staking", address(0xABCD));
