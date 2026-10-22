@@ -24,6 +24,13 @@ const REPUTATION_ABI = [
   // Declared so ethers decodes the revert into a named error instead of raw bytes. A
   // checker that loses the race needs to tell that apart from a real failure.
   'error ScoreAlreadyPending(bytes32 didHash, uint256 proposedAt)',
+  // Same reason. A pending proposal whose proposer has lost its authority (the operator was
+  // removed, its signer cleared, or its role revoked) can never be finalized, and the epoch has
+  // to tell that from a real failure.
+  'error ProposerNotAuthorized(bytes32 didHash, address proposer)',
+  // What a dry run says when the wallet is neither an active operator nor the signer of one: a
+  // signer that was cleared, or an operator that was removed. Named so the log says so.
+  'error OracleNotBonded(address oracle)',
   'function finalizeReputation(bytes32 didHash)',
   // evidenceRoot is decoded now, not dropped. A divergence without it says two operators
   // disagree; with it, a stranger can see they were scoring different evidence and go and
@@ -39,7 +46,15 @@ const FEE_ABI = [
   'function epochFee() view returns (uint256)',
   'function isCovered(bytes32 didHash) view returns (bool)',
   'function chargeEpoch(bytes32 didHash) returns (bool)',
+  // An agent is charged once per epoch. Declared so that being told it was already charged
+  // is not mistaken for a failure to pay.
+  'error AlreadyCharged(bytes32 didHash, uint256 epoch)',
 ];
+
+// Every custom error declared above, to name a revert from its data. See namedError.
+const REVERT_NAMES = new ethers.Interface(
+  [...REPUTATION_ABI, ...FEE_ABI].filter((fragment) => fragment.startsWith('error ')),
+);
 
 // AgentStatus enum — must match SigvaraIdentity.sol
 const STATUS_SLASHED = 2;
@@ -714,15 +729,38 @@ async function canPropose(didHash, scores, evidenceRoot = ethers.ZeroHash, ifEmp
   }
 }
 
-/// True when this error is the pending slot having been taken by someone else, rather
-/// than anything being wrong. Matched on the decoded error name first, with a string
-/// fallback for nodes that return the revert without enough ABI context to decode it.
-function isSlotTaken(err) {
+/// A revert the contract named, matched on the decoded name first, then on the revert data, and
+/// on the text last.
+///
+/// The data is read because ethers decodes a custom error only on a path that holds the
+/// contract's interface, which is a call. A send that fails while its gas is estimated reaches
+/// this code from the provider: `data` is set, `revert` is null, and the message says "unknown
+/// custom error". That is how a real node answered the first time AlreadyCharged was seen live,
+/// and a match on the name alone read it as an ordinary failure.
+function namedError(err, name) {
   if (!err) return false;
-  if (err.errorName === 'ScoreAlreadyPending') return true;
-  if (err.revert && err.revert.name === 'ScoreAlreadyPending') return true;
-  return /ScoreAlreadyPending/.test(String(err.shortMessage || err.message || ''));
+  if (err.errorName === name) return true;
+  if (err.revert && err.revert.name === name) return true;
+  if (typeof err.data === 'string' && err.data.length >= 10) {
+    let parsed = null;
+    try { parsed = REVERT_NAMES.parseError(err.data); } catch { /* not an error this oracle knows */ }
+    if (parsed && parsed.name === name) return true;
+  }
+  return new RegExp(name).test(String(err.shortMessage || err.message || ''));
 }
+
+/// True when finalizing was refused because whoever made the pending proposal can no longer
+/// make it. Not a failure of this epoch: nothing can finalize that proposal, and the proposal
+/// this oracle is about to make replaces it.
+function isProposerNotAuthorized(err) { return namedError(err, 'ProposerNotAuthorized'); }
+
+/// True when the agent was already charged in this epoch, by an earlier run of this oracle or
+/// by someone else. The agent is covered for it, so it counts as paid.
+function isAlreadyCharged(err) { return namedError(err, 'AlreadyCharged'); }
+
+/// True when this error is the pending slot having been taken by someone else, rather
+/// than anything being wrong. Matched as namedError does: decoded name, revert data, text.
+function isSlotTaken(err) { return namedError(err, 'ScoreAlreadyPending'); }
 
 /**
  * True when the node refused the request because we are being throttled, rather than
@@ -840,6 +878,8 @@ async function chargeEpoch(didHash) {
 module.exports = {
   readWithBackoff,
   isSlotTaken,
+  isProposerNotAuthorized,
+  isAlreadyCharged,
   isRateLimited,
   init,
   reset,

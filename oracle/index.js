@@ -137,14 +137,16 @@ if (cfg.checkerMode) {
     console.error(`[oracle] ${tolErr}`);
     process.exit(1);
   }
-  // A checker that proposes as failover would otherwise run the primary's fee path and
-  // debit the agent a second time for one scoring epoch: chargeEpoch has no per-epoch
-  // idempotency, so two operators charging is two charges. A checker does not bill.
+  // A checker that proposes as failover would otherwise run the primary's fee path. A fee
+  // registry from before the once-per-epoch charge would debit the agent a second time for
+  // one scoring epoch, and a current one would refuse the second charge while the two
+  // operators raced for the first. A checker does not bill.
   if (cfg.feeRegistryAddress) {
     console.error(
       '[oracle] ORACLE_MODE=checker with FEE_REGISTRY_ADDRESS set. A checker must not ' +
-      'charge epoch fees — chargeEpoch is not idempotent, so the agent would pay twice ' +
-      'for one epoch. Unset FEE_REGISTRY_ADDRESS on the checker.',
+      'charge epoch fees: the primary bills, and a second operator charging would either ' +
+      'debit the agent twice on an older registry or race the primary for the one charge ' +
+      'a newer one allows. Unset FEE_REGISTRY_ADDRESS on the checker.',
     );
     process.exit(1);
   }
@@ -760,17 +762,26 @@ const PHASE_ONE_CHUNK = 32;
             finalized++;
             metrics.inc('finalizeSuccesses');
           } catch (finalizeErr) {
-            // finalizeReputation is permissionless, so another party can front-run
-            // us. If the pending proposal is gone, that's exactly what happened —
-            // the score is live, carry on and propose fresh. Anything else is a
-            // real failure and should skip this agent via the outer catch.
-            const still = await chain.getPendingScore(didHash);
-            if (still.exists) {
-              metrics.inc('finalizeErrors');
-              throw finalizeErr;
+            if (chain.isProposerNotAuthorized(finalizeErr)) {
+              // The proposer of the pending proposal has lost its authority: its operator was
+              // removed, its signer cleared, or its role revoked. Nobody can finalize that
+              // proposal, so it is not a failure of this epoch, and the proposal made below
+              // replaces it.
+              console.log(`[oracle]   ${didHash.slice(0, 10)}… the pending proposal's proposer is no longer authorized; replacing it`);
+              metrics.inc('proposalsStranded');
+            } else {
+              // finalizeReputation is permissionless, so another party can front-run
+              // us. If the pending proposal is gone, that's exactly what happened —
+              // the score is live, carry on and propose fresh. Anything else is a
+              // real failure and should skip this agent via the outer catch.
+              const still = await chain.getPendingScore(didHash);
+              if (still.exists) {
+                metrics.inc('finalizeErrors');
+                throw finalizeErr;
+              }
+              console.log(`[oracle]   ${didHash.slice(0, 10)}… already finalized by another party`);
+              metrics.inc('finalizeSuccesses');
             }
-            console.log(`[oracle]   ${didHash.slice(0, 10)}… already finalized by another party`);
-            metrics.inc('finalizeSuccesses');
           }
         }
 
@@ -824,7 +835,25 @@ const PHASE_ONE_CHUNK = 32;
           // This narrows the race to one round trip. The rest is closed by the contract:
           // the propose below uses proposeIfEmpty, which reverts rather than replacing a
           // proposal that lands in the remaining gap.
-          const freshPending = await chain.getPendingScore(didHash);
+          let freshPending = await chain.getPendingScore(didHash);
+
+          // A proposal whose proposer has lost its authority holds the slot in name only. It
+          // can never be finalized, and the contract lets proposeIfEmpty replace it, which is
+          // how a checker takes over from a primary that was removed. The contract is asked
+          // rather than the answer worked out here: a compare-and-swap that would be accepted
+          // over an occupied slot means the occupant is dead. Anything short of a clear yes
+          // leaves the proposal alone, which is the safe reading.
+          if (freshPending.exists) {
+            let probe = { ok: false };
+            try {
+              probe = await chain.canPropose(didHash, scores, undefined, true);
+            } catch { /* cannot ask, so leave it alone */ }
+            if (probe.ok) {
+              console.log(`[oracle]   ${didHash.slice(0, 10)}… the pending proposal's proposer is no longer authorized; covering for it`);
+              metrics.inc('proposalsStranded');
+              freshPending = { exists: false, proposedAt: 0, data: {}, evidenceRoot: null };
+            }
+          }
 
           // Score the proposal against ITS OWN clock, not this epoch's.
           //
@@ -929,6 +958,13 @@ const PHASE_ONE_CHUNK = 32;
                 metrics.inc('finalizeThrottled');
                 continue;
               }
+              // The proposer lost its authority between the probe above and this call. The next
+              // epoch's probe sees it and covers for it.
+              if (chain.isProposerNotAuthorized(finalizeErr)) {
+                console.log(`[oracle]   ${didHash.slice(0, 10)}… the proposer is no longer authorized; covering for it next epoch`);
+                metrics.inc('proposalsStranded');
+                continue;
+              }
               // An empty slot after a failed finalize has two very different causes, and
               // counting both as success hides the one that matters most: the slashing
               // committee rejecting a proposal deletes it too. That is the committee
@@ -970,10 +1006,11 @@ const PHASE_ONE_CHUNK = 32;
         // nothing to us. The trade-off is that an agent charged for an epoch whose
         // proposal then fails has paid for a run it did not get; that is logged
         // and counted, and is the lesser of the two errors.
-        // Never in checker mode. chargeEpoch has no per-epoch idempotency, so a second
+        // Never in checker mode. On a registry from before the once-per-epoch charge a second
         // operator running this path would debit the agent a second time for one scoring
-        // epoch. Startup already refuses checker + FEE_REGISTRY_ADDRESS; this is the
-        // second lock on a path that moves real value.
+        // epoch, and on a current one it would race the primary for the single charge.
+        // Startup already refuses checker + FEE_REGISTRY_ADDRESS; this is the second lock on
+        // a path that moves real value.
         if (gatingActive && !cfg.checkerMode) {
           // Ask the contract whether this proposal would be accepted before taking the fee
           // for it. Charging first is still right, for the reason above, but it used to be
@@ -998,16 +1035,23 @@ const PHASE_ONE_CHUNK = 32;
             await chain.chargeEpoch(didHash);
             metrics.inc('feeCharges');
           } catch (chargeErr) {
-            // A charge that was sent and not seen mined may still land. Said plainly, because
-            // the agent may have paid for an epoch that is not scored.
-            if (chain.isTxUnconfirmed(chargeErr)) {
-              metrics.inc('txUnconfirmed');
-              console.error(`[oracle]   ${didHash.slice(0, 10)}… epoch-fee charge not confirmed, not scoring: ${chargeErr.message}`);
+            if (chain.isAlreadyCharged(chargeErr)) {
+              // Charged earlier in this epoch, by an earlier run of this oracle or by anyone
+              // else. The agent has paid for it, so scoring carries on and nothing more is taken.
+              console.log(`[oracle]   ${didHash.slice(0, 10)}… already charged this epoch; scoring without charging again`);
+              metrics.inc('feeChargesAlreadyPaid');
             } else {
-              console.error(`[oracle]   ${didHash.slice(0, 10)}… epoch-fee charge failed, not scoring: ${chargeErr.message}`);
+              // A charge that was sent and not seen mined may still land. Said plainly, because
+              // the agent may have paid for an epoch that is not scored.
+              if (chain.isTxUnconfirmed(chargeErr)) {
+                metrics.inc('txUnconfirmed');
+                console.error(`[oracle]   ${didHash.slice(0, 10)}… epoch-fee charge not confirmed, not scoring: ${chargeErr.message}`);
+              } else {
+                console.error(`[oracle]   ${didHash.slice(0, 10)}… epoch-fee charge failed, not scoring: ${chargeErr.message}`);
+              }
+              metrics.inc('feeChargeErrors');
+              continue;
             }
-            metrics.inc('feeChargeErrors');
-            continue;
           }
         }
 
@@ -2046,8 +2090,9 @@ server.listen(cfg.port, cfg.host, () => {
       console.log(`[oracle] bonded operator check passed (registry ${operatorBond})`);
     } else {
       console.warn(
-        `[oracle] WARNING: this wallet is not an admitted operator in ${operatorBond}. ` +
-        'Every proposeReputation will revert until it has bonded and been admitted.'
+        `[oracle] WARNING: this wallet is neither an admitted operator in ${operatorBond} nor the signer ` +
+        'one has named. Every proposeReputation will revert until its operator has bonded, been admitted ' +
+        'and named this wallet with setSigner.'
       );
     }
   }).catch(() => {});

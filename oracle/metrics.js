@@ -20,6 +20,8 @@ const counters = {
   // An agent not charged because the contract would have refused the proposal, or because
   // the dry run could not be made. Each one is a fee that was not taken for nothing.
   feeChargesSkipped: 0,
+  feeChargesAlreadyPaid: 0,
+  proposalsStranded: 0,
   // Transactions the oracle declined to sign (a fee or cost above its cap), and ones it
   // sent and never saw mined. Neither is the contract refusing or the provider throttling,
   // and both are worth a look at the RPC.
@@ -164,6 +166,7 @@ function toPrometheusText(extra = {}) {
   lines.push(`sigvara_oracle_fee_charges_total{result="ok"} ${counters.feeCharges}`);
   lines.push(`sigvara_oracle_fee_charges_total{result="error"} ${counters.feeChargeErrors}`);
   lines.push(`sigvara_oracle_fee_charges_total{result="skipped"} ${counters.feeChargesSkipped}`);
+  lines.push(`sigvara_oracle_fee_charges_total{result="already_paid"} ${counters.feeChargesAlreadyPaid}`);
 
   lines.push('');
   lines.push('# HELP sigvara_oracle_tx_refused_total Transactions not signed because of a fee cap, or sent and never seen mined');
@@ -207,6 +210,11 @@ function toPrometheusText(extra = {}) {
   lines.push('# HELP sigvara_oracle_proposals_rejected_total Proposals rejected by the slashing committee');
   lines.push('# TYPE sigvara_oracle_proposals_rejected_total counter');
   lines.push(`sigvara_oracle_proposals_rejected_total ${counters.proposalsRejected}`);
+
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_proposals_stranded_total Pending proposals whose proposer lost its authority, replaced rather than finalized');
+  lines.push('# TYPE sigvara_oracle_proposals_stranded_total counter');
+  lines.push(`sigvara_oracle_proposals_stranded_total ${counters.proposalsStranded}`);
 
   lines.push('');
   lines.push('# HELP sigvara_oracle_flags_total Flags received');
