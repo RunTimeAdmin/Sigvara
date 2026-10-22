@@ -431,6 +431,38 @@ function creditPayment(
   return true;
 }
 
+/**
+ * Give an already-credited payment the outcome it was credited without.
+ *
+ * A payment found by the scan, or attested by someone who holds no token, is credited with
+ * no outcome (see payments.hasOutcome). When a credential holder later reports one for the
+ * same settlement, that report must not be refused as a replay: the earlier credit said
+ * nothing about how the work went, and refusing meant whoever credited a payment first
+ * could keep the party who audited it from ever recording the result.
+ *
+ * Once an outcome is recorded it is final. Changing it would let a later caller overwrite an
+ * audited result, so a second report gets 'already_set'.
+ *
+ * @returns {'set'|'already_set'|'not_found'} not_found when no event matches: it was pruned,
+ *          or the credit predates keys that name the sender.
+ */
+function setPaymentOutcome(didHash, txHash, payer, success) {
+  if (typeof success !== 'boolean') throw new TypeError('setPaymentOutcome: success must be a boolean');
+  const did = String(didHash).toLowerCase();
+  const tx = String(txHash).toLowerCase();
+  const who = String(payer).toLowerCase();
+  const list = paymentEvents.get(did) ?? [];
+  const i = list.findIndex((e) => e.txHash === tx && String(e.payer).toLowerCase() === who);
+  if (i < 0) return 'not_found';
+  if (typeof list[i].success === 'boolean') return 'already_set';
+  // A new array, not an edit in place: the evidence cache treats the array's identity as
+  // the revision token, so a changed outcome has to be a new identity.
+  const next = [...list];
+  next[i] = { ...list[i], success };
+  paymentEvents.set(did, Object.freeze(next));
+  return 'set';
+}
+
 /** Every agent's payment log. Read-only use: the canary picks a known settlement. */
 function allPaymentEvents() { return paymentEvents; }
 
@@ -563,6 +595,7 @@ module.exports = {
   getLastPersist,
   paymentEventError,
   creditPayment,
+  setPaymentOutcome,
   divergences,
   recordDivergence,
   getDivergences,

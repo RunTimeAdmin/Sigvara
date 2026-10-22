@@ -25,6 +25,18 @@ const { readPrivateKey } = require('./secrets');
 // process rather than silently disabling verification on the first request.
 const paymentCfg = payments.readConfig();
 
+// A minimum of zero with verification on means a transfer of one unit counts as a payment,
+// so a counterparty that is not real costs only the gas to send it. The setting is easy to
+// leave at its default, so the process refuses to start rather than run that way. (A
+// zero-value transfer never counts, whatever this is; see payments.countsAsPayment.)
+if (payments.required(paymentCfg) && paymentCfg.minAmount <= 0n) {
+  console.error(
+    '[oracle] PAYMENT_VERIFICATION=required needs PAYMENT_MIN_AMOUNT above 0, in the asset\'s base ' +
+    'units (10000 is one cent of 6-decimal USDC). At 0, a transfer of a single unit counts as a payment.',
+  );
+  process.exit(1);
+}
+
 // ERC-8183 job registry, read-only and off unless JOBS_REGISTRY_ADDRESS is set. Parsed
 // at startup so a malformed address stops the process rather than failing on the first
 // request, the same way the payment config does.
@@ -150,6 +162,7 @@ const {
   checkAttestCooldown,
   recordAttestation,
   creditPayment,
+  setPaymentOutcome,
   getScanState: loadScanState,
   setScanState,
   getPaymentScanState,
@@ -1176,6 +1189,32 @@ const server = http.createServer(async (req, res) => {
         });
       }
 
+      // true, false, or left out. Anything else is refused rather than guessed at: the tally
+      // below used to count the string "false" as a success, because it is truthy.
+      if (success !== undefined && success !== null && typeof success !== 'boolean') {
+        metrics.inc('attestRejectedOther');
+        return json(res, 400, { error: 'success must be true, false or omitted' });
+      }
+
+      /* What an outcome is worth depends on who reports it.
+       *
+       * A credential holder is a party this oracle has agreed to hear from: CounterAudit,
+       * which audited the work, or the operator's own tooling. Its outcome is recorded.
+       *
+       * Anyone else holds only a settlement hash, and a settlement hash is public. It proves
+       * that money moved to the agent, not that the person naming it paid, and not that the
+       * work went well. Taking their `success` at its word let an agent's operator file
+       * "success" against every one of its customers' payments before anyone else could, and
+       * the first credit for a settlement is final. So a stranger's attestation still records
+       * the payment, as evidence of fee volume and tenure, and records no outcome, which is
+       * exactly what a payment found by the scan carries. A credential holder can still give
+       * that payment its outcome afterwards.
+       *
+       * `caller` is truthy for a matched credential and in the open mode a loopback bind may
+       * run in, where there are no credentials at all.
+       */
+      const outcome = caller && typeof success === 'boolean' ? success : null;
+
       let attester = body.attester;
       if (!body.didHash) {
         metrics.inc('attestRejectedOther');
@@ -1196,9 +1235,13 @@ const server = http.createServer(async (req, res) => {
       // settlement transfer. The `attester` field in the body is ignored: letting a
       // caller name themselves is what made attestations free to manufacture.
       let credited = null;
+      // Declared here, not inside the block, because the per-leg self-payment check further
+      // down reads it. It was declared inside, so every attestation with verification on
+      // threw a ReferenceError at that line and was answered 400: nothing was credited, and
+      // no test covered the route.
+      let info = null;
       if (payments.required(paymentCfg)) {
         const txHash = body.payment && body.payment.txHash;
-        let info;
         try {
           info = await chain.getAgentInfo(didHash);
         } catch (err) {
@@ -1241,24 +1284,33 @@ const server = http.createServer(async (req, res) => {
         attester = credited.payer;
       }
 
-      const cooldownCheck = checkAttestCooldown(attester, didHash);
-      if (!cooldownCheck.allowed) {
-        metrics.inc('attestRejectedCooldown');
-        const remainingSec = Math.ceil(cooldownCheck.remainingMs / 1000);
-        return json(res, 429, {
-          error: 'Attestation cooldown active',
-          attester,
-          didHash,
-          remainingSeconds: remainingSec,
-          cooldownMs: ATTEST_COOLDOWN_MS,
-        });
+      /* The cooldown throttles strangers. A credential holder reporting on a payment this
+       * oracle has just verified is not spamming: the settlement is single-use and cost real
+       * money, and the credential is the throttle. Exempting it also stops the cooldown being
+       * used as a lock. It is keyed on the payer, anyone can submit a public settlement hash,
+       * and an agent's operator could therefore arm it on every customer payment as it
+       * happened and keep the auditor's report out indefinitely. With verification off every
+       * caller holds a credential, so the cooldown there is untouched.
+       */
+      const throttled = !(credited && caller);
+      if (throttled) {
+        const cooldownCheck = checkAttestCooldown(attester, didHash);
+        if (!cooldownCheck.allowed) {
+          metrics.inc('attestRejectedCooldown');
+          const remainingSec = Math.ceil(cooldownCheck.remainingMs / 1000);
+          return json(res, 429, {
+            error: 'Attestation cooldown active',
+            attester,
+            didHash,
+            remainingSeconds: remainingSec,
+            cooldownMs: ATTEST_COOLDOWN_MS,
+          });
+        }
       }
 
-      const att = attestations.get(didHash) ?? { successful: 0, total: 0 };
-      att.total++;
-      if (success) att.successful++;
-      attestations.set(didHash, att);
-      recordAttestation(attester, didHash);
+      // Whether this request put an outcome on a payment. Only meaningful when one was
+      // credited; without verification there is no payment to hang an outcome on.
+      let outcomeRecorded = false;
       if (credited) {
         // Credit after the cooldown check so a rejected attestation does not burn
         // the receipt; the payer can retry once the cooldown clears.
@@ -1284,6 +1336,7 @@ const server = http.createServer(async (req, res) => {
         // with the outcome, as before.
         const legs = credited.legs ?? [{ payer: credited.payer, amount: credited.amount }];
         let anyCredited = false;
+        let outcomeConflict = false;
         for (const [i, leg] of legs.entries()) {
           // Per leg, matching planCredits, which refuses a self-paying sender group and
           // credits the rest of the transaction. Checking only the largest contributor
@@ -1291,25 +1344,50 @@ const server = http.createServer(async (req, res) => {
           // customer also paid into, and would put the two intake paths back into
           // disagreement about the same transaction.
           if (payments.isSelfPayment(leg.payer, info)) continue;
-          const outcome = i === 0 ? success : null;
+          const legOutcome = i === 0 ? outcome : null;
           if (creditPayment(
-            didHash, credited.txHash, leg.amount, leg.payer, outcome, credited.settledAt, packet,
+            didHash, credited.txHash, leg.amount, leg.payer, legOutcome, credited.settledAt, packet,
             credited.blockNumber,
-          )) anyCredited = true;
+          )) {
+            anyCredited = true;
+            if (legOutcome !== null) outcomeRecorded = true;
+            continue;
+          }
+          // Credited before. A report with an outcome is not a replay when the earlier
+          // credit carried none (the scan, or a stranger's attestation): it is the first
+          // outcome this payment has had. An outcome that is already recorded stays.
+          if (legOutcome === null) continue;
+          const filed = setPaymentOutcome(didHash, credited.txHash, leg.payer, legOutcome);
+          if (filed === 'set') { anyCredited = true; outcomeRecorded = true; }
+          else if (filed === 'already_set') outcomeConflict = true;
         }
         if (!anyCredited) {
           metrics.inc('attestRejectedPayment');
-          return json(res, 409, { error: 'this settlement has already been credited', code: 'replayed' });
+          return outcomeConflict
+            ? json(res, 409, { error: 'an outcome has already been recorded for this settlement', code: 'outcome_recorded' })
+            : json(res, 409, { error: 'this settlement has already been credited', code: 'replayed' });
         }
         metrics.inc('paymentsVerified');
       }
+
+      // Recorded last, once something has been accepted. These used to be written before the
+      // credit was decided, so a refused replay (409) of somebody else's public settlement
+      // still armed the payer's cooldown and added to the tally: anyone could lock a payer
+      // out of an agent, an hour at a time, by replaying that payer's transaction.
+      const att = attestations.get(didHash) ?? { successful: 0, total: 0 };
+      att.total++;
+      if (outcome === true) att.successful++;
+      attestations.set(didHash, att);
+      if (throttled) recordAttestation(attester, didHash);
       persistState();
       metrics.inc('attestAccepted');
       return json(res, 200, {
         didHash,
         attester,
         ...att,
-        ...(credited ? { payment: { txHash: credited.txHash, amount: credited.amount.toString() } } : {}),
+        ...(credited
+          ? { payment: { txHash: credited.txHash, amount: credited.amount.toString() }, outcomeRecorded }
+          : {}),
       });
     } catch (err) {
       metrics.inc('attestRejectedOther');

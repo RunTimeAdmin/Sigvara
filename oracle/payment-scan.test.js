@@ -741,3 +741,28 @@ test('planCredits with the store as isUsed: a second payer in the same transacti
   assert.deepEqual(credits.map((x) => x.payer), [OTHER_PAYER]);
   assert.deepEqual(skipped.map((x) => [x.payer, x.reason]), [[PAYER, 'already_credited']]);
 });
+
+// ---------------------------------------------------------------------------
+// Zero-value transfers
+// ---------------------------------------------------------------------------
+//
+// A zero-value Transfer is not a small payment. On a standard ERC-20 anyone can emit one
+// naming any sender (transferFrom with a value of 0 needs no allowance), so crediting it
+// credited a counterparty that never paid anything. It is refused whatever the minimum.
+
+test('planCredits: a zero-value transfer is skipped as zero_value, whatever the minimum', () => {
+  for (const minAmount of [0n, 100n]) {
+    const { credits, skipped } = plan([transfer(STRANGER, AGENT, 0n)], { minAmount });
+    assert.equal(credits.length, 0, `minimum ${minAmount}`);
+    assert.deepEqual(skipped.map((s) => s.reason), ['zero_value'], `minimum ${minAmount}`);
+  }
+});
+
+test('planCredits: a zero-value leg beside a real payment credits only the real one', () => {
+  const { credits, skipped } = plan([
+    transfer(PAYER, AGENT, 500n, { logIndex: 0 }),
+    transfer(STRANGER, AGENT, 0n, { logIndex: 1 }),
+  ]);
+  assert.deepEqual(credits.map((c) => c.payer), [PAYER]);
+  assert.deepEqual(skipped.map((s) => s.reason), ['zero_value']);
+});
