@@ -99,6 +99,9 @@ Health check with operational signals for production alerting.
   "statePersisted": true,
   "lastPersistMs": 1234567890000,
   "statePath": "/data/oracle-state.json",
+  "stateSource": "file",
+  "chainId": 5042,
+  "expectedChainId": 5042,
   "attestCooldownMs": 3600000,
   "epochRunning": false,
   "commit": "1f1456e3f6df0a625f0a107b84d4198f0a88f669",
@@ -125,6 +128,17 @@ It matters because `/attest` answers 200 on the strength of having recorded some
 so a failed persist means a payer was told a payment counted when a restart will lose
 it. Pulled payments are found again by the next scan; attested outcomes are on chain
 nowhere, so those do not come back.
+
+`stateSource` is `file`, `fresh` (there was no state file) or `backup`. `backup` means the
+state file could not be read and the previous save was used instead; the bad file is kept
+beside it as `<state>.corrupt-<time>`, and anything recorded since that save is gone. A
+recovery is something a person should hear about, which is why it is here and not only in
+the log. See [State Persistence](#state-persistence).
+
+`chainId` is the chain the RPC was last seen on, and `null` until the first check has
+finished. `expectedChainId` is what `EXPECTED_CHAIN_ID` names, and `null` when it is unset.
+They are separate because only the first is a fact: a deployment with the second unset signs
+for whatever chain its RPC serves.
 
 `commit` is the git revision the container cloned at start, or `null` when the
 deployment did not report one. It answers "are these two operators running the same
@@ -187,6 +201,8 @@ Also exposed, and worth knowing about:
 | `sigvara_oracle_propose_attempts_total`, `..._finalize_attempts_total` | attempts, so success + error + slot_taken can be reconciled rather than assumed to account for everything. |
 | `sigvara_oracle_proposals_rejected_total` | scores the slashing committee rejected. |
 | `sigvara_oracle_evidence_cache_total{result}` | `/evidence` responses served from cache against rebuilt. A miss hashes a Merkle tree over the agent's whole payment history and derives every proof, so the hit rate is the difference between a cheap endpoint and an expensive one. |
+| `sigvara_oracle_fee_charges_total{result="skipped"}` | agents not charged an epoch fee because the contract's dry run said their proposal would be refused, or because the dry run could not be made. Nonzero for long means proposals are being refused: look at the oracle's bond and the agents' status. |
+| `sigvara_oracle_tx_refused_total{reason}` | `fee_cap`: a transaction the oracle would not sign because the fee the RPC quoted was above `MAX_FEE_GWEI` or `MAX_TX_COST`. `unconfirmed`: a transaction that was sent and not seen mined within `TX_WAIT_SECONDS`, even after one replacement. Either one is a reason to look at the RPC. |
 
 The first four were incremented by the epoch for some time while being declared nowhere,
 and `metrics.inc()` ignores names it does not know. So they read zero throughout,
@@ -718,6 +734,7 @@ and then its silence means nothing.
 |----------|---------|-------------|
 | `ORACLE_ADMIN_TOKEN` | (empty) | Bearer token for authenticated endpoints. **Set this before exposing the service.** Generate with `openssl rand -hex 32` |
 | `ORACLE_STATE_PATH` | `/data/oracle-state.json` | Path to the persistent state file. Mount a volume here in Docker. |
+| `EXPECTED_CHAIN_ID` | (empty) | The chain this oracle is for: `5042` for Arc mainnet, `5042002` for the testnet. **Set this.** With it set, nothing is read for scoring or signed while the RPC reports another chain, and a state file saved on another chain is refused. Unset, the oracle signs for whatever chain `RPC_URL` serves and says so at startup |
 | `ATTEST_COOLDOWN_MS` | `3600000` (1 hour) | Minimum time before the same attester can re-attest the same agent |
 
 ### Optional
@@ -735,6 +752,26 @@ and then its silence means nothing.
 | `EXTERNAL_RPC` | (empty) | RPC for ERC-8004 external score lookups |
 | `EXTERNAL_IDENTITY_ADDRESS` | (empty) | ERC-8004 Identity contract |
 | `EXTERNAL_REPUTATION_ADDRESS` | (empty) | ERC-8004 Reputation contract |
+
+### Transactions and the clock
+
+The RPC chooses the fees it quotes, whether a transaction has been mined, and what time the
+chain says it is. These bound how far the oracle takes its word for each.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TX_WAIT_SECONDS` | `60` | How long a transaction is waited for. After that it is replaced once, with the same nonce at twice the fee, and waited for again. If that does not land either the epoch moves on, and the next one reads the chain as it is. `5` to `3600` |
+| `MAX_FEE_GWEI` | `1000` | The highest `maxFeePerGas` the oracle will sign, in gwei. A transaction over it is refused before it is signed and costs nothing. Arc's minimum base fee is 20 gwei, so the default is a long way above normal; tighten it once you have watched a week of real fees |
+| `MAX_TX_COST` | `1` | The most one transaction may cost at its worst, gas limit times fee, in the native token (USDC on Arc). Catches an inflated gas estimate, which the fee cap alone does not |
+| `MAX_CLOCK_SKEW_SECONDS` | `600` | How far the chain's latest block time may be from this host's clock before the epoch is not run. Payments are dated and scores aged by the block time the RPC reports, so a node serving a stale or false head moves every score the same way, and nothing else would show it |
+
+### Settings are checked at startup
+
+Every numeric setting in these tables is checked before anything starts. A value that is
+set and is not a plain number in range stops the process, with every offending setting
+named. `PAYMENT_MAX_PER_PAYER=four` used to remove the per-payer cap, and
+`PAYMENT_HALF_LIFE_DAYS=90d` used to remove decay, because `Number('four')` is `NaN` and
+every comparison against `NaN` is false. A blank value still means unset.
 
 ### Payment verification
 
@@ -841,11 +878,15 @@ for fee and tenure, and stays required for success.
 ## Production Checklist
 
 - [ ] **Set `ORACLE_ADMIN_TOKEN`** - Required before exposing the HTTP port
+- [ ] **Set `EXPECTED_CHAIN_ID`** - Without it the oracle signs for whatever chain its RPC serves
 - [ ] **Mount persistent volume** to `ORACLE_STATE_PATH` - Attestation and flag state must survive restarts
+- [ ] **Copy the state file off the host** on a schedule. The `.bak` beside it is one save behind and on the same disk
 - [ ] **Configure monitoring:**
   - Scrape `/metrics` with Prometheus
   - Alert on `/health` returning 503
   - Watch `sigvara_oracle_epochs_total{status="failed"}` for epoch failures
+  - Watch `sigvara_oracle_tx_refused_total` and `sigvara_oracle_fee_charges_total{result="skipped"}`: a fee cap that trips is a reason to look at the RPC, and skipped charges mean proposals are being refused
+  - Watch `stateSource` on `/health`: anything but `file` after a restart means the state was recovered or started empty
   - Watch `sigvara_oracle_attest_total{result="rejected_cooldown"}` for potential abuse attempts
 - [ ] **Reverse proxy** with TLS if exposing beyond localhost
 - [ ] **Fund oracle wallet** with native token for gas
@@ -878,8 +919,22 @@ The oracle persists the following to `ORACLE_STATE_PATH`:
 - **paymentEvents**: Per-agent verified payments, one record each (`txHash`, settlement time, amount, payer, outcome, and `blockNumber` for anything credited since 3 Oct 2026). Stored individually rather than as a running total, because a total cannot be decayed. Records whose weight falls below a thousandth are pruned once per epoch
 - **usedPaymentTxs**: Settlements already credited, as `txHash|didHash|payer`, so the same receipt cannot be counted twice for the same agent from the same sender. Keyed by all three because one transaction can pay several agents and can carry several senders, and collapsing either loses what the per-payer cap and the distinct counterparty count read. Shorter keys from before each change are still honoured and block everything below them, since what they omit is not recoverable: pruning drops old payment records and deliberately leaves this list alone
 - **scanState**: The `AgentRegistered` log scan cursor, checkpointed per chunk so a rate-limited scan resumes instead of restarting from `FROM_BLOCK`
+- **schemaVersion** and **chainId**: The format the file was written in, and the chain it belongs to, recorded the first time the oracle checks which chain its RPC serves
 
 Writes are atomic (temp file + rename, with an `fsync` before the rename so a crash cannot leave an atomically-renamed empty file). `/health` reports both whether the path is writable and whether the last write actually succeeded, and returns 503 on either. The two are not the same check: the first writes a few bytes to a test file, which passes while a real state file fails for want of space.
+
+Before each save the file it replaces is kept as `<state>.bak`. It is a hard link, so it costs no copy, and it is always the save before the current one. On start:
+
+| What is found | What happens |
+|---|---|
+| No state file | Starts empty. Deleting the file is the documented way to rescan |
+| A file that reads | It is used |
+| A file that exists and cannot be read (cut off, or hand-edited wrongly) | The `.bak` is used instead, the bad file is moved aside as `<state>.corrupt-<time>`, and `/health` reports `stateSource: "backup"`. Anything recorded since that save is gone |
+| An unreadable file and no usable `.bak` | The process stops and says why. Restore the file from a copy, or move it aside to start empty on purpose |
+| A file written by a newer version of the oracle (`schemaVersion` above what this build reads) | The process stops. The `.bak` is older than that file, so it is not used either |
+| A file saved on a different chain from the one the RPC reports | The process stops. Point `RPC_URL` at the right chain, or move the file aside |
+
+An unreadable file used to be logged as "starting fresh" and the next save wrote an empty state over the original. What is in that file cannot be rebuilt from the chain (attested outcomes, flags, links, and the record of which settlements were already credited), and losing the last one means a settlement can be credited a second time.
 
 `blockNumber` is where the settlement sits on the chain. It is kept because the only other way to find that out is `eth_getTransactionReceipt`, and every Arc endpoint prunes that index: measured 3 Oct 2026 at about 6 days on Circle’s and 13 on QuickNode’s. The scan canary needs the block to re-issue its filter against a settlement known to exist, so without it the canary reported `unavailable` for anything older than the horizon and no empty scan could be believed. It is corroboration rather than evidence and is deliberately absent from the Merkle leaf, since committing to it would change the leaf format and make published roots unreproducible; a verifier reads it off the chain anyway. Events stored before this omit the field rather than carrying a null, and the canary still falls back to a receipt lookup for those.
 
@@ -898,10 +953,13 @@ cd oracle
 node --test
 ```
 
-509 tests covering scoring formulas, payment verification and decay, per-payer caps and
-the trust weighting, Merkle evidence trees, HTTP helpers, store persistence, chain
-access with backoff and scan checkpointing, metrics, and cooldown logic. No network
-access required.
+669 tests covering scoring formulas, payment verification and decay, per-payer caps and
+the trust weighting, Merkle evidence trees, HTTP helpers, store persistence and recovery,
+chain access with backoff, scan checkpointing, fee caps and transaction replacement,
+metrics, and cooldown logic. Several of the files run the real `index.js` and `watcher.js`
+as child processes against a stubbed chain (`test-support/`), so startup refusals, exit
+codes and the order in which the epoch charges and proposes are tested as they happen. No
+network access required.
 
 The Merkle tree is cross-checked against the contracts: the oracle builds a tree in
 JavaScript and a Foundry test verifies those exact proofs on chain. A disagreement about

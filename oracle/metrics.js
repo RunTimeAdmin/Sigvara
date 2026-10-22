@@ -17,6 +17,14 @@ const counters = {
   finalizeErrors: 0,
   feeCharges: 0,
   feeChargeErrors: 0,
+  // An agent not charged because the contract would have refused the proposal, or because
+  // the dry run could not be made. Each one is a fee that was not taken for nothing.
+  feeChargesSkipped: 0,
+  // Transactions the oracle declined to sign (a fee or cost above its cap), and ones it
+  // sent and never saw mined. Neither is the contract refusing or the provider throttling,
+  // and both are worth a look at the RPC.
+  txCapped: 0,
+  txUnconfirmed: 0,
   attestAccepted: 0,
   attestRejectedCooldown: 0,
   attestRejectedOther: 0,
@@ -155,6 +163,13 @@ function toPrometheusText(extra = {}) {
   lines.push('# TYPE sigvara_oracle_fee_charges_total counter');
   lines.push(`sigvara_oracle_fee_charges_total{result="ok"} ${counters.feeCharges}`);
   lines.push(`sigvara_oracle_fee_charges_total{result="error"} ${counters.feeChargeErrors}`);
+  lines.push(`sigvara_oracle_fee_charges_total{result="skipped"} ${counters.feeChargesSkipped}`);
+
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_tx_refused_total Transactions not signed because of a fee cap, or sent and never seen mined');
+  lines.push('# TYPE sigvara_oracle_tx_refused_total counter');
+  lines.push(`sigvara_oracle_tx_refused_total{reason="fee_cap"} ${counters.txCapped}`);
+  lines.push(`sigvara_oracle_tx_refused_total{reason="unconfirmed"} ${counters.txUnconfirmed}`);
 
   lines.push('');
   lines.push('# HELP sigvara_oracle_attest_total Attestation requests');

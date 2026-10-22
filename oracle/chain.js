@@ -46,7 +46,110 @@ const STATUS_SLASHED = 2;
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+// ---- Safety around the RPC -------------------------------------------------
+//
+// The oracle trusts its RPC endpoint for three things it can check cheaply: which chain it
+// is on, what a transaction costs, and whether a transaction landed. Each of them used to be
+// taken on trust.
+
+/** The RPC reports a different chain from the one this oracle was configured for. */
+class ChainMismatchError extends Error {
+  constructor(expected, actual, what = 'EXPECTED_CHAIN_ID') {
+    super(
+      what === 'state'
+        ? `the state file belongs to chain ${expected} but the RPC reports chain ${actual}. Using it would ` +
+          'mix one chain\'s records into another\'s. Point RPC_URL at the right chain, or move the state file aside.'
+        : `${what} is ${expected} but the RPC reports chain ${actual}. Nothing will be signed until they agree.`,
+    );
+    this.code = 'CHAIN_MISMATCH';
+    this.expected = expected;
+    this.actual = actual;
+  }
+}
+
+/** A transaction was refused before signing because its fee or total cost is above the cap. */
+class FeeCapError extends Error {
+  constructor(message) {
+    super(message);
+    this.code = 'FEE_CAP';
+  }
+}
+
+/** A transaction was sent and has not been seen mined within the wait. It may still land. */
+class TxUnconfirmedError extends Error {
+  constructor(txHash, waitedMs, replacementHash = null) {
+    super(
+      `transaction ${txHash} was not mined within ${Math.round(waitedMs / 1000)}s` +
+      (replacementHash ? ` (nor was its fee-bumped replacement ${replacementHash})` : '') +
+      '; it may still land, and the next epoch will read the chain as it is',
+    );
+    this.code = 'TX_UNCONFIRMED';
+    this.txHash = txHash;
+    this.replacementHash = replacementHash;
+  }
+}
+
+const DEFAULT_MAX_FEE_GWEI = 1000;
+const DEFAULT_MAX_TX_COST = '1'; // native token units, which is USDC on Arc
+const DEFAULT_TX_WAIT_MS = 60_000;
+const DEFAULT_TX_POLL_MS = 1_500;
+
+/**
+ * A wallet that will not sign a transaction whose fee or worst-case cost is above a cap.
+ *
+ * The fee comes from the RPC. With no limit, an endpoint that reports a priority fee of a
+ * few million gwei made one finalize spend nearly the whole float, and an endpoint that
+ * is merely wrong does the same without meaning to. The check runs after ethers has filled
+ * in the transaction and before anything is signed, so a refused transaction costs nothing.
+ *
+ * Two bounds, because they fail differently: a ceiling on the price of gas, and a ceiling
+ * on price times the gas limit, which also catches an inflated gas estimate.
+ */
+class CappedWallet extends ethers.Wallet {
+  constructor(privateKey, provider, caps) {
+    super(privateKey, provider);
+    this.caps = caps;
+  }
+
+  async populateTransaction(tx) {
+    const populated = await super.populateTransaction(tx);
+    assertWithinCaps(populated, this.caps);
+    return populated;
+  }
+}
+
+const gwei = (wei) => `${Number(ethers.formatUnits(wei, 'gwei')).toLocaleString('en-US', { maximumFractionDigits: 3 })} gwei`;
+
+function assertWithinCaps(tx, { maxFeePerGas, maxTxCost }) {
+  const perGas = tx.maxFeePerGas ?? tx.gasPrice;
+  if (perGas == null) return;
+  const price = BigInt(perGas);
+  if (maxFeePerGas != null && price > maxFeePerGas) {
+    throw new FeeCapError(
+      `refusing to sign: the RPC set a fee of ${gwei(price)} per gas, above MAX_FEE_GWEI (${gwei(maxFeePerGas)})`,
+    );
+  }
+  if (maxTxCost != null && tx.gasLimit != null) {
+    const worst = price * BigInt(tx.gasLimit);
+    if (worst > maxTxCost) {
+      throw new FeeCapError(
+        `refusing to sign: this transaction could cost ${ethers.formatEther(worst)} (gas limit ${tx.gasLimit} at ` +
+        `${gwei(price)}), above MAX_TX_COST (${ethers.formatEther(maxTxCost)})`,
+      );
+    }
+  }
+}
+
+function capsFromConfig(cfg) {
+  return {
+    maxFeePerGas: ethers.parseUnits(String(cfg.maxFeeGwei ?? DEFAULT_MAX_FEE_GWEI), 'gwei'),
+    maxTxCost: ethers.parseEther(String(cfg.maxTxCost ?? DEFAULT_MAX_TX_COST)),
+  };
+}
+
 let provider, wallet, identityContract, reputationContract, feeContract, cfg_;
+let txWaitMs = DEFAULT_TX_WAIT_MS;
+let txPollMs = DEFAULT_TX_POLL_MS;
 let lastScannedBlock = null;
 let knownAgents = new Map(); // didHash => { didHash, agentAddress, blockNumber }
 
@@ -54,8 +157,10 @@ let knownAgents = new Map(); // didHash => { didHash, agentAddress, blockNumber 
 // to a real RPC. Production usage (index.js) calls init(cfg) with no deps.
 function init(cfg, deps = {}) {
   cfg_ = cfg;
+  txWaitMs = cfg.txWaitMs ?? DEFAULT_TX_WAIT_MS;
+  txPollMs = cfg.txPollMs ?? DEFAULT_TX_POLL_MS;
   provider = deps.provider ?? new ethers.JsonRpcProvider(cfg.rpcUrl);
-  wallet = deps.wallet ?? new ethers.Wallet(cfg.privateKey, provider);
+  wallet = deps.wallet ?? new CappedWallet(cfg.privateKey, provider, capsFromConfig(cfg));
   identityContract = deps.identityContract ?? new ethers.Contract(cfg.identityAddress, IDENTITY_ABI, provider);
   reputationContract = deps.reputationContract ?? new ethers.Contract(cfg.reputationAddress, REPUTATION_ABI, wallet);
 
@@ -396,6 +501,158 @@ async function isBonded(didHash) {
   }
 }
 
+// ---- Waiting for a transaction ----------------------------------------------
+
+/** The node's own trouble, as opposed to an answer about the transaction. */
+function isTransientRpc(err) {
+  if (!err) return false;
+  if (isRateLimited(err)) return true;
+  const code = err.code;
+  return code === 'SERVER_ERROR' || code === 'NETWORK_ERROR' || code === 'TIMEOUT'
+    || /timeout|etimedout|econnreset|socket hang up|fetch failed/i.test(String(err.shortMessage || err.message || ''));
+}
+
+/**
+ * The receipt of the first of `hashes` to be mined, or null once `deadline` passes.
+ *
+ * The node is polled here instead of leaning on tx.wait(). ethers polls inside the
+ * provider, so a rate-limit error on one of those reads rejects the wait although the
+ * transaction was mined: an epoch fee that had landed was reported as failed and charged
+ * again next epoch. A read that fails for the node's own reasons is tried again here.
+ */
+async function pollReceipt(hashes, deadline) {
+  for (;;) {
+    for (const h of hashes) {
+      try {
+        const receipt = await provider.getTransactionReceipt(h);
+        if (receipt) return { receipt, hash: h };
+      } catch (err) {
+        if (!isTransientRpc(err)) throw err;
+      }
+    }
+    if (Date.now() >= deadline) return null;
+    await sleep(Math.min(txPollMs, Math.max(0, deadline - Date.now())));
+  }
+}
+
+function revertedError(tx, receipt) {
+  const err = new Error('transaction execution reverted');
+  err.code = 'CALL_EXCEPTION';
+  err.receipt = receipt;
+  err.transaction = { hash: tx.hash };
+  return err;
+}
+
+/**
+ * The same call at twice the fee, with the same nonce, or null when that cannot be done.
+ *
+ * Same nonce is what makes this safe where a blind resend is not. The original and the
+ * replacement compete for one slot in the account's sequence, so at most one of them can
+ * ever be mined and the epoch cannot be paid twice. A transaction that never reaches the
+ * mempool is dropped for a fee below the base fee on Arc, silently, and the higher fee is
+ * what lets it through. The wallet's caps apply as they do to any send.
+ */
+async function tryReplace(tx) {
+  if (!tx || tx.nonce == null || !tx.to || tx.maxFeePerGas == null || tx.maxPriorityFeePerGas == null
+      || tx.gasLimit == null || typeof wallet?.sendTransaction !== 'function') {
+    return null;
+  }
+  try {
+    return await wallet.sendTransaction({
+      to: tx.to,
+      data: tx.data,
+      value: tx.value ?? 0n,
+      nonce: tx.nonce,
+      gasLimit: tx.gasLimit,
+      type: 2,
+      chainId: tx.chainId,
+      maxFeePerGas: BigInt(tx.maxFeePerGas) * 2n,
+      maxPriorityFeePerGas: BigInt(tx.maxPriorityFeePerGas) * 2n,
+    });
+  } catch (err) {
+    // The caps refused it, or the node says the nonce is used because the original landed.
+    console.warn(`[oracle] could not replace ${tx.hash}: ${err.shortMessage || err.message}`);
+    return null;
+  }
+}
+
+function settled(tx, { receipt, hash }) {
+  if (receipt.status === 0) throw revertedError(tx, receipt);
+  return { receipt, hash };
+}
+
+/**
+ * Wait for a sent transaction to be mined, for a bounded time.
+ *
+ * tx.wait(1) had no timeout, and ethers sets none. A transaction the node dropped, or one
+ * it never broadcast, left the wait pending for ever: the epoch never finished, its guard
+ * stayed set, every later tick was skipped and /epoch answered 409, until someone
+ * restarted the process.
+ *
+ * After TX_WAIT_SECONDS the transaction is replaced once, at a higher fee and the same
+ * nonce (see tryReplace), and the replacement is given the same wait. If neither lands this
+ * throws TxUnconfirmedError and the epoch moves on. Nothing is resent beyond that, which
+ * keeps the rule the write paths have always had: never pay twice for one epoch.
+ *
+ * Resolves to { receipt, hash }, where hash is the transaction that was mined. Throws the
+ * revert as ethers would for a transaction that was mined and failed.
+ */
+async function settle(tx) {
+  const first = await pollReceipt([tx.hash], Date.now() + txWaitMs);
+  if (first) return settled(tx, first);
+
+  console.warn(
+    `[oracle] ${tx.hash} was not mined within ${Math.round(txWaitMs / 1000)}s; ` +
+    'sending it again at a higher fee with the same nonce',
+  );
+  const replacement = await tryReplace(tx);
+  // With a replacement in flight it gets a full wait. Without one there is nothing new to
+  // wait for, and a last look is all that is left.
+  const second = await pollReceipt(
+    replacement ? [tx.hash, replacement.hash] : [tx.hash],
+    Date.now() + (replacement ? txWaitMs : 0),
+  );
+  if (second) return settled(tx, second);
+  throw new TxUnconfirmedError(tx.hash, txWaitMs * (replacement ? 2 : 1), replacement?.hash ?? null);
+}
+
+function isTxUnconfirmed(err) { return !!err && err.code === 'TX_UNCONFIRMED'; }
+function isFeeCap(err) { return !!err && err.code === 'FEE_CAP'; }
+
+// ---- Which chain, and is anything stuck ----------------------------------------
+
+/** The chain id as the node reports it now. Asked afresh: ethers caches the first answer. */
+async function getChainId() {
+  return Number(BigInt(await provider.send('eth_chainId', [])));
+}
+
+/**
+ * The chain id, after checking it against the one this oracle was configured for.
+ *
+ * Nothing used to say which chain the RPC was on. A testnet URL beside mainnet addresses
+ * fails loudly on the first call, but an endpoint that serves the wrong chain, or a failover
+ * that lands on one, would have been signed against. Throws ChainMismatchError when
+ * `expected` is given and the node disagrees.
+ */
+async function assertChainId(expected = null) {
+  const actual = await readWithBackoff('chain id', getChainId);
+  if (expected != null && actual !== Number(expected)) throw new ChainMismatchError(Number(expected), actual);
+  return actual;
+}
+
+/**
+ * How many of this wallet's transactions are pending: ones the node has accepted that no
+ * block holds yet. Epochs run one at a time, so at the start of one the answer should be 0.
+ * More means a transaction is stuck, and every transaction sent behind it waits for it.
+ */
+async function getNonceGap() {
+  const [latest, pending] = await Promise.all([
+    readWithBackoff('nonce', () => provider.getTransactionCount(wallet.address, 'latest')),
+    readWithBackoff('pending nonce', () => provider.getTransactionCount(wallet.address, 'pending')),
+  ]);
+  return Math.max(0, Number(pending) - Number(latest));
+}
+
 /**
  * Propose a score.
  *
@@ -419,8 +676,42 @@ async function proposeScore(didHash, scores, evidenceRoot = ethers.ZeroHash, ifE
     propagationScore: scores.propagationScore,
     lastUpdated:      BigInt(Math.floor(Date.now() / 1000)),
   }, evidenceRoot);
-  await tx.wait(1);
-  return tx.hash;
+  return (await settle(tx)).hash;
+}
+
+/**
+ * Whether a proposal would be accepted right now, asked of the node without sending
+ * anything. Returns { ok: true } or { ok: false, reason } when the contract itself says no
+ * (the operator is not bonded, the agent is not scorable, the slot is taken).
+ *
+ * Exists so the epoch fee is not taken for a proposal that cannot land. The fee used to be
+ * charged first and the proposal sent second, and when the oracle's bond lapsed every
+ * charge succeeded while every proposal reverted: ten epochs, a hundred tokens charged,
+ * no proposals, and /health still green. Anything that is not the contract refusing, such
+ * as the node being down, is thrown rather than answered, so an unreachable node does not
+ * read as "cannot propose" and does not read as "can" either.
+ */
+async function canPropose(didHash, scores, evidenceRoot = ethers.ZeroHash, ifEmpty = false) {
+  const method = ifEmpty ? 'proposeIfEmpty' : 'proposeReputation';
+  try {
+    await readWithBackoff('simulate propose', () => reputationContract[method].staticCall(didHash, {
+      feeScore:         scores.feeScore,
+      successScore:     scores.successScore,
+      ageScore:         scores.ageScore,
+      externalScore:    scores.externalScore,
+      communityScore:   scores.communityScore,
+      propagationScore: scores.propagationScore,
+      lastUpdated:      BigInt(Math.floor(Date.now() / 1000)),
+    }, evidenceRoot));
+    return { ok: true };
+  } catch (err) {
+    // A real revert carries its data. Without any, the node declined to execute at all, and
+    // that is not the contract's answer.
+    if (err && err.code === 'CALL_EXCEPTION' && err.data) {
+      return { ok: false, reason: err.revert?.name || err.reason || err.shortMessage || 'reverted' };
+    }
+    throw err;
+  }
 }
 
 /// True when this error is the pending slot having been taken by someone else, rather
@@ -462,8 +753,7 @@ function isRateLimited(err) {
 
 async function finalizeScore(didHash) {
   const tx = await reputationContract.finalizeReputation(didHash);
-  await tx.wait(1);
-  return tx.hash;
+  return (await settle(tx)).hash;
 }
 
 // Returns { exists, proposedAt } — proposedAt is 0 when no proposal is pending.
@@ -544,8 +834,7 @@ async function isCovered(didHash) {
 async function chargeEpoch(didHash) {
   if (!feeContract) return;
   const tx = await feeContract.chargeEpoch(didHash);
-  await tx.wait(1);
-  return tx.hash;
+  return (await settle(tx)).hash;
 }
 
 module.exports = {
@@ -578,5 +867,17 @@ module.exports = {
   getEpochFee,
   isCovered,
   chargeEpoch,
+  canPropose,
+  settle,
+  isTxUnconfirmed,
+  isFeeCap,
+  getChainId,
+  assertChainId,
+  getNonceGap,
+  assertWithinCaps,
+  CappedWallet,
+  ChainMismatchError,
+  FeeCapError,
+  TxUnconfirmedError,
   STATUS_SLASHED,
 };

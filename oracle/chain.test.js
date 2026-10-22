@@ -19,6 +19,8 @@ function makeFakeProvider(latestBlock, timestamp = 1_700_000_000) {
   return {
     getBlockNumber: async () => latestBlock,
     getBlock: async () => ({ timestamp: BigInt(timestamp) }),
+    // Every transaction a test sends is mined at once. chain.settle polls for the receipt.
+    getTransactionReceipt: async () => ({ status: 1 }),
   };
 }
 

@@ -2,6 +2,10 @@
 
 require('dotenv').config();
 
+// Before any module reads its own settings. A typo in a numeric one used to turn a control
+// off without a word: PAYMENT_MAX_PER_PAYER=four removed the per-payer cap. See config.js.
+require('./config').requireValidNumericConfig('oracle');
+
 const http = require('http');
 const chain = require('./chain');
 const external = require('./external');
@@ -9,7 +13,7 @@ const { computeScore } = require('./scoring');
 const {
   decideAction, decideCheckerAction, scoreDivergence,
   epochIntervalError, divergenceToleranceError, DEFAULT_DIVERGENCE_TOLERANCE,
-  mapChunked,
+  mapChunked, clockSkewError,
 } = require('./epoch-policy');
 const {
   json, readBody, readCredentials, identifyCaller, mayAttestUnauthenticated, parseScorePath, parseDidHash,
@@ -97,6 +101,18 @@ const cfg = {
   // Named in divergence records so a reader is told where the other side's evidence
   // lives, rather than having to already know the deployment's endpoint layout.
   primaryEvidenceUrl: trimTrailingSlash(process.env.PRIMARY_EVIDENCE_URL || 'https://oracle.sigvara.xyz'),
+  // The chain this oracle is for. When set, nothing is read for scoring or signed while the
+  // RPC reports another, and the saved state must belong to it. Unset keeps the old
+  // behaviour of signing for whatever the RPC serves, with a warning at startup.
+  expectedChainId: process.env.EXPECTED_CHAIN_ID ? Number(process.env.EXPECTED_CHAIN_ID) : null,
+  // How long a transaction is waited for before it is replaced once at a higher fee, and
+  // then given up on. See chain.settle.
+  txWaitMs: Number(process.env.TX_WAIT_SECONDS || 60) * 1000,
+  // Ceilings on what one transaction may cost, enforced before signing. See chain.CappedWallet.
+  maxFeeGwei: process.env.MAX_FEE_GWEI ? Number(process.env.MAX_FEE_GWEI) : undefined,
+  maxTxCost: process.env.MAX_TX_COST || undefined,
+  // How far the chain's clock may be from this host's before the epoch is not run.
+  maxClockSkewMs: Number(process.env.MAX_CLOCK_SKEW_SECONDS || 600) * 1000,
 };
 
 if (!cfg.rpcUrl || !cfg.privateKey || !cfg.identityAddress || !cfg.reputationAddress) {
@@ -200,6 +216,9 @@ const {
   pruneExpiredCooldowns,
   isStatePathWritable,
   getStatePath,
+  getLoadReport,
+  getStateChainId,
+  setStateChainId,
   recordDivergence,
   getDivergences,
   allDivergences,
@@ -290,6 +309,40 @@ async function payerScoresFor(didHash) {
 // /epoch endpoint firing at the same time, which would submit tx's with colliding
 // nonces from the shared oracle wallet.
 let epochRunning = false;
+
+// The chain the RPC was last seen on, once it has been checked. Reported by /health.
+let verifiedChainId = null;
+let warnedNoExpectedChain = false;
+
+/**
+ * The chain the RPC is on, checked against EXPECTED_CHAIN_ID and against the chain the saved
+ * state belongs to. Throws chain.ChainMismatchError when either disagrees.
+ *
+ * Nothing said which chain an RPC was serving. A testnet URL beside mainnet addresses fails
+ * on the first call, but a node that serves the wrong chain, or a failover that lands on
+ * one, would have been signed against, and state copied from one chain onto another would
+ * have scored mainnet agents with testnet payments. Asked before every epoch and at startup;
+ * the answer comes from the node each time, because ethers remembers its first.
+ */
+async function ensureChain() {
+  const actual = await chain.assertChainId(cfg.expectedChainId);
+  const stored = getStateChainId();
+  if (stored != null && stored !== actual) throw new chain.ChainMismatchError(stored, actual, 'state');
+  if (stored == null) {
+    // First run on this state file: it now belongs to this chain.
+    setStateChainId(actual);
+    persistState();
+  }
+  if (cfg.expectedChainId == null && !warnedNoExpectedChain) {
+    warnedNoExpectedChain = true;
+    console.warn(
+      `[oracle] WARNING: EXPECTED_CHAIN_ID is not set, so this oracle will sign for whatever chain RPC_URL ` +
+      `serves (chain ${actual} now). Set EXPECTED_CHAIN_ID=${actual}.`,
+    );
+  }
+  verifiedChainId = actual;
+  return actual;
+}
 
 async function runEpoch() {
   if (epochRunning) {
@@ -504,6 +557,30 @@ async function runEpochInner() {
   payerScoreCache = new Map();
   console.log(`[oracle] epoch start — ${new Date().toISOString()}`);
   metrics.inc('epochsStarted');
+
+  // Before anything is read for scoring or signed. A mismatch throws, and runEpoch logs the
+  // epoch as aborted and tries again at the next tick.
+  await ensureChain();
+
+  // Epochs run one at a time, so a pending transaction from this wallet at this point is
+  // left over from an earlier one, and everything sent now queues behind it. Informational:
+  // chain.settle already replaces a transaction that does not land.
+  try {
+    const stuck = await chain.getNonceGap();
+    if (stuck > 0) {
+      console.warn(
+        `[oracle] WARNING: ${stuck} transaction(s) from this wallet are still pending from before this epoch. ` +
+        'Anything sent now queues behind them.',
+      );
+    }
+  } catch { /* a missing warning is not worth an epoch */ }
+
+  // The chain's clock against this host's, before anything is credited or scored from it.
+  // Payments are stored with the block time the RPC reports and every score is dated by it,
+  // so a node serving a stale or false head would date all of it wrongly, unseen, and the
+  // payment record is permanent.
+  const skewReason = clockSkewError(await chain.getLatestBlockTimestamp(), Date.now(), cfg.maxClockSkewMs);
+  if (skewReason) throw new Error(skewReason);
 
   let agents;
   try {
@@ -877,6 +954,14 @@ const PHASE_ONE_CHUNK = 32;
           // this operator covers for it. That is the failover half of running a second.
         }
 
+        // Commit to the evidence alongside the score. Without it the only record of
+        // which payments produced this number is the oracle's own state file, and a
+        // third party checking the arithmetic would have to take that on trust.
+        // Worked out before the fee, because the fee now waits on a dry run of the proposal.
+        const evidenceRoot = payments.required(paymentCfg)
+          ? merkle.rootFor(getPaymentEvents(didHash))
+          : undefined;
+
         // Charge before proposing, not after. The coverage read above and the
         // charge are separated by at least the propose transaction, and an
         // operator can withdraw in that gap: they would be scored for free, and
@@ -890,23 +975,43 @@ const PHASE_ONE_CHUNK = 32;
         // epoch. Startup already refuses checker + FEE_REGISTRY_ADDRESS; this is the
         // second lock on a path that moves real value.
         if (gatingActive && !cfg.checkerMode) {
+          // Ask the contract whether this proposal would be accepted before taking the fee
+          // for it. Charging first is still right, for the reason above, but it used to be
+          // unconditional: when the oracle's bond lapsed, or an agent stopped being
+          // scorable, every charge succeeded and every proposal reverted, every epoch, and
+          // /health stayed green. A refusal here costs the agent nothing. Not being able to
+          // ask is not a yes either: the agent is skipped this epoch, uncharged.
+          let verdict;
+          try {
+            verdict = await chain.canPropose(didHash, scores, evidenceRoot, cfg.checkerMode);
+          } catch (simErr) {
+            console.error(`[oracle]   ${didHash.slice(0, 10)}… could not check the proposal before charging, skipping: ${simErr.message}`);
+            metrics.inc('feeChargesSkipped');
+            continue;
+          }
+          if (!verdict.ok) {
+            console.warn(`[oracle]   ${didHash.slice(0, 10)}… the contract would refuse this proposal (${verdict.reason}); no fee taken`);
+            metrics.inc('feeChargesSkipped');
+            continue;
+          }
           try {
             await chain.chargeEpoch(didHash);
             metrics.inc('feeCharges');
           } catch (chargeErr) {
-            console.error(`[oracle]   ${didHash.slice(0, 10)}… epoch-fee charge failed, not scoring: ${chargeErr.message}`);
+            // A charge that was sent and not seen mined may still land. Said plainly, because
+            // the agent may have paid for an epoch that is not scored.
+            if (chain.isTxUnconfirmed(chargeErr)) {
+              metrics.inc('txUnconfirmed');
+              console.error(`[oracle]   ${didHash.slice(0, 10)}… epoch-fee charge not confirmed, not scoring: ${chargeErr.message}`);
+            } else {
+              console.error(`[oracle]   ${didHash.slice(0, 10)}… epoch-fee charge failed, not scoring: ${chargeErr.message}`);
+            }
             metrics.inc('feeChargeErrors');
             continue;
           }
         }
 
         metrics.inc('proposeAttempts');
-        // Commit to the evidence alongside the score. Without it the only record of
-        // which payments produced this number is the oracle's own state file, and a
-        // third party checking the arithmetic would have to take that on trust.
-        const evidenceRoot = payments.required(paymentCfg)
-          ? merkle.rootFor(getPaymentEvents(didHash))
-          : undefined;
         // Checker mode uses the compare-and-swap entry point. It decided to propose by
         // reading the slot and finding it empty, and the primary can land a proposal in
         // the gap between that read and this transaction. proposeReputation would replace
@@ -942,6 +1047,19 @@ const PHASE_ONE_CHUNK = 32;
             `[oracle]   ${didHash.slice(0, 10)}… RPC throttled the proposal; retrying next epoch`,
           );
           metrics.inc('proposeThrottled');
+          continue;
+        }
+        // A transaction the oracle would not sign, or one that was sent and never seen mined.
+        // Each has its own counter, because neither is the contract refusing and neither is
+        // the provider throttling, and a fee cap that trips is a reason to look at the RPC.
+        if (chain.isFeeCap(err)) {
+          console.error(`[oracle]   ${didHash.slice(0, 10)}… ${err.message}`);
+          metrics.inc('txCapped');
+          continue;
+        }
+        if (chain.isTxUnconfirmed(err)) {
+          console.error(`[oracle]   ${didHash.slice(0, 10)}… ${err.message}`);
+          metrics.inc('txUnconfirmed');
           continue;
         }
         console.error(`[oracle]   ${didHash.slice(0, 10)}… error: ${err.message}`);
@@ -1143,6 +1261,13 @@ async function handleRequest(req, res) {
       lastPersistMs: persisted.at,
       ...(persisted.ok ? {} : { statePersistError: persisted.error }),
       statePath: getStatePath(),
+      // 'file', 'fresh', or 'backup' when the state file was unusable and the previous save
+      // was used instead, which is a recovery somebody should hear about.
+      stateSource: getLoadReport().source,
+      // The chain the RPC was last seen on, and the one this oracle was configured for. Null
+      // until the first check, and the expected one is null when EXPECTED_CHAIN_ID is unset.
+      chainId: verifiedChainId,
+      expectedChainId: cfg.expectedChainId,
       attestCooldownMs: ATTEST_COOLDOWN_MS,
       epochRunning,
       commit: runningCommit(),
@@ -1879,7 +2004,15 @@ server.listen(cfg.port, cfg.host, () => {
     );
   }
   console.log(`[oracle] state path: ${getStatePath()}`);
-  loadState();
+  // A state file that exists and cannot be used stops the process. It used to log "starting
+  // fresh" and carry on, and the next save wrote an empty state over the original. See
+  // store.load for what is recovered on the way and what is refused.
+  try {
+    loadState();
+  } catch (err) {
+    console.error(`[oracle] ${err.message}`);
+    process.exit(1);
+  }
 
   // Resume the log scan where it left off. Without this every restart replays the
   // chain from FROM_BLOCK, which lengthens with every block and eventually exceeds
@@ -1918,6 +2051,16 @@ server.listen(cfg.port, cfg.host, () => {
       );
     }
   }).catch(() => {});
+  // Which chain, now and not only at the first epoch, so a wrong one ends the process instead
+  // of waiting to be noticed. A node that cannot be reached yet is not a wrong chain: the
+  // epochs wait for the answer.
+  ensureChain().catch((err) => {
+    if (err instanceof chain.ChainMismatchError) {
+      console.error(`[oracle] ${err.message}`);
+      process.exit(1);
+    }
+    console.warn(`[oracle] could not check the chain yet (${err.message}); epochs wait until it can be checked`);
+  });
   runEpoch().catch(err => console.error('[oracle] startup epoch error:', err.message));
   setInterval(() => runEpoch().catch(err => console.error('[oracle] scheduled epoch error:', err.message)), cfg.epochMs);
 });

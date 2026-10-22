@@ -185,8 +185,31 @@ async function mapChunked(items, size, mapper) {
   return out;
 }
 
+/**
+ * Why the chain's clock and this host's cannot both be believed, or null when they agree
+ * to within `maxSkewMs`.
+ *
+ * Scores are computed against the chain's timestamp, so whoever supplies it chooses how old
+ * every payment looks. A node serving a stale head, or a false one, deflates or inflates
+ * every score in the same direction; a host with a wrong clock stamps proposals wrongly.
+ * Neither is visible in the numbers. The two clocks have no reason to differ by more than a
+ * few seconds, so a large gap means one of them is wrong, and the epoch is not run.
+ *
+ * Returns a reason rather than throwing, like the other checks in this file.
+ */
+function clockSkewError(chainNowSec, hostNowMs, maxSkewMs) {
+  const chainMs = Number(chainNowSec) * 1000;
+  if (!Number.isFinite(chainMs)) return `the chain timestamp (${chainNowSec}) is not a number`;
+  const skew = Math.abs(chainMs - hostNowMs);
+  if (skew <= maxSkewMs) return null;
+  const direction = chainMs > hostNowMs ? 'ahead of' : 'behind';
+  return `the chain's clock is ${Math.round(skew / 1000)}s ${direction} this host's, past the limit of ` +
+    `${Math.round(maxSkewMs / 1000)}s (MAX_CLOCK_SKEW_SECONDS). One of them is wrong, and every score depends ` +
+    'on which; no epoch will run until they agree.';
+}
+
 module.exports = {
   decideAction, decideCheckerAction, scoreDivergence, mapChunked,
-  epochIntervalError, divergenceToleranceError, MAX_TIMER_MS, MIN_EPOCH_MS,
+  epochIntervalError, divergenceToleranceError, clockSkewError, MAX_TIMER_MS, MIN_EPOCH_MS,
   SCORE_FACTORS, DEFAULT_DIVERGENCE_TOLERANCE, MAX_DIVERGENCE_TOLERANCE,
 };

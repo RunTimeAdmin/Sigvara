@@ -92,6 +92,23 @@ class World {
     this.data[key] = value;
     this.flush();
   }
+
+  /**
+   * An agent for an epoch to score: registered, active, and listed by the registry. Returns
+   * what addAgent does. Naming any agent switches the stub's epoch on (see stub-chain.js).
+   */
+  addRegisteredAgent(opts) {
+    const agent = this.addAgent(opts);
+    this.data.registered = [...(this.data.registered || []), agent.didHash];
+    this.flush();
+    return agent;
+  }
+
+  /** Set one entry of a per-agent map the stub reads, such as `canPropose` or `bonded`. */
+  setFor(map, didHash, value) {
+    this.data[map] = { ...(this.data[map] || {}), [didHash]: value };
+    this.flush();
+  }
 }
 
 function freePort() {
@@ -120,7 +137,35 @@ function baseEnv(dir, port, worldFile) {
     EPOCH_HOURS: '24',
     ORACLE_STATE_PATH: path.join(dir, 'state.json'),
     STUB_WORLD: worldFile,
+    STUB_CALLS: path.join(dir, 'calls.jsonl'),
   };
+}
+
+// Files the oracle should find already in its directory, such as a saved state. Written before
+// it starts.
+function seedFiles(dir, files) {
+  for (const [name, content] of Object.entries(files || {})) {
+    fs.writeFileSync(path.join(dir, name), content);
+  }
+}
+
+// Every regular file in the directory, by name, for a test to inspect once the process is gone.
+function snapshot(dir) {
+  const out = {};
+  for (const name of fs.readdirSync(dir)) {
+    const file = path.join(dir, name);
+    if (fs.statSync(file).isFile()) out[name] = fs.readFileSync(file, 'utf8');
+  }
+  return out;
+}
+
+// What the oracle asked the chain to do, from the stub's record: [{ name, args }, ...].
+function readCalls(dir) {
+  try {
+    return fs.readFileSync(path.join(dir, 'calls.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  } catch {
+    return [];
+  }
 }
 
 function spawnOracle(dir, env) {
@@ -143,12 +188,14 @@ function spawnOracle(dir, env) {
  * @param {object} opts
  * @param {World}  opts.world
  * @param {object} [opts.env] overrides for the child's environment
+ * @param {object} [opts.files] files to put in its directory first, by name
  */
-async function startOracle({ world, env = {} }) {
+async function startOracle({ world, env = {}, files }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sigvara-e2e-'));
   const worldFile = path.join(dir, 'world.json');
   world.file = worldFile;
   world.flush();
+  seedFiles(dir, files);
   const port = await freePort();
   const { child, out, exited } = spawnOracle(dir, { ...baseEnv(dir, port, worldFile), ...env });
 
@@ -212,6 +259,19 @@ async function startOracle({ world, env = {} }) {
     raw,
     logs: () => out.log,
     alive: () => out.code === null,
+    // Writes the oracle attempted, in order. The settings it started the chain module with are
+    // separate: chainInit().
+    calls: () => readCalls(dir).filter((c) => c.name !== 'init'),
+    chainInit: () => readCalls(dir).find((c) => c.name === 'init')?.args[0],
+    files: () => snapshot(dir),
+    /** Resolves once the log has matched `pattern`, or throws with the log after `ms`. */
+    async waitForLog(pattern, ms = 15_000) {
+      const deadline = Date.now() + ms;
+      while (!pattern.test(out.log)) {
+        if (Date.now() > deadline) throw new Error(`no log line matched ${pattern} in ${ms}ms:\n${out.log}`);
+        await new Promise((r) => setTimeout(r, 50));
+      }
+    },
     async stop() {
       child.kill();
       await exited;
@@ -222,20 +282,22 @@ async function startOracle({ world, env = {} }) {
 
 /**
  * Start the oracle and wait for it to exit on its own, for the startup guards that refuse to
- * run. Returns the exit code and everything it printed.
+ * run. Returns the exit code, everything it printed, and the files left in its directory.
  */
-async function runToExit({ world, env = {} }) {
+async function runToExit({ world, env = {}, files }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sigvara-e2e-'));
   const worldFile = path.join(dir, 'world.json');
   world.file = worldFile;
   world.flush();
+  seedFiles(dir, files);
   const port = await freePort();
   const { child, out, exited } = spawnOracle(dir, { ...baseEnv(dir, port, worldFile), ...env });
   const timer = setTimeout(() => child.kill(), 15_000);
   await exited;
   clearTimeout(timer);
+  const left = snapshot(dir);
   fs.rmSync(dir, { recursive: true, force: true });
-  return { code: out.code, log: out.log };
+  return { code: out.code, log: out.log, files: left };
 }
 
 /**
