@@ -604,12 +604,13 @@ contract SigvaraIdentity is Initializable, TimelockedGrants, UUPSUpgradeable, In
         uint256 n = list.length;
         if (offset >= n) return new bytes32[](0);
 
-        uint256 end = offset + limit;
-        if (end > n) end = n;
+        // Not offset + limit, which overflows for a limit of the maximum, the natural way to ask for the rest.
+        uint256 remaining = n - offset;
+        uint256 count = limit < remaining ? limit : remaining;
 
-        page = new bytes32[](end - offset);
-        for (uint256 i = offset; i < end; i++) {
-            page[i - offset] = list[i];
+        page = new bytes32[](count);
+        for (uint256 i = 0; i < count; i++) {
+            page[i] = list[offset + i];
         }
     }
 

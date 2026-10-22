@@ -241,6 +241,40 @@ contract SigvaraIdentityTest is Test, RegistrationHelper {
         assertEq(identity.getOperatorAgentsPaged(operator, 0, 0).length, 0);
     }
 
+    /// "Everything from here" is a natural way to ask for the rest, and `offset + limit` overflowed for it:
+    /// the call panicked where the NatSpec promises a short page.
+    function test_operatorAgentsPaged_aLimitOfTheMaximumReturnsTheRest() public {
+        bytes32 didA = _register();
+        (, uint256 pkB) = makeAddrAndKey("agentPageB");
+        bytes32 didB = registerSigned(identity, operator, pkB, PUB_KEY_2);
+
+        bytes32[] memory all = identity.getOperatorAgentsPaged(operator, 0, type(uint256).max);
+        assertEq(all.length, 2);
+        assertEq(all[0], didA);
+        assertEq(all[1], didB);
+
+        bytes32[] memory rest = identity.getOperatorAgentsPaged(operator, 1, type(uint256).max);
+        assertEq(rest.length, 1);
+        assertEq(rest[0], didB);
+
+        // An offset at the maximum is past the end: empty, not a panic.
+        assertEq(identity.getOperatorAgentsPaged(operator, type(uint256).max, type(uint256).max).length, 0);
+    }
+
+    /// Whatever the offset and the limit, a page is the slice of the list they name, cut short at the end.
+    function testFuzz_operatorAgentsPaged_isTheSliceCutAtTheEnd(uint256 offset, uint256 limit) public {
+        bytes32 didA = _register();
+        (, uint256 pkB) = makeAddrAndKey("agentPageB");
+        bytes32 didB = registerSigned(identity, operator, pkB, PUB_KEY_2);
+        bytes32[2] memory list = [didA, didB];
+
+        bytes32[] memory page = identity.getOperatorAgentsPaged(operator, offset, limit);
+
+        uint256 expected = offset >= 2 ? 0 : (limit < 2 - offset ? limit : 2 - offset);
+        assertEq(page.length, expected);
+        for (uint256 i = 0; i < page.length; i++) assertEq(page[i], list[offset + i]);
+    }
+
     /// The index has to follow the agent, or the seller keeps listing something it no
     /// longer controls and the buyer cannot find what it bought.
     function test_transfer_movesTheAgentBetweenOperatorIndexes() public {
