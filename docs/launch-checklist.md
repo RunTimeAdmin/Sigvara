@@ -10,7 +10,7 @@ Sequenced against the Q4 2026 SVR mainnet milestone. Dates are targets, not comm
 
 ## Phase 2 — External audit (weeks 2–6, overlaps Phase 1)
 
-- [ ] **Engage an external auditor** for the Sigvara registries (`SigvaraIdentity`, `SigvaraStaking`, `SigvaraReputation`, `SigvaraOracleBond`, `SigvaraEpochFees`). Audits and development are funded separately from the token — ecosystem grants and CounterAudit integration revenue, not SVR.
+- [ ] **Engage an external auditor** for the Sigvara registries (`SigvaraIdentity`, `SigvaraStaking`, `SigvaraReputation`, `SigvaraOracleBond`). `SigvaraEpochFees` is left out of launch and of this audit ([ADR 0005](adr/0005-governance-and-emergency-powers.md)). Audits and development are funded separately from the token — ecosystem grants and CounterAudit integration revenue, not SVR.
 - [ ] **Fix findings, re-audit critical items** before any mainnet deployment transaction is signed.
 - [ ] **Publish the audit report** on sigvara.xyz and in the repo. A token with no audit and a single-operator oracle is exactly what a skeptic attacks first.
 
@@ -25,13 +25,13 @@ Sequenced against the Q4 2026 SVR mainnet milestone. Dates are targets, not comm
 
 ## Phase 4 — Mainnet registry deployment (gated on Phase 2)
 
-- [ ] **Deploy registries to Arc mainnet** (chain ID 5042) initialized with the SVR address, `minimumStake` = 10,000 SVR, `bondAmount` = 2,500,000 SVR, `epochFee` = 0 (Bootstrap stage).
+- [ ] **Deploy registries to Arc mainnet** (chain ID 5042) initialized with the SVR address, `minimumStake` = 10,000 SVR, and `bondAmount` = 2,500,000 SVR. `SigvaraEpochFees` is not deployed at launch.
 - [ ] **Initialize oracle bonds** for admitted operators. `admit()` is governance-gated — nobody buys their way in. The bond is what a corrupt oracle can lose.
 - [ ] **Verify impersonation guidance**: only the published address is genuine SVR. `countersig.network` redirects to sigvara.xyz and serves nothing.
 
 ## Phase 5 — Flip monetization on
 
-- [ ] **Set `epochFee` > 0** once real volume exists. This is when metered monetization (verification lookups, bond checks, challenge windows via Circle nanopayments/x402 at sub-cent rates) turns on. Bootstrap at zero is deliberate — charging before utility exists is the POAP mistake.
+- [ ] **Deploy the epoch-fee module and set `epochFee` > 0** once real volume exists. The module is left out of launch and of the first audit ([ADR 0005](adr/0005-governance-and-emergency-powers.md)); its charge moves into the proposal transaction, and it is audited before it is deployed. This is when metered monetization (verification lookups, bond checks, challenge windows via Circle nanopayments/x402 at sub-cent rates) turns on. Bootstrap at zero is deliberate — charging before utility exists is the POAP mistake.
 - [ ] **Meter per-event fees** aligned with the Circle/Proof x401+x402 demo pricing precedent (Proof bills $1.50 per identity verification).
 - [ ] **Staking rewards stay off** until treasury buybacks have built inventory. Cap: 5% of treasury SVR balance per quarter, published before the period, not after. Only bonded agents and bonded oracle operators are eligible — holding SVR earns nothing.
 

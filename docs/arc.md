@@ -683,7 +683,12 @@ them are in [token.md](token.md#mainnet-parameters):
 |---|---|---|---|
 | `bondAmount` | 25,000 SVR | 2,500,000 SVR | 0.25% |
 | `minimumStake` | 1,000 SVR | 10,000 SVR | 0.001% |
-| `epochFee` | 0 | 0 at launch | n/a |
+
+`SigvaraEpochFees` is not part of the mainnet launch. It has never been deployed, its fee would
+be zero, and it is left out of the first audit too (see
+[ADR 0005](adr/0005-governance-and-emergency-powers.md)). `script/DeployEpochFees.s.sol`
+refuses on chain 5042 with no override, and the post-deploy checks treat `epochFees` as
+optional: they check it when the artifact has an entry and say so when it does not.
 
 Two things worth carrying into the deploy.
 

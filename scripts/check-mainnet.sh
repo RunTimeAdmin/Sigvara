@@ -78,6 +78,11 @@ owners_of() { tr ',' '\n' | tr -d '[] ' | tr A-F a-f | sed '/^$/d' | sort | tr '
 # Proxy addresses come from the artifact. load_artifact <the keys this check needs>: a
 # missing key is a FAIL, because SplitAuthority skips a name the artifact lacks, which would
 # leave the deployer in charge of that contract.
+#
+# epochFees is the exception. SigvaraEpochFees is left out of the mainnet launch
+# (docs/adr/0005), so the artifact normally has no entry for it, FEES is then empty, and each
+# check that would read it says so instead (note_no_fees). If it is ever deployed, record it in
+# the artifact before the handover and the checks cover it again.
 load_artifact() {
   local k v
   for k in "$@"; do
@@ -86,7 +91,10 @@ load_artifact() {
   done
   IDENTITY=$(art identity); REPUTATION=$(art reputation); STAKING=$(art staking)
   BOND=$(art oracleBond); FEES=$(art epochFees)
+  if [ "$FEES" = "undefined" ]; then FEES=""; fi
 }
+
+note_no_fees() { echo "note  $ARTIFACT has no epochFees: the epoch-fee module is left out of launch (docs/adr/0005), so it is not checked"; }
 
 summary() { [ $FAIL = 0 ] && echo "$1: all checks passed" || echo "$1: STOP, something above failed"; }
 
@@ -133,36 +141,42 @@ check_core() {
   summary core
 }
 
-# check_bond_and_fees: the operator bond registry and the epoch fee registry.
+# check_bond_and_fees: the operator bond registry and, if one was deployed, the epoch fee
+# registry. The name is older than the decision to leave epoch fees out of launch.
 check_bond_and_fees() {
-  FAIL=0; load_artifact identity oracleBond epochFees
+  FAIL=0; load_artifact identity oracleBond
   expect "oracleBond.svr is SVR"          "$SVR"              "$(val $BOND 'svr()(address)')"
   expect "oracleBond.bondAmount"          "$WANT_BOND"        "$(val $BOND 'bondAmount()(uint256)')"
   expect "oracleBond.unbondingPeriod"     "$WANT_BOND_UNBONDING" "$(val $BOND 'unbondingPeriod()(uint256)')"
   expect "oracleBond.slashBeneficiary"    "$TREASURY"         "$(val $BOND 'slashBeneficiary()(address)')"
   expect "oracleBond: initialized once (1)"    1              "$(initialized $BOND)"
-  expect "epochFees: initialized once (1)"     1              "$(initialized $FEES)"
   has $BOND $SLASHER_ROLE $COMMITTEE true  "oracleBond: committee holds SLASHER"
   has $BOND $SLASHER_ROLE $DEPLOYER  false "oracleBond: deployer does not hold SLASHER"
   has $BOND $GUARDIAN_ROLE $GUARDIAN true  "oracleBond: guardian holds GUARDIAN"
   has $BOND $GUARDIAN_ROLE $DEPLOYER false "oracleBond: deployer does not hold GUARDIAN"
   expect "oracleBond: inflows are open"       false               "$(val $BOND 'inflowsPaused()(bool)')"
-  expect "epochFees.svr is SVR"           "$SVR"              "$(val $FEES 'svr()(address)')"
-  expect "epochFees.identityRegistry"     "$IDENTITY"         "$(val $FEES 'identityRegistry()(address)')"
-  expect "epochFees.epochFee is 0"        0                   "$(val $FEES 'epochFee()(uint256)')"
-  expect "epochFees.rewardPool"           "$TREASURY"         "$(val $FEES 'rewardPool()(address)')"
-  has $FEES $ORACLE_ROLE $ORACLE   true  "epochFees: oracle holds ORACLE"
-  has $FEES $ORACLE_ROLE $DEPLOYER false "epochFees: deployer does not hold ORACLE"
+  if [ -n "$FEES" ]; then
+    expect "epochFees: initialized once (1)"     1              "$(initialized $FEES)"
+    expect "epochFees.svr is SVR"           "$SVR"              "$(val $FEES 'svr()(address)')"
+    expect "epochFees.identityRegistry"     "$IDENTITY"         "$(val $FEES 'identityRegistry()(address)')"
+    expect "epochFees.epochFee is 0"        0                   "$(val $FEES 'epochFee()(uint256)')"
+    expect "epochFees.rewardPool"           "$TREASURY"         "$(val $FEES 'rewardPool()(address)')"
+    has $FEES $ORACLE_ROLE $ORACLE   true  "epochFees: oracle holds ORACLE"
+    has $FEES $ORACLE_ROLE $DEPLOYER false "epochFees: deployer does not hold ORACLE"
+  else
+    note_no_fees
+  fi
   summary bond+fees
 }
 
 # check_authority <admin holder> <upgrader holder>
 # Before the handover that is $DEPLOYER twice. After it, $SAFE and $TIMELOCK, and the
-# deployer must hold neither role on any of the five.
+# deployer must hold neither role on any of the four, or the five if epochFees was deployed.
 check_authority() {
-  FAIL=0; load_artifact identity reputation staking oracleBond epochFees
-  local pair n c who
-  for pair in identity:$IDENTITY reputation:$REPUTATION staking:$STAKING oracleBond:$BOND epochFees:$FEES; do
+  FAIL=0; load_artifact identity reputation staking oracleBond
+  local pair n c who pairs="identity:$IDENTITY reputation:$REPUTATION staking:$STAKING oracleBond:$BOND"
+  if [ -n "$FEES" ]; then pairs="$pairs epochFees:$FEES"; else note_no_fees; fi
+  for pair in $pairs; do
     n=${pair%%:*}; c=${pair#*:}
     has $c $ADMIN_ROLE    $1 true "$n: admin is $1"
     has $c $UPGRADER_ROLE $2 true "$n: upgrader is $2"
@@ -213,9 +227,10 @@ check_new_implementation() { FAIL=0; check_impl "$1" "$2"; summary implementatio
 # check_code: the code behind each proxy is what this working tree builds. Reads the
 # implementation addresses from the artifact, so run record-implementations first.
 check_code() {
-  FAIL=0
-  local pair n impl
-  for pair in identity:SigvaraIdentity reputation:SigvaraReputation staking:SigvaraStaking oracleBond:SigvaraOracleBond epochFees:SigvaraEpochFees; do
+  FAIL=0; load_artifact
+  local pair n impl pairs="identity:SigvaraIdentity reputation:SigvaraReputation staking:SigvaraStaking oracleBond:SigvaraOracleBond"
+  if [ -n "$FEES" ]; then pairs="$pairs epochFees:SigvaraEpochFees"; else note_no_fees; fi
+  for pair in $pairs; do
     n=${pair%%:*}
     impl=$(node -p "require('./$ARTIFACT').implementations['$n'].current" 2>/dev/null)
     if [ -z "$impl" ] || [ "$impl" = "undefined" ]; then echo "FAIL  $n: no implementation recorded"; FAIL=1; continue; fi

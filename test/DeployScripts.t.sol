@@ -442,34 +442,25 @@ contract DeployScriptRunTest is Test {
         assertEq(period, 21 days);
         assertTrue(address(SigvaraStaking(staking).svrToken()) != address(0));
 
-        // EpochFees on mainnet: the deployer may not be the oracle or the reward pool.
+        // EpochFees on mainnet: refused, whatever the inputs. The module is left out of launch
+        // (docs/adr/0005), so even separated roles and a bond registry, which used to deploy, are
+        // turned away.
         DeployEpochFees e = new DeployEpochFees();
+        address bond = makeAddr("bond");
         vm.chainId(5042);
         vm.setEnv("SVR_ADDRESS", vm.toString(svr));
         vm.setEnv("IDENTITY_ADDRESS", vm.toString(makeAddr("identity")));
         vm.setEnv("EPOCH_FEE", "");
-        vm.setEnv("ORACLE_ADDRESS", "");
-        vm.setEnv("REWARD_POOL", vm.toString(pool));
-        vm.expectRevert(abi.encodeWithSelector(DeployEpochFees.RolesNotSeparated.selector, deployer, deployer, pool));
-        e.run();
-
         vm.setEnv("ORACLE_ADDRESS", vm.toString(oracle));
-        vm.setEnv("REWARD_POOL", "");
-        vm.expectRevert(abi.encodeWithSelector(DeployEpochFees.RolesNotSeparated.selector, deployer, oracle, deployer));
-        e.run();
-
-        // Separated, but with no operator bond registry: refused, because the right to charge
-        // would then follow the role alone.
         vm.setEnv("REWARD_POOL", vm.toString(pool));
-        vm.setEnv("OPERATOR_BOND", "");
+        vm.setEnv("OPERATOR_BOND", vm.toString(bond));
         vm.setEnv("EPOCH_LENGTH", "");
-        vm.expectRevert(DeployEpochFees.OperatorBondNotSet.selector);
+        vm.expectRevert(DeployEpochFees.EpochFeesDeferredOnMainnet.selector);
         e.run();
 
-        // Separated and bonded: deploys, and sets the epoch length and the registry, which are
-        // not part of initialize.
-        address bond = makeAddr("bond");
-        vm.setEnv("OPERATOR_BOND", vm.toString(bond));
+        // Testnet still deploys it, and sets the epoch length and the registry, which are not
+        // part of initialize.
+        vm.chainId(5042002);
         vm.recordLogs();
         e.run();
         address fees = _emitterOf(vm.getRecordedLogs(), keccak256("EpochLengthUpdated(uint256)"));
@@ -485,6 +476,7 @@ contract DeployScriptRunTest is Test {
         assertEq(SigvaraEpochFees(fees).epochLength(), 6 hours);
 
         // OracleBond on mainnet: the default bond amount is refused, a stated one deploys.
+        vm.chainId(5042);
         DeployOracleBond ob = new DeployOracleBond();
         vm.setEnv("SLASHER_ADDRESS", vm.toString(makeAddr("slasher")));
         vm.setEnv("SLASH_BENEFICIARY", vm.toString(makeAddr("beneficiary")));

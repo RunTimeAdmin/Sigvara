@@ -16,7 +16,11 @@ was not:
 - the committee could drop a proposal and file the next in the same block, so a stake could be held
   frozen for good;
 - there was no way to stop new value or new state entering a registry while a bug was being fixed,
-  and the only fix is a timelocked upgrade, 48 hours away.
+  and the only fix is a timelocked upgrade, 48 hours away;
+- the epoch-fee module charges an agent in a call that is separate from the score it pays for, and cuts
+  epochs on calendar boundaries, so an agent can be charged for an epoch in which nothing was scored,
+  and two charges can land seconds apart across a boundary. Neither matters while the fee is zero.
+  Both do once it is not.
 
 This ADR records what was decided about each, and what was left as a stated trust assumption.
 
@@ -39,7 +43,6 @@ This ADR records what was decided about each, and what was left as a stated trus
    bond registry's unbonding period (one day) and bond requirement (above zero), staking's challenge
    (three days) and unbonding (one day) periods, and a minimum stake above zero are refused in the
    initializers as well as the setters.
-
 5. **A guardian can stop new inflows, and nothing else.** `GUARDIAN_ROLE` may call `pauseInflows()` on
    identity, staking, reputation and the bond registry. It closes only the ways something new enters:
    `registerAgent`, `depositStake`, `proposeReputation` and `proposeIfEmpty`, `depositBond`. It never
@@ -53,6 +56,14 @@ This ADR records what was decided about each, and what was left as a stated trus
    to a live proxy shifts no existing variable. The guardian is a separate, lighter key: the deploy
    scripts require it on mainnet and refuse the deployer, the oracle, the committee and the slasher.
    The admin can grant itself the role, so this separates duties and adds no new trust assumption.
+6. **The epoch-fee module is left out of launch and out of the first audit.** `SigvaraEpochFees` has
+   never been deployed, and at launch its fee would be zero, so it would add a contract to deploy,
+   operate and audit that does nothing yet. `script/DeployEpochFees.s.sol` now refuses on mainnet, with
+   no override. The post-deploy checks (`scripts/check-mainnet.sh`, `scripts/check-role-holders.mjs`)
+   treat `epochFees` as optional and say so when it is absent from the artifact. The contract and its
+   tests stay in the repository. When fees are to be turned on, the charge moves into the proposal
+   transaction, so a fee can only be paid by a score that was actually proposed, and the module is
+   audited then.
 
 ## What stays on the admin Safe, and why
 
@@ -75,4 +86,6 @@ oracle role at once. That is a stated trust assumption, not an oversight:
 - A pause can be used against the protocol by a compromised guardian: it can close new registrations,
   deposits, proposals and bonds for three of every four days until the admin revokes it. That is a
   nuisance with an instant remedy, and the price of being able to stop a live bug while a fix is built.
-- The deferral of the epoch-fee module is recorded in this file when it lands.
+- Mainnet launches without `SigvaraEpochFees`. The oracle's `FEE_REGISTRY_ADDRESS` stays unset and the
+  app's fee controls stay off, as they are on testnet today. Turning fees on later is a new deployment
+  of a reworked module, not a switch.
