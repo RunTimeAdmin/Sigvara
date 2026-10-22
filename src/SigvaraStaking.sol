@@ -138,6 +138,14 @@ contract SigvaraStaking is
     ///         token, or a contract that reverts) froze the entire bond permanently.
     mapping(address => uint256) public claimable;
 
+    /// @notice When a proposal against the agent was last dropped: cancelled by the committee,
+    ///         vetoed by the admin, expired after a dispute, or resolved in the agent's favour.
+    ///         Zero if none ever was. initiateSlash refuses to file again until one challenge
+    ///         period has passed.
+    /// @dev    Appended after `claimable`, so existing proxies read it as zero for every agent,
+    ///         which means "never dropped" and changes nothing for them.
+    mapping(bytes32 => uint256) public lastDroppedAt;
+
     // -------------------------------------------------------------------------
     // Events
     // -------------------------------------------------------------------------
@@ -149,6 +157,8 @@ contract SigvaraStaking is
     event SlashDisputed(bytes32 indexed didHash, address indexed operator);
     event SlashExecuted(bytes32 indexed didHash, uint256 burned, uint256 toVictim, uint256 toReporter);
     event SlashCancelled(bytes32 indexed didHash, address indexed by);
+    /// Emitted alongside SlashCancelled when the admin, not the committee, dropped the proposal.
+    event SlashVetoed(bytes32 indexed didHash, address indexed by);
     event SlashProceedsClaimed(address indexed account, uint256 amount);
     event MinimumStakeUpdated(uint256 newMinimum);
     event ChallengePeriodUpdated(uint256 newPeriod);
@@ -174,6 +184,8 @@ contract SigvaraStaking is
     error PeriodTooShort(uint256 provided, uint256 minimum);
     error MinimumStakeZero();
     error SlashNotDisputed(bytes32 didHash);
+    /// A proposal against this agent was dropped less than one challenge period ago.
+    error SlashCooldownActive(bytes32 didHash, uint256 refileAt);
     error DisputeResolutionActive(bytes32 didHash, uint256 expiresAt);
     error NothingClaimable(address account);
 
@@ -433,6 +445,15 @@ contract SigvaraStaking is
         if (existing == SlashState.Pending || existing == SlashState.Disputed) {
             revert SlashAlreadyPending(didHash);
         }
+        // A dropped proposal is not a licence to file the next one in the same block. Without
+        // this the committee could file, cancel and file again, so the agent was never Active
+        // for a moment, could never queue a withdrawal, and its stake stayed frozen for good.
+        // One challenge period after each drop leaves the operator a window to act, and a
+        // queued withdrawal stays slashable while it waits.
+        uint256 droppedAt = lastDroppedAt[didHash];
+        if (droppedAt != 0 && block.timestamp < droppedAt + challengePeriod) {
+            revert SlashCooldownActive(didHash, droppedAt + challengePeriod);
+        }
 
         // Write state before the external call (CEI pattern).
         slashProposals[didHash] = SlashProposal({
@@ -529,12 +550,38 @@ contract SigvaraStaking is
         _dropProposal(didHash, proposal);
     }
 
+    /**
+     * @notice The admin drops a pending or disputed slash. The committee accuses and rules;
+     *         this is the second key that can stop it.
+     * @dev    The committee is trusted to file slashes, and a slash pays a quarter of the bond to
+     *         whoever filed it and a quarter to the victim it names, so a committee that is
+     *         compromised, or simply wrong, has a reason to file. The proposal sits for a whole
+     *         challenge period before anyone can execute it, and this is what an independent
+     *         admin does inside that period. It adds no power the admin did not have: an admin
+     *         can grant itself the committee role and call cancelSlash. It makes the check
+     *         explicit and usable without a role grant in the middle of an incident.
+     *
+     *         Works while the proposal is Pending, including after its challenge deadline and
+     *         before anyone executes it, and while it is Disputed. The agent is reinstated as
+     *         for any dropped proposal, and the committee waits one challenge period before it
+     *         can file again.
+     */
+    function vetoSlash(bytes32 didHash) external nonReentrant onlyRole(DEFAULT_ADMIN_ROLE) {
+        SlashProposal storage proposal = slashProposals[didHash];
+        if (proposal.state != SlashState.Pending && proposal.state != SlashState.Disputed) {
+            revert NoActivePendingSlash(didHash);
+        }
+        _dropProposal(didHash, proposal);
+        emit SlashVetoed(didHash, msg.sender);
+    }
+
     /// @dev Cancel a proposal and return the agent to Active. Reinstating to Active
     ///      (rather than the pre-slash status) is deliberate: it is what clears the
     ///      staking-core suspension lock in SigvaraIdentity. An operator who wants to
     ///      stay suspended can self-suspend again.
     function _dropProposal(bytes32 didHash, SlashProposal storage proposal) internal {
         proposal.state = SlashState.Cancelled;
+        lastDroppedAt[didHash] = block.timestamp;
         // Only reinstate an agent that is still bonded. An operator can queue a
         // withdrawal while Suspended, so by the time a proposal is dropped the active
         // stake may sit below minimumStake, and reinstating would hand back Active

@@ -190,7 +190,7 @@ stateDiagram-v2
     PendingBond --> Active : depositStake() reaches minimumStake
 
     Active --> Suspended : operator.updateStatus()\nor StakingCore.initiateSlash()
-    Suspended --> Active : operator.updateStatus()\nor resolveDispute(false)\nor cancelSlash() / expireDispute()
+    Suspended --> Active : operator.updateStatus()\nor resolveDispute(false)\nor cancelSlash() / vetoSlash() / expireDispute()
 
     Active --> Slashed : StakingCore.executeSlash()
     Suspended --> Slashed : StakingCore.executeSlash()
@@ -276,6 +276,14 @@ sequenceDiagram
 | `address(0xdead)` | 50% | Deflationary burn |
 | Victim | 25% | Recourse for the harmed party, credited and withdrawn with `claimSlashProceeds()` |
 | Committee reporter | 25% | Incentivizes accurate reporting, credited and withdrawn with `claimSlashProceeds()` |
+
+The committee files and rules on slashes, and a quarter of the bond goes to whoever filed it,
+so a second key can stop one: the admin can `vetoSlash(didHash)` while the proposal is
+Pending, including after its challenge deadline and before anyone executes it, or Disputed.
+Whenever a proposal is dropped (cancelled, vetoed, expired, or resolved in the agent's
+favour) the committee has to wait one challenge period before it can file against the same
+agent again, so the operator always gets a window to act, and a queued withdrawal stays
+slashable while it waits.
 
 ---
 

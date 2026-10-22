@@ -233,7 +233,10 @@ cast send <staking> "disputeSlash(bytes32)" <TARGET_DID_HASH> \
 Disputing **freezes** the bond rather than releasing it, and does not un-suspend the agent.
 The committee then resolves with `resolveDispute(didHash, uphold)`. If it never does,
 anyone may call `expireDispute` after `DISPUTE_RESOLUTION_PERIOD` (14 days), so an operator
-is never hostage to committee silence.
+is never hostage to committee silence. The admin can also drop a Pending or Disputed
+proposal with `vetoSlash`, and after any drop the committee waits one challenge period
+before it can file against the same agent again. A drill that cancels and re-files has to
+wait that long between the two.
 
 Whether you exercise the dispute branch is a choice. Doing it demonstrates more of the
 mechanism; skipping it keeps the drill to seven days instead of potentially twenty-one.
