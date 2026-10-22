@@ -626,9 +626,6 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
     function getTotalScore(bytes32 didHash) public view returns (uint8) {
         uint8 earned = getEarnedScore(didHash);
         uint8 anchor = maturedScore[didHash];
-        if (earned <= anchor) return earned;
-
-
         uint256 since = maturedAt[didHash];
 
         // A handover restarts maturity. The reputation was earned by whoever held the
@@ -636,6 +633,17 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
         // make aged, scored identities a liquid commodity, which is the farm-and-sell
         // market this is meant to price out. The score itself survives; only the right
         // to spend it is re-earned, over the same window as any other rise.
+        //
+        // This runs before anything returns the earned score. It used to sit after
+        // `earned <= anchor`, so a score the oracle had finalized again at full maturity,
+        // or one that had fallen below its anchor, went to the buyer whole.
+        //
+        // `>=`, not `>`. Arc timestamps have one second granularity and consecutive blocks
+        // can share one, so a sale accepted in the same second as a finalize has
+        // operatorChangedAt == maturedAt. That finalize anchored what the SELLER had
+        // matured. A finalize that runs after the sale re-anchors from the restarted value,
+        // so treating equality as a handover costs nothing there and closes the other order.
+        //
         // Read through a raw staticcall rather than the typed getter. An identity
         // registry deployed before operator transfer existed has no such function, and
         // a typed call to it reverts, taking this view down with it. getTotalScore is
@@ -650,12 +658,16 @@ contract SigvaraReputation is Initializable, AccessControlUpgradeable, UUPSUpgra
             );
             if (ok && ret.length == 32) {
                 uint256 changed = abi.decode(ret, (uint256));
-                if (changed > since) {
+                if (changed != 0 && changed >= since) {
                     since = changed;
                     anchor = 0;
                 }
             }
         }
+
+        // A fall is not delayed, and a score that has fully matured has nothing left to
+        // release. Either way the earned score is what is spendable.
+        if (earned <= anchor) return earned;
 
         // Before the first finalize there is no anchor to grow from, and a zero
         // timestamp would extrapolate from 1970 and mature everything instantly.
