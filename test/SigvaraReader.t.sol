@@ -127,6 +127,48 @@ contract SigvaraReaderTest is StackFixture {
         assertTrue(reader.isTrusted(agent, 40));
     }
 
+    /// The minimum stake can be raised after an agent was admitted. Its status stays Active,
+    /// because nothing walks the registry to re-check it, and its score stays: reputation writes
+    /// stop for an agent below the new minimum, but what it already earned does not. The reader
+    /// is what consumers trust, so it has to ask the staking contract what is held now.
+    function test_isTrusted_aRaisedMinimumStakeStopsTrustUntilTheAgentTopsUp() public {
+        bytes32 didHash = _registerAndBond(agentPk, MIN_STAKE);
+        _finalize(didHash, _score40());
+        assertTrue(reader.isTrusted(agent, 40));
+
+        vm.prank(admin);
+        staking.setMinimumStake(2 * MIN_STAKE);
+
+        assertTrue(identity.isActive(didHash), "the stored status does not change");
+        assertEq(reputation.getTotalScore(didHash), 40, "and neither does the score");
+        assertFalse(reader.isTrusted(agent, 40), "but the bond no longer meets the minimum");
+        assertFalse(reader.isTrusted(agent, 0));
+
+        vm.prank(operator);
+        staking.depositStake(didHash, MIN_STAKE);
+        assertTrue(reader.isTrusted(agent, 40), "trusted again once it tops up");
+    }
+
+    /// The same fact, reported rather than only applied: a consumer that reads the struct can see
+    /// why an Active agent is not trusted, and what it holds against what is asked.
+    function test_trust_collateralizedReflectsTheCurrentMinimum() public {
+        assertFalse(reader.trust(makeAddr("stranger")).collateralized, "nothing to hold for an unknown address");
+
+        bytes32 didHash = _registerAndBond(agentPk, MIN_STAKE);
+        assertTrue(reader.trust(agent).collateralized);
+
+        vm.prank(admin);
+        staking.setMinimumStake(2 * MIN_STAKE);
+        ISigvaraReader.Trust memory t = reader.trust(agent);
+        assertTrue(t.active, "still Active by status");
+        assertFalse(t.collateralized, "but under the new minimum");
+        assertEq(t.stake, MIN_STAKE, "the bond is what it was");
+
+        vm.prank(operator);
+        staking.depositStake(didHash, MIN_STAKE);
+        assertTrue(reader.trust(agent).collateralized);
+    }
+
     /// An open slash shows up as Pending and then Disputed and keeps the agent out. A
     /// dropped one leaves a Cancelled record and the agent trusted again.
     function test_trust_slashProceedingIsVisibleAndBlocksTrust() public {

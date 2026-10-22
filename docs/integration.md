@@ -14,8 +14,12 @@ ISigvaraReader sigvara = ISigvaraReader(READER); // a deployed SigvaraReader
 require(sigvara.isTrusted(agent, 40), "agent not in good standing");
 ```
 
-`isTrusted(agent, minScore)` is true when the agent is Active and its spendable score is at
-least `minScore`. It takes the agent's address, so there is no didHash to derive first.
+`isTrusted(agent, minScore)` is true when the agent is Active, the bond it holds now meets the
+staking contract's current minimum, and its spendable score is at least `minScore`. It takes
+the agent's address, so there is no didHash to derive first. The bond is read at call time
+because status is stored: if the minimum is raised, an agent admitted at the old one stays
+Active and keeps its score while holding less than the new one asks, and `isTrusted` stops
+returning true for it until it tops up. `trust(agent).collateralized` reports the same check.
 `SigvaraReader` is a small stateless contract that reads the three registries. See
 [Deploying a reader](#deploying-a-reader).
 
@@ -23,7 +27,7 @@ least `minScore`. It takes the agent's address, so there is no didHash to derive
 
 | You want | Call | Notes |
 |---|---|---|
-| A yes or no | `reader.isTrusted(agent, minScore)` | Status and score together |
+| A yes or no | `reader.isTrusted(agent, minScore)` | Status, current bond and score together |
 | The standing behind it | `reader.trust(agent)`, or `trustByDid(didHash)` | One struct, described below |
 | One registry fact | the interfaces in `src/interfaces/ISigvara.sol` | Keyed by didHash, from `computeDidHash(agent)` |
 | An off-chain service that wants proof the caller controls the agent | `SigvaraGate` in the SDK | Challenge and response, then the same checks. See the [README](../README.md#refusing-work-to-an-agent-without-standing) |
@@ -59,7 +63,9 @@ write a new score for an agent that sits below the minimum.
 
 `SigvaraReputation.meetsThreshold(didHash, n)` compares the spendable score with `n` and
 nothing else. A suspended agent keeps its score, so it passes. At `n = 0` every address
-passes, including ones that were never registered. `isTrusted` adds the status check.
+passes, including ones that were never registered. An agent that holds less than a raised
+minimum stake passes too, because the score does not move when the minimum does. `isTrusted`
+adds the status check and the current bond.
 
 ## The `Trust` struct
 
@@ -74,6 +80,7 @@ passes, including ones that were never registered. `isTrusted` adds the status c
 | `earned` | The score as computed, before maturity. `score` never exceeds it. |
 | `stake` | Bond held for the agent, in the bond token's units. Excludes any amount queued for withdrawal. |
 | `slash` | Where the latest slash proposal stands: `None`, `Pending`, `Disputed`, `Executed` or `Cancelled`. |
+| `collateralized` | The bond held now meets the staking contract's current minimum. `active` is a stored status and does not change when the minimum is raised, so an `Active` agent can hold less than the minimum asks. `isTrusted` requires this. |
 
 ### Spendable and earned score
 

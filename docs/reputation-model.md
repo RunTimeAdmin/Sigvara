@@ -341,8 +341,9 @@ function requireTrusted(address agent) internal view {
 
 `SigvaraReputation.meetsThreshold(didHash, n)` compares the spendable score with `n` and
 nothing else. It does not look at the agent's status, so a suspended agent passes it, and at
-`n = 0` so does an address that was never registered. `isTrusted` adds the status check. The
-[integration guide](integration.md) has the rest.
+`n = 0` so does an address that was never registered. Nor does it look at the bond, so an
+agent that holds less than a raised minimum stake passes it. `isTrusted` adds the status
+check and the current bond. The [integration guide](integration.md) has the rest.
 
 To read the score itself:
 

@@ -24,11 +24,15 @@ import {
  *         upgrade ever changes a function this reads, deploy a new reader. There is
  *         nothing to migrate.
  *
- *         Three things it does on purpose, because the raw reads get them wrong:
+ *         Four things it does on purpose, because the raw reads get them wrong:
  *
  *         - `isTrusted` requires Active status as well as a score. `meetsThreshold` only
  *           compares a number, so a Suspended agent keeps its score and a threshold of
  *           zero is met by an address that was never registered.
+ *         - `isTrusted` also requires that the bond held now meets the staking contract's
+ *           CURRENT minimum. Status is stored and the minimum can be raised, so an agent
+ *           admitted at the old minimum stays Active, with its score, while holding less
+ *           than the new one asks. `collateralized` reports the same check.
  *         - `registered` is reported separately. AgentStatus.Active is the zero value, so
  *           an unregistered address reads as Active until registeredAt is checked.
  *         - The score is the spendable one, which is what `meetsThreshold` uses. The
@@ -69,7 +73,9 @@ contract SigvaraReader is ISigvaraReader {
     /// @inheritdoc ISigvaraReader
     function isTrusted(address agent, uint8 minScore) external view returns (bool) {
         bytes32 didHash = identity.computeDidHash(agent);
-        return identity.isActive(didHash) && reputation.meetsThreshold(didHash, minScore);
+        return identity.isActive(didHash)
+            && staking.hasMinimumStake(didHash)
+            && reputation.meetsThreshold(didHash, minScore);
     }
 
     function _trust(bytes32 didHash) internal view returns (Trust memory t) {
@@ -86,5 +92,6 @@ contract SigvaraReader is ISigvaraReader {
         t.earned = reputation.getEarnedScore(didHash);
         t.stake = staking.getStake(didHash);
         t.slash = staking.getSlashProposal(didHash).state;
+        t.collateralized = staking.hasMinimumStake(didHash);
     }
 }
