@@ -177,7 +177,10 @@ and its ceiling. That is a stated trust assumption, not an oversight:
   operator's bond 7, and both stay slashable while they wait, so the 48 hours is time to see and
   respond, not time to get out.
 - Changing the reputation window changes it for proposals made afterwards. One already pending keeps
-  the end it was made under.
+  the end it was made under. A proposal that was pending when a proxy from before decision 9 is upgraded
+  has no fixed end (`finalizableAt` reads zero) and is judged against the live window until it
+  finalizes or is replaced. So clear the pending proposals before upgrading such a proxy, and do not
+  change the window while one is pending. Mainnet is a fresh deployment and has none.
 - Proxies initialised by the older code, the Arc testnet ones among them, keep the admin as the
   grantor of these roles. Mainnet is a fresh deployment, and `scripts/check-mainnet.sh` reads the
   role admins to confirm the arrangement. They also have no slasher/payee guard until their

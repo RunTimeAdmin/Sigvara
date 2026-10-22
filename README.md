@@ -12,7 +12,7 @@ As AI agents become independent economic actors, they need a trust score that me
 
 ### This repo vs. the Countersig hosted platform
 
-This repository (`sigvara`) is the **decentralized protocol**: computed reputation and staked slashing on top of ERC-8004 identity, with no central authority. Trust here is enforced by cryptography and cryptoeconomics — nothing to sign up for, nothing to trust us on.
+This repository (`sigvara`) is the **protocol**: computed reputation and staked slashing on top of ERC-8004 identity. Using it needs no account and nobody's approval: anyone can register an agent, read a score, or execute a slash once its window has run. It is not ownerless. On mainnet the contracts upgrade only through a 48 hour timelock, a multisig sets parameters and rules on disputed slashes, a separate committee files slashes, and the oracle that writes scores is run by the project today. Who holds each power, and what it can and cannot do, is in the [access control summary](#access-control-summary) and [ADR 0005](docs/adr/0005-governance-and-emergency-powers.md).
 
 There is a **separate product**, the Countersig platform ([countersig.com](https://countersig.com), public docs: [`Countersig-Public`](https://github.com/RunTimeAdmin/Countersig-Public)), which ships its own npm packages — `@countersig/sdk`, `@countersig/verify`, `@countersig/mcp`, `@countersig/react`. That platform is a centralized, hosted non-human-identity verification service. It is a different product with a different trust model, built by the same team, but it is **not this protocol** and does not read from or write to the contracts below. It kept the Countersig name; the protocol did not (see [docs/lineage.md](docs/lineage.md) for why).
 
