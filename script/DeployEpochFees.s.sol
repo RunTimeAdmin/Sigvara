@@ -14,6 +14,10 @@ import "../src/SigvaraEpochFees.sol";
  *         running oracle. Point the oracle at it via FEE_REGISTRY_ADDRESS to
  *         activate coverage checks once a non-zero fee is set.
  *
+ * Refused on Arc mainnet (chain 5042), with no override. The module is deferred from the
+ * mainnet launch and from the first audit (docs/adr/0005-governance-and-emergency-powers.md),
+ * so run() reverts with EpochFeesDeferredOnMainnet there. Testnet is unaffected.
+ *
  * Usage:
  *   forge script script/DeployEpochFees.s.sol --rpc-url $RPC --broadcast -vvvv
  *
@@ -54,8 +58,13 @@ contract DeployEpochFees is Script {
 
     error RolesNotSeparated(address deployer, address oracle, address rewardPool);
     error OperatorBondNotSet();
+    error EpochFeesDeferredOnMainnet();
 
     function run() external {
+        // Left out of the mainnet launch and the first audit, with no override. The role and
+        // bond checks below apply to a mainnet run again once this line is lifted.
+        if (block.chainid == ARC_MAINNET) revert EpochFeesDeferredOnMainnet();
+
         uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
         address deployer = vm.addr(deployerKey);
 

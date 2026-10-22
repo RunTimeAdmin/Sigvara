@@ -3,15 +3,17 @@
  *
  * AccessControl is not enumerable. hasRole answers only for an address you already
  * suspect, so a grant nobody expected is invisible to it. This replays every RoleGranted
- * and RoleRevoked event from the deploy block for the five proxies and the timelock, and
+ * and RoleRevoked event from the deploy block for the proxies and the timelock, and
  * fails unless each role is held by exactly the expected addresses and no role exists
  * that is not on the list.
  *
  *   SAFE=0x.. TIMELOCK=0x.. COMMITTEE=0x.. ORACLE=0x.. GUARDIAN=0x.. node scripts/check-role-holders.mjs
  *
  * Run it after the handover, not before: until then the deployer holds admin and upgrader.
- * The five proxies and the deploy block come from deployments/5042.json. The holders
- * come from the environment, so a wrong artifact cannot vouch for itself.
+ * The proxies and the deploy block come from deployments/5042.json: four, and a fifth
+ * (epochFees) only if the artifact has one, since the epoch-fee module is left out of the
+ * mainnet launch (docs/adr/0005). The holders come from the environment, so a wrong artifact
+ * cannot vouch for itself.
  *
  * RPC_URL overrides the default endpoint. The public endpoint caps eth_getLogs at 10,000
  * blocks and throttles bursts, so the scan is chunked and paced (PACE_MS, default 500).
@@ -48,11 +50,16 @@ const TIMELOCK = need('TIMELOCK');
 const COMMITTEE = need('COMMITTEE');
 const ORACLE = need('ORACLE');
 const GUARDIAN = need('GUARDIAN');
-for (const k of ['identity', 'reputation', 'staking', 'oracleBond', 'epochFees']) {
+for (const k of ['identity', 'reputation', 'staking', 'oracleBond']) {
   if (!artifact[k]) fail(`deployments/${CHAIN_ID}.json has no ${k}`);
 }
 if (!Number.isInteger(artifact.deployBlock)) fail(`deployments/${CHAIN_ID}.json has no deployBlock`);
 if (failed) process.exit(1);
+// Checked when the artifact has it, said aloud when it does not, so a missing entry cannot pass
+// for a clean result.
+if (!artifact.epochFees) {
+  console.log(`note  deployments/${CHAIN_ID}.json has no epochFees: the epoch-fee module is left out of launch (docs/adr/0005), so it is not checked`);
+}
 
 const ZERO_ADDR = ethers.ZeroAddress.toLowerCase();
 const ADMIN = ethers.ZeroHash;
@@ -89,10 +96,12 @@ const expected = {
       GUARDIAN_ROLE: [GUARDIAN],
     },
   },
-  epochFees: {
-    address: artifact.epochFees,
-    roles: { DEFAULT_ADMIN_ROLE: [SAFE], UPGRADER_ROLE: [TIMELOCK], ORACLE_ROLE: [ORACLE] },
-  },
+  ...(artifact.epochFees && {
+    epochFees: {
+      address: artifact.epochFees,
+      roles: { DEFAULT_ADMIN_ROLE: [SAFE], UPGRADER_ROLE: [TIMELOCK], ORACLE_ROLE: [ORACLE] },
+    },
+  }),
   timelock: {
     address: TIMELOCK,
     roles: {

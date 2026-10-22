@@ -152,7 +152,7 @@
         <h3>When the utility starts</h3>
         <p>The Sigvara registries deploy to Arc mainnet after an external audit. Until that deployment, SVR has no on-chain use in the protocol. Between launch and mainnet registries it is a token with a published roadmap and nothing else.</p>
 
-        <p>Arc testnet keeps using the faucet <code>SVRToken</code> for mechanics testing. That token carries the SVR name and symbol, anyone can mint it from an open faucet, it is worth nothing, and it is <b>not</b> this token. At mainnet deploy the registries are initialized with the SVR address above, with <code>minimumStake</code> and <code>epochFee</code> denominated in 18 decimals.</p>
+        <p>Arc testnet keeps using the faucet <code>SVRToken</code> for mechanics testing. That token carries the SVR name and symbol, anyone can mint it from an open faucet, it is worth nothing, and it is <b>not</b> this token. At mainnet deploy the registries are initialized with the SVR address above, with <code>minimumStake</code> and <code>bondAmount</code> denominated in 18 decimals. <code>SigvaraEpochFees</code> is not deployed at launch.</p>
 
         <h3>Mainnet parameters</h3>
         <table class="data-table">
@@ -160,7 +160,6 @@
           <tbody>
             <tr><td><code>SigvaraOracleBond.bondAmount</code></td><td>2,500,000 SVR</td><td>0.25%</td></tr>
             <tr><td><code>SigvaraStaking.minimumStake</code></td><td>10,000 SVR</td><td>0.001%</td></tr>
-            <tr><td><code>SigvaraEpochFees.epochFee</code></td><td>0 at launch (Bootstrap stage)</td><td>n/a</td></tr>
           </tbody>
         </table>
 

@@ -130,7 +130,8 @@ published roadmap and nothing else. Arc testnet keeps using the faucet
 `SVRToken` for mechanics testing; testnet tokens have no value and never will.
 
 At mainnet deploy the registries are initialized with the SVR address above,
-`minimumStake` and `epochFee` denominated in 18 decimals.
+`minimumStake` and `bondAmount` denominated in 18 decimals. `SigvaraEpochFees` is not
+deployed at launch.
 
 ## Mainnet parameters
 
@@ -142,7 +143,6 @@ jobs.
 |---|---|---|
 | `SigvaraOracleBond.bondAmount` | 2,500,000 SVR | 0.25% |
 | `SigvaraStaking.minimumStake` | 10,000 SVR | 0.001% |
-| `SigvaraEpochFees.epochFee` | 0 at launch (Bootstrap stage) | n/a |
 
 The operator bond is what a corrupt oracle loses. `slash()` can take up to the whole of
 it, so the deterrent is the full number rather than a fraction. The agent stake is a

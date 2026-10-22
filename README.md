@@ -594,7 +594,7 @@ Key scenarios tested:
 | `UPGRADER_ROLE` | Deployer EOA `0x18CBcE50…` | Governance timelock (48 hours) | Authorize UUPS upgrades, and wire the stake view and the oracle bond (`setStakeView`, `setOperatorBond`). On a registry initialised by the current code it is administered by itself, so the admin cannot grant it |
 | `GUARDIAN_ROLE` | Not granted on the current testnet deployment | A separate, lighter key | Pause new inflows (registrations, stake deposits, score proposals, bond deposits) for three days at a time. Never exits, slash rulings or finalization, and the admin can revoke it at once |
 | `STAKING_CORE_ROLE` | `SigvaraStaking` `0xA69d62B2…` | `SigvaraStaking` | Suspend / slash agents, zero reputation, clear slash suspensions |
-| `ORACLE_ROLE` | Primary `0x6352b8FF…` + checker `0x989aabd6…`, both bonded | Multiple independently operated bonded operators, each signing with a key its cold bond owner has named | Propose reputation scores; charge epoch fees |
+| `ORACLE_ROLE` | Primary `0x6352b8FF…` + checker `0x989aabd6…`, both bonded | Multiple independently operated bonded operators, each signing with a key its cold bond owner has named | Propose reputation scores (and charge epoch fees on `SigvaraEpochFees`, which is not deployed at launch) |
 | `SLASHING_COMMITTEE_ROLE` | EOA `0x045d6c1D…` | 3-of-5 multisig | Initiate slash proposals, reject bad scores |
 | Operator | Agent registrant | Agent registrant | Register, suspend, reinstate, rotate key, transfer the agent |
 
