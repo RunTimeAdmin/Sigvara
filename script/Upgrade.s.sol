@@ -77,11 +77,13 @@ contract Upgrade is Script {
     error ProxyNotFound(string target, uint256 chainId);
     error ImplementationUnchanged(address proxy, address impl);
     error DependencyMissing(string target, string needs, address from);
+    error ProxyIsNotTheTarget(string target, address proxy);
 
     function run() external {
         string memory target = vm.envString("TARGET");
         _requireKnownTarget(target); // fail on a typo before touching the artifact
         address proxy = _proxyAddress(target);
+        _requireShape(target, proxy);
         bytes memory initData = vm.envOr("INIT_CALLDATA", bytes(""));
 
         _checkDependencies(target, proxy);
@@ -149,6 +151,26 @@ contract Upgrade is Script {
         (bool ok, bytes memory ret) = target.staticcall(abi.encodeWithSignature(sig));
         if (!ok || ret.length < 32) return address(0);
         return abi.decode(ret, (address));
+    }
+
+    /// @dev The proxy answers a getter that only `target` has. Every registry is a UUPS proxy, so an
+    ///      implementation of one kind installs cleanly on a proxy of another, and the upgrade then lands
+    ///      on storage it does not match and bricks the registry. PROXY overrides the address in the
+    ///      artifact and nothing else tied it to TARGET. The getters are the long-standing public ones
+    ///      each contract has had since it first deployed, so a proxy that predates the latest code
+    ///      still answers.
+    function _requireShape(string memory target, address proxy) internal view {
+        if (!_answers(proxy, _shapeProbe(target))) revert ProxyIsNotTheTarget(target, proxy);
+    }
+
+    function _shapeProbe(string memory target) internal pure returns (bytes memory) {
+        bytes32 t = keccak256(bytes(target));
+        if (t == keccak256("identity"))   return abi.encodeWithSignature("computeDidHash(address)", address(0));
+        if (t == keccak256("reputation")) return abi.encodeWithSignature("challengeWindow()");
+        if (t == keccak256("staking"))    return abi.encodeWithSignature("minimumStake()");
+        if (t == keccak256("oracleBond")) return abi.encodeWithSignature("bondAmount()");
+        if (t == keccak256("epochFees"))  return abi.encodeWithSignature("epochFee()");
+        revert UnknownTarget(target);
     }
 
     /// @dev Fresh implementation for `target`. Implementations hold no state, so a

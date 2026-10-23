@@ -11,6 +11,7 @@ import "../src/SigvaraIdentity.sol";
 import "../src/SigvaraReputation.sol";
 import "../src/SigvaraStaking.sol";
 import "../src/SigvaraEpochFees.sol";
+import "../src/SigvaraOracleBond.sol";
 import "../script/Upgrade.s.sol";
 
 /// Minimal ERC20 for testing only.
@@ -349,10 +350,14 @@ contract ProxyStub {
     constructor(address id) { identityRegistry = id; }
 }
 
-/// Exposes the script's internal precheck.
+/// Exposes the script's internal prechecks.
 contract UpgradeHarness is Upgrade {
     function check(string memory target, address proxy) external view {
         _checkDependencies(target, proxy);
+    }
+
+    function shape(string memory target, address proxy) external view {
+        _requireShape(target, proxy);
     }
 }
 
@@ -361,6 +366,76 @@ contract UpgradeDependencyTest is Test {
 
     function setUp() public {
         harness = new UpgradeHarness();
+    }
+
+    // -------------------------------------------------------------------------
+    // The proxy is the kind the target names
+    // -------------------------------------------------------------------------
+
+    /// PROXY overrides the address read from the deployment artifact, and nothing checked it against TARGET.
+    /// Every registry is a UUPS proxy, so an implementation of one kind installs cleanly on a proxy of
+    /// another and bricks it: the upgrade lands, the new code reads the old storage, and nothing works.
+    function _proxies() internal returns (address[5] memory p, string[5] memory names) {
+        names = ["identity", "reputation", "staking", "oracleBond", "epochFees"];
+        MockSVRUpgrade svr = new MockSVRUpgrade();
+        address admin = address(0xAD);
+        p[0] = address(new ERC1967Proxy(
+            address(new SigvaraIdentity()), abi.encodeCall(SigvaraIdentity.initialize, (admin, address(0)))
+        ));
+        p[1] = address(new ERC1967Proxy(
+            address(new SigvaraReputation()),
+            abi.encodeCall(SigvaraReputation.initialize, (admin, address(0), address(0), address(0), 1 hours))
+        ));
+        p[2] = address(new ERC1967Proxy(
+            address(new SigvaraStaking()),
+            abi.encodeCall(SigvaraStaking.initialize, (admin, p[0], p[1], address(svr), 1000e18, 7 days, 21 days))
+        ));
+        p[3] = address(new ERC1967Proxy(
+            address(new SigvaraOracleBond()),
+            abi.encodeCall(SigvaraOracleBond.initialize, (admin, address(0), address(svr), 1000e18, 7 days, admin))
+        ));
+        p[4] = address(new ERC1967Proxy(
+            address(new SigvaraEpochFees()),
+            abi.encodeCall(SigvaraEpochFees.initialize, (admin, address(0), address(svr), p[0], admin, 0))
+        ));
+    }
+
+    function test_shape_acceptsEachProxyForItsOwnTarget() public {
+        (address[5] memory p, string[5] memory names) = _proxies();
+        for (uint256 i = 0; i < 5; i++) harness.shape(names[i], p[i]);
+    }
+
+    function test_shape_refusesEveryOtherPairing() public {
+        (address[5] memory p, string[5] memory names) = _proxies();
+        for (uint256 t = 0; t < 5; t++) {
+            for (uint256 x = 0; x < 5; x++) {
+                if (x == t) continue;
+                vm.expectRevert(abi.encodeWithSelector(Upgrade.ProxyIsNotTheTarget.selector, names[t], p[x]));
+                harness.shape(names[t], p[x]);
+            }
+        }
+    }
+
+    /// The check is in run(), not only in the helper: a staking upgrade pointed at an identity proxy stops
+    /// before the key is read or anything is sent. TARGET and PROXY are read by this script alone.
+    function test_run_refusesAProxyOfAnotherKind() public {
+        (address[5] memory p,) = _proxies();
+        vm.setEnv("TARGET", "staking");
+        vm.setEnv("PROXY", vm.toString(p[0])); // an identity proxy
+        Upgrade script_ = new Upgrade();
+        vm.expectRevert(abi.encodeWithSelector(Upgrade.ProxyIsNotTheTarget.selector, "staking", p[0]));
+        script_.run();
+        vm.setEnv("TARGET", "");
+        vm.setEnv("PROXY", "");
+    }
+
+    function test_shape_refusesAnAddressWithNoCodeOrAnotherKindOfContract() public {
+        vm.expectRevert(abi.encodeWithSelector(Upgrade.ProxyIsNotTheTarget.selector, "staking", address(0xABCD)));
+        harness.shape("staking", address(0xABCD));
+
+        address notAProxy = address(new CurrentIdentity());
+        vm.expectRevert(abi.encodeWithSelector(Upgrade.ProxyIsNotTheTarget.selector, "reputation", notAProxy));
+        harness.shape("reputation", notAProxy);
     }
 
     /// The exact ordering that broke Arc testnet: upgrade reputation while identity

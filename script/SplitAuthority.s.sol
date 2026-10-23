@@ -36,8 +36,8 @@ import {TimelockController} from "@openzeppelin/contracts/governance/TimelockCon
  * administered UPGRADER_ROLE because no contract named another admin for it, and the Safe
  * could grant itself the role in one transaction and upgrade in the next (checked on a
  * fork). Proxies deployed before the change, the Arc testnet ones among them, are still
- * like that. `plan` and `renounce` say which case each contract is, rather than leave it to
- * be assumed. The same holds for the roles that take funds or change an agent's standing
+ * like that. `plan` says which case each contract is, and `renounce` refuses unless every one
+ * is the first, since renouncing cannot be undone. The same holds for the roles that take funds or change an agent's standing
  * (SLASHER, SLASHING_COMMITTEE, STAKING_CORE), the slash beneficiary, setStakeView and
  * setOperatorBond: on a registry initialized by the current code they need the timelock, and
  * the Safe can only revoke. What the Safe can still do with no delay is what DEFAULT_ADMIN_ROLE
@@ -100,6 +100,9 @@ import {TimelockController} from "@openzeppelin/contracts/governance/TimelockCon
 contract SplitAuthority is Script {
     bytes32 internal constant ADMIN_ROLE = 0x00; // DEFAULT_ADMIN_ROLE
     bytes32 internal constant UPGRADER_ROLE = keccak256("UPGRADER_ROLE");
+    bytes32 internal constant STAKING_CORE_ROLE = keccak256("STAKING_CORE_ROLE");
+    bytes32 internal constant SLASHING_COMMITTEE_ROLE = keccak256("SLASHING_COMMITTEE_ROLE");
+    bytes32 internal constant SLASHER_ROLE = keccak256("SLASHER_ROLE");
 
     uint256 internal constant DEFAULT_MIN_DELAY = 48 hours;
 
@@ -126,6 +129,8 @@ contract SplitAuthority is Script {
     error TimelockHasNoDelay(address timelock);
     error DeployerCanActAlone(address safe);
     error DeployerStillAdmin(string target, address deployer);
+    error UpgraderRoleNotSelfAdministered(string target);
+    error RoleNotTimelocked(string target, bytes32 role);
 
     function run() external {
         string memory phase = vm.envOr("PHASE", string("plan"));
@@ -162,7 +167,7 @@ contract SplitAuthority is Script {
             console2.log(targets[i].name, targets[i].addr);
             _printHolder("   admin    ", targets[i].addr, ADMIN_ROLE, deployer, safe, timelock);
             _printHolder("   upgrader ", targets[i].addr, UPGRADER_ROLE, deployer, safe, timelock);
-            _printUpgraderAdmin(targets[i].addr);
+            _printUpgraderAdmin(targets[i].name, targets[i].addr);
         }
         console2.log("");
 
@@ -392,6 +397,13 @@ contract SplitAuthority is Script {
             // The Safe removed it, or it is still there. Dropping it from here would reach
             // the same state and prove nothing about the Safe.
             if (c.hasRole(ADMIN_ROLE, deployer)) revert DeployerStillAdmin(targets[i].name, deployer);
+            // This cannot be undone, so it also refuses to leave the Safe a way round the timelock. On a
+            // registry set up by the older code the admin Safe can grant itself UPGRADER_ROLE, or the
+            // slasher, committee and staking-core roles, in one transaction. That used to be a warning
+            // printed after the deployer had already gone.
+            if (!_upgraderAdminIsSelf(targets[i].addr)) revert UpgraderRoleNotSelfAdministered(targets[i].name);
+            (bool open, bytes32 role) = _firstRoleTheAdminCanGrant(targets[i].name, targets[i].addr);
+            if (open) revert RoleNotTimelocked(targets[i].name, role);
         }
 
         vm.startBroadcast(vm.envUint("DEPLOYER_PRIVATE_KEY"));
@@ -406,12 +418,6 @@ contract SplitAuthority is Script {
         console2.log("=== done ===");
         console2.log("admin    ", safe);
         console2.log("upgrader ", timelock);
-        for (uint256 i = 0; i < targets.length; i++) {
-            if (!_upgraderAdminIsSelf(targets[i].addr)) {
-                console2.log("WARNING: the Safe can still give itself upgrade rights on", targets[i].name);
-                console2.log("   (UPGRADER_ROLE is administered by DEFAULT_ADMIN_ROLE there)");
-            }
-        }
     }
 
     // -------------------------------------------------------------------------
@@ -496,12 +502,58 @@ contract SplitAuthority is Script {
         return ok && ret.length == 32 && abi.decode(ret, (bytes32)) == UPGRADER_ROLE;
     }
 
-    function _printUpgraderAdmin(address target) internal view {
+    function _printUpgraderAdmin(string memory name, address target) internal view {
         if (_upgraderAdminIsSelf(target)) {
             console2.log("   upgrader role: administered by itself, so the Safe cannot grant it");
         } else {
             console2.log("   WARNING upgrader role: administered by DEFAULT_ADMIN_ROLE, so the Safe can skip the timelock");
         }
+        (bool open,) = _firstRoleTheAdminCanGrant(name, target);
+        if (open) {
+            console2.log("   WARNING roles: the slasher, committee or staking-core role is still the admin's to grant,");
+            console2.log("   so the Safe can install a holder with no delay. PHASE=renounce refuses on this.");
+        }
+    }
+
+    /// @dev The roles the timelock protects on each contract: the ones that move funds or change an agent's
+    ///      standing. On a registry initialized by the current code each is administered by UPGRADER_ROLE,
+    ///      so granting one takes the timelock's delay and the admin can only revoke. The oracle and
+    ///      guardian roles stay with the admin on purpose (docs/adr/0005), and are not listed.
+    ///      test/SplitAuthority.t.sol compares this table with what the contracts actually do.
+    function _timelockedRoles(string memory name) internal pure returns (bytes32[] memory roles) {
+        bytes32 h = keccak256(bytes(name));
+        if (h == keccak256("identity")) {
+            roles = new bytes32[](1);
+            roles[0] = STAKING_CORE_ROLE;
+        } else if (h == keccak256("reputation")) {
+            roles = new bytes32[](2);
+            roles[0] = STAKING_CORE_ROLE;
+            roles[1] = SLASHING_COMMITTEE_ROLE;
+        } else if (h == keccak256("staking")) {
+            roles = new bytes32[](1);
+            roles[0] = SLASHING_COMMITTEE_ROLE;
+        } else if (h == keccak256("oracleBond")) {
+            roles = new bytes32[](1);
+            roles[0] = SLASHER_ROLE;
+        }
+    }
+
+    /// @dev The first of those roles that DEFAULT_ADMIN_ROLE can still grant on this contract. A role
+    ///      whose admin cannot be read counts as open, because a check that cannot be made must not be
+    ///      reported as one that passed.
+    function _firstRoleTheAdminCanGrant(string memory name, address target)
+        internal
+        view
+        returns (bool open, bytes32 role)
+    {
+        bytes32[] memory roles = _timelockedRoles(name);
+        for (uint256 i = 0; i < roles.length; i++) {
+            (bool ok, bytes memory ret) = target.staticcall(
+                abi.encodeWithSelector(IAccessControl.getRoleAdmin.selector, roles[i])
+            );
+            if (!ok || ret.length != 32 || abi.decode(ret, (bytes32)) != UPGRADER_ROLE) return (true, roles[i]);
+        }
+        return (false, bytes32(0));
     }
 
     function _printHolder(
