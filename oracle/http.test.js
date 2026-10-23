@@ -65,6 +65,15 @@ test('a request target that is not a canonical path is refused, and the process 
   assert.ok(counter(text, 'sigvara_oracle_http_refused_total{reason="bad_target"}') >= 3, text);
 });
 
+// The watcher judges a checker that has never finished an epoch by how long it has been up, so /health has to
+// say both, in these fields. This pins the contract between index.js and watcher-policy.js.
+test('/health before the first epoch says so: no last epoch, a null gap, and an uptime', async () => {
+  const health = (await oracle.call('GET', '/health')).body;
+  assert.equal(health.lastSuccessfulEpochMs, 0);
+  assert.equal(health.timeSinceLastEpochMs, null);
+  assert.equal(typeof health.uptimeSeconds, 'number');
+});
+
 test('an ordinary request is still answered', async () => {
   assert.match(await oracle.raw('GET /health HTTP/1.1'), / 200 /);
   assert.match(await oracle.raw(`GET /evidence/${DID} HTTP/1.1`), / 200 /);

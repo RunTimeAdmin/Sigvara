@@ -55,6 +55,22 @@ function alertKey(divergence) {
 }
 
 /**
+ * How long the checker has gone without finishing an epoch, in ms, or NaN when /health does not say.
+ *
+ * A checker that has never finished one reports `lastSuccessfulEpochMs: 0` and `timeSinceLastEpochMs:
+ * null`. Number(null) is 0, so it used to read as no silence at all, however long the process had been up
+ * and however many epochs had failed since. Its silence runs from the start of the process, which /health
+ * reports as `uptimeSeconds`. A checker that does not report either field is not judged.
+ */
+function silenceMs(health) {
+  if (health.timeSinceLastEpochMs != null) return Number(health.timeSinceLastEpochMs);
+  if ('lastSuccessfulEpochMs' in health && !health.lastSuccessfulEpochMs && health.uptimeSeconds != null) {
+    return Number(health.uptimeSeconds) * 1000;
+  }
+  return NaN;
+}
+
+/**
  * Whether the checker itself is in a state where its silence means anything.
  *
  * Returns { ok, reason }. `ok: false` is itself an alert: the committee is relying on
@@ -70,9 +86,15 @@ function checkerStatus(health, divergencePayload, nowMs, maxSilenceMs, payloadEr
   }
   // An epoch that has not completed in a long time means the checker is running but not
   // checking, which looks identical to "nothing to report" from outside.
-  const since = Number(health.timeSinceLastEpochMs);
+  const since = silenceMs(health);
   if (Number.isFinite(since) && since > maxSilenceMs) {
-    return { ok: false, reason: `checker has not completed an epoch in ${Math.round(since / 60000)} minutes` };
+    const minutes = Math.round(since / 60000);
+    return {
+      ok: false,
+      reason: health.timeSinceLastEpochMs == null
+        ? `checker has not completed an epoch since it started ${minutes} minutes ago`
+        : `checker has not completed an epoch in ${minutes} minutes`,
+    };
   }
   // Up but not readable. /health answers whatever the rate limiter is doing, while
   // /divergence is metered, so a /health that works beside a /divergence that does not is
