@@ -57,7 +57,11 @@ This ADR records what was decided about each, and what was left as a stated trus
 3. **The committee cannot file again at once.** Every drop (cancelled, vetoed, expired after a
    dispute, resolved in the agent's favour) records `lastDroppedAt`, and `initiateSlash` refuses
    for one challenge period after it. An operator always gets a window to act, and a withdrawal it
-   queues in that window stays slashable.
+   queues in that window stays slashable. Evidence the admin has ruled against, by a veto or by a
+   ruling for the agent, is also refused for that agent from then on (`evidenceRejected`,
+   `EvidenceAlreadyRejected`), so a re-file needs something new to point at. The committee chooses the
+   evidence bytes, so this is a speed bump rather than a wall. A proposal the committee cancelled, that
+   lapsed, or whose dispute expired unruled was never ruled against, and its evidence can be filed again.
 4. **Floors and ceilings are enforced where the value is set.** The reputation challenge window (one
    hour), the bond registry's unbonding period (one day) and bond requirement (above zero), staking's
    challenge (three days) and unbonding (one day) periods, and a minimum stake above zero are refused in

@@ -155,6 +155,14 @@ contract SigvaraStaking is
     ///         under (the time it was queued plus the period in force when it is claimed).
     mapping(bytes32 => uint256) public unbondingClaimableAt;
 
+    /// @notice Evidence the admin has ruled against for an agent: `keccak256(evidenceHash)` of a proposal
+    ///         the admin vetoed, or resolved in the agent's favour, keyed by the agent.
+    /// @dev    Appended after `unbondingClaimableAt`, so existing proxies read it as false for every pair
+    ///         and nothing already decided is reopened or closed. Only an admin ruling writes it. A
+    ///         proposal the committee cancelled, or that lapsed with nobody executing it, or whose dispute
+    ///         expired unruled, was never ruled against, and its evidence can be filed again.
+    mapping(bytes32 => mapping(bytes32 => bool)) public evidenceRejected;
+
     // -------------------------------------------------------------------------
     // Events
     // -------------------------------------------------------------------------
@@ -196,6 +204,8 @@ contract SigvaraStaking is
     error SlashNotDisputed(bytes32 didHash);
     /// A proposal against this agent was dropped less than one challenge period ago.
     error SlashCooldownActive(bytes32 didHash, uint256 refileAt);
+    /// The admin already ruled against this evidence for this agent. File new evidence.
+    error EvidenceAlreadyRejected(bytes32 didHash, bytes32 evidenceKey);
     error DisputeResolutionActive(bytes32 didHash, uint256 expiresAt);
     /// A Pending proposal is still inside the fortnight in which anyone may execute it.
     error ExecutionPeriodActive(bytes32 didHash, uint256 expiresAt);
@@ -483,6 +493,14 @@ contract SigvaraStaking is
         if (droppedAt != 0 && block.timestamp < droppedAt + challengePeriod) {
             revert SlashCooldownActive(didHash, droppedAt + challengePeriod);
         }
+        // Evidence the admin has already ruled against does not come back unchanged. The cooldown
+        // gives the operator a window, and the contract has always said a re-file needs stronger
+        // evidence, but nothing remembered what had been rejected, so the committee could file the
+        // same package every period and freeze the bond each time until the admin vetoed it again.
+        // The committee picks the bytes, so this is a speed bump: filing again needs something new
+        // to point at, and it is visible on chain when it does not.
+        bytes32 evidenceKey = keccak256(evidenceHash);
+        if (evidenceRejected[didHash][evidenceKey]) revert EvidenceAlreadyRejected(didHash, evidenceKey);
 
         // Write state before the external call (CEI pattern).
         slashProposals[didHash] = SlashProposal({
@@ -561,6 +579,7 @@ contract SigvaraStaking is
             if (block.timestamp <= deadline) revert ChallengePeriodActive(didHash, deadline);
             _settleSlash(didHash, proposal);
         } else {
+            _rejectEvidence(didHash, proposal);
             _dropProposal(didHash, proposal);
         }
     }
@@ -636,8 +655,15 @@ contract SigvaraStaking is
         if (proposal.state != SlashState.Pending && proposal.state != SlashState.Disputed) {
             revert NoActivePendingSlash(didHash);
         }
+        _rejectEvidence(didHash, proposal);
         _dropProposal(didHash, proposal);
         emit SlashVetoed(didHash, msg.sender);
+    }
+
+    /// @dev Record that the admin ruled against this proposal's evidence for this agent. Only the
+    ///      admin's two rulings come through here (a veto, and a dispute resolved for the agent).
+    function _rejectEvidence(bytes32 didHash, SlashProposal storage proposal) internal {
+        evidenceRejected[didHash][keccak256(proposal.evidenceHash)] = true;
     }
 
     /// @dev Cancel a proposal and return the agent to Active. Reinstating to Active
