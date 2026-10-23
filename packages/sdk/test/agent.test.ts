@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { inspect } from 'node:util';
 import nacl from 'tweetnacl';
 import { SigvaraAgent } from '../src/agent';
 import {
@@ -231,5 +232,26 @@ describe('SigvaraAgent: accessors and generate()', () => {
     expect(p.did).toBe(peerDid);
     expect(p.audience).toBe(me.did);
     expect(c.expiresAt - c.timestamp).toBe(30);
+  });
+});
+
+describe('SigvaraAgent keeps its secret key out of sight', () => {
+  it('is not in the JSON, the console output or the enumerable properties', () => {
+    const { agent, privateKey } = SigvaraAgent.generate({ agentAddress: AGENT_ADDR, chainId: CHAIN_ID });
+    const seedHex = privateKey.replace(/^0x/, '');
+    const json = JSON.stringify(agent);
+    expect(json).not.toMatch(/secretKey|keyPair/);
+    expect(inspect(agent, { depth: 6 })).not.toMatch(/secretKey|keyPair/);
+    expect(Object.keys(agent)).not.toContain('keyPair');
+    expect(json).not.toContain(seedHex);
+  });
+
+  it('still signs: the private field is what signChallengeFor and signChallenge use', () => {
+    const a = SigvaraAgent.generate({ agentAddress: AGENT_ADDR, chainId: CHAIN_ID }).agent;
+    const b = SigvaraAgent.generate({ agentAddress: PEER_ADDR, chainId: CHAIN_ID }).agent;
+    const c = a.issueChallenge(b.did);
+    const pub = bytes32ToPubKey(b.publicKeyBytes32);
+    expect(verifyChallenge(c.payload, b.signChallengeFor(c.payload, a.did), pub)).toBe(true);
+    expect(verifyChallenge(c.payload, b.signChallenge(c.payload), pub)).toBe(true);
   });
 });

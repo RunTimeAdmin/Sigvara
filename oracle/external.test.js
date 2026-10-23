@@ -178,3 +178,18 @@ test('refreshChainId: a hung provider does not hang the caller forever', async (
   assert.ok(Date.now() - started < 20_000, 'must time out rather than wait on a dead RPC');
   assert.match(external.chainState().error, /timeout/i);
 });
+
+// ---- tags are chosen by whoever posts the feedback --------------------------
+
+test('externalScore: a tag that names an Object.prototype member is just an unrecognized tag', () => {
+  const honest = [{ value: 40, tag: 'quality' }];
+  const baseline = computeExternalScore(honest);
+  assert.equal(baseline, 10);
+  // 'constructor' used to resolve to Object, so Object(100) joined the mean and pinned the factor at the cap.
+  assert.equal(computeExternalScore([...honest, { value: 100, tag: 'constructor' }]), baseline);
+  // '__proto__' used to resolve to Object.prototype, which is not a function, so the whole computation threw.
+  assert.doesNotThrow(() => computeExternalScore([...honest, { value: 1, tag: '__proto__' }]));
+  assert.equal(computeExternalScore([...honest, { value: 1, tag: '__proto__' }]), baseline);
+  // On their own they carry no evidence at all.
+  assert.equal(computeExternalScore([{ value: 100, tag: 'constructor' }, { value: 100, tag: '__proto__' }]), 0);
+});

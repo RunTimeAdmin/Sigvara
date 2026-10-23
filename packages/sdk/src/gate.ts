@@ -142,13 +142,26 @@ export class SigvaraGate {
         'response given to this gate cannot be relayed to another one.',
       );
     }
+    // A threshold or lifetime that is not a usable number must stop the gate being built.
+    //
+    // `score < NaN` is false, so a threshold that came from `Number(process.env.X)` with X unset admitted every
+    // active agent that could prove its key, whatever its score. A NaN lifetime made every spent nonce look
+    // expired as soon as it was stored, so a captured proof could be replayed within its window. Both fail
+    // open and say nothing, which is the wrong way for an admission check to be wrong.
+    if (typeof config.threshold !== 'number' || !Number.isFinite(config.threshold) || config.threshold < 0) {
+      throw new Error(`SigvaraGate: threshold must be a finite number, 0 or more (got ${String(config.threshold)}).`);
+    }
+    const ttl = config.ttlSeconds ?? 300;
+    if (typeof ttl !== 'number' || !Number.isFinite(ttl) || ttl <= 0) {
+      throw new Error(`SigvaraGate: ttlSeconds must be a positive number (got ${String(config.ttlSeconds)}).`);
+    }
     this.verifier = new SigvaraVerifier({
       rpcUrl: config.rpcUrl, addresses: config.addresses, chainId: config.chainId,
       timeoutMs: config.timeoutMs,
     });
     this.threshold = config.threshold;
     this.audience = config.audience;
-    this.ttl = config.ttlSeconds ?? 300;
+    this.ttl = ttl;
     this.nonces = config.nonceStore ?? new MemoryNonceStore();
   }
 

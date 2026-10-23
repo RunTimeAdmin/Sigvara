@@ -16,6 +16,7 @@
 // EXTERNAL_* env is unset the module is inert and every externalScore is 0.
 
 const { ethers } = require('ethers');
+const { CAPS } = require('./score-caps');
 
 const ID_ABI = ['function ownerOf(uint256) view returns (address)'];
 const REP_ABI = [
@@ -24,7 +25,7 @@ const REP_ABI = [
   'function readFeedback(uint256 agentId, address clientAddress, uint64 feedbackIndex) view returns (int128 value, uint8 valueDecimals, string tag1, string tag2, bool isRevoked)',
 ];
 
-const MAX_EXTERNAL_SCORE = 25;
+const MAX_EXTERNAL_SCORE = CAPS.external;
 const READ_TIMEOUT_MS = 8000;
 
 // ---- pure normalization (the oracle's judgment; curated deliberately) -------
@@ -48,7 +49,10 @@ const TAG_NORMALIZERS = {
 function computeExternalScore(rows) {
   const recognized = [];
   for (const r of rows) {
-    const norm = TAG_NORMALIZERS[r.tag];
+    // Own keys only. `tag` is text chosen by whoever posts the feedback, and a plain object also
+    // answers to 'constructor' and '__proto__'. The first returned Object(value) and dragged the mean
+    // up to the cap; the second is not a function, so this threw and externalScoreFor read it as 0.
+    const norm = Object.hasOwn(TAG_NORMALIZERS, r.tag) ? TAG_NORMALIZERS[r.tag] : undefined;
     if (norm) recognized.push(norm(r.value));
   }
   if (!recognized.length) return 0;

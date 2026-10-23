@@ -21,7 +21,7 @@ const { computeScore } = require('./scoring');
 const {
   decideAction, decideCheckerAction, scoreDivergence,
   epochIntervalError, divergenceToleranceError, DEFAULT_DIVERGENCE_TOLERANCE,
-  mapChunked, clockSkewError,
+  mapChunked, clockSkewError, scoringIsStale,
 } = require('./epoch-policy');
 const {
   json, readBody, readCredentials, identifyCaller, mayAttestUnauthenticated, parseScorePath, parseDidHash,
@@ -1270,6 +1270,18 @@ function buildEvidenceBody(didHash, events) {
 // with /evidence and /score meant anyone could make the watcher's poll fail with a 429.
 const rateKey = (req, cls) => `${cls}|${clientKey(req, isTrustedProxy)}`;
 
+/**
+ * Over this caller's limit for `bucket`? When true the 429 has already been sent and the route should
+ * return. Nine routes carried this block word for word. The badge route keeps its own check on purpose,
+ * because it limits only a cache miss.
+ */
+const overLimit = (req, res, bucket) => {
+  if (!rateLimited(rateKey(req, bucket))) return false;
+  metrics.inc('rateLimitHits');
+  json(res, 429, { error: 'Rate limited' });
+  return true;
+};
+
 async function handleRequest(req, res) {
   metrics.inc('httpRequests');
   // Only a path-form target whose path is already canonical is answered. See
@@ -1311,7 +1323,9 @@ async function handleRequest(req, res) {
 
     const healthy = storeWritable
       && persisted.ok
-      && (!lastEpoch || timeSinceLastEpoch < cfg.epochMs * 2);
+      && !scoringIsStale({
+        lastEpochMs: lastEpoch, nowMs: Date.now(), uptimeMs: metrics.uptimeSeconds() * 1000, epochMs: cfg.epochMs,
+      });
 
     return json(res, healthy ? 200 : 503, {
       ok: healthy,
@@ -1371,10 +1385,7 @@ async function handleRequest(req, res) {
   // POST /epoch  — trigger a manual run (useful for testing)
   if (req.method === 'POST' && pathname === '/epoch') {
     // Metered before it is authorised, so that guessing at a token is throttled as well.
-    if (rateLimited(rateKey(req, 'write'))) {
-      metrics.inc('rateLimitHits');
-      return json(res, 429, { error: 'Rate limited' });
-    }
+    if (overLimit(req, res, 'write')) return;
     // Gated: a manual epoch submits on-chain tx's paid from the oracle wallet, so
     // it must not be triggerable by anyone who can reach the port.
     const caller = identifyCaller(req.headers, cfg.credentials);
@@ -1389,10 +1400,7 @@ async function handleRequest(req, res) {
   // attester: unique ID for the party submitting the attestation (e.g. client address, API key hash).
   // Used for dedupe/cooldown: the same attester cannot attest the same agent within ATTEST_COOLDOWN_MS.
   if (req.method === 'POST' && pathname === '/attest') {
-    if (rateLimited(rateKey(req, 'write'))) {
-      metrics.inc('rateLimitHits');
-      return json(res, 429, { error: 'Rate limited' });
-    }
+    if (overLimit(req, res, 'write')) return;
     try {
       const body = await readBody(req);
       const { success, packetId } = body;
@@ -1638,10 +1646,7 @@ async function handleRequest(req, res) {
   if (readMethod === 'GET' && (pathname === '/divergence' || pathname.startsWith('/divergence/'))) {
     // Its own class: the watcher polls this, and sharing a bucket with the expensive reads
     // let anyone make that poll fail.
-    if (rateLimited(rateKey(req, 'divergence'))) {
-      metrics.inc('rateLimitHits');
-      return json(res, 429, { error: 'Rate limited' });
-    }
+    if (overLimit(req, res, 'divergence')) return;
     if (!cfg.checkerMode) {
       // A primary has nothing to say here, and an empty list would read as "checked,
       // no disagreements" rather than "this oracle does not check".
@@ -1698,10 +1703,7 @@ async function handleRequest(req, res) {
     // the agent's payment history, so this is the most expensive thing a stranger can
     // ask for once the read paths are proxied to the public internet. The cache below
     // bounds repeat cost, not first-request cost, and the limiter still matters.
-    if (rateLimited(rateKey(req, 'evidence'))) {
-      metrics.inc('rateLimitHits');
-      return json(res, 429, { error: 'Rate limited' });
-    }
+    if (overLimit(req, res, 'evidence')) return;
     // The one stored spelling. The cache is keyed on this, and it used to be keyed on
     // whatever casing the caller sent, so one agent's hash had millions of spellings, each
     // its own cache entry and each a full Merkle rebuild.
@@ -1720,10 +1722,7 @@ async function handleRequest(req, res) {
 
   // POST /flag  — body: { didHash }
   if (req.method === 'POST' && pathname === '/flag') {
-    if (rateLimited(rateKey(req, 'write'))) {
-      metrics.inc('rateLimitHits');
-      return json(res, 429, { error: 'Rate limited' });
-    }
+    if (overLimit(req, res, 'write')) return;
     const caller = identifyCaller(req.headers, cfg.credentials);
     if (!caller) return json(res, 401, { error: 'Unauthorized' });
     if (!mayUse(cfg.scopes, caller, 'flag')) return json(res, 403, { error: 'Forbidden' });
@@ -1756,10 +1755,7 @@ async function handleRequest(req, res) {
   // Token-gated like /flag, and for a stronger reason: this one raises a score. It
   // stays off the public proxy entirely.
   if (req.method === 'POST' && pathname === '/flag/resolve') {
-    if (rateLimited(rateKey(req, 'write'))) {
-      metrics.inc('rateLimitHits');
-      return json(res, 429, { error: 'Rate limited' });
-    }
+    if (overLimit(req, res, 'write')) return;
     const caller = identifyCaller(req.headers, cfg.credentials);
     if (!caller) return json(res, 401, { error: 'Unauthorized' });
     if (!mayUse(cfg.scopes, caller, 'flag')) return json(res, 403, { error: 'Forbidden' });
@@ -1786,10 +1782,7 @@ async function handleRequest(req, res) {
   // ERC-8004 identity so its 8004 feedback drives externalScore. Accepted only
   // if the 8004 agent NFT is owned by the same wallet as the Sigvara operator.
   if (req.method === 'POST' && pathname === '/link') {
-    if (rateLimited(rateKey(req, 'write'))) {
-      metrics.inc('rateLimitHits');
-      return json(res, 429, { error: 'Rate limited' });
-    }
+    if (overLimit(req, res, 'write')) return;
     const caller = identifyCaller(req.headers, cfg.credentials);
     if (!caller) return json(res, 401, { error: 'Unauthorized' });
     if (!mayUse(cfg.scopes, caller, 'link')) return json(res, 403, { error: 'Forbidden' });
@@ -1838,10 +1831,7 @@ async function handleRequest(req, res) {
         hint: 'set JOBS_REGISTRY_ADDRESS (and JOBS_RPC if the registry is on another chain)',
       });
     }
-    if (rateLimited(rateKey(req, 'read'))) {
-      metrics.inc('rateLimitHits');
-      return json(res, 429, { error: 'Rate limited' });
-    }
+    if (overLimit(req, res, 'read')) return;
     try {
       const provider = await jobsProviderOrNull();
       const head = await provider.getBlockNumber();
@@ -1929,10 +1919,7 @@ async function handleRequest(req, res) {
     // Each call costs several RPC round trips (agent info, payer standing, and the
     // external score when one is linked), so it is metered like the writes despite
     // needing no token.
-    if (rateLimited(rateKey(req, 'read'))) {
-      metrics.inc('rateLimitHits');
-      return json(res, 429, { error: 'Rate limited' });
-    }
+    if (overLimit(req, res, 'read')) return;
     try {
       // Upstream failures are reported as 502, the way /attest already reports them.
       // A node having a bad minute is not a bad request, and answering 500 told a

@@ -316,3 +316,19 @@ describe('MemoryNonceStore pruning', () => {
     expect((await gate.admit(DID, c, sig)).reason).toBe('replayed');
   });
 });
+
+describe('SigvaraGate configuration that would fail open', () => {
+  const base = { rpcUrl: 'http://unused', addresses: ADDRESSES, audience: AUDIENCE };
+
+  it.each([NaN, Infinity, -1, undefined as any, '40' as any])('refuses a threshold of %s', (threshold) => {
+    expect(() => new SigvaraGate({ ...base, threshold })).toThrow(/threshold must be/);
+  });
+
+  it.each([NaN, 0, -5, Infinity])('refuses ttlSeconds of %s', (ttlSeconds) => {
+    expect(() => new SigvaraGate({ ...base, threshold: 40, ttlSeconds })).toThrow(/ttlSeconds must be/);
+  });
+
+  it('still accepts a threshold of 0, and the default lifetime', () => {
+    expect(() => new SigvaraGate({ ...base, threshold: 0 })).not.toThrow();
+  });
+});

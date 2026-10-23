@@ -208,8 +208,25 @@ function clockSkewError(chainNowSec, hostNowMs, maxSkewMs) {
     'on which; no epoch will run until they agree.';
 }
 
+/**
+ * Whether the scoring loop has been quiet for too long to call the oracle healthy.
+ *
+ * Quiet means two epoch intervals with no successful epoch. After a success it is counted from that
+ * success. Before the first one it is counted from process start: the first epoch runs at start, so a
+ * process still failing it two intervals later is not starting up, it is broken. The check used to be
+ * `!lastEpoch || since < 2 * interval`, which kept a primary that had never succeeded green for as long
+ * as it ran, against what oracle/README.md says /health returns. watcher-policy.silenceMs applies the
+ * same reading to the checker.
+ *
+ * @param {{ lastEpochMs: number, nowMs: number, uptimeMs: number, epochMs: number }} t
+ */
+function scoringIsStale({ lastEpochMs, nowMs, uptimeMs, epochMs }) {
+  const quietForMs = lastEpochMs ? nowMs - lastEpochMs : uptimeMs;
+  return quietForMs >= epochMs * 2;
+}
+
 module.exports = {
-  decideAction, decideCheckerAction, scoreDivergence, mapChunked,
+  decideAction, decideCheckerAction, scoreDivergence, mapChunked, scoringIsStale,
   epochIntervalError, divergenceToleranceError, clockSkewError, MAX_TIMER_MS, MIN_EPOCH_MS,
   SCORE_FACTORS, DEFAULT_DIVERGENCE_TOLERANCE, MAX_DIVERGENCE_TOLERANCE,
 };

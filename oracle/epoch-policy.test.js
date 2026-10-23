@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  decideAction, decideCheckerAction, scoreDivergence, mapChunked,
+  decideAction, decideCheckerAction, scoreDivergence, mapChunked, scoringIsStale,
   epochIntervalError, divergenceToleranceError, MAX_TIMER_MS, MIN_EPOCH_MS,
 } = require('./epoch-policy');
 
@@ -348,4 +348,25 @@ test('clockSkewError: a timestamp that is not a number is refused, never compare
 test('clockSkewError: a blockNumber-style bigint timestamp is read as seconds', () => {
   const host = 1_800_000_000_000;
   assert.equal(clockSkewError(1_800_000_000n, host, 600_000), null);
+});
+
+// ---- scoringIsStale ---------------------------------------------------------
+
+const HOUR = 3_600_000;
+
+test('scoringIsStale: after a success it counts from that success, and two intervals is the limit', () => {
+  const now = 1_800_000_000_000;
+  assert.equal(scoringIsStale({ lastEpochMs: now - 47 * HOUR, nowMs: now, uptimeMs: 500 * HOUR, epochMs: 24 * HOUR }), false);
+  assert.equal(scoringIsStale({ lastEpochMs: now - 48 * HOUR, nowMs: now, uptimeMs: 500 * HOUR, epochMs: 24 * HOUR }), true);
+});
+
+test('scoringIsStale: a process that has never finished an epoch is given two intervals from start, then it is stale', () => {
+  const base = { lastEpochMs: 0, nowMs: 1_800_000_000_000, epochMs: 24 * HOUR };
+  assert.equal(scoringIsStale({ ...base, uptimeMs: 5_000 }), false, 'just started: the first epoch may still be running');
+  assert.equal(scoringIsStale({ ...base, uptimeMs: 47 * HOUR }), false);
+  assert.equal(scoringIsStale({ ...base, uptimeMs: 48 * HOUR }), true, 'two intervals up and still no success');
+});
+
+test('scoringIsStale: a null last epoch (what /health reports before the first success) is read as never', () => {
+  assert.equal(scoringIsStale({ lastEpochMs: null, nowMs: 1_800_000_000_000, uptimeMs: 3 * 24 * HOUR, epochMs: 24 * HOUR }), true);
 });
