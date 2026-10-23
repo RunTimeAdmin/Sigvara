@@ -36,6 +36,7 @@ contract Deploy_Harness is Deploy {
         return (MIN_CHALLENGE_PERIOD, MIN_UNBONDING_PERIOD, MIN_CHALLENGE_WINDOW);
     }
     function checkMaturityRate(uint256 r) external view { _checkMainnetMaturityRate(r); }
+    function minimumStakeTarget() external pure returns (uint256) { return MAINNET_MINIMUM_STAKE; }
     function ceilings() external pure returns (uint256, uint256, uint256, uint256) {
         return (MAX_CHALLENGE_PERIOD, MAX_UNBONDING_PERIOD, MAX_CHALLENGE_WINDOW, MAX_MATURITY_RATE_PER_DAY);
     }
@@ -48,6 +49,7 @@ contract DeployOracleBond_Harness is DeployOracleBond {
     function checkRoles(address d, address s, address ben) external view { _checkRoleSeparation(d, s, ben); }
     function floor() external pure returns (uint256) { return MIN_UNBONDING; }
     function ceiling() external pure returns (uint256) { return MAX_UNBONDING; }
+    function bondTarget() external pure returns (uint256) { return MAINNET_BOND_AMOUNT; }
 }
 
 contract DeployEpochFees_Harness is DeployEpochFees {
@@ -228,6 +230,14 @@ contract DeployScriptGuardsTest is Test {
         b.checkUnbonding(90 days);
     }
 
+    /// The launch targets are written in three places: the scripts, the post-deploy checks and
+    /// docs/token.md. scripts/check-docs.mjs reads all three and fails when they differ, and this pins the
+    /// script constants to the figures themselves.
+    function test_theLaunchTargetsAreTheDocumentedOnes() public view {
+        assertEq(h.minimumStakeTarget(), 10_000e18);
+        assertEq(b.bondTarget(), 2_500_000e18);
+    }
+
     /// Like the floors, the script carries copies of the ceilings, and this is what stops them drifting.
     function test_ceilingsMatchTheContracts() public {
         (uint256 challenge, uint256 unbonding, uint256 window, uint256 rate) = h.ceilings();
@@ -276,6 +286,28 @@ contract DeployScriptGuardsTest is Test {
         h.checkMinimumStake(10_000e18);
     }
 
+    /// The published launch figures (docs/token.md) are minimums on mainnet. Refusing only the testnet default
+    /// stopped a forgotten variable, and let a nominal figure that was not the default through: a minimum
+    /// stake of one token, which is the whole security budget of an agent's bond.
+    function test_mainnet_refusesAMinimumStakeUnderTheTarget() public {
+        vm.chainId(5042);
+        uint256 target = 10_000e18;
+        uint256[5] memory low = [uint256(0), 1, 1e18, 9_999e18, target - 1];
+        for (uint256 i = 0; i < low.length; i++) {
+            vm.expectRevert(abi.encodeWithSelector(Deploy.BelowMainnetTarget.selector, "MINIMUM_STAKE", low[i], target));
+            h.checkMinimumStake(low[i]);
+        }
+        h.checkMinimumStake(target);
+        h.checkMinimumStake(target + 1);
+        h.checkMinimumStake(1_000_000e18);
+    }
+
+    function test_testnet_stillAcceptsAnyMinimumStake() public {
+        vm.chainId(5042002);
+        h.checkMinimumStake(1);
+        h.checkMinimumStake(1_000e18);
+    }
+
     function test_testnet_stillAcceptsTheDefaultMinimumStake() public {
         vm.chainId(5042002);
         h.checkMinimumStake(1_000e18);
@@ -292,6 +324,29 @@ contract DeployScriptGuardsTest is Test {
     function test_oracleBond_mainnet_acceptsAStatedBondAmount() public {
         vm.chainId(5042);
         b.checkBondAmount(2_500_000e18);
+    }
+
+    /// The bond is what a corrupt oracle can lose, so a nominal figure that is not the testnet default
+    /// weakens the deterrent exactly as the default would.
+    function test_oracleBond_mainnet_refusesABondUnderTheTarget() public {
+        vm.chainId(5042);
+        uint256 target = 2_500_000e18;
+        uint256[5] memory low = [uint256(0), 1, 25_000e18, 2_499_999e18, target - 1];
+        for (uint256 i = 0; i < low.length; i++) {
+            vm.expectRevert(
+                abi.encodeWithSelector(DeployOracleBond.BelowMainnetTarget.selector, "ORACLE_BOND_AMOUNT", low[i], target)
+            );
+            b.checkBondAmount(low[i]);
+        }
+        b.checkBondAmount(target);
+        b.checkBondAmount(target + 1);
+        b.checkBondAmount(10_000_000e18);
+    }
+
+    function test_oracleBond_testnet_stillAcceptsAnyBondAmount() public {
+        vm.chainId(5042002);
+        b.checkBondAmount(1);
+        b.checkBondAmount(25_000e18);
     }
 
     function test_oracleBond_testnet_stillAcceptsTheDefaultBondAmount() public {

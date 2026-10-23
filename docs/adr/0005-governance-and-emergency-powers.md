@@ -135,6 +135,17 @@ This ADR records what was decided about each, and what was left as a stated trus
     committee, holds no slasher role, and is not an owner of the admin Safe or of the committee Safe.
     Whether different addresses are different people cannot be read from the chain; the owner lists are
     confirmed by the signers, as for the other Safe checks.
+11. **The mainnet scripts hold the launch amounts as floors.** `script/Deploy.s.sol` refuses a minimum
+    stake under 10,000 SVR and `script/DeployOracleBond.s.sol` a bond under 2,500,000 SVR on chain 5042,
+    the figures published in `docs/token.md`. Refusing only the exact testnet default stopped a forgotten
+    variable and let a nominal figure through that merely differed from it. The contracts' setters stay
+    free: both are parameters the admin Safe tunes after launch, and a floor in the contract would be
+    argued again with every change in the token's price. What is fixed is the launch. Starting lower is
+    an edit to a constant in a script, which is reviewed like any change. After launch,
+    `scripts/check-mainnet.sh` compares the live figures with the targets, and the admin lowering either
+    later is visible to every consumer as `minimumStake` and `bondAmount`, and in `collateralized` on the
+    Reader. The three places the figures are written (the scripts, the check and `docs/token.md`) are
+    compared by `scripts/check-docs.mjs`, which fails the build when they differ.
 
 ## What stays on the admin Safe, and why
 

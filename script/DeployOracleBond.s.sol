@@ -27,7 +27,8 @@ import "../src/SigvaraOracleBond.sol";
  *   SLASHER_ADDRESS       — granted SLASHER_ROLE (governance/committee)
  *   SLASH_BENEFICIARY     — destination for slashed bonds (defaults to deployer)
  *   ORACLE_BOND_AMOUNT    — minimum bond in wei (default 1,000 SVR; the default is refused on
- *                           mainnet, so state the number there)
+ *                           mainnet, so state the number there, and it may not be under the
+ *                           published 2,500,000 SVR)
  *   ORACLE_UNBONDING      — unbonding cooldown seconds (default 7 days; between 1 and 90 days)
  *   GUARDIAN_ADDRESS        the key granted GUARDIAN_ROLE. It can pause new bonds for three days
  *                           at a time, and nothing else. Required on mainnet, where it may not be
@@ -41,6 +42,10 @@ contract DeployOracleBond is Script {
     uint256 constant DEFAULT_UNBONDING = 7 days;
     uint256 constant ARC_MAINNET = 5042;
 
+    /// The bond the published launch asks of an operator (docs/token.md): 2,500,000 SVR. Refused below on
+    /// mainnet, for the reason Deploy.s.sol refuses a minimum stake under its own target.
+    uint256 constant MAINNET_BOND_AMOUNT = 2_500_000e18;
+
     /// The floor SigvaraOracleBond enforces in its initializer and setter. test/DeployScripts.t.sol
     /// pins it to the contract's own constant.
     uint256 constant MIN_UNBONDING = 1 days;
@@ -51,6 +56,7 @@ contract DeployOracleBond is Script {
     error RolesNotSeparated(address deployer, address slasher, address beneficiary);
     error SlasherIsBeneficiary(address account);
     error DefaultAmountOnMainnet(string name, uint256 value);
+    error BelowMainnetTarget(string name, uint256 value, uint256 target);
     error PeriodBelowFloor(string name, uint256 value, uint256 floor);
     error AboveCeiling(string name, uint256 value, uint256 ceiling);
     error GuardianNotSet();
@@ -109,10 +115,15 @@ contract DeployOracleBond is Script {
     ///      valid number and a very different deployment from the one intended: the bond is what
     ///      an operator stands to lose, so a figure far too low weakens the deterrent. The
     ///      admin can raise it with a setter afterwards, but the first weeks would run on the
-    ///      wrong figure, so the default is refused and the number has to be stated.
+    ///      wrong figure, so the default is refused and the number has to be stated. It must also
+    ///      reach the published launch figure: any other nominal amount passes the default check
+    ///      and weakens the deterrent just the same.
     function _checkMainnetBondAmount(uint256 bondAmount) internal view {
         if (block.chainid != ARC_MAINNET) return;
         if (bondAmount == DEFAULT_BOND) revert DefaultAmountOnMainnet("ORACLE_BOND_AMOUNT", bondAmount);
+        if (bondAmount < MAINNET_BOND_AMOUNT) {
+            revert BelowMainnetTarget("ORACLE_BOND_AMOUNT", bondAmount, MAINNET_BOND_AMOUNT);
+        }
     }
 
     /// @dev Mainnet only. The contract refuses an unbonding period under the floor itself, with

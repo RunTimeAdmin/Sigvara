@@ -45,7 +45,8 @@ import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
  *   COMMITTEE_ADDRESS      — initial SLASHING_COMMITTEE_ROLE holder (testnet 3-of-5 multisig)
  *                            defaults to deployer
  *   MINIMUM_STAKE          — minimum stake-token stake in wei (default: 1,000 SVR; the default
- *                            is refused on mainnet, so state the number there)
+ *                            is refused on mainnet, so state the number there, and it may not be
+ *                            under the published 10,000 SVR)
  *   CHALLENGE_PERIOD       — slash challenge window in seconds (default: 7 days)
  *   SCORE_CHALLENGE_WINDOW — reputation-score challenge window in seconds (default: 6 hours)
  *   UNBONDING_PERIOD       — seconds a queued withdrawal is still slashable before claim (default: 21 days)
@@ -76,6 +77,11 @@ contract Deploy is Script {
 
     uint256 constant ARC_MAINNET = 5042;
 
+    /// The minimum stake the published launch asks of an agent (docs/token.md): 10,000 SVR. Refused below
+    /// on mainnet. The contract's setter stays free, since this is a launch figure the admin tunes, but a
+    /// launch on a nominal figure that merely differs from the testnet default would pass the default check.
+    uint256 constant MAINNET_MINIMUM_STAKE = 10_000e18;
+
     /// The floors the contracts enforce in their initializers and setters: staking's challenge
     /// and unbonding periods, and the reputation registry's challenge window. The script checks
     /// them first on mainnet so a mistyped value is refused with its name before anything is sent.
@@ -97,6 +103,7 @@ contract Deploy is Script {
     error PeriodBelowFloor(string name, uint256 value, uint256 floor);
     error AboveCeiling(string name, uint256 value, uint256 ceiling);
     error DefaultAmountOnMainnet(string name, uint256 value);
+    error BelowMainnetTarget(string name, uint256 value, uint256 target);
     error GuardianNotSet();
     error GuardianNotSeparated(address guardian);
 
@@ -272,10 +279,12 @@ contract Deploy is Script {
     /// @dev Mainnet only. A forgotten MINIMUM_STAKE leaves the testnet default, which is a valid
     ///      number and a very different deployment from the one intended. The admin can change
     ///      it with a setter afterwards, but the first weeks would run on the wrong figure, so
-    ///      the default is refused and the number has to be stated.
+    ///      the default is refused and the number has to be stated. It must also reach the published
+    ///      launch figure: any other nominal amount passes the default check and is just as wrong.
     function _checkMainnetMinimumStake(uint256 minStake) internal view {
         if (block.chainid != ARC_MAINNET) return;
         if (minStake == DEFAULT_MINIMUM_STAKE) revert DefaultAmountOnMainnet("MINIMUM_STAKE", minStake);
+        if (minStake < MAINNET_MINIMUM_STAKE) revert BelowMainnetTarget("MINIMUM_STAKE", minStake, MAINNET_MINIMUM_STAKE);
     }
 
     /// @dev Mainnet only. The pause guardian is the only fast response to a live bug, since the
