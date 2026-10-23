@@ -149,6 +149,13 @@ contract SigvaraStaking is
     ///         which means "never dropped" and changes nothing for them.
     mapping(bytes32 => uint256) public lastDroppedAt;
 
+    /// @notice When an agent's queued withdrawal becomes claimable, fixed when it was queued.
+    /// @dev    Zero means no snapshot was taken: nothing is queued, or the withdrawal was queued
+    ///         before this field existed. Appended after `lastDroppedAt`, so existing proxies read
+    ///         it as zero for every agent, and what is already waiting keeps the rule it was queued
+    ///         under (the time it was queued plus the period in force when it is claimed).
+    mapping(bytes32 => uint256) public unbondingClaimableAt;
+
     // -------------------------------------------------------------------------
     // Events
     // -------------------------------------------------------------------------
@@ -347,7 +354,8 @@ contract SigvaraStaking is
     /**
      * @notice Queue a withdrawal. Only permitted if agent is Active and no slash is pending.
      * @dev    Moves `amount` from the active stake into an unbonding queue for
-     *         unbondingPeriod seconds. The queued amount is still subject to slashing
+     *         unbondingPeriod seconds, counted from now: the claim time is fixed here, so a later
+     *         change to unbondingPeriod does not move it. The queued amount is still subject to slashing
      *         during that window (see executeSlash) — queuing a withdrawal does not let
      *         an operator escape accountability for behavior discovered before it clears.
      *         Only one withdrawal may be queued at a time per agent; claim it before
@@ -392,7 +400,15 @@ contract SigvaraStaking is
         s.unbondingAmount = amount;
         s.unbondingAt = block.timestamp;
 
-        emit WithdrawalInitiated(didHash, msg.sender, amount, block.timestamp + unbondingPeriod);
+        // Fixed now. The period is an admin setting, so reading it again at claim time let a
+        // change move the exit of every withdrawal already waiting, in either direction: a
+        // lowered period released them early, past a slash that had not been filed yet, and a
+        // raised one held back exits that had been promised sooner. The challenge deadline of a
+        // slash and the review window of a score are fixed when they start, for the same reason.
+        uint256 claimableAt = block.timestamp + unbondingPeriod;
+        unbondingClaimableAt[didHash] = claimableAt;
+
+        emit WithdrawalInitiated(didHash, msg.sender, amount, claimableAt);
     }
 
     /**
@@ -420,12 +436,13 @@ contract SigvaraStaking is
             revert SlashAlreadyPending(didHash);
         }
 
-        uint256 claimableAt = s.unbondingAt + unbondingPeriod;
+        uint256 claimableAt = _claimableAt(didHash, s);
         if (block.timestamp < claimableAt) revert UnbondingPeriodActive(didHash, claimableAt);
 
         uint256 amount = s.unbondingAmount;
         s.unbondingAmount = 0;
         s.unbondingAt = 0;
+        delete unbondingClaimableAt[didHash];
 
         svrToken.safeTransfer(msg.sender, amount);
 
@@ -699,6 +716,7 @@ contract SigvaraStaking is
         s.amount = 0;
         s.unbondingAmount = 0;
         s.unbondingAt = 0;
+        delete unbondingClaimableAt[didHash];
 
         proposal.state = SlashState.Executed;
 
@@ -750,9 +768,9 @@ contract SigvaraStaking is
     /// @notice Lower bound on unbonding, so queued withdrawals cannot be made
     ///         instantly claimable while a slash is being prepared.
     uint256 public constant MIN_UNBONDING_PERIOD = 1 days;
-    /// @notice Upper bounds on the same two periods. The unbonding period is read when a withdrawal is
-    ///         claimed, so a value far above any sane one locks every queued withdrawal, and a challenge
-    ///         period far above one leaves a slash that cannot be executed for as long.
+    /// @notice Upper bounds on the same two periods. The unbonding period is fixed when a withdrawal is
+    ///         queued, so a value far above any sane one locks every withdrawal queued while it stands,
+    ///         and a challenge period far above one leaves a slash that cannot be executed for as long.
     uint256 public constant MAX_CHALLENGE_PERIOD = 30 days;
     uint256 public constant MAX_UNBONDING_PERIOD = 90 days;
 
@@ -796,7 +814,15 @@ contract SigvaraStaking is
 
     function getPendingWithdrawal(bytes32 didHash) external view returns (uint256 amount, uint256 claimableAt) {
         Stake storage s = stakes[didHash];
-        return (s.unbondingAmount, s.unbondingAmount == 0 ? 0 : s.unbondingAt + unbondingPeriod);
+        return (s.unbondingAmount, s.unbondingAmount == 0 ? 0 : _claimableAt(didHash, s));
+    }
+
+    /// @dev The time fixed when the withdrawal was queued. A withdrawal queued before that was
+    ///      recorded has none, and keeps the rule it was queued under: the time it was queued
+    ///      plus the period in force now.
+    function _claimableAt(bytes32 didHash, Stake storage s) internal view returns (uint256) {
+        uint256 fixedAt = unbondingClaimableAt[didHash];
+        return fixedAt != 0 ? fixedAt : s.unbondingAt + unbondingPeriod;
     }
 
     function getSlashProposal(bytes32 didHash) external view returns (SlashProposal memory) {

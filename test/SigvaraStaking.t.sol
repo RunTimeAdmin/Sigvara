@@ -768,6 +768,16 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
             staking.lastDroppedAt(didHash), "slot 9 is lastDroppedAt");
     }
 
+    /// Appended after `lastDroppedAt`. A mapping again, so the probe is a key that holds a value.
+    function test_storageLayout_unbondingClaimableAtPinnedToSlot10() public {
+        _deposit(); // 2 * MIN_STAKE
+        vm.prank(operator);
+        staking.initiateWithdrawal(didHash, MIN_STAKE);
+        assertGt(staking.unbondingClaimableAt(didHash), 0);
+        assertEq(uint256(vm.load(address(staking), keccak256(abi.encode(didHash, uint256(10))))),
+            staking.unbondingClaimableAt(didHash), "slot 10 is unbondingClaimableAt");
+    }
+
     /**
      * SigvaraStaking inherits the NON-upgradeable ReentrancyGuard. That is safe only
      * because OpenZeppelin >= 5.1 keeps `_status` in a namespaced slot; the older version
