@@ -76,7 +76,10 @@ const verifier = new SigvaraVerifier({ rpcUrl: RPC, addresses, chainId: CHAIN_ID
 // control, normally your own origin. It is signed, so the agent's response proves it was
 // talking to *you* and cannot be relayed onward by anyone who receives it.
 const challenge = generateChallenge(agent.did, 'https://your-service.example');
-const signature = agent.signChallenge(challenge.payload); // done by the agent, returned to the counterparty
+// Done by the agent, returned to the counterparty. signChallengeFor refuses a challenge that is not
+// addressed to the verifier the agent means to prove itself to, which is what stops a verifier from
+// collecting a signature meant for someone else. (signChallenge signs whatever it is handed.)
+const signature = agent.signChallengeFor(challenge.payload, 'https://your-service.example');
 
 // Pass the same audience back when verifying. Without it the check still runs, but an
 // unbound v1 payload would be accepted, which is the relayable case.

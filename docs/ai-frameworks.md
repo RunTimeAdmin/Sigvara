@@ -246,11 +246,12 @@ const myAgent = new SigvaraAgent({
   chainId: 5042002,
 });
 
-// Handle an inbound challenge from a peer
-function handleChallenge(challengePayload: string): { did: string; signature: string } {
+// Handle an inbound challenge from a peer. `peerDid` is who you believe you are talking to, from the
+// connection and not from the payload. signChallengeFor refuses a challenge addressed to anyone else.
+function handleChallenge(challengePayload: string, peerDid: string): { did: string; signature: string } {
   return {
     did: myAgent.did,
-    signature: myAgent.signChallenge(challengePayload),
+    signature: myAgent.signChallengeFor(challengePayload, peerDid),
   };
 }
 
