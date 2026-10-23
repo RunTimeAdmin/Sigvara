@@ -282,6 +282,7 @@ function parseState(parsed) {
       return !why;
     });
     if (!usable.length) continue;
+    for (const e of usable) Object.freeze(e);
     // Keys are lowercase. A mixed-case key holds credits /attest filed before it
     // normalised the hash, where scoring never looked; folding them back in returns
     // those payments to the agent they paid.
@@ -620,7 +621,9 @@ function creditPayment(
   // token, so handing out copies would turn every request into a miss; freezing keeps one
   // array per version and makes the "never mutated in place" rule the cache depends on
   // enforced rather than merely documented.
-  paymentEvents.set(did, Object.freeze([...list, event]));
+  // The event is frozen as well as the array: merkle.js caches a leaf against the event and a root
+  // against the array, and that is only sound for values that cannot change.
+  paymentEvents.set(did, Object.freeze([...list, Object.freeze(event)]));
   return true;
 }
 
@@ -651,7 +654,7 @@ function setPaymentOutcome(didHash, txHash, payer, success) {
   // A new array, not an edit in place: the evidence cache treats the array's identity as
   // the revision token, so a changed outcome has to be a new identity.
   const next = [...list];
-  next[i] = { ...list[i], success };
+  next[i] = Object.freeze({ ...list[i], success });
   paymentEvents.set(did, Object.freeze(next));
   return 'set';
 }

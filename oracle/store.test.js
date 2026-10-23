@@ -981,3 +981,37 @@ test('persist: copes with a filesystem that cannot hard link, and never fails th
   assert.equal(r.okAfterCopy, true);
   assert.equal(r.okWithoutBackup, true);
 });
+
+test('creditPayment: the events it keeps are frozen, which merkle.js relies on to cache leaves and roots', () => {
+  const did = '0x' + 'f1'.repeat(32);
+  assert.equal(creditPayment(did, '0x' + '01'.repeat(32), '5', '0x' + '22'.repeat(20), true, 1_700_000_000_000, 'pkt-1', 77), true);
+  const list = getPaymentEvents(did);
+  assert.ok(Object.isFrozen(list), 'the array');
+  assert.ok(list.every((e) => Object.isFrozen(e)), 'and every event in it, optional fields included');
+  assert.equal(list[0].packetId, 'pkt-1');
+  assert.equal(list[0].blockNumber, 77);
+});
+
+test('setPaymentOutcome: the replacement event is a new frozen object and the old one is left alone', () => {
+  const did = '0x' + 'f2'.repeat(32);
+  const tx = '0x' + '02'.repeat(32);
+  const payer = '0x' + '33'.repeat(20);
+  creditPayment(did, tx, '5', payer, null, 1_700_000_000_000);
+  const before = getPaymentEvents(did);
+  assert.equal(setPaymentOutcome(did, tx, payer, true), 'set');
+  const after = getPaymentEvents(did);
+  assert.notEqual(after, before, 'a new array');
+  assert.notEqual(after[0], before[0], 'and a new event');
+  assert.equal(before[0].success, null, 'the old event still says what it said');
+  assert.ok(Object.isFrozen(after) && after.every((e) => Object.isFrozen(e)));
+});
+
+test('load: the payment events it restores are frozen as well', () => {
+  const out = inChildWithState({ paymentEvents: { 'did-frozen': [goodEvent] } }, `
+    const s = require('./store');
+    s.load();
+    const list = s.getPaymentEvents('did-frozen');
+    console.log(JSON.stringify({ n: list.length, array: Object.isFrozen(list), events: list.every((e) => Object.isFrozen(e)) }));
+  `);
+  assert.deepEqual(JSON.parse(out.trim().split('\n').pop()), { n: 1, array: true, events: true });
+});

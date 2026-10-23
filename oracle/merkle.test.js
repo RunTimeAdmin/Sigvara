@@ -268,3 +268,118 @@ test('leafFor: a stored block number does not enter the leaf', () => {
     '0x93719bf728289b66233e9bb41eeda66eda0fa2cdf553733ef7a659ede8c01d57'
   );
 });
+
+// ---- the fast encoding and the caches ---------------------------------------------------------
+//
+// leafFor builds the 160-byte encoding by hand. leafByAbi is the ABI coder's version, which is the
+// definition of the leaf, so the two must agree on every input, and fail on the same ones.
+
+const { leafByAbi } = require('./merkle');
+
+function seeded(seed) {
+  return () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function hexOf(rnd, bytes) {
+  let s = '';
+  for (let i = 0; i < bytes; i++) s += Math.floor(rnd() * 256).toString(16).padStart(2, '0');
+  return s;
+}
+
+test('leafFor: the hand-built encoding is the ABI coder\'s, on every shape of input', () => {
+  const rnd = seeded(20261022);
+  for (let i = 0; i < 1500; i++) {
+    const address = '0x' + hexOf(rnd, 20);
+    const payer = [ethers.getAddress(address), address, '0x' + hexOf(rnd, 20).toUpperCase()][i % 3];
+    const txHex = hexOf(rnd, 32);
+    const e = {
+      txHash: i % 4 === 0 ? '0x' + txHex.toUpperCase() : '0x' + txHex,
+      payer,
+      amount: String(BigInt('0x' + hexOf(rnd, 1 + Math.floor(rnd() * 31)))),
+      ts: 1_700_000_000_000 + Math.floor(rnd() * 1e9),
+      success: [true, false, null, undefined][i % 4],
+    };
+    assert.equal(leafFor(e), leafByAbi(e), JSON.stringify(e));
+  }
+});
+
+test('leafFor: an amount as a number, and the largest uint256, encode the same either way', () => {
+  const base = ev(1);
+  for (const amount of [0, 5, '0', (2n ** 256n - 1n).toString()]) {
+    assert.equal(leafFor({ ...base, amount }), leafByAbi({ ...base, amount }));
+  }
+});
+
+test('leafFor: fails on exactly the inputs the ABI coder fails on', () => {
+  const base = ev(1);
+  const bad = [
+    { ...base, txHash: '' },
+    { ...base, txHash: '0x1234' },
+    { ...base, payer: '0x123' },
+    { ...base, payer: '0xAbCdEf0123456789aBcDeF0123456789AbCdEf01' },
+    { ...base, amount: '-5' },
+    { ...base, amount: (2n ** 256n).toString() },
+    { ...base, amount: 'abc' },
+    { ...base, ts: undefined },
+  ];
+  for (const e of bad) {
+    assert.throws(() => leafByAbi(e), undefined, `reference should refuse ${JSON.stringify(e)}`);
+    assert.throws(() => leafFor(e), undefined, `leafFor should refuse ${JSON.stringify(e)}`);
+  }
+  assert.throws(() => leafFor({ ...base, txHash: '' }), /no settlement hash/);
+});
+
+// An event whose property reads are counted, so a cache hit can be told from a recomputation.
+function counted(event) {
+  const reads = { n: 0 };
+  const proxy = new Proxy(Object.freeze({ ...event }), {
+    get(target, key, receiver) { reads.n += 1; return Reflect.get(target, key, receiver); },
+  });
+  return { proxy, reads };
+}
+
+test('leafFor: a frozen event is hashed once, however often it is asked for', () => {
+  const { proxy, reads } = counted(ev(2));
+  const first = leafFor(proxy);
+  const readsAfterFirst = reads.n;
+  assert.ok(readsAfterFirst > 0, 'the first call reads the event');
+  assert.equal(leafFor(proxy), first);
+  assert.equal(reads.n, readsAfterFirst, 'the second call never touches the event');
+});
+
+test('leafFor: an event that is not frozen is never cached, so an edit shows up', () => {
+  const e = ev(3);
+  const before = leafFor(e);
+  e.success = !e.success;
+  assert.notEqual(leafFor(e), before);
+  assert.equal(leafFor(e), leafByAbi(e));
+});
+
+test('rootFor: a frozen array of frozen events keeps its root without rereading the events', () => {
+  const made = Array.from({ length: 6 }, (_, i) => counted(ev(i)));
+  const events = Object.freeze(made.map((m) => m.proxy));
+  const first = rootFor(events);
+  const reads = made.map((m) => m.reads.n);
+  assert.equal(rootFor(events), first);
+  assert.deepEqual(made.map((m) => m.reads.n), reads, 'the second call does not read any event');
+  assert.equal(first, buildTree(made.map((m) => ({ ...m.proxy }))).root, 'and it is the same root a rebuild gives');
+});
+
+test('rootFor: an array that is not frozen is recomputed every time', () => {
+  const events = [ev(1), ev(2)];
+  const before = rootFor(events);
+  events.push(ev(3));
+  assert.notEqual(rootFor(events), before);
+});
+
+test('rootFor: frozen events inside an array that is not frozen are not cached against that array', () => {
+  const events = [Object.freeze(ev(1)), Object.freeze(ev(2))];
+  const before = rootFor(events);
+  events[1] = Object.freeze(ev(9));
+  assert.notEqual(rootFor(events), before);
+});
