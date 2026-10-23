@@ -57,7 +57,7 @@ ORACLE_TOKEN_HOODSCAN=...         # named `hoodscan`
 By default any of them authorises any write; the names exist for **revocation and
 attribution**. Deleting one variable revokes exactly that caller and leaves the rest
 working, which a single shared token cannot do — revoking one integration would
-mean rotating all of them. The name is logged on every write, so `flag raised on 0x… by
+mean rotating all of them. The name is logged when a flag is raised or cleared, so `flag raised on 0x… by
 counteraudit` is answerable where "someone with the token" was not.
 
 To give a service less than everything, restrict it. `ORACLE_SCOPES_<NAME>` takes a
@@ -76,7 +76,7 @@ it. A token shorter than 32 characters still works but is named in a startup war
 generate them with `openssl rand -hex 32`.
 
 Credentials are read once at startup and the banner lists the names it loaded, never the
-values. Revoking means editing the environment and restarting, and that line is where you
+values. Revoking means deleting the variable and recreating the container with `docker compose up -d` (a plain `restart` does not re-read `env_file`), and that line is where you
 confirm it took effect.
 
 `ORACLE_ADMIN_TOKEN` keeps working exactly as before. Nothing needs to change to upgrade.

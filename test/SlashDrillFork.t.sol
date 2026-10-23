@@ -26,9 +26,17 @@ import "../src/SigvaraReputation.sol";
  * by COMMITTEE below, recovered from the RoleGranted log at deployment (see
  * docs/slash-drill.md). This fork pranks that address rather than granting the role to a
  * fresh one, so the rehearsal exercises the account that will actually sign. What it
- * still cannot tell you is whether anyone holds that key. Confirm custody before the
- * live drill: a proposal filed with no way to resolve it leaves an agent suspended and
- * its bond frozen until cancelSlash, which needs the same key.
+ * still cannot tell you is whether anyone holds that key. Confirm custody before a
+ * live drill: filing and cancelSlash both need that key, and a proposal you cannot cancel
+ * leaves the agent suspended with its bond frozen until the deadline, after which anyone
+ * can execute it.
+ *
+ * The drill this rehearsed has run: filed on 20 September 2026 and executed on 3 October
+ * (docs/slash-drill-log.md). These cases still run against the live fork, which is the
+ * 21 September code, where the committee rules on a dispute with resolveDispute. On main
+ * resolveDispute is admin-only and an upheld ruling waits for the deadline, so
+ * test_drill_disputeUpheld and test_drill_disputeRejectedRestoresTheAgent will need
+ * updating when the testnet proxies are upgraded. The other cases do not call it.
  */
 contract SlashDrillForkTest is Test {
     // Live Arc testnet, from deployments/5042002.json

@@ -145,7 +145,7 @@ const allowed = new Set([
   '0xccf2fd69c07edfbc3c215cfd31e2f20fc208a16c', '0xbb0c9c2df28af31905defea04c80372c0909f1bf',
   '0x7281cf35ae9bf56eaf5b1d0c2c8e167e50bcec75', '0xfb38fa3c085fd9d06564524855d00e098ae0c450',
   '0x9a9b6a49f3fe1c02fb1b5cb7f2911add0ce2e2bb', '0x7e44af56d14ebfd16d5d7ba4f011b5206d487d55',
-  '0xbcb531b68a87f4bcc3a0394ccd2db95c52bb4e08', '0x2d657d1d166f5c7ed90bebc6808f50d07d7e70cb',
+  '0xbcb531b68a87f4bcc3a0394ccd2db95c52bb4e08',
   '0x000000000000000000000000000000000000dead', '0x3600000000000000000000000000000000000000',
   '0x8004a818bfb912233c491871b3d84c89a494bd9e', '0x8004b663056a597dffe9eccc1965a193b7388713',
   '0x0000000000000000000000000000000000000000',
@@ -177,7 +177,6 @@ const banned = [
   ['pending deployment', 'the contracts are deployed; deployments/5042002.json is committed'],
   ['maxes at 95', 'all six factors are live, so the ceiling is 100'],
   ['totalFeesUSD', 'feeScore is base units over PAYMENT_FEE_UNIT, not a USD total'],
-  ['verifier.getTotalScore', 'not on the published SDK; use getReputation(did).total'],
 ];
 for (const f of docFiles()) {
   if (f.startsWith('archive')) continue;
@@ -199,8 +198,9 @@ for (const f of docFiles()) {
 //    It does NOT catch the case that actually happened, where the source has a
 //    method and the version on npm does not: the guide says `npm install` with no
 //    version, so what users get is whatever was published last. That gap is a
-//    release-process problem, and the banned-claims list above pins the one
-//    instance rather than pretending this section covers it.
+//    release-process problem. The one instance that happened (verifier.getTotalScore)
+//    has been in the published SDK since 1.0.0-alpha.9, so its banned-claims entry is
+//    gone; a method that is only in the repository is called out in the docs that use it.
 // ---------------------------------------------------------------------------
 const verifierSrc = read('packages/sdk/src/verifier.ts');
 const verifierMethods = new Set(
