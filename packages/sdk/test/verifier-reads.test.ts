@@ -22,7 +22,7 @@ const kp = seedToKeyPair(new Uint8Array(32).fill(7));
 const other = seedToKeyPair(new Uint8Array(32).fill(8));
 
 function verifierWith(
-  identity: Partial<{ operator: string; ed25519PubKey: string; status: number; registeredAt: bigint }> = {},
+  identity: Partial<{ operator: string; ed25519PubKey: string; status: bigint; registeredAt: bigint }> = {},
   chainId: number | null = CHAIN,
 ) {
   const v = new SigvaraVerifier({

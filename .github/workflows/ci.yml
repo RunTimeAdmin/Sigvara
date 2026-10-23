@@ -55,6 +55,10 @@ jobs:
           node-version: 20
       - run: npm ci
       - run: npm run build
+
+      # The build compiles src only, and vitest strips types without checking them, so a test that calls
+      # the SDK wrongly passes both. This checks the tests against the same types as the sources.
+      - run: npm run typecheck
       - run: npm test
 
   oracle:
