@@ -72,13 +72,23 @@ This ADR records what was decided about each, and what was left as a stated trus
    | Unbonding period | `SigvaraOracleBond` | 1 day | 90 days |
 
    The ceilings exist because the admin can change each of these at once and nothing else stood in the
-   way of a typo or a compromised key. The unbonding period is read when a withdrawal is claimed, so one
-   huge value locks every queued exit, including those already waiting. A window or a rate near the
+   way of a typo or a compromised key. The bond registry's unbonding period is read when a withdrawal is
+   claimed, so one huge value locks every queued exit, including those already waiting. Staking's is fixed
+   when a withdrawal is queued, so there it locks only what is queued while it stands. A window or a rate near the
    integer limit overflows the sum that dates a proposal or the product that releases a score, which
    stops proposals or score reads. A rate of 100 a day already releases a whole score in a day, so a
    higher rate adds nothing. The ceilings are generous against the intended values (6 hours, 4 a day,
    7 days, 21 days, 7 days); raising one is a contract upgrade, which takes the timelock. The deploy
    scripts check them first on mainnet and name the variable.
+
+   Staking's unbonding period is also the one period fixed per request. `initiateWithdrawal` records when
+   the withdrawal becomes claimable (`unbondingClaimableAt`) and `claimWithdrawal` honours that, so a later
+   change moves only the withdrawals queued after it. Before, the period was read at claim time, and the
+   admin could release every waiting exit early by lowering it to its floor, or hold exits back by raising
+   it, the way the challenge deadline of a slash and the review window of a score had already been fixed
+   when they start. A withdrawal queued before the field existed has no record and keeps the old rule,
+   its queue time plus the period in force when it is claimed. `SigvaraOracleBond` still reads its
+   period when a withdrawal is claimed.
 5. **A guardian can stop new inflows, and nothing else.** `GUARDIAN_ROLE` may call `pauseInflows()` on
    identity, staking, reputation and the bond registry. It closes only the ways something new enters:
    `registerAgent`, `depositStake`, `proposeReputation` and `proposeIfEmpty`, `depositBond`. It never
