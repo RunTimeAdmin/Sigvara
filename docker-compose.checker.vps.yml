@@ -11,7 +11,7 @@
 # and nothing else. There is nothing on the host to `git pull` and nothing to rebuild.
 #
 #   scp this file and .env to /docker/sigvara-checker/ on the checker box
-#   cd /docker/sigvara-checker && docker compose up -d
+#   cd /docker/sigvara-checker && docker compose -f docker-compose.checker.vps.yml up -d
 #
 # No reverse proxy lives in this file. The watcher needs /health and /divergence from a
 # third host, but whatever already terminates 80/443 on the box should serve them: on the

@@ -38,7 +38,7 @@ docker compose -f docker-compose.oracle.yml up -d
 
 The compose file mounts `oracle_state` volume to `/data` for persistence. The HTTP port is published as `127.0.0.1:3030` (localhost only), so nothing reaches the service without a reverse proxy in front of it.
 
-Do not simply proxy the whole service. [`Caddyfile.oracle.example`](Caddyfile.oracle.example) publishes `/health`, `/score/*`, `/evidence/*` and `POST /attest`, and answers 404 for everything else, which is the arrangement running on the Arc testnet deployment at `oracle.sigvara.xyz`. `/flag`, `/flag/resolve`, `/link` and `/epoch` stay off the proxy: they are token-gated, but keeping them unreachable means an attacker needs a shell on the box before the token matters at all.
+Do not simply proxy the whole service. [`Caddyfile.oracle.example`](Caddyfile.oracle.example) publishes `/health`, `/score/*`, `/evidence/*`, `/badge/*` and `POST /attest`, and answers 404 for everything else, which is the arrangement running on the Arc testnet deployment at `oracle.sigvara.xyz`. `/flag`, `/flag/resolve`, `/link` and `/epoch` stay off the proxy: they are token-gated, but keeping them unreachable means an attacker needs a shell on the box before the token matters at all.
 
 `/attest` being published does not make it open. The oracle decides per request. A **positive** attestation carrying a payment it verifies against the chain needs no token to record that *payment*: the payer is read from the transfer log rather than asserted, and the payment counts toward fee volume and tenure. It records no *outcome*. A settlement hash is public, so whoever submits one has not shown that they paid or that they saw the work, and the first credit for a settlement is final; an outcome therefore needs the token, and a positive without one is stored the way a payment found by the scan is, with no outcome. A **negative** one still requires the token. `successScore` is `successful / (total + prior)`, so a negative lowers the score directly, while the payment proves only that money moved and never that the work failed — leaving it open would let anyone downgrade any agent for the price of one minimum transfer, which on a faucet-backed testnet is free.
 
@@ -118,7 +118,7 @@ Health check with operational signals for production alerting.
 Returns 503 when:
 - State file path is not writable (likely volume mount issue)
 - The last state write failed (`statePersisted: false`, with `statePersistError`)
-- No successful epoch in the last 2× epoch interval (stale scoring)
+- No successful epoch for two epoch intervals (stale scoring). After a success the two intervals are counted from it. Before the first success they are counted from process start, so a primary that has never completed an epoch reports 503 once it has been up that long, rather than staying green
 
 `storeWritable` and `statePersisted` are not the same check and both are reported.
 The first writes a few bytes to a test file and deletes them, so it answers whether the
@@ -140,8 +140,8 @@ finished. `expectedChainId` is what `EXPECTED_CHAIN_ID` names, and `null` when i
 They are separate because only the first is a fact: a deployment with the second unset signs
 for whatever chain its RPC serves.
 
-`commit` is the git revision the container cloned at start, or `null` when the
-deployment did not report one. It answers "are these two operators running the same
+`commit` is the git revision the container cloned at start (the VPS and mainnet compose files
+put it in `SIGVARA_COMMIT`), or `null` when the deployment did not report one. It answers "are these two operators running the same
 scoring code", which is the first thing to rule out when a checker disagrees and was
 otherwise unanswerable from outside: the deployments clone `main` at container start,
 so the only alternative was inferring it from restart times. **It is not a trust
@@ -347,7 +347,36 @@ Link a Sigvara agent to its ERC-8004 identity for cross-protocol scoring.
 
 ### `GET /score/:didHash`
 
-Preview the computed score for an agent without writing to chain.
+Preview the computed score for an agent without writing to chain. It uses the same inputs as the
+epoch, including counterparty standing and the chain's clock, so two operators' answers can be
+compared by hand.
+
+```json
+{
+  "didHash": "0x...",
+  "status": 0,
+  "scores": {
+    "feeScore": 20, "successScore": 8, "ageScore": 3,
+    "externalScore": 0, "communityScore": 5, "propagationScore": 0, "total": 36
+  },
+  "attestations": { "successful": 9, "total": 9 },
+  "weighted": {
+    "attestations": { "successful": 6.211, "total": 6.211 },
+    "distinctPayers": 8,
+    "activity": { "firstActivitySec": 1789734970, "lastActivitySec": 1789944267, "recency": 0.78 },
+    "trustWeight": 1, "halfLifeDays": 90, "maxPerPayer": 4
+  },
+  "flags": 0,
+  "flagWeight": 0,
+  "erc8004AgentId": null
+}
+```
+
+`status` is the identity registry's `AgentStatus`: 0 Active, 1 Suspended, 2 Slashed, 3 PendingBond.
+`attestations` is the raw tally. `weighted` is what the score was computed from, and appears only
+when payment verification is on. `flags` is the raw count and `flagWeight` the age-weighted one the
+score charges for. A node that cannot answer, after retries, gets `502` with `code: "rpc_error"`.
+Any other failure is a generic `500`: this route is public, so it does not echo error text.
 
 ### `GET /evidence/:didHash`
 
@@ -436,7 +465,7 @@ The embeddable score badge. Takes an **agent address**, not a didHash, because i
 meant to be pasted into a README by someone holding the former and nothing else:
 
 ```
-https://oracle.sigvara.xyz/badge/0x9a940B2e62a2c4a51E3cC38837944296717C4a96.svg
+https://oracle.sigvara.xyz/badge/0xCc52Cd92963f8A86d04dB29a4810d1e01D193910.svg
 ```
 
 ```markdown
@@ -564,19 +593,37 @@ nothing" rather than "this oracle does not check".
 {
   "mode": "checker",
   "tolerance": 3,
-  "agents": {
-    "0x8414ce0b…": [
-      { "at": 1789852600000, "proposedAt": 1789852503,
-        "pendingTotal": 12, "ownTotal": 31,
-        "factors": { "successScore": { "pending": 7, "own": 26, "delta": 19 } } }
-    ]
-  }
+  "epochHours": 1,
+  "challengeWindowHours": 6,
+  "seesProposals": true,
+  "total": 1,
+  "truncated": false,
+  "divergences": [
+    { "didHash": "0x8414ce0b…", "at": 1789852600000, "proposedAt": 1789852503,
+      "pendingTotal": 12, "ownTotal": 21,
+      "factors": { "successScore": { "pending": 3, "own": 12, "delta": 9 } },
+      "evidence": {
+        "ownEvidenceRoot": "0x…", "proposedEvidenceRoot": "0x…",
+        "ownPaymentEvents": 9, "ownDistinctPayers": 8,
+        "compareWith": "https://oracle.sigvara.xyz/evidence/0x8414ce0b…"
+      } }
+  ]
 }
 ```
+
+The list holds the 100 most recent divergences, newest first, because a committee acts on what
+is still inside its challenge window. `total` and `truncated` say whether more exist.
+`/divergence/:didHash` returns `{ mode, tolerance, didHash, divergences }` for one agent.
 
 `proposedAt` is the disputed proposal's timestamp, so a reader can work out whether it
 is still inside its challenge window. That is the difference between something the
 slashing committee can still reject and a post-mortem.
+
+`evidence` says what each side was scoring, not only that the numbers differ. Different roots
+mean different evidence, which can be diagnosed. Identical roots with different scores would
+mean an arithmetic disagreement, which is a much more serious finding. `compareWith` names the
+primary's `/evidence` for that agent and is built from `PRIMARY_EVIDENCE_URL` (default
+`https://oracle.sigvara.xyz`). A stored record may lack `evidence`; the other fields are always present.
 
 Unauthenticated, like `/score` and `/evidence`. The point of a second operator is that
 its disagreements are visible to someone other than its own operator.
@@ -605,12 +652,19 @@ what it disputes would be protecting exactly what it was run to catch. Finalisin
 disputed score is the same mistake in the other direction: it would launder a number
 this oracle questions into the live value.
 
-**The empty-slot rule is narrowed, not guaranteed.** The checker re-reads
-`getPendingScore` immediately before it writes, so the gap is one RPC round trip rather
-than a whole epoch. It is not zero: `proposeReputation` has no compare-and-swap, so a
-proposal landing inside that gap is still overwritten. Closing it needs a
-`proposeIfEmpty` variant on the contract that reverts if the slot changed. Until then a
-checker can, rarely, overwrite a proposal it never saw.
+**The empty-slot rule is enforced by the contract.** The checker re-reads
+`getPendingScore` immediately before it writes, which narrows the gap to one RPC round
+trip, and then proposes through `proposeIfEmpty`, the contract's compare-and-swap. It
+reverts with `ScoreAlreadyPending` if a proposal landed in that gap, so a checker never
+overwrites a proposal it did not see. Losing that race is a normal outcome, because it means
+the primary came back first, and it is counted as
+`sigvara_oracle_propose_total{result="slot_taken"}` rather than as an error. A pending
+proposal whose proposer has lost its authority (operator removed, signer cleared or
+`ORACLE_ROLE` revoked) does not hold the slot: it can never be finalized, so
+`proposeIfEmpty` replaces it, which is how a checker takes over from a removed primary. That clause is on
+`main`: the September contract code on the Arc testnet reverts for any pending proposal.
+The primary keeps `proposeReputation`, because replacing its own stale proposal with a fresher
+one is the intended behaviour.
 
 The comparison fails **closed**. Every threshold test is `>`, and `>` against `NaN` is
 false, so anything that cannot be compared — an unparseable tolerance, a factor that did
@@ -730,7 +784,8 @@ and then its silence means nothing.
 | Variable | Description |
 |----------|-------------|
 | `RPC_URL` | Ethereum JSON-RPC endpoint for the target chain |
-| `ORACLE_PRIVATE_KEY` | Private key for the oracle wallet (must have ORACLE_ROLE) |
+| `ORACLE_PRIVATE_KEY` | Private key for the oracle wallet (must have ORACLE_ROLE). Required unless `ORACLE_PRIVATE_KEY_FILE` is set |
+| `ORACLE_PRIVATE_KEY_FILE` | Path to a file holding that key, in place of `ORACLE_PRIVATE_KEY`; setting both stops the process. Prefer it in production: an environment variable shows in `docker inspect`, in `/proc/<pid>/environ` and in every child process, while a compose secret mounts the file read-only. A malformed key is refused with a fixed message that never contains the value |
 | `IDENTITY_ADDRESS` | SigvaraIdentity contract address |
 | `REPUTATION_ADDRESS` | SigvaraReputation contract address |
 
@@ -890,6 +945,32 @@ for fee and tenure, and stays required for success.
 | `JOBS_RPC` | `RPC_URL` | Set only when the registry is on a different chain. |
 | `JOBS_FROM_BLOCK` | `0` | Earliest block a scan starts from. |
 | `JOBS_MAX_SPAN` | `50000` | Widest range one request may scan. |
+| `JOBS_LOG_CHUNK` | `LOG_CHUNK_SIZE` | Blocks per `getLogs` call when reading the registry. |
+
+### Checker mode
+
+See [Running a second operator](#running-a-second-operator).
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `ORACLE_MODE` | `primary` | `checker` scores every agent, compares with the pending proposal, records divergences and proposes only into an empty slot. Refused together with `FEE_REGISTRY_ADDRESS`. Any value other than `primary` or `checker`, including `Checker`, stops the process |
+| `DIVERGENCE_TOLERANCE` | `3` | Points of difference in the total that count as benign skew between two honest operators. A non-number, a negative value or one above `10` stops the process at startup, since each would make the checker agree with everything |
+| `PRIMARY_EVIDENCE_URL` | `https://oracle.sigvara.xyz` | The primary's public base URL. Named in each divergence record as `compareWith`, so a reader is told where the other side's evidence lives |
+
+### Divergence watcher
+
+See [The divergence watcher](#the-divergence-watcher). `.env.watcher.example` is the commented reference.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CHECKER_URL` | (required) | The checker to watch. A primary answers 404 on `/divergence`, which the watcher raises as an alert rather than reading as good news |
+| `RPC_URL` | (required) | A chain view independent of both the oracle and the checker |
+| `REPUTATION_ADDRESS` | (required) | `SigvaraReputation`, where the pending score and challenge window are read |
+| `POLL_SECONDS` | `300` | Seconds between polls, at least `30` |
+| `MAX_SILENCE_MINUTES` | `120` | A checker that has not completed an epoch for this long is itself an alert |
+| `FINAL_WARNING_MINUTES` | `60` | The second, louder alert when a challenge window is this close to closing |
+| `WEBHOOK_URL` | (empty) | Where alerts go. Discord, Slack and Telegram URLs are recognised and shaped for; anything else gets a generic JSON body. Without it alerts reach the container log only |
+| `WEBHOOK_CHAT_ID` | (empty) | Telegram only: the numeric `-100...` channel id, not the `@name` |
 
 ## Production Checklist
 
@@ -939,6 +1020,10 @@ The oracle persists the following to `ORACLE_STATE_PATH`:
 
 Writes are atomic (temp file + rename, with an `fsync` before the rename so a crash cannot leave an atomically-renamed empty file). `/health` reports both whether the path is writable and whether the last write actually succeeded, and returns 503 on either. The two are not the same check: the first writes a few bytes to a test file, which passes while a real state file fails for want of space.
 
+The file is written in pieces of about 1 MB (`state-serialize.js`) instead of being built as one string. The bytes are identical to `JSON.stringify` of the same state, so nothing that reads the file changes. What changes is memory: building the whole text and then a second copy for the write meant a save needed many times the size of the file. Measured on Node 20 in an otherwise idle process, the peak of one save went from 449 MB to 189 MB with 100,000 payments (a 38 MB file), from 700 MB to 280 MB with 200,000, and from 1,628 MB to 395 MB with 400,000. `docker-compose.mainnet.yml` limits the container to 768 MB, which the old save would have passed at roughly 225,000 payments. Save time is unchanged at 100,000 payments and 12 to 26 percent lower beyond that. Size the container for the peak of a save, not the size of the file.
+
+Payment events are immutable once stored. `store.js` freezes each one when it is created, replaced or loaded, and `merkle.js` relies on that to cache each leaf and each agent's root by identity: an epoch in which an agent's evidence has not changed reuses its root instead of hashing every payment again. Code that changed a stored event in place would now throw. Replace the event with a new one instead, as `setPaymentOutcome` does.
+
 Before each save the file it replaces is kept as `<state>.bak`. It is a hard link, so it costs no copy, and it is always the save before the current one. On start:
 
 | What is found | What happens |
@@ -969,13 +1054,18 @@ cd oracle
 node --test
 ```
 
-669 tests covering scoring formulas, payment verification and decay, per-payer caps and
+751 tests (as of 22 October 2026) covering scoring formulas, payment verification and decay, per-payer caps and
 the trust weighting, Merkle evidence trees, HTTP helpers, store persistence and recovery,
-chain access with backoff, scan checkpointing, fee caps and transaction replacement,
+the streamed state file, chain access with backoff, scan checkpointing, fee caps and transaction replacement,
 metrics, and cooldown logic. Several of the files run the real `index.js` and `watcher.js`
 as child processes against a stubbed chain (`test-support/`), so startup refusals, exit
 codes and the order in which the epoch charges and proposes are tested as they happen. No
 network access required.
+
+One test is sensitive to machine load: "a rate-limited receipt lookup does not undo a transaction
+that was mined" in `chain-safety.test.js` failed in 15 to 20 percent of runs when eight copies of
+the suite ran at once, and passes alone every time. If it is the only red test, run it again before
+looking for a cause.
 
 The Merkle tree is cross-checked against the contracts: the oracle builds a tree in
 JavaScript and a Foundry test verifies those exact proofs on chain. A disagreement about

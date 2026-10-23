@@ -5,7 +5,7 @@ Stands up a checking operator alongside the primary. Read
 instead of competing; this file is the sequence, not the reasoning.
 
 Nothing here is reversible in under a week: `initiateUnbond` starts a 7-day cooldown.
-Read step 8 before you start step 3.
+Read step 10 before you start step 3.
 
 > **On the placeholders below.** `<THING>` marks a value you substitute. In bash the
 > angle brackets are redirect operators, so pasting a line with them intact fails with
@@ -97,9 +97,9 @@ cast call 0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171 "bondAmount()(uint256)" --r
   other.** Measured 3 Oct 2026 by issuing thirty 10,000-block scans back to back: QuickNode
   refused 19 of 30 with `-32005`, Circle's endpoint refused 20 of 30. Individual calls are
   cheap, about 120ms for a 10,000-block window, so the limit is on request *rate* and not
-  on per-call cost. The scanner has no pacing between chunks, which is what makes a long
+  on per-call cost. The scanner used to have no pacing between chunks, which made a long
   catch-up fragile: `scanRange` wraps each call in `readWithBackoff` with four attempts, so
-  a few hundred consecutive chunks will probably exhaust one of them, throw, and leave the
+  a few hundred consecutive chunks would probably exhaust one of them, throw, and leave the
   checkpoint unadvanced for a full retry next epoch.
 
   Two consequences worth knowing before debugging from error codes. A range of 20,000
@@ -116,8 +116,8 @@ cast call 0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171 "bondAmount()(uint256)" --r
   Writes are **not** retried, deliberately: proposing and finalizing race other parties for
   one slot, and resending something that may already be in the mempool is how you pay twice.
   A throttled write is counted as `sigvara_oracle_propose_throttled_total` or
-  `sigvara_oracle_finalize_throttled_total`, apart from `propose_errors` and
-  `finalize_errors`, which should keep meaning that this operator could not do its job. The
+  `sigvara_oracle_finalize_throttled_total`, apart from `sigvara_oracle_propose_total{result="error"}`
+  and `sigvara_oracle_finalize_total{result="error"}`, which should keep meaning that this operator could not do its job. The
   next epoch retries on its own, so the cost is up to an hour of delay, against a six-hour
   challenge window.
 
@@ -240,7 +240,8 @@ This key is a distinct operator. It must not be the primary's key: two processes
 with one key share a nonce and would serialise against each other, and an operator set
 where both members are the same address is a set of one wearing two hats.
 
-Record the address. The private key goes straight into `.env.checker` (step 6) and
+Record the address. The private key goes straight into the checker's environment file (step 6: `.env` for
+`docker-compose.checker.vps.yml`, `oracle/.env.checker` for `docker-compose.checker.yml`) and
 nowhere else.
 
 ## 2. Fund it for gas
@@ -280,8 +281,8 @@ cast call 0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171 \
 
 ## 4. Admit it to the operator set
 
-From the `DEFAULT_ADMIN_ROLE` wallet. `admit` reverts with `InsufficientBond` if step 3
-did not land, so it is safe to attempt.
+From the `DEFAULT_ADMIN_ROLE` wallet. `admit` reverts (`WrongStatus` with no deposit, `InsufficientBond` with a short one) if
+step 3 did not land, so it is safe to attempt.
 
 ```bash
 cast send 0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171 \
@@ -316,12 +317,13 @@ A checker that never proposes would not strictly need this, but then its failove
 does nothing, and the failure is invisible until the primary is already down.
 
 **If the bond is owned by another key.** The bond can belong to a cold key or a Safe, with the
-key on this host named as its signer. Then the owner makes the `depositBond` call in section 4, and
+key on this host named as its signer. Then the owner makes the `depositBond` call in step 3, and
 once the operator is admitted it calls `setSigner(<CHECKER_ADDRESS>)` on `SigvaraOracleBond`. The
 grant above is unchanged and goes to the signer. The host's wallet needs gas and no SVR, and
 `isActiveOperator(<CHECKER_ADDRESS>)` reads true, so the checker logs `bonded operator check
 passed` at startup. `clearSigner()` from the owner revokes it in one transaction. See
-`docs/arc.md`, section 4b.
+`docs/arc.md`, section 4b. `setSigner` is on `main` and not on the Arc testnet proxies, which still run
+the September code, so on the testnet the bonded address and the signing address have to be the same.
 
 ## 6. Configure
 
@@ -339,7 +341,7 @@ ORACLE_MODE=checker
 DIVERGENCE_TOLERANCE=3          # validated at startup; max 10
 EPOCH_HOURS=1                   # MUST be below half the challenge window (6h)
 FEE_REGISTRY_ADDRESS=           # MUST be empty
-RPC_URL=https://rpc.blockdaemon.testnet.arc.io   # NOT the primary's provider
+RPC_URL=https://rpc.quicknode.testnet.arc.io     # NOT the primary's provider
 ORACLE_PRIVATE_KEY=<CHECKER_KEY>
 ORACLE_STATE_PATH=/data/oracle-state.json        # its own volume, not the primary's
 HOST=0.0.0.0                                     # required for the port mapping to work
@@ -382,8 +384,8 @@ primary is deployed. Nothing on the host to check out, nothing to `git pull`, no
 rebuild. Copy it and your `.env` to `/docker/sigvara-checker/` on the checker box:
 
 ```bash
-cd /docker/sigvara-checker && docker compose up -d
-docker compose logs --tail=30 checker
+cd /docker/sigvara-checker && docker compose -f docker-compose.checker.vps.yml up -d
+docker compose -f docker-compose.checker.vps.yml logs --tail=30 checker
 ```
 
 `docker-compose.checker.yml` builds from `./oracle` and needs a repository checkout on the
@@ -404,18 +406,18 @@ Expect in the log:
 [oracle] bonded operator check passed (registry 0x3c9c12F2…)
 ```
 
-If it says `WARNING: this wallet is not an admitted operator`, step 4 did not land.
+If it says `WARNING: this wallet is neither an admitted operator`, step 4 did not land.
 
 ## 7a. Seed the state BEFORE the first epoch
 
 Do this immediately after step 7, before the checker's first epoch completes. The
 ordering is the whole point of this step.
 
-A fresh checker has no `paymentEvents`, and that is the one part of state a rescan cannot
-rebuild: attestations arrive over HTTP, not from the chain. So its first epoch computes
-`successScore` 0 for every agent, and `ageScore` from the calendar fallback rather than
-from an activity window it does not have. It records a divergence against the primary for
-both, and it is wrong on both.
+A fresh checker has no `paymentEvents`, and outcomes are the part of state a rescan cannot
+rebuild: they arrive over HTTP, not from the chain. A payment scan refills the payments
+but never an outcome. So its first epoch computes `successScore` 0 for every agent, and
+`ageScore` 0 until it holds an activity window. It records a divergence against the
+primary for both, and it is wrong on both.
 
 That record does not go away when the next epoch agrees. `/divergence` is an append-only
 log bounded per agent and pruned by age, not a current-state flag, because a committee
@@ -441,9 +443,15 @@ decay and tenure come out identical rather than approximated:
 TOKEN=$(grep '^ORACLE_ADMIN_TOKEN=' .env | cut -d= -f2)
 curl -s -X POST http://127.0.0.1:3031/attest \
   -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
-  -d '{"didHash":"<DID>","success":true,"payment":{"txHash":"<SETTLEMENT_TX>"}}'
+  -d '{"didHash":"<DID>","payment":{"txHash":"<SETTLEMENT_TX>"}}'
 unset TOKEN
 ```
+
+Add `"success":true` or `"success":false` to the body only where the primary's
+`/evidence/<DID>` shows that outcome for the hash, and leave it out where the primary shows
+none (a payment its scan found carries no outcome). The outcome is part of each Merkle
+leaf, so a checker that records a different one computes a different root and a different
+`successScore`.
 
 A `{"error":"transaction not found or not yet mined"}` here means the RPC cannot see
 historical transactions, not that the transaction is missing. Re-read the provider table
@@ -461,7 +469,7 @@ curl -s http://127.0.0.1:3031/divergence
 auditing anything, whatever the empty divergence list suggests.
 
 Then leave it for one challenge window (6 hours) and check that
-`finalizeSuccesses` is climbing. A checker that agrees with everything and finalizes
+`sigvara_oracle_finalize_total{result="success"}` on `/metrics` is climbing. A checker that agrees with everything and finalizes
 nothing is not reaching the finalize branch at all.
 
 ## 9. When a divergence fires
@@ -469,7 +477,7 @@ nothing is not reaching the finalize branch at all.
 A divergence is not proof the primary is wrong. It is a disagreement between two
 independent recomputations, and the checker can be the broken one. Every entry in
 [`docs/divergence-log.md`](../docs/divergence-log.md) so far was the checker's own cold
-start or a known reweight skew, not misconduct.
+start, a known reweight skew or an evidence delivery gap, not misconduct.
 
 Whatever you conclude, write it down there, including the cases where the checker was
 the broken one. A checker that reports disagreements and never publishes outcomes is
@@ -518,9 +526,10 @@ curl -s https://checker.sigvara.xyz/divergence/$DID
 ```
 
 A delta on `feeScore` or `successScore` means the two oracles saw different payments.
-A delta on `ageScore` alone, with the checker *higher*, usually means the checker has no
-payment events at all and fell back to the calendar curve: that is a cold start, not a
-finding. See the 20:31 entry of 2026-09-20 in the log.
+A delta on `ageScore` alone, with the checker at 0, usually means the checker has no
+payment events yet: that is a cold start, not a finding. The 20:31 entry of 2026-09-20 in
+the log shows the earlier behaviour, where the checker fell back to the calendar curve
+and read higher.
 
 **2. Is the disputed proposal still live?** Past the window there is nothing to reject and
 the score is already final.
@@ -537,7 +546,10 @@ word, and `exists` is word 8. Counting the scores and stopping at six lands on
 `lastUpdated`, which on a live proposal often holds the same value, so that mistake does
 not announce itself.
 
-The proposal is live while `proposedAt + challengeWindow > block.timestamp`. If the
+The proposal is live while `block.timestamp < finalizableAt`, which is word 11 of the
+returndata and is fixed when the proposal is made. Where that word is zero or absent (a
+proposal from before it existed, and the Arc testnet proxies, which still run the September
+code), the rule is `proposedAt + challengeWindow > block.timestamp`. If the
 pending slot is empty, or holds a *different* `proposedAt` than the record, the disputed
 proposal has already turned over: the record is `superseded`, still visible, no longer
 actionable.
@@ -630,7 +642,7 @@ the checker cannot reject anything itself; it can only make the disagreement leg
 ## 10. Backing out
 
 ```bash
-docker compose -f docker-compose.checker.yml down
+docker compose -f docker-compose.checker.vps.yml down
 cast send 0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171 "initiateUnbond()" \
   --rpc-url <CHECKER_RPC> --private-key <CHECKER_KEY>
 # 7 days later:
