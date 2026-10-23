@@ -21,7 +21,7 @@ const { computeScore } = require('./scoring');
 const {
   decideAction, decideCheckerAction, scoreDivergence,
   epochIntervalError, divergenceToleranceError, DEFAULT_DIVERGENCE_TOLERANCE,
-  mapChunked, clockSkewError,
+  mapChunked, clockSkewError, scoringIsStale,
 } = require('./epoch-policy');
 const {
   json, readBody, readCredentials, identifyCaller, mayAttestUnauthenticated, parseScorePath, parseDidHash,
@@ -1311,7 +1311,9 @@ async function handleRequest(req, res) {
 
     const healthy = storeWritable
       && persisted.ok
-      && (!lastEpoch || timeSinceLastEpoch < cfg.epochMs * 2);
+      && !scoringIsStale({
+        lastEpochMs: lastEpoch, nowMs: Date.now(), uptimeMs: metrics.uptimeSeconds() * 1000, epochMs: cfg.epochMs,
+      });
 
     return json(res, healthy ? 200 : 503, {
       ok: healthy,
