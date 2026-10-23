@@ -58,14 +58,16 @@ part worth understanding before you set a threshold.
    than on score.
 
 2. **Get paid, from more than one payer.** Score comes from settled payments to the
-   agent's own address, verified on chain. One counterparty is capped at 5 points by
+   agent's own address, verified on chain. One counterparty is capped at 4 points by
    `PAYMENT_MAX_PER_PAYER`, so the fee factor measures *how many independent parties paid
    you*, not how much money moved. `scripts/fat-path.mjs` does this end to end if you want
    to see it work before wiring your own.
 
-3. **Attest the settlements.** `POST /attest` with the settlement hash. No token needed:
+3. **Attest the settlements (optional).** The oracle also finds payments by scanning, so
+   this only makes one count sooner. `POST /attest` with the settlement hash and `"success": true` needs no token:
    the oracle reads the payer off the transfer log and re-verifies the transaction, so the
-   payment is the credential. Self-payments are refused.
+   payment is the credential for the payment. Without a token it carries no outcome.
+   Self-payments are refused.
 
 4. **Wait for an epoch.** The oracle proposes hourly, and a proposal sits in a challenge
    window before it is final. `meetsThreshold` reads the finalized value, so a score you
@@ -79,13 +81,13 @@ Read this before picking a number, because the scale is not what it looks like.
 |---|---|
 | 0 | nothing; use `isActive` instead if you only want a bonded agent |
 | ~20 | bonded, and paid by at least four independent counterparties |
-| ~35–40 | the above, plus attested outcomes and a few days of trading |
+| ~35–40 | the above, plus outcomes reported with a token (CounterAudit's) and a few days of trading |
 | 60+ | **not currently reachable** — see below |
 
-**Thirty of the hundred points are switched off on this deployment.** `externalScore` (25)
-needs an ERC-8004 registry configured on the oracle and there is none, so it is
-structurally zero. `propagationScore` (5) reads counterparties' external standing, so it
-is zero for the same reason. Tenure is 30 points and takes years by design: a month of
+**Thirty of the hundred points are out of reach today.** `externalScore` (25) needs an
+agent linked to an ERC-8004 identity it owns, and none is linked, so it is zero for
+everyone. `propagationScore` (5) reads counterparties' external standing, so it is zero
+for the same reason. Tenure is 30 points and takes years by design: a month of
 sustained trading is 14.
 
 So an honest, active, well-paid agent plateaus around 40 right now. A threshold of 60

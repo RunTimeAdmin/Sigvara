@@ -34,11 +34,11 @@ one runs. Each line of the results is one mutant:
 
 ## Writing a campaign
 
-The newer campaigns share one helper, `runl id file anchor target from to what`: find the first line of
+Eight campaigns (`mutate-p3-slash`, `-p3-window` and the six `mutate-p4-*`) share one helper, `runl id file anchor target from to what`: find the first line of
 `file` containing `anchor`, then the first line at or after it containing `target`, and apply one `sed`
 substitution `s/from/to/` on that line only. Finding the line by content and not by number keeps a campaign
 valid when unrelated code moves. A `[` in `from` is a bracket expression in `sed`; escape it (`\[i\]`). The
-older campaigns use an earlier form of the same idea (`run`), with the same reporting.
+other eleven use an earlier helper, `run`, which applies a `sed` expression to a whole file. Five of them (`mutate-guard`, `-guard-extra`, `-guard-extra2`, `-epochfees` and `-p3-roles`) report with the labels in the table above. The six oldest (`mutate-pf`, `-c01`, `-floors`, `-reader`, `-slash` and `-wiring`) report differently: a result line with no `[FAIL` is a survivor, and a break that could not be applied reads `NO CHANGE APPLIED` or `PATTERN NOT FOUND`.
 
 ## Campaigns
 
