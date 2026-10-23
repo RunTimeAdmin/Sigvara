@@ -647,9 +647,11 @@ Ordered by what unblocks what, not by difficulty.
    on state changes only, never on a healthy poll, so nothing downstream can distinguish a
    quiet watcher from a dead one. An external dead-man's switch does not rescue that.
 
-   **Its alerts currently go to a container log.** `WEBHOOK_URL` is unset, so the
-   component that exists for 3am cannot reach anyone at 3am. That is the next thing to
-   fix, and it is worth more than any remaining item on this list.
+   **Its alerts go to a webhook.** As of 23 October 2026 `WEBHOOK_URL` is set on the
+   running watcher and its log shows no failed delivery in the previous 72 hours, so an
+   alert leaves the container instead of waiting in a log. A watcher started without it
+   logs and nothing more, which is why an unset `WEBHOOK_URL` counts as an incomplete
+   deployment.
 4. ~~**`proposeIfEmpty`.**~~ Deployed 20 September 2026. Closes the checker's overwrite
    race by making the contract check and write in the same breath, which is the only place
    that gap can be closed: there is no atomicity between a view call and the transaction
