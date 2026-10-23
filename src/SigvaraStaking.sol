@@ -35,7 +35,8 @@ interface IReputationZero {
  * Slashing model (testnet: multisig committee):
  *   - A SLASHING_COMMITTEE member initiates a slash, supplying evidence and a victim address.
  *   - A CHALLENGE_PERIOD_SECONDS timelock begins. The agent operator may dispute.
- *   - If undisputed after the challenge period, anyone can call executeSlash.
+ *   - If undisputed after the challenge period, anyone can call executeSlash, as long as the
+ *     reporter still holds the committee role.
  *   - On execution: 50% burned, 25% to victim, 25% to the initiating reporter.
  *   - The Identity registry marks the agent Slashed; Reputation zeroes out.
  *
@@ -192,6 +193,9 @@ contract SigvaraStaking is
     error DisputeResolutionActive(bytes32 didHash, uint256 expiresAt);
     /// A Pending proposal is still inside the fortnight in which anyone may execute it.
     error ExecutionPeriodActive(bytes32 didHash, uint256 expiresAt);
+    /// The reporter of this slash no longer holds SLASHING_COMMITTEE_ROLE, so it will not be
+    /// executed. A current member can cancel it, and anyone can expire it once it lapses.
+    error ReporterNotAuthorized(bytes32 didHash, address reporter);
     error NothingClaimable(address account);
 
     // -------------------------------------------------------------------------
@@ -572,10 +576,11 @@ contract SigvaraStaking is
      *         after that point used to stay Pending for good: the agent stayed suspended and a
      *         queued withdrawal could not be claimed, with only the admin's veto to end it.
      *         Permissionless, so a frozen bond never depends on the committee's liveness or its
-     *         goodwill. Until it lapses it can still be executed by anyone, as an undisputed slash
-     *         always could, and a slash worth executing is worth a fortnight, since the victim and
-     *         the reporter are paid from it. A lapsed proposal is dropped like any other: the agent
-     *         is reinstated and the committee waits one challenge period before it files again.
+     *         goodwill. Until it lapses it can still be executed by anyone while its reporter is
+     *         on the committee, as an undisputed slash always could, and a slash worth executing
+     *         is worth a fortnight, since the victim and the reporter are paid from it. A lapsed
+     *         proposal is dropped like any other: the agent is reinstated and the committee waits
+     *         one challenge period before it files again.
      */
     function expireSlash(bytes32 didHash) external nonReentrant {
         SlashProposal storage proposal = slashProposals[didHash];
@@ -648,6 +653,9 @@ contract SigvaraStaking is
      * @dev    Anyone may call this once the window has closed — execution is permissionless
      *         to avoid committee liveness dependence. The distribution is fixed at init:
      *         50% burned (sent to 0xdead), 25% to victim, 25% to reporter.
+     *
+     *         Permissionless is not unconditional: the REPORTER must still hold
+     *         SLASHING_COMMITTEE_ROLE. See the check below.
      */
     function executeSlash(bytes32 didHash) external nonReentrant {
         SlashProposal storage proposal = slashProposals[didHash];
@@ -656,6 +664,23 @@ contract SigvaraStaking is
         uint256 deadline = proposal.challengeDeadline;
         if (block.timestamp <= deadline) {
             revert ChallengePeriodActive(didHash, deadline);
+        }
+
+        // Execution stays permissionless, so nothing is asked of whoever calls it. What is asked
+        // is whether the REPORTER could still have filed this slash. A slash is that member's
+        // accusation, and one whose reporter has been taken off the committee is not an
+        // accusation this contract will carry out unreviewed. That is what lets the admin
+        // defuse a compromised committee key with one revocation, instead of vetoing each
+        // proposal it filed inside the challenge window (one transaction per agent, and
+        // revoking alone used to leave all of them executable). SigvaraReputation holds a
+        // pending score to the same rule.
+        //
+        // The proposal is not stranded. Any current member can cancelSlash it, anyone can
+        // expireSlash it once it lapses, and the committee can file again after the cooldown.
+        // The admin's ruling on a dispute (resolveDispute) does not come through here: it is
+        // a decision taken now by a key that is not the accuser.
+        if (!hasRole(SLASHING_COMMITTEE_ROLE, proposal.reporter)) {
+            revert ReporterNotAuthorized(didHash, proposal.reporter);
         }
 
         _settleSlash(didHash, proposal);
