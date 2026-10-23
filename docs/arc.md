@@ -241,8 +241,8 @@ closed elsewhere.
 ## 4. SDK live integration tests
 
 Addresses below are the live Arc testnet deployment, from
-`deployments/5042002.json`. The operator key needs USDC for gas and SVR for the
-stake, since the test registers a real agent.
+`deployments/5042002.json`. The operator key needs USDC for gas and nothing else,
+since registering an agent moves no tokens and the test does not bond it.
 
 PowerShell:
 
