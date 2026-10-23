@@ -12,6 +12,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { stateChunks } = require('./state-serialize');
 // The decay curve lives in payments.js. Imported rather than reimplemented so flags and
 // payments age on exactly the same function; payments.js requires only ethers, so this
 // direction of dependency is not circular.
@@ -469,30 +470,42 @@ function keepBackup() {
   }
 }
 
+// Write all of `text` to `fd`. fs.writeSync may write less than it was given, which writeFileSync
+// used to take care of.
+function writeAll(fd, text) {
+  const bytes = Buffer.from(text, 'utf8');
+  for (let done = 0; done < bytes.length;) done += fs.writeSync(fd, bytes, done, bytes.length - done);
+}
+
 function persist() {
   try {
     fs.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
     const tmp = `${STATE_PATH}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify({
-      schemaVersion: STATE_SCHEMA_VERSION,
-      chainId: stateChainId,
-      attestations: Object.fromEntries(attestations),
-      flags: Object.fromEntries(flags),
-      links: Object.fromEntries(links),
-      attestCooldowns: Object.fromEntries(attestCooldowns),
-      paymentEvents: Object.fromEntries(paymentEvents),
-      usedPaymentTxs: [...usedPaymentTxs],
-      divergences: Object.fromEntries(divergences),
-      scanState,
-      paymentScanState,
-      savedAt: new Date().toISOString(),
-    }));
-    // Flush before the rename. The rename is atomic, so a crash can never leave a
-    // half-written state file, but without this it can leave an atomically-renamed
-    // *empty* one: the directory entry is durable while the contents are still in the
-    // page cache. Cheap insurance for the file that holds every attested outcome.
-    const fd = fs.openSync(tmp, 'r+');
-    try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    const fd = fs.openSync(tmp, 'w');
+    try {
+      // Written in pieces rather than as one string: see state-serialize.js for why.
+      for (const piece of stateChunks({
+        schemaVersion: STATE_SCHEMA_VERSION,
+        chainId: stateChainId,
+        attestations: Object.fromEntries(attestations),
+        flags: Object.fromEntries(flags),
+        links: Object.fromEntries(links),
+        attestCooldowns: Object.fromEntries(attestCooldowns),
+        paymentEvents: Object.fromEntries(paymentEvents),
+        usedPaymentTxs: [...usedPaymentTxs],
+        divergences: Object.fromEntries(divergences),
+        scanState,
+        paymentScanState,
+        savedAt: new Date().toISOString(),
+      })) writeAll(fd, piece);
+      // Flush before the rename. The rename is atomic, so a crash can never leave a
+      // half-written state file, but without this it can leave an atomically-renamed
+      // *empty* one: the directory entry is durable while the contents are still in the
+      // page cache. Cheap insurance for the file that holds every attested outcome.
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
     keepBackup();
     fs.renameSync(tmp, STATE_PATH);
     lastPersist = { ok: true, at: Date.now(), error: null };

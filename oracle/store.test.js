@@ -587,14 +587,21 @@ test('load: drops an unusable payment event and still scores every other agent',
 test('persist: a failed write is recorded rather than swallowed', () => {
   const out = inChildWithState(null, `
     const fs = require('fs');
-    const real = fs.writeFileSync;
+    const realOpen = fs.openSync;
+    const realWrite = fs.writeSync;
     const s = require('./store');
-    // Fail only the state write, so mkdir and the rest behave normally.
-    fs.writeFileSync = (p, d) => {
-      if (String(p).includes('oracle-state.json')) {
+    // Fail only writes to the state file, so mkdir and the rest behave normally.
+    const stateFds = new Set();
+    fs.openSync = (p, ...rest) => {
+      const fd = realOpen(p, ...rest);
+      if (String(p).includes('oracle-state.json')) stateFds.add(fd);
+      return fd;
+    };
+    fs.writeSync = (fd, ...rest) => {
+      if (stateFds.has(fd)) {
         const e = new Error('no space left on device'); e.code = 'ENOSPC'; throw e;
       }
-      return real(p, d);
+      return realWrite(fd, ...rest);
     };
     s.creditPayment('did-x', '0x' + 'ee'.repeat(32), '5', '0x' + '22'.repeat(20), true, 1);
     s.persist();
