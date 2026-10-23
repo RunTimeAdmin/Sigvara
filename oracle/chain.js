@@ -245,19 +245,28 @@ async function queryWithBackoff(filter, start, end, attempts = 4) {
  * for one slot, and retrying a submission that may already be in the mempool is how you
  * pay twice for one epoch.
  */
+/**
+ * Whether a read failed because of the node and not because of what was asked of it: a throttle, a
+ * timeout, a dropped connection, a call that came back empty with no revert data. readWithBackoff
+ * retries these. A caller that is about to read a failed answer as "none" has to refuse to for these,
+ * because the failure says nothing about the thing it was asking about.
+ */
+function isTransientReadError(err) {
+  const msg = String((err && err.message) || err);
+  const code = err && err.code;
+  return /rate limit|429|too many requests|timeout|etimedout|econnreset|socket hang up/i.test(msg) ||
+    code === 'SERVER_ERROR' || code === 'NETWORK_ERROR' || code === 'TIMEOUT' ||
+    (code === 'CALL_EXCEPTION' && (err.data === null || err.data === undefined));
+}
+
 async function readWithBackoff(label, fn, attempts = 4) {
   let delay = 500;
   for (let i = 0; ; i++) {
     try {
       return await fn();
     } catch (err) {
-      const msg = String((err && err.message) || err);
       const code = err && err.code;
-      const transient =
-        /rate limit|429|too many requests|timeout|etimedout|econnreset|socket hang up/i.test(msg) ||
-        code === 'SERVER_ERROR' || code === 'NETWORK_ERROR' || code === 'TIMEOUT' ||
-        (code === 'CALL_EXCEPTION' && (err.data === null || err.data === undefined));
-      if (!transient || i >= attempts - 1) throw err;
+      if (!isTransientReadError(err) || i >= attempts - 1) throw err;
       console.log(`[oracle] ${label} failed (${code || 'error'}), retrying in ${delay}ms`);
       await sleep(delay);
       delay *= 2;
@@ -450,38 +459,48 @@ async function getReputationData(didHash) {
 
 async function getAgentScore(address) {
   try {
-    // Was three serial round trips per counterparty. The first is now arithmetic when
-    // the derivation has been verified, so it is two, and those two are genuinely
-    // dependent. At ~124 ms a call on Arc that is a third off every payer lookup, and
-    // payer lookups are the bulk of what an epoch spends its time on.
-    const didHash = localDidHash
-      ? didHashOf(address, localDidHash.chainId)
-      : await identityContract.computeDidHash(address);
-
-    const id = await identityContract.getIdentity(didHash);
-    if (Number(id.registeredAt) === 0) return 0;
-    if (Number(id.status) === STATUS_SLASHED) return 0;
-
-    // The HARD part of a counterparty's standing, not its total.
-    //
-    // Weighting by the total let a farmed score launder into someone else's. A sybil
-    // that wash-traded its way to 100 raised its target's per-payer cap (trustMultiplier
-    // doubles it) and counted as a fully trusted voucher (propagationScore). Measured:
-    // scored sybils maxed the 30-point fee factor with four payers instead of six.
-    //
-    // externalScore is the one factor a single party cannot manufacture, because it is
-    // ERC-8004 standing in a registry this protocol does not control. Capping it by the
-    // matured total keeps the existing lag: an identity cannot link an 8004 history and
-    // propagate it the same epoch, and a handover restarts maturity, so bought standing
-    // is not instantly spendable through counterparties either.
-    const [rep, matured] = await Promise.all([
-      reputationContract.getReputation(didHash),
-      reputationContract.getTotalScore(didHash),
-    ]);
-    return Math.min(Number(rep.externalScore), Number(matured));
-  } catch {
+    return await readWithBackoff('payer standing', () => readStanding(address));
+  } catch (err) {
+    // A failure of the node says nothing about the counterparty. Read as "no standing" it lowers the
+    // score this oracle proposes, and the checker, whose own reads succeeded, then records a divergence
+    // against an honest primary. It was retried above; if it still fails, the caller skips the agent
+    // for this epoch and tries again at the next, instead of scoring on a number it knows is wrong.
+    if (isTransientReadError(err)) throw err;
+    // Anything else is about the counterparty or the question, and has always meant no standing.
     return 0;
   }
+}
+
+async function readStanding(address) {
+  // Was three serial round trips per counterparty. The first is now arithmetic when
+  // the derivation has been verified, so it is two, and those two are genuinely
+  // dependent. At ~124 ms a call on Arc that is a third off every payer lookup, and
+  // payer lookups are the bulk of what an epoch spends its time on.
+  const didHash = localDidHash
+    ? didHashOf(address, localDidHash.chainId)
+    : await identityContract.computeDidHash(address);
+
+  const id = await identityContract.getIdentity(didHash);
+  if (Number(id.registeredAt) === 0) return 0;
+  if (Number(id.status) === STATUS_SLASHED) return 0;
+
+  // The HARD part of a counterparty's standing, not its total.
+  //
+  // Weighting by the total let a farmed score launder into someone else's. A sybil
+  // that wash-traded its way to 100 raised its target's per-payer cap (trustMultiplier
+  // doubles it) and counted as a fully trusted voucher (propagationScore). Measured:
+  // scored sybils maxed the 30-point fee factor with four payers instead of six.
+  //
+  // externalScore is the one factor a single party cannot manufacture, because it is
+  // ERC-8004 standing in a registry this protocol does not control. Capping it by the
+  // matured total keeps the existing lag: an identity cannot link an 8004 history and
+  // propagate it the same epoch, and a handover restarts maturity, so bought standing
+  // is not instantly spendable through counterparties either.
+  const [rep, matured] = await Promise.all([
+    reputationContract.getReputation(didHash),
+    reputationContract.getTotalScore(didHash),
+  ]);
+  return Math.min(Number(rep.externalScore), Number(matured));
 }
 
 /// Read-only provider, for modules that verify transactions the oracle did not send.
@@ -893,6 +912,7 @@ module.exports = {
   getProvider,
   isBonded,
   getAgentScore,
+  isTransientReadError,
   getScanState,
   restoreScanState,
   operatorStanding,

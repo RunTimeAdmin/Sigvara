@@ -45,6 +45,26 @@ const attest = (didHash, txHash, { success, token } = {}) => oracle.call(
 const evidence = async (didHash) => (await oracle.call('GET', `/evidence/${didHash}`)).body.evidence;
 const score = async (didHash) => (await oracle.call('GET', `/score/${didHash}`)).body;
 
+// ---- a payer the node cannot answer for ------------------------------------------------
+
+test('/score does not serve a number built on a payer it could not read', async () => {
+  const agent = world.addAgent();
+  const payer = wallet();
+  const tx = world.addTx([{ from: payer, to: agent.agentAddress, value: 5n * USDC }]);
+  assert.equal((await attest(agent.didHash, tx, { success: true })).status, 200);
+
+  // The node throttles the read of that payer's standing. Scored as "no standing" this would have been a
+  // lower number than the true one, and a checker that read it successfully would flag it as a divergence.
+  world.set('standingFails', { [payer.toLowerCase()]: true });
+  const failed = await oracle.call('GET', `/score/${agent.didHash}`);
+  assert.equal(failed.status, 502, failed.text);
+  assert.equal(failed.body.code, 'rpc_error');
+
+  world.set('standingFails', {});
+  const ok = await oracle.call('GET', `/score/${agent.didHash}`);
+  assert.equal(ok.status, 200, ok.text);
+});
+
 // ---- the route works -------------------------------------------------------------------
 
 test('a payment-backed attestation from a stranger is accepted and credits the payment', async () => {
