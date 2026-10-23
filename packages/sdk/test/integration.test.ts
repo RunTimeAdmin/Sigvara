@@ -44,6 +44,7 @@ let verifier: SigvaraVerifier;
 let agentAddress: string;
 let agentDid: string;
 let agentPrivateKey: Uint8Array;
+let agentPubKey: string;
 
 beforeAll(async () => {
   if (!ENABLED) return;
@@ -59,8 +60,10 @@ beforeAll(async () => {
   agentAddress = agentWallet.address;
   agentDid     = formatDid(agentAddress, CHAIN_ID);
   const pubKey = pubKeyToBytes32(nacl.sign.keyPair.fromSeed(agentPrivateKey).publicKey);
+  agentPubKey = pubKey;
   try {
-    await registerAgent(operator, agentAddress, pubKey, IDENTITY_ADDR!);
+    // The agent address signs for its own registration; the operator only sends the transaction.
+    await registerAgent(operator, agentAddress, pubKey, IDENTITY_ADDR!, { agentSigner: agentWallet });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     if (!msg.includes('AlreadyRegistered')) throw err;
@@ -68,14 +71,17 @@ beforeAll(async () => {
 }, 60_000);
 
 maybeDescribe('Integration: identity', () => {
-  it('getIdentity returns correct public key and Active status', async () => {
+  // Registration moves no tokens, so the agent waits in PendingBond until a deposit reaches the
+  // minimum stake. Bonding needs the bond token and is not exercised here.
+  it('getIdentity returns the registered public key and a PendingBond status', async () => {
     const id = await verifier.getIdentity(agentDid);
-    expect(id.status).toBe(AgentStatus.Active);
+    expect(id.ed25519PubKey.toLowerCase()).toBe(agentPubKey.toLowerCase());
+    expect(id.status).toBe(AgentStatus.PendingBond);
     expect(id.registeredAt).toBeGreaterThan(0n);
   }, 30_000);
 
-  it('isActive returns true', async () => {
-    expect(await verifier.isActive(agentDid)).toBe(true);
+  it('isActive is false until the agent is bonded', async () => {
+    expect(await verifier.isActive(agentDid)).toBe(false);
   }, 30_000);
 
   it('computeDidHash is a valid bytes32', () => {
