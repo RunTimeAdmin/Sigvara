@@ -1,18 +1,27 @@
 /* Sigvara interactive demo engine.
  *
  * Everything runs in the browser. Keys and signatures are real Ed25519
- * (tweetnacl). The chain is simulated, but every rule below mirrors the
- * deployed contracts and the reference oracle:
+ * (tweetnacl). The chain is simulated. The staking and slash rules below follow the
+ * contracts on main. Scoring and registration are simplified: score maturity, the
+ * per-payer fee cap and the PendingBond step are not modelled.
  *   - DID and didHash derivation (SigvaraIdentity)
- *   - minimum stake, unbonding, slash lifecycle and split (SigvaraStaking):
- *     a dispute freezes the bond and hands the proposal to the committee, whose
- *     ruling either slashes or reinstates; an unresolved dispute can be expired
- *     by anyone after 14 days. Undisputed execution is permissionless strictly
- *     after the 7-day window. Reporter = the committee member who filed, and
- *     victim/reporter shares are credited for them to claim, not pushed.
+ *   - minimum stake, unbonding, slash lifecycle and split (SigvaraStaking, as on
+ *     main): a dispute freezes the bond and hands the proposal to the admin, whose
+ *     ruling either slashes (never before the 7-day deadline) or reinstates at once;
+ *     an unruled dispute can be expired by anyone after 14 days. Undisputed
+ *     execution is permissionless strictly after the 7-day window and stays open
+ *     until someone expires the proposal, which anyone can do from 14 days after its
+ *     deadline. The admin can veto a pending or disputed proposal, a committee member
+ *     can cancel a pending one, and after any dropped proposal the committee waits one
+ *     challenge period before filing again. Reporter = the committee member who filed,
+ *     and victim/reporter shares are credited for them to claim, not pushed. The Arc
+ *     testnet proxies still run the 21 September code, where the committee rules on a
+ *     dispute, an upheld ruling takes effect at once, and there is no veto, no expiry
+ *     of an unexecuted slash and no re-file cooldown.
  *   - six-factor score with per-factor maxima and the 6h score challenge
  *     window (SigvaraReputation + docs/reputation-model.md)
- *   - challenge/response payload format (packages/sdk challenge.ts)
+ *   - challenge/response with the v1 payload of packages/sdk challenge.ts (the
+ *     current v2 format also binds an audience)
  */
 (function (root) {
   'use strict';
@@ -69,6 +78,7 @@
     scoreChallengeWindow: 6 * 3600,
     unbondingPeriod: 21 * 24 * 3600,
     disputeResolutionPeriod: 14 * 24 * 3600,
+    executionPeriod: 14 * 24 * 3600,
     faucetGrant: 10000n * 10n ** 18n,
     factors: [
       { key: 'feeScore', label: 'Fee activity', max: 20 },
@@ -123,8 +133,11 @@
     this.now = Math.floor(Date.now() / 1000);
     this.events = [];
     this.operator = '0x' + bytesToHex(randomBytes(20));
-    // SLASHING_COMMITTEE_ROLE holder. On testnet this is the deployer; on mainnet a multisig.
+    // SLASHING_COMMITTEE_ROLE holder. On testnet this is a dedicated key, not the deployer; on mainnet a multisig.
     this.committee = '0x' + bytesToHex(randomBytes(20));
+    // DEFAULT_ADMIN_ROLE holder: rules on disputes and can veto. The deployer on testnet, the admin Safe on mainnet.
+    this.admin = '0x' + bytesToHex(randomBytes(20));
+    this.lastDroppedAt = 0;
     this.balances = {};
     this.claimable = {};
     this.balances[this.operator] = PARAMS.faucetGrant;
@@ -170,8 +183,9 @@
   };
   Simulator.prototype.depositStake = function (amount) {
     this.requireAgent();
-    if (this.agent.status !== 'Active') throw new Error('AgentNotActive: only Active agents can add stake');
-    if (amount <= 0n) throw new Error('ZeroAmount');
+    // Suspended agents may deposit: SigvaraIdentity will not reactivate an agent below minimumStake, so an
+    // operator that withdrew its bond has to be able to top it up. Only Slashed is terminal. A zero deposit is accepted.
+    if (this.agent.status === 'Slashed') throw new Error('AgentNotActive: a slashed agent is terminal and cannot take stake');
     if (this.allowance < amount) throw new Error('ERC20InsufficientAllowance: approve SigvaraStaking first');
     if (this.balances[this.operator] < amount) throw new Error('ERC20InsufficientBalance');
     this.balances[this.operator] -= amount;
@@ -182,8 +196,9 @@
   Simulator.prototype.hasMinimumStake = function () { return this.stake >= PARAMS.minimumStake; };
   Simulator.prototype.initiateWithdrawal = function (amount) {
     this.requireAgent();
-    if (this.slash && !this.slash.executed) throw new Error('SlashPending: withdrawals are frozen during a slash');
-    if (this.pendingWithdrawal) throw new Error('WithdrawalAlreadyQueued');
+    if (this.stake === 0n) throw new Error('NoStake');
+    if (this.pendingWithdrawal) throw new Error('WithdrawalAlreadyPending');
+    if (this.slashFrozen()) throw new Error('SlashAlreadyPending: withdrawals are frozen during a slash');
     if (amount > this.stake) throw new Error('InsufficientStake');
     var remaining = this.stake - amount;
     // While Active the remaining stake must stay at or above minimumStake. A full
@@ -195,9 +210,9 @@
   };
   Simulator.prototype.claimWithdrawal = function () {
     this.requireAgent();
-    if (!this.pendingWithdrawal) throw new Error('NoWithdrawalQueued');
-    if (this.slash && !this.slash.executed) throw new Error('SlashPending');
-    if (this.now < this.pendingWithdrawal.claimableAt) throw new Error('UnbondingNotElapsed: ' + Math.ceil((this.pendingWithdrawal.claimableAt - this.now) / 86400) + ' days left');
+    if (!this.pendingWithdrawal) throw new Error('NoWithdrawalPending');
+    if (this.slashFrozen()) throw new Error('SlashAlreadyPending');
+    if (this.now < this.pendingWithdrawal.claimableAt) throw new Error('UnbondingPeriodActive: ' + Math.ceil((this.pendingWithdrawal.claimableAt - this.now) / 86400) + ' days left');
     var amt = this.pendingWithdrawal.amount;
     this.pendingWithdrawal = null;
     this.balances[this.operator] += amt;
@@ -231,7 +246,7 @@
   Simulator.prototype.getTotalScore = function () { return this.score ? this.score.total : 0; };
   Simulator.prototype.meetsThreshold = function (t) { return this.getTotalScore() >= t; };
 
-  // Challenge and response, byte-for-byte the SDK format.
+  // Challenge and response in the SDK's v1 format (the current v2 also binds an audience).
   Simulator.prototype.issueChallenge = function (ttl) {
     this.requireAgent();
     var nonce = bytesToHex(randomBytes(16));
@@ -255,24 +270,32 @@
     return { ok: ok, reason: ok ? 'signature matches the on-chain Ed25519 key' : 'signature does not match the on-chain key' };
   };
 
-  // Slash proposal states mirror SlashState { Pending, Cancelled, Executed }.
+  // Slash proposal states mirror SlashState { Pending, Executed, Cancelled, Disputed }; no proposal yet is None.
   Simulator.prototype.pendingSlash = function () { return this.slash && this.slash.state === 'Pending' ? this.slash : null; };
+  /// A Pending or Disputed proposal freezes the bond and blocks a new filing. Cancelled and Executed do not.
+  Simulator.prototype.slashFrozen = function () {
+    return !!this.slash && (this.slash.state === 'Pending' || this.slash.state === 'Disputed');
+  };
   Simulator.prototype.initiateSlash = function (victim) {
     this.requireAgent();
-    if (this.pendingSlash()) throw new Error('SlashAlreadyPending');
+    if (this.slashFrozen()) throw new Error('SlashAlreadyPending');
+    // After any dropped proposal the committee waits one challenge period, so the operator always gets a window to act.
+    if (this.lastDroppedAt && this.now < this.lastDroppedAt + PARAMS.challengePeriod) {
+      throw new Error('SlashCooldownActive: ' + Math.ceil((this.lastDroppedAt + PARAMS.challengePeriod - this.now) / 86400) + ' day(s) left');
+    }
     // Gate on active stake plus anything queued for withdrawal.
     if (this.stake + (this.pendingWithdrawal ? this.pendingWithdrawal.amount : 0n) === 0n) throw new Error('NoStake');
     // The reporter is the committee member who files (msg.sender); they receive the reporter share.
     this.slash = { victim: victim, reporter: this.committee, initiatedAt: this.now, deadline: this.now + PARAMS.challengePeriod, state: 'Pending' };
     this.agent.status = 'Suspended';
-    this.emit('SlashInitiated', { didHash: this.agent.didHash, reporter: this.committee, victim: victim, initiatedAt: this.now }, 'committee: SigvaraStaking.initiateSlash. Agent Suspended via SigvaraIdentity.updateStatus; 7-day challenge window');
     this.emit('AgentStatusUpdated', { didHash: this.agent.didHash, newStatus: 'Suspended' }, 'SigvaraIdentity, applied by the staking core (operator cannot lift it)');
+    this.emit('SlashInitiated', { didHash: this.agent.didHash, reporter: this.committee, victim: victim, initiatedAt: this.now }, 'committee: SigvaraStaking.initiateSlash. Agent Suspended via SigvaraIdentity.updateStatus; 7-day challenge window');
   };
   Simulator.prototype.disputeSlash = function () {
     var p = this.pendingSlash();
     if (!p) throw new Error('NoActivePendingSlash');
     if (this.now > p.deadline) throw new Error('ChallengePeriodExpired: the window closed at ' + p.deadline);
-    // A dispute hands the proposal to the committee and keeps the bond frozen. It
+    // A dispute hands the proposal to the admin and keeps the bond frozen. It
     // does not cancel the slash and does not reinstate the agent: releasing the bond
     // here let an operator veto every proposal for free and withdraw the whole stake.
     p.state = 'Disputed';
@@ -284,15 +307,20 @@
     return this.slash && this.slash.state === 'Disputed' ? this.slash : null;
   };
 
-  /// Committee rules on a disputed proposal.
+  /// The admin rules on a disputed proposal. Upholding waits for the challenge deadline, the
+  /// moment an undisputed slash could be executed, so a dispute never speeds a slash up.
+  /// Dropping is open at any time.
   Simulator.prototype.resolveDispute = function (uphold) {
     var p = this.disputedSlash();
     if (!p) throw new Error('SlashNotDisputed');
-    if (uphold) return this._settle(p);
-    this._drop(p, this.committee, 'committee: SigvaraStaking.resolveDispute(false). Proposal dropped, agent reinstated');
+    if (uphold) {
+      if (this.now <= p.deadline) throw new Error('ChallengePeriodActive: ' + Math.ceil((p.deadline - this.now) / 86400) + ' day(s) left; an upheld ruling cannot land before the deadline');
+      return this._settle(p);
+    }
+    this._drop(p, this.admin, 'admin: SigvaraStaking.resolveDispute(false). Proposal dropped, agent reinstated');
   };
 
-  /// Anyone may lift a freeze the committee never resolved.
+  /// Anyone may lift a freeze the admin never ruled on.
   Simulator.prototype.expireDispute = function () {
     var p = this.disputedSlash();
     if (!p) throw new Error('SlashNotDisputed');
@@ -301,15 +329,42 @@
     this._drop(p, 'anyone', 'anyone: SigvaraStaking.expireDispute. Unresolved past the window, so the freeze lifts');
   };
 
+  /// Anyone may drop a Pending proposal once 14 days have passed since its deadline. Until someone does, it can still be executed.
+  Simulator.prototype.expireSlash = function () {
+    var p = this.pendingSlash();
+    if (!p) throw new Error('NoActivePendingSlash');
+    var expiresAt = p.deadline + PARAMS.executionPeriod;
+    if (this.now <= expiresAt) throw new Error('ExecutionPeriodActive: ' + Math.ceil((expiresAt - this.now) / 86400) + ' day(s) left');
+    this._drop(p, 'anyone', 'anyone: SigvaraStaking.expireSlash. Nobody executed it within 14 days of the deadline, so it is dropped');
+  };
+
+  /// A committee member can withdraw a Pending proposal.
+  Simulator.prototype.cancelSlash = function () {
+    var p = this.pendingSlash();
+    if (!p) throw new Error('NoActivePendingSlash');
+    this._drop(p, this.committee, 'committee: SigvaraStaking.cancelSlash. Proposal withdrawn, agent reinstated');
+  };
+
+  /// The admin can drop a Pending or Disputed proposal at any time before it is executed.
+  Simulator.prototype.vetoSlash = function () {
+    var p = this.pendingSlash() || this.disputedSlash();
+    if (!p) throw new Error('NoActivePendingSlash');
+    this._drop(p, this.admin, 'admin: SigvaraStaking.vetoSlash. Proposal dropped, agent reinstated');
+    this.emit('SlashVetoed', { didHash: this.agent.didHash, by: this.admin }, 'emitted by vetoSlash after SlashCancelled; resolveDispute(false) drops a proposal without it');
+  };
+
   Simulator.prototype._drop = function (p, by, note) {
     p.state = 'Cancelled';
+    this.lastDroppedAt = this.now;
+    // Main reinstates only while the active stake is still at least minimumStake, and otherwise leaves the
+    // agent Suspended. The demo cannot reach that case: it has no self-suspend, so the bond never drops below it.
     this.agent.status = 'Active';
-    this.emit('SlashCancelled', { didHash: this.agent.didHash, by: by }, note);
     this.emit('AgentStatusUpdated', { didHash: this.agent.didHash, newStatus: 'Active' }, 'SigvaraIdentity, reinstated by the staking core');
+    this.emit('SlashCancelled', { didHash: this.agent.didHash, by: by }, note);
   };
   Simulator.prototype.executeSlash = function () {
     var p = this.pendingSlash();
-    if (!p) throw new Error('NoActivePendingSlash' + (this.slash && this.slash.state === 'Disputed' ? ': the proposal is disputed; the committee resolves it' : ''));
+    if (!p) throw new Error('NoActivePendingSlash' + (this.slash && this.slash.state === 'Disputed' ? ': the proposal is disputed; the admin rules on it' : ''));
     // Executable strictly after the deadline (block.timestamp <= deadline reverts).
     if (this.now <= p.deadline) throw new Error('ChallengePeriodActive: ' + Math.ceil((p.deadline - this.now) / 86400) + ' day(s) left');
     return this._settle(p);
