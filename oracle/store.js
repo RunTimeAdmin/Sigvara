@@ -12,6 +12,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { stateChunks } = require('./state-serialize');
 // The decay curve lives in payments.js. Imported rather than reimplemented so flags and
 // payments age on exactly the same function; payments.js requires only ethers, so this
 // direction of dependency is not circular.
@@ -282,6 +283,7 @@ function parseState(parsed) {
       return !why;
     });
     if (!usable.length) continue;
+    for (const e of usable) Object.freeze(e);
     // Keys are lowercase. A mixed-case key holds credits /attest filed before it
     // normalised the hash, where scoring never looked; folding them back in returns
     // those payments to the agent they paid.
@@ -468,30 +470,42 @@ function keepBackup() {
   }
 }
 
+// Write all of `text` to `fd`. fs.writeSync may write less than it was given, which writeFileSync
+// used to take care of.
+function writeAll(fd, text) {
+  const bytes = Buffer.from(text, 'utf8');
+  for (let done = 0; done < bytes.length;) done += fs.writeSync(fd, bytes, done, bytes.length - done);
+}
+
 function persist() {
   try {
     fs.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
     const tmp = `${STATE_PATH}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify({
-      schemaVersion: STATE_SCHEMA_VERSION,
-      chainId: stateChainId,
-      attestations: Object.fromEntries(attestations),
-      flags: Object.fromEntries(flags),
-      links: Object.fromEntries(links),
-      attestCooldowns: Object.fromEntries(attestCooldowns),
-      paymentEvents: Object.fromEntries(paymentEvents),
-      usedPaymentTxs: [...usedPaymentTxs],
-      divergences: Object.fromEntries(divergences),
-      scanState,
-      paymentScanState,
-      savedAt: new Date().toISOString(),
-    }));
-    // Flush before the rename. The rename is atomic, so a crash can never leave a
-    // half-written state file, but without this it can leave an atomically-renamed
-    // *empty* one: the directory entry is durable while the contents are still in the
-    // page cache. Cheap insurance for the file that holds every attested outcome.
-    const fd = fs.openSync(tmp, 'r+');
-    try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    const fd = fs.openSync(tmp, 'w');
+    try {
+      // Written in pieces rather than as one string: see state-serialize.js for why.
+      for (const piece of stateChunks({
+        schemaVersion: STATE_SCHEMA_VERSION,
+        chainId: stateChainId,
+        attestations: Object.fromEntries(attestations),
+        flags: Object.fromEntries(flags),
+        links: Object.fromEntries(links),
+        attestCooldowns: Object.fromEntries(attestCooldowns),
+        paymentEvents: Object.fromEntries(paymentEvents),
+        usedPaymentTxs: [...usedPaymentTxs],
+        divergences: Object.fromEntries(divergences),
+        scanState,
+        paymentScanState,
+        savedAt: new Date().toISOString(),
+      })) writeAll(fd, piece);
+      // Flush before the rename. The rename is atomic, so a crash can never leave a
+      // half-written state file, but without this it can leave an atomically-renamed
+      // *empty* one: the directory entry is durable while the contents are still in the
+      // page cache. Cheap insurance for the file that holds every attested outcome.
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
     keepBackup();
     fs.renameSync(tmp, STATE_PATH);
     lastPersist = { ok: true, at: Date.now(), error: null };
@@ -620,7 +634,9 @@ function creditPayment(
   // token, so handing out copies would turn every request into a miss; freezing keeps one
   // array per version and makes the "never mutated in place" rule the cache depends on
   // enforced rather than merely documented.
-  paymentEvents.set(did, Object.freeze([...list, event]));
+  // The event is frozen as well as the array: merkle.js caches a leaf against the event and a root
+  // against the array, and that is only sound for values that cannot change.
+  paymentEvents.set(did, Object.freeze([...list, Object.freeze(event)]));
   return true;
 }
 
@@ -651,7 +667,7 @@ function setPaymentOutcome(didHash, txHash, payer, success) {
   // A new array, not an edit in place: the evidence cache treats the array's identity as
   // the revision token, so a changed outcome has to be a new identity.
   const next = [...list];
-  next[i] = { ...list[i], success };
+  next[i] = Object.freeze({ ...list[i], success });
   paymentEvents.set(did, Object.freeze(next));
   return 'set';
 }
