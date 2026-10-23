@@ -48,7 +48,10 @@ const TAG_NORMALIZERS = {
 function computeExternalScore(rows) {
   const recognized = [];
   for (const r of rows) {
-    const norm = TAG_NORMALIZERS[r.tag];
+    // Own keys only. `tag` is text chosen by whoever posts the feedback, and a plain object also
+    // answers to 'constructor' and '__proto__'. The first returned Object(value) and dragged the mean
+    // up to the cap; the second is not a function, so this threw and externalScoreFor read it as 0.
+    const norm = Object.hasOwn(TAG_NORMALIZERS, r.tag) ? TAG_NORMALIZERS[r.tag] : undefined;
     if (norm) recognized.push(norm(r.value));
   }
   if (!recognized.length) return 0;
