@@ -265,7 +265,9 @@ cast send <staking> "executeSlash(bytes32)" <TARGET_DID_HASH> --rpc-url arc_test
 ### Day 7: settle
 
 Execution is permissionless. Anyone can call it, which is deliberate: the committee files,
-but settlement does not depend on the committee still being around.
+but settlement does not depend on the committee acting again. It does depend on the key that
+filed still being on the committee: `executeSlash` refuses a proposal whose reporter has been
+revoked (`ReporterNotAuthorized`), so do not rotate the drill key before this step.
 
 ```bash
 cast send <staking> "executeSlash(bytes32)" <TARGET_DID_HASH> \

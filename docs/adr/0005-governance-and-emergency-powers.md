@@ -146,6 +146,20 @@ This ADR records what was decided about each, and what was left as a stated trus
     later is visible on chain as `minimumStake` and `bondAmount`; the Reader's `collateralized` follows
     `minimumStake`. The three places the figures are written (the scripts, the check and `docs/token.md`) are
     compared by `scripts/check-docs.mjs`, which fails the build when they differ.
+12. **A slash is executed only while its reporter is still on the committee.** Execution stays
+    permissionless, but `executeSlash` refuses a proposal whose reporter no longer holds
+    `SLASHING_COMMITTEE_ROLE` (`ReporterNotAuthorized`). Decision 8 made revoking a committee member
+    instant, as the remedy for a compromised key, but a revocation stopped only new filings: proposals
+    already filed stayed Pending, anyone could execute them once their windows closed, and the revoked
+    reporter was paid its quarter. The only way to stop them was a veto per agent inside a window that can
+    be three days long. `SigvaraReputation` already holds a pending score to this rule, so an operator or
+    governance can kill a stolen key's proposals at once, and staking now does the same. The proposal is
+    not stranded: any current member can cancel it, anyone can expire it 14 days after its deadline, and
+    the committee can file again after the cooldown. The admin's ruling on a disputed slash
+    (`resolveDispute`) does not depend on the reporter, since it is a decision taken now by a key that is
+    not the accuser. The cost is some of the liveness decision 7 protects: a slash whose reporter is
+    removed before anyone executes it cannot be executed, so a committee about to be replaced should
+    execute or cancel what is ripe before it revokes.
 
 ## What stays on the admin Safe, and why
 
@@ -189,6 +203,11 @@ and its ceiling. That is a stated trust assumption, not an oversight:
   and the guardian.
 - A slash that is legitimate has to be executed within 14 days of its deadline, or it lapses and has to
   be filed again after the cooldown, so it should be executed as soon as the window closes.
+- Replacing the committee address (a new Safe, say) orphans the proposals of the one it replaces. They
+  can no longer be executed by anyone, and lapse 14 days after their deadline unless a member of the new
+  committee cancels them first (decision 12). Execute what is ripe, and cancel the rest, before the
+  old address is revoked. On the Arc testnet proxies the rule applies once the implementation is
+  upgraded.
 - A dispute turns an automatic slash into one the admin has to uphold, and it cannot be upheld sooner
   than an undisputed slash could have been executed. Disputing buys the operator a ruling, never a
   faster loss.
