@@ -114,9 +114,10 @@ test('splitting one payer across many small payments does not defeat the cap', (
 
 test('MEASURED: what a wash ring buys, by wallet count', () => {
   // Each wallet contributes at most maxPerPayer points, so the attacker's lever is
-  // wallet count, not money. The money returns to them either way. Four wallets now
-  // max the factor rather than six, because the reweight cut it from 30 to 20 without
-  // changing maxPerPayer: the ring saturates sooner, but on a smaller prize.
+  // wallet count, not money. The money returns to them either way. Five wallets now
+  // max the factor (maxPerPayer is 4 against a 20-point cap). It took six before the
+  // reweight cut the cap from 30 to 20, and four while maxPerPayer was 5: the ring
+  // saturates sooner, but on a smaller prize.
   const rows = [];
   for (const wallets of [1, 3, 6, 10, 20]) {
     const s = scoreOf(washRing(wallets, 600));

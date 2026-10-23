@@ -69,9 +69,10 @@ function readConfig(env = process.env) {
     //
     // 100 USDC per point is almost certainly too small once settlement is in real
     // USDC rather than a faucet token. A single observed payment on Arc was 2,548
-    // USDC, which maxes the factor on its own, and a fee score that saturates on
-    // one invoice measures whether an agent has ever been paid rather than how much
-    // it trades. Recalibrate before switching PAYMENT_ASSET to USDC.
+    // USDC, which earns that payer's whole cap (maxPerPayer, below) on its own. A
+    // payer that fills its share with one invoice measures whether a counterparty has
+    // ever paid rather than how much it trades, and five such payers reach the
+    // ceiling. Recalibrate before switching PAYMENT_ASSET to USDC.
     feeUnit: BigInt(env.PAYMENT_FEE_UNIT || '100000000'),
     // Days after which a payment counts half. 0 disables decay, which makes a
     // score answer "was this agent ever busy" rather than "is it busy now".
@@ -428,7 +429,7 @@ function propagationScore(events, payerScores, max = 5) {
   return Math.min(max, Math.floor(trust));
 }
 
-/// The maximum a counterparty's HARD standing can be: externalScore caps at 15.
+/// The maximum a counterparty's HARD standing can be: externalScore caps at 25.
 ///
 /// payerScores used to carry the total score, 0..100. That let a farmed number launder
 /// into someone else's: a wash-traded sybil at 100 doubled its target's per-payer cap

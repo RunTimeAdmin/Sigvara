@@ -8,7 +8,7 @@ import "../src/SigvaraStaking.sol";
 
 /**
  * Rehearsal for script/SplitAuthority.s.sol, against a fork of the live Arc testnet
- * deployment with its real roles, real bonds and the real in-flight slash drill in it.
+ * deployment with its real roles and real bonds, and the slash drill's final state in it.
  *
  * The migration it rehearses ends with the deployer renouncing UPGRADER_ROLE, which
  * cannot be undone. If the replacement authority does not work, the proxies are frozen
@@ -20,11 +20,15 @@ import "../src/SigvaraStaking.sol";
  *     and driven by a real owner signature, rather than a stand-in with a call method
  *   - does the timelock actually impose the delay, and does anyone-can-execute work
  *   - did any of this disturb the oracle, committee or cross-contract roles
- *   - does the slash filed on 20 September still settle on 27 September
+ *   - does a slash that is in flight when the migration runs still settle
  *
- * That last one is the reason this is a fork test rather than a unit test. The drill
- * is in its challenge window right now, its settlement reaches across three contracts,
- * and a migration that stranded it would not show up anywhere else.
+ * That last one is the reason this is a fork test rather than a unit test. A slash in
+ * its challenge window reaches across three contracts, and a migration that stranded it
+ * would not show up anywhere else. The test was written for the drill filed on 20 September
+ * 2026, which settled on 3 October without the migration having run. It is tied to that one
+ * proposal (DRILL_DID and DRILL_DEADLINE), now Executed, so on today's chain it finds no
+ * Pending proposal and returns early. To exercise the case again, point those two constants
+ * at a slash that is in flight.
  *
  *   forge test --match-path test/SplitAuthorityFork.t.sol \
  *     --fork-url https://rpc.testnet.arc.io -vv
@@ -55,7 +59,7 @@ contract SplitAuthorityForkTest is Test {
 
     bytes32 constant IMPL_SLOT = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
 
-    /// The slash filed on 20 September 2026, still Pending as this is written.
+    /// The slash filed on 20 September 2026 and executed on 3 October 2026.
     bytes32 constant DRILL_DID = 0x59d75ab4a3af114de90c4f6640f4dc47cee83d0895f3f8c4eb9b012dc5f6e153;
     uint256 constant DRILL_DEADLINE = 1790537284; // 2026-09-27T19:28:04Z
 
@@ -233,10 +237,11 @@ contract SplitAuthorityForkTest is Test {
     }
 
     /**
-     * The slash drill is mid-window on the live chain. Settlement moves the agent to
-     * Slashed in the identity registry and zeroes its reputation, both through roles
-     * the migration does not touch, but that is an argument rather than evidence.
-     * This warps past the real deadline and settles the real proposal.
+     * Written while the slash drill was mid-window on the live chain. Settlement moves the
+     * agent to Slashed in the identity registry and zeroes its reputation, both through
+     * roles the migration does not touch, but that is an argument rather than evidence.
+     * While the proposal is Pending this warps past the real deadline and settles it. The
+     * drill was executed on 3 October 2026, so on today's chain the test skips itself.
      */
     function test_afterSplit_theSlashDrillStillSettles() public onlyArcFork {
         _migrate();

@@ -14,12 +14,11 @@
   /* No address is prefilled, deliberately.
    *
    * The obvious convenience is to seed the field with a known agent so a first-time
-   * visitor can press the button and see something. The only registered agent on this
-   * deployment is the slash drill's target, which is suspended now and will read
-   * "slashed" permanently from 27 September. Prefilling it would make the first thing
-   * every visitor sees a punished agent, and prefilling any single address bakes that
-   * address's fate into the page. An empty field with a clear placeholder asks for what
-   * the visitor already has. */
+   * visitor can press the button and see something. The agent the slash drill used, a
+   * throwaway slashed on 3 October 2026, reads "slashed" permanently, so prefilling it
+   * would make the first thing every visitor sees a punished agent, and prefilling any
+   * single address bakes that address's fate into the page. An empty field with a clear
+   * placeholder asks for what the visitor already has. */
 
   var BANDS = [
     { min: 75, color: '#15803d', label: '75 – 100', reading: 'Long track record of settled payments. Little left to prove.' },

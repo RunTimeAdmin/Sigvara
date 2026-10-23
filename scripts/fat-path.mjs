@@ -5,8 +5,8 @@
  * claim about the score resisting manipulation is measured in a test harness, and the live
  * deployment has never carried a number large enough for `meetsThreshold` to mean
  * anything. This funds a set of independent payer wallets, has each pay the agent, and
- * attests the settlements, so the fee and success factors are computed from real settled
- * volume from genuinely distinct counterparties.
+ * attests the settlements, so the fee factor is computed from real settled volume from
+ * genuinely distinct counterparties.
  *
  *   node scripts/fat-path.mjs --agent 0x... --payers 6 --amount 500 --dry-run
  *   node scripts/fat-path.mjs --agent 0x... --payers 6 --amount 500
@@ -17,21 +17,24 @@
  * ## What this can and cannot move
  *
  * Reaching the 20-point fee cap takes 2,000 SVR of decayed volume with no single payer
- * contributing more than 5 points, which is 500 SVR at the default unit. That is why the
- * payers are separate wallets rather than one wallet paying repeatedly: `maxPerPayer` is
- * the cap that makes a payer count as a counterparty rather than as money, and paying
- * yourself six times is exactly what it exists to refuse.
+ * contributing more than 4 points, which is 400 SVR at the default unit, so five payers.
+ * That is why the payers are separate wallets rather than one wallet paying repeatedly:
+ * `maxPerPayer` is the cap that makes a payer count as a counterparty rather than as
+ * money, and paying yourself six times is exactly what it exists to refuse.
  *
  * Tenure responds immediately but not much: the span runs from the agent's FIRST verified
  * payment, so paying today extends an existing span rather than starting one. It then
  * grows with the calendar and nothing here can hurry it.
  *
  * `externalScore` and `propagationScore` cannot be moved by this script at all. External
- * needs EXTERNAL_RPC/EXTERNAL_IDENTITY/EXTERNAL_REPUTATION pointing at an ERC-8004
- * deployment, and the live oracle has none, so it is structurally 0. Propagation reads
- * counterparties' hard standing, which IS their external score, so it is 0 for the same
- * reason. That is 30 of the 100 points switched off, and it is a configuration gap rather
- * than anything this script can close. Say so when quoting a resulting score.
+ * needs an agent linked to an ERC-8004 identity it owns, and none is linked on the live
+ * deployment, so it is 0. Propagation reads counterparties' hard standing, which IS their
+ * external score, so it is 0 for the same reason. That is 30 of the 100 points out of
+ * reach, and nothing this script can close. Say so when quoting a resulting score.
+ *
+ * The success rate does not move either. The attestations are sent without a token, so
+ * they credit the payment and record no outcome; only a token holder's attestation
+ * records one.
  */
 
 import fs from 'node:fs';
@@ -48,8 +51,8 @@ const ORACLE     = process.env.ORACLE_URL || 'https://oracle.sigvara.xyz';
 const SVR        = '0x41De2D6D55318e197a00E8f5B496eA2790e23E6c';
 const IDENTITY   = '0x7e3aFC532eE5d922ab3cc3FFb510c7C8151477Dd';
 
-/// The slash drill target. Paying it would build a history that gets destroyed on
-/// 27 September, and worse, would muddy the drill's before/after.
+/// The slash drill target, slashed on 3 October 2026. Slashed is terminal, so a history
+/// built on it would sit on an agent that can never be restored.
 const DRILL_TARGET = '0x59d75ab4a3af114de90c4f6640f4dc47cee83d0895f3f8c4eb9b012dc5f6e153';
 
 const arg = (name, fallback) => {
@@ -90,10 +93,10 @@ async function main() {
   const svr      = new ethers.Contract(SVR, SVR_ABI, funder);
   const identity = new ethers.Contract(IDENTITY, ID_ABI, provider);
 
-  // ---- refuse to build a history on something about to be destroyed -----------
+  // ---- refuse to build a history on the slashed drill target ------------------
   const didHash = await identity.computeDidHash(AGENT);
   if (didHash.toLowerCase() === DRILL_TARGET.toLowerCase()) {
-    throw new Error('that is the slash drill target; its history is destroyed on 27 September');
+    throw new Error('that is the slash drill target, which was slashed on 3 October 2026 and cannot be restored');
   }
   const id = await identity.identities(didHash);
   if (id.registeredAt === 0n) throw new Error(`agent ${AGENT} is not registered`);
@@ -129,8 +132,8 @@ async function main() {
     }
   }
 
-  log(`\nprojected: fee +20 (at ${PAYERS} payers x ${AMOUNT} SVR), success rises with attestations,`);
-  log(`           tenure extends the existing span, external and propagation stay 0 (EXTERNAL_* unset)`);
+  log(`\nprojected: fee up to +20 (full marks need five or more payers at 400 SVR or more each at the default cap; this run is ${PAYERS} x ${AMOUNT} SVR), success does not move (no token, so no outcome),`);
+  log(`           tenure extends the existing span, external and propagation stay 0 (no agent is linked to an ERC-8004 id)`);
 
   if (problems.length) {
     log('\nblocked:');
@@ -148,7 +151,7 @@ async function main() {
 
   // ---- one wallet per payer ---------------------------------------------------
   // Distinct wallets, not one wallet paying repeatedly: maxPerPayer caps any single
-  // counterparty at 5 points, so repeat payments from one address are refused the
+  // counterparty at 4 points, so repeat payments from one address are refused the
   // headroom by design.
   const payers = Array.from({ length: PAYERS }, () => ethers.Wallet.createRandom().connect(provider));
   const record = { agent: AGENT, didHash, at: new Date().toISOString(), payments: [] };
