@@ -570,7 +570,7 @@ Everything below runs offline, with no deployed contracts, except two fork suite
 | Oracle | 760 | `cd oracle && node --test` |
 | SDK | 168 | `cd packages/sdk && npx vitest run` |
 
-Counts are individual tests as of 23 October 2026, so each of the 16 invariants counts once. Without a fork URL, 654 of the contract tests run and 7 skip. The SDK's 168 include 8 integration tests that skip without a live deployment. [`scripts/mutation`](scripts/mutation/README.md) holds the harnesses that measure whether these tests would catch a deliberate break in the contracts or deploy scripts.
+Counts are individual tests as of 23 October 2026, so each of the 16 invariants counts once. Without a fork URL, 654 of the contract tests run and 7 skip. The SDK's 168 include 8 integration tests that skip without a live deployment. Vitest strips types without checking them, so `npm run typecheck` in `packages/sdk` checks the tests against the SDK's types as well as the sources. [`scripts/mutation`](scripts/mutation/README.md) holds the harnesses that measure whether these tests would catch a deliberate break in the contracts or deploy scripts.
 
 ### Unit Tests (default)
 
@@ -649,7 +649,7 @@ The first three run in CI on every push. Run them from the repository root.
 | `node scripts/backfill-payment-blocks.mjs` | One-off repair for payment events saved before they carried a block number. Needs `--state`, `--rpc` and `--asset`, is a dry run until `--write` is given, and has to run with the oracle stopped |
 | `node scripts/fat-path.mjs` | Testnet only. Funds separate payer wallets that each pay a live agent and attest the settlements, so its fee factor rests on distinct counterparties (the attestations carry no outcome, so the success rate does not move). Needs `--agent` and `DEPLOYER_PRIVATE_KEY` |
 
-CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on every push to `main` and every pull request, with read-only repository permissions. It builds and tests the contracts (`forge build --sizes`, then `forge test` on the `ci` profile with 5,000 fuzz runs, including the testnet-forking `SlashDrillFork`), builds and tests the SDK, runs the oracle tests and the first three scripts above, and runs Slither, which fails the build on High findings only. The Medium and Low findings that were reviewed and accepted are recorded in [ADR 0002](docs/adr/0002-analyzer-accepted-findings.md).
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on every push to `main` and every pull request, with read-only repository permissions. It builds and tests the contracts (`forge build --sizes`, then `forge test` on the `ci` profile with 5,000 fuzz runs, including the testnet-forking `SlashDrillFork`), builds, typechecks and tests the SDK, runs the oracle tests and the first three scripts above, and runs Slither, which fails the build on High findings only. The Medium and Low findings that were reviewed and accepted are recorded in [ADR 0002](docs/adr/0002-analyzer-accepted-findings.md).
 
 ---
 
