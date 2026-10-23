@@ -79,7 +79,9 @@ what is not yet true.
 > matches the chain. The contract changes merged since are on `main` and described in this
 > README, but they are not deployed on the testnet: timelocked role grants, the guardian
 > pause, admin-ruled disputes with a veto and a lapse, launch floors and ceilings, operator
-> signers, and the stake view and operator registry wiring behind the timelock.
+> signers, the stake view and operator registry wiring behind the timelock, the reporter
+> check at slash execution, a withdrawal's claim time fixed when it is queued, and the
+> refusal of evidence the admin rejected.
 > `SigvaraReader` has not been deployed anywhere. `test/SlashDrillFork.t.sol` rehearses the
 > deployed behaviour, so it will need updating when the testnet proxies are upgraded.
 
@@ -310,10 +312,17 @@ key keeps the check: the admin rules on every dispute and can `vetoSlash(didHash
 proposal is Pending, including after its challenge deadline and before anyone executes it, or
 Disputed. A proposal nobody executes or cancels lapses: 14 days after its deadline anyone can
 `expireSlash(didHash)`, so a bond is never frozen for good by silence.
+Execution is permissionless but not unconditional: `executeSlash` refuses a proposal whose
+reporter no longer holds the committee role, so revoking a compromised member also defuses
+what it had already filed. Any current member can cancel such a proposal, and it lapses like
+any other.
 Whenever a proposal is dropped (cancelled, vetoed, expired, or resolved in the agent's
 favour) the committee has to wait one challenge period before it can file against the same
 agent again, so the operator always gets a window to act, and a queued withdrawal stays
-slashable while it waits.
+slashable while it waits. Evidence the admin has vetoed, or ruled against, is refused for
+that agent from then on, so a re-file needs something new. A queued withdrawal's claim time
+is fixed when it is queued: changing `unbondingPeriod` later moves only the withdrawals
+queued after it.
 
 ---
 
@@ -566,11 +575,11 @@ Everything below runs offline, with no deployed contracts, except two fork suite
 
 | Suite | Count | Command |
 |---|---|---|
-| Contracts: unit, fuzz, E2E, upgrade, deploy-script, handover and 19 invariants | 665 | `forge test` |
+| Contracts: unit, fuzz, E2E, upgrade, deploy-script, handover and 19 invariants | 693 | `forge test` |
 | Oracle | 760 | `cd oracle && node --test` |
 | SDK | 168 | `cd packages/sdk && npx vitest run` |
 
-Counts are individual tests as of 23 October 2026, so each of the 19 invariants counts once. Without a fork URL, 658 of the contract tests run and 7 skip. The SDK's 168 include 8 integration tests that skip without a live deployment. Vitest strips types without checking them, so `npm run typecheck` in `packages/sdk` checks the tests against the SDK's types as well as the sources. [`scripts/mutation`](scripts/mutation/README.md) holds the harnesses that measure whether these tests would catch a deliberate break in the contracts or deploy scripts.
+Counts are individual tests as of 23 October 2026, so each of the 19 invariants counts once. Without a fork URL, 686 of the contract tests run and 7 skip. The SDK's 168 include 8 integration tests that skip without a live deployment. Vitest strips types without checking them, so `npm run typecheck` in `packages/sdk` checks the tests against the SDK's types as well as the sources. [`scripts/mutation`](scripts/mutation/README.md) holds the harnesses that measure whether these tests would catch a deliberate break in the contracts or deploy scripts.
 
 ### Unit Tests (default)
 
@@ -661,7 +670,7 @@ CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on every push t
 
 The permissions column describes the contracts on `main`. The Arc testnet proxies still run their
 21 September implementations, in which the admin also grants the slasher, committee and staking-core
-roles, the committee rules on disputes, and there is no guardian, veto or lapse (see
+roles, the committee rules on disputes, and there is no guardian, veto, lapse or reporter check (see
 [Deployed contracts](#deployed-contracts-arc-testnet)).
 
 | Role | Holder (Testnet) | Mainnet target | Permissions |

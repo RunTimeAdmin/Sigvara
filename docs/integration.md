@@ -184,7 +184,7 @@ So people can see the rules and not only the result:
 |---|---|---|
 | `minimumStake()` | Staking | Bond an agent needs to become Active |
 | `challengePeriod()` | Staking | Seconds an operator has to dispute a slash |
-| `unbondingPeriod()` | Staking | Seconds a queued withdrawal waits |
+| `unbondingPeriod()` | Staking | Seconds a withdrawal queued from now waits. A withdrawal already queued keeps the period it was queued under: `getPendingWithdrawal(didHash)` returns its fixed claim time |
 | `maturityRatePerDay()` | Reputation | Points of earned score released per day |
 | `challengeWindow()` | Reputation | Seconds a proposed score stays open to challenge |
 

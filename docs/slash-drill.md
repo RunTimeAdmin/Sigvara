@@ -231,9 +231,9 @@ cast send <staking> "disputeSlash(bytes32)" <TARGET_DID_HASH> \
 ```
 
 > The rest of this section describes `main`. The Arc testnet proxies still run the September
-> code, where the committee rules on a dispute with `resolveDispute` and the veto, the lapse
-> and the re-file cooldown below do not exist yet. `test/SlashDrillFork.t.sol` rehearses the
-> deployed behaviour.
+> code, where the committee rules on a dispute with `resolveDispute` and the veto, the lapse,
+> the re-file cooldown, the reporter check and the evidence rule below do not exist yet.
+> `test/SlashDrillFork.t.sol` rehearses the deployed behaviour.
 
 Disputing **freezes** the bond rather than releasing it, and does not un-suspend the agent.
 The admin then rules with `resolveDispute(didHash, uphold)`; the committee that filed the
@@ -245,7 +245,8 @@ nobody disputes, executes or cancels lapses the same way: anyone may call `expir
 14 days after its deadline. The admin can also drop a Pending or Disputed proposal with
 `vetoSlash`, and after any drop the committee waits one challenge period before it can file
 against the same agent again. A drill that cancels and re-files has to wait that long between
-the two.
+the two. After a veto, or a ruling for the agent, the same evidence is also refused for that
+agent (`EvidenceAlreadyRejected`), so a drill that re-files after one has to bring new evidence.
 
 Whether you exercise the dispute branch is a choice. Doing it demonstrates more of the
 mechanism; skipping it keeps the drill to seven days instead of potentially twenty-one.
