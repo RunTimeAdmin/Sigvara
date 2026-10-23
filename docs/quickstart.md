@@ -124,8 +124,8 @@ const verifier = new SigvaraVerifier({
 });
 
 const identity = await verifier.getIdentity(agent.did);
-console.log('Status:', identity.status);   // → Active
-console.log('Registered at block:', identity.registeredAt);
+console.log('Status:', identity.status);   // prints 0, which is AgentStatus.Active
+console.log('Registered at (unix time):', identity.registeredAt);
 
 const { total } = await verifier.getReputation(agent.did);
 console.log('Reputation score:', total);   // → 0 until the first epoch finalizes
@@ -164,11 +164,15 @@ const signature = myAgent.signChallengeFor(challenge.payload, peerAgent.did);
 const valid = await verifier.verifySignature(
   myAgent.did, challenge.payload, signature, 300, peerAgent.did,
 );
-const trusted = await verifier.meetsThreshold(myAgent.did, 60);
+const trusted = await verifier.meetsThreshold(myAgent.did, 40);
 
 console.log('Signature valid:', valid);
-console.log('Meets 60-point threshold:', trusted);
+console.log('Meets 40-point threshold:', trusted);
 ```
+
+`signChallengeFor` is in this repository but not in 1.0.0-alpha.9, the version on npm. On
+alpha.9 call `signChallenge`, after checking yourself that the payload names the verifier
+you mean to prove yourself to.
 
 ## 8. Wire up CounterAudit (optional but recommended)
 

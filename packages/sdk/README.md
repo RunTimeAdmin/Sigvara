@@ -10,6 +10,14 @@ npm install @sigvara/protocol-sdk
 
 Runtime dependencies are `ethers` v6 and `tweetnacl`. Node 18 or newer.
 
+> **This README describes the repository.** npm has 1.0.0-alpha.9, and the items under
+> Unreleased in [CHANGELOG.md](CHANGELOG.md) are not in it: `signChallengeFor`, the 30 second
+> read timeout and the parallel status and score read, the fix for a challenge dated in the
+> future, the checks on a gate's `threshold` and `ttlSeconds`, and `SigvaraAgent` keeping its
+> secret key in a private field. On alpha.9, `signChallenge` signs whatever it is handed, so
+> check the payload's audience yourself before you sign, and the secret key is an ordinary
+> property, so `JSON.stringify(agent)` or logging an agent includes it.
+
 > **Upgrading from 1.0.0-alpha.7:** `generateChallenge` now takes an audience as its
 > second argument, and every existing call site needs it.
 >
@@ -26,7 +34,7 @@ Runtime dependencies are `ethers` v6 and `tweetnacl`. Node 18 or newer.
 > **This does not make you replay-proof.** The audience stops a response being reused at
 > a *different* verifier. Reuse at *yours* is stopped by remembering the nonce, and the
 > SDK cannot do that for you — see
-> [Two things the SDK cannot do for you](#two-things-the-sdk-cannot-do-for-you).
+> [What the SDK still needs from you](#what-the-sdk-still-needs-from-you).
 
 ## What it does
 
@@ -121,6 +129,11 @@ nothing was proven. `replayed` means a valid signature arrived twice. `not_activ
 means a real, proven agent that is unbonded, suspended or slashed, and telling that
 caller to earn more points would be wrong. Only `below_threshold` is about reputation,
 and it carries the score so you can say how short they were.
+
+The constructor refuses a `threshold` that is not a finite number of 0 or more, and a
+`ttlSeconds` that is not a positive number. A `NaN` threshold, for example
+`Number(process.env.THRESHOLD)` with the variable unset, would otherwise admit every active
+agent that can prove its key, whatever its score.
 
 The proof is checked before the status or the score is read, so a caller who cannot prove an
 identity cannot make your gate read either, and a failed proof does not consume the nonce, so

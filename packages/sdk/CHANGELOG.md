@@ -51,6 +51,22 @@ fresh, audience-correct, unused challenge proves possession of the key as well a
 one, and requiring issuance would break stateless gates. With the signer checking the
 audience, what a relayed challenge could do is already refused at both ends.
 
+### Changed: `SigvaraGate` refuses a threshold or lifetime that is not a usable number
+
+`new SigvaraGate(...)` now throws when `threshold` is not a finite number of 0 or more, or when
+`ttlSeconds` is not a positive number. Both used to be accepted. `score < NaN` is false, so a
+threshold taken from `Number(process.env.X)` with `X` unset admitted every active agent that could
+prove its key, whatever its score. A `NaN` lifetime made every spent nonce look expired as soon as it
+was stored, so a captured proof could be replayed inside its window. Both failed open and said
+nothing. A gate built from a setting that was never checked will now fail at construction.
+
+### Changed: `SigvaraAgent` keeps its secret key in a private field
+
+The key was a TypeScript `private` property, which is erased at compile time, so
+`JSON.stringify(agent)`, a logged agent and an error reporter's snapshot all carried it. It is now a
+true private field and none of them do. Code that read the key by reaching around the type system
+stops working; sign with `signChallengeFor` or `signChallenge`.
+
 ## 1.0.0-alpha.9
 
 ### New: `SigvaraGate`
