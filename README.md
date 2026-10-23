@@ -211,12 +211,12 @@ Any party can reproduce the hash without querying contract state. The on-chain d
 ```mermaid
 stateDiagram-v2
     direction LR
-    [*] --> PendingBond : registerAgent()\n(signed by the agent address)
+    [*] --> PendingBond : registerAgent()<br/>(signed by the agent address)
 
     PendingBond --> Active : depositStake() reaches minimumStake
 
-    Active --> Suspended : operator.updateStatus()\nor StakingCore.initiateSlash()
-    Suspended --> Active : operator.updateStatus()\nor resolveDispute(false)\nor cancelSlash() / vetoSlash() / expireDispute() / expireSlash()
+    Active --> Suspended : operator.updateStatus()<br/>or StakingCore.initiateSlash()
+    Suspended --> Active : operator.updateStatus()<br/>or resolveDispute(false)<br/>or cancelSlash() / vetoSlash() / expireDispute() / expireSlash()
 
     Active --> Slashed : StakingCore.executeSlash()
     Suspended --> Slashed : StakingCore.executeSlash()
@@ -285,7 +285,7 @@ sequenceDiagram
         Op->>ST: disputeSlash(didHash)
         Note over ST: Proposal → Disputed. Bond stays frozen,<br/>agent stays Suspended
         AD->>ST: resolveDispute(didHash, uphold)
-        Note over ST: Upheld slashes, but not before the 7-day deadline;<br/>rejected cancels and reinstates at once.<br/>Unruled after 14 days, anyone may expireDispute()
+        Note over ST: Upheld slashes, but not before the 7-day deadline.<br/>Rejected cancels and reinstates at once.<br/>Unruled after 14 days, anyone may expireDispute()
     else Challenge period elapses undisputed
         Anyone->>ST: executeSlash(didHash)
         ST->>ID: updateStatus(didHash, Slashed)
@@ -358,7 +358,7 @@ sequenceDiagram
     participant REP as SigvaraReputation
 
     A->>B: request action
-    B->>A: challenge payload\n"SIGVARA-VERIFY-V2\ndid: {DID}\naud: {audience}\nnonce: {nonce}\nts: {timestamp}"
+    B->>A: challenge payload<br/>"SIGVARA-VERIFY-V2<br/>did: {DID}<br/>aud: {audience}<br/>nonce: {nonce}<br/>ts: {timestamp}"
     A->>A: sign payload with Ed25519 private key
     A->>B: { did, signature }
     B->>ID: getIdentity(didHash)
