@@ -5,10 +5,22 @@ on:
     branches: [main]
   pull_request:
 
+# Least privilege: nothing here writes to the repository or the API.
+permissions:
+  contents: read
+
+# A newer push to a pull request replaces the run still going for it. A push to main gets a group of its
+# own, so a burst of merges does not leave GitHub cancelling the pending ones: every merge commit keeps
+# its own result.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   contracts:
     name: Contracts (forge)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
 
@@ -32,6 +44,7 @@ jobs:
   sdk:
     name: SDK (vitest)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: packages/sdk
@@ -47,6 +60,7 @@ jobs:
   oracle:
     name: Oracle (node --test)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: oracle
@@ -85,6 +99,7 @@ jobs:
   slither:
     name: Static analysis (slither)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
 

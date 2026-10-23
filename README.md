@@ -515,7 +515,7 @@ Requires [Foundry](https://getfoundry.sh).
 ```bash
 git clone https://github.com/RunTimeAdmin/sigvara
 cd sigvara
-forge install
+sh scripts/fetch-deps.sh   # OpenZeppelin and forge-std, each fetched by commit into lib/ (gitignored, no submodules)
 forge build
 forge test
 ```
