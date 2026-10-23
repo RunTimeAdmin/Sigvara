@@ -24,9 +24,10 @@ The [**wiki**](https://github.com/RunTimeAdmin/Sigvara/wiki) is the browsable re
 pages covering the contracts, the oracle, the scoring model, the SDK and operations, with
 every claim linked to the line of source it was derived from. It is generated from the tree
 and edited for publication, so where it disagrees with the code or the tables below, the
-code wins. It was last published on 7 October 2026, before the mainnet-readiness changes of
-22 October (timelocked role grants, the guardian pause, launch floors and ceilings, reader
-freshness), which the documents below cover.
+code wins. It was last republished on 23 October 2026 against `main` at `d8e44c2`, so it
+covers the mainnet-readiness changes of 22 October (timelocked role grants, the guardian
+pause, admin-ruled disputes, launch floors and ceilings, reader freshness). Anything merged
+since is in the documents below first.
 
 The documents below are written by hand and are the authority on intent, trade-offs and
 what is not yet true.
