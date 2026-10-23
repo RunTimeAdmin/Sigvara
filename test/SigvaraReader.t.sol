@@ -104,6 +104,141 @@ contract SigvaraReaderTest is StackFixture {
         assertTrue(reader.isTrusted(agent, 40));
     }
 
+    // =========================================================================
+    // How old the score is
+    // =========================================================================
+
+    /// The same struct as Trust before `scoreUpdatedAt` was appended: a caller built against the earlier
+    /// shape still decodes what it asks for, because the new field is last and the struct is all static.
+    struct TrustBeforeScoreAge {
+        bool registered;
+        ISigvaraIdentity.AgentStatus status;
+        bool active;
+        uint8 score;
+        uint8 earned;
+        uint256 stake;
+        ISigvaraStaking.SlashState slash;
+        bool collateralized;
+    }
+
+    /// Neither the score nor the stake says when the score was last written, so a high score left over from
+    /// before an oracle outage, or from while proposals were paused, satisfied a gate for as long as the
+    /// outage lasted. The reader reports the time, and isTrustedFresh refuses a score older than the caller
+    /// will accept.
+    function test_trust_reportsWhenTheScoreWasLastWritten() public {
+        address stranger = makeAddr("stranger");
+        assertEq(reader.trust(stranger).scoreUpdatedAt, 0, "an unregistered address has no score");
+
+        bytes32 didHash = _registerAndBond(agentPk, 2 * MIN_STAKE);
+        assertEq(reader.trust(agent).scoreUpdatedAt, 0, "bonded and never scored");
+
+        _finalize(didHash, _score40());
+        uint256 wroteAt = block.timestamp;
+        assertEq(reader.trust(agent).scoreUpdatedAt, wroteAt);
+        assertEq(reader.trust(agent).scoreUpdatedAt, reputation.getReputation(didHash).lastUpdated);
+
+        vm.warp(wroteAt + 3 days);
+        assertEq(reader.trust(agent).scoreUpdatedAt, wroteAt, "time passing does not refresh it");
+    }
+
+    function test_trust_aCallerBuiltAgainstTheEarlierStructStillDecodes() public {
+        bytes32 didHash = _registerAndBond(agentPk, 2 * MIN_STAKE);
+        _finalize(didHash, _score40());
+
+        (bool ok, bytes memory ret) = address(reader).staticcall(abi.encodeCall(reader.trust, (agent)));
+        assertTrue(ok);
+        TrustBeforeScoreAge memory old = abi.decode(ret, (TrustBeforeScoreAge));
+        assertTrue(old.registered);
+        assertEq(old.score, 40);
+        assertEq(old.stake, 2 * MIN_STAKE);
+        assertTrue(old.collateralized);
+    }
+
+    function test_isTrustedFresh_acceptsAScoreUpToTheAgeAndNotOneSecondOver() public {
+        bytes32 didHash = _registerAndBond(agentPk, 2 * MIN_STAKE);
+        _finalize(didHash, _score40());
+        uint256 wroteAt = block.timestamp;
+        uint256 maxAge = 1 days;
+
+        assertTrue(reader.isTrustedFresh(agent, 40, maxAge), "just written");
+
+        vm.warp(wroteAt + maxAge);
+        assertTrue(reader.isTrustedFresh(agent, 40, maxAge), "exactly the age");
+        assertTrue(reader.isTrusted(agent, 40));
+
+        vm.warp(wroteAt + maxAge + 1);
+        assertFalse(reader.isTrustedFresh(agent, 40, maxAge), "one second over");
+        assertTrue(reader.isTrusted(agent, 40), "isTrusted does not look at age, which is why this exists");
+    }
+
+    /// A maximum age of zero asks for a score written in this very second.
+    function test_isTrustedFresh_zeroAgeMeansWrittenThisSecond() public {
+        bytes32 didHash = _registerAndBond(agentPk, 2 * MIN_STAKE);
+        _finalize(didHash, _score40());
+
+        assertTrue(reader.isTrustedFresh(agent, 40, 0));
+        vm.warp(block.timestamp + 1);
+        assertFalse(reader.isTrustedFresh(agent, 40, 0));
+    }
+
+    /// An agent that has never been scored has no score to be fresh. isTrusted at threshold zero says yes
+    /// to it, since status and bond are all it asks, and a freshness check must not.
+    function test_isTrustedFresh_anAgentNeverScoredIsNotFreshHoweverLargeTheAge() public {
+        _registerAndBond(agentPk, 2 * MIN_STAKE);
+        assertTrue(reader.isTrusted(agent, 0), "setup: active, bonded, never scored");
+        assertFalse(reader.isTrustedFresh(agent, 0, type(uint256).max));
+    }
+
+    function test_isTrustedFresh_isNeverTrueForAnAddressThatWasNeverRegistered() public {
+        address stranger = makeAddr("stranger");
+        assertFalse(reader.isTrustedFresh(stranger, 0, type(uint256).max));
+    }
+
+    /// Freshness is added to what isTrusted asks, not substituted for it.
+    function test_isTrustedFresh_stillNeedsEverythingIsTrustedNeeds() public {
+        bytes32 didHash = _registerAndBond(agentPk, 2 * MIN_STAKE);
+        _finalize(didHash, _score40());
+        uint256 anyAge = type(uint256).max;
+        assertTrue(reader.isTrustedFresh(agent, 40, anyAge));
+
+        assertFalse(reader.isTrustedFresh(agent, 41, anyAge), "under the bar");
+
+        vm.prank(operator);
+        identity.updateStatus(didHash, SigvaraIdentity.AgentStatus.Suspended);
+        assertFalse(reader.isTrustedFresh(agent, 40, anyAge), "suspended");
+        vm.prank(operator);
+        identity.updateStatus(didHash, SigvaraIdentity.AgentStatus.Active);
+        assertTrue(reader.isTrustedFresh(agent, 40, anyAge));
+
+        vm.prank(admin);
+        staking.setMinimumStake(3 * MIN_STAKE);
+        assertFalse(reader.isTrustedFresh(agent, 40, anyAge), "holding less than the raised minimum");
+    }
+
+    /// After an outage a new finalized score makes the agent fresh again, with no other change.
+    function test_isTrustedFresh_aNewScoreAfterAnOutageRestoresIt() public {
+        bytes32 didHash = _registerAndBond(agentPk, 2 * MIN_STAKE);
+        _finalize(didHash, _score40());
+        uint256 maxAge = 2 days;
+
+        vm.warp(block.timestamp + 10 days);
+        assertFalse(reader.isTrustedFresh(agent, 40, maxAge), "stale after the outage");
+
+        _finalize(didHash, _score40());
+        assertTrue(reader.isTrustedFresh(agent, 40, maxAge), "fresh again");
+    }
+
+    /// Whatever the age and the time since the write, isTrustedFresh is exactly isTrusted and an age check.
+    function testFuzz_isTrustedFresh_isIsTrustedAndTheAgeCheck(uint256 elapsed, uint256 maxAge) public {
+        bytes32 didHash = _registerAndBond(agentPk, 2 * MIN_STAKE);
+        _finalize(didHash, _score40());
+        uint256 wroteAt = block.timestamp;
+        elapsed = bound(elapsed, 0, 3650 days);
+        vm.warp(wroteAt + elapsed);
+
+        assertEq(reader.isTrustedFresh(agent, 40, maxAge), reader.isTrusted(agent, 40) && elapsed <= maxAge);
+    }
+
     /// Suspension does not touch the score, so the raw threshold read still passes. The
     /// reader does not.
     function test_trust_suspendedKeepsItsScoreButIsNotTrusted() public {

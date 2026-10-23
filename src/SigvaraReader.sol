@@ -24,7 +24,7 @@ import {
  *         upgrade ever changes a function this reads, deploy a new reader. There is
  *         nothing to migrate.
  *
- *         Four things it does on purpose, because the raw reads get them wrong:
+ *         Five things it does on purpose, because the raw reads get them wrong:
  *
  *         - `isTrusted` requires Active status as well as a score. `meetsThreshold` only
  *           compares a number, so a Suspended agent keeps its score and a threshold of
@@ -38,6 +38,9 @@ import {
  *         - The score is the spendable one, which is what `meetsThreshold` uses. The
  *           earned score comes back beside it so a caller can see how much of a recent
  *           increase is still being released.
+ *         - Nothing on chain ages a score, so one left over from an oracle outage keeps
+ *           satisfying a gate. `scoreUpdatedAt` reports when it was written and
+ *           `isTrustedFresh` adds a limit on that age to `isTrusted`.
  */
 contract SigvaraReader is ISigvaraReader {
     ISigvaraIdentity public immutable identity;
@@ -72,7 +75,18 @@ contract SigvaraReader is ISigvaraReader {
 
     /// @inheritdoc ISigvaraReader
     function isTrusted(address agent, uint8 minScore) external view returns (bool) {
+        return _isTrusted(identity.computeDidHash(agent), minScore);
+    }
+
+    /// @inheritdoc ISigvaraReader
+    function isTrustedFresh(address agent, uint8 minScore, uint256 maxAgeSeconds) external view returns (bool) {
         bytes32 didHash = identity.computeDidHash(agent);
+        if (!_isTrusted(didHash, minScore)) return false;
+        uint256 updatedAt = reputation.getReputation(didHash).lastUpdated;
+        return updatedAt != 0 && block.timestamp - updatedAt <= maxAgeSeconds;
+    }
+
+    function _isTrusted(bytes32 didHash, uint8 minScore) internal view returns (bool) {
         return identity.isActive(didHash)
             && staking.hasMinimumStake(didHash)
             && reputation.meetsThreshold(didHash, minScore);
@@ -93,5 +107,6 @@ contract SigvaraReader is ISigvaraReader {
         t.stake = staking.getStake(didHash);
         t.slash = staking.getSlashProposal(didHash).state;
         t.collateralized = staking.hasMinimumStake(didHash);
+        t.scoreUpdatedAt = reputation.getReputation(didHash).lastUpdated;
     }
 }

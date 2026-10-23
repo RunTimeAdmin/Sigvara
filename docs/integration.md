@@ -28,6 +28,7 @@ returning true for it until it tops up. `trust(agent).collateralized` reports th
 | You want | Call | Notes |
 |---|---|---|
 | A yes or no | `reader.isTrusted(agent, minScore)` | Status, current bond and score together |
+| A yes or no that refuses a stale score | `reader.isTrustedFresh(agent, minScore, maxAgeSeconds)` | `isTrusted`, and the score was written no more than `maxAgeSeconds` ago. See [How old the score is](#how-old-the-score-is) |
 | The standing behind it | `reader.trust(agent)`, or `trustByDid(didHash)` | One struct, described below |
 | One registry fact | the interfaces in `src/interfaces/ISigvara.sol` | Keyed by didHash, from `computeDidHash(agent)` |
 | An off-chain service that wants proof the caller controls the agent | `SigvaraGate` in the SDK | Challenge and response, then the same checks. See the [README](../README.md#refusing-work-to-an-agent-without-standing) |
@@ -81,6 +82,7 @@ adds the status check and the current bond.
 | `stake` | Bond held for the agent, in the bond token's units. Excludes any amount queued for withdrawal. |
 | `slash` | Where the latest slash proposal stands: `None`, `Pending`, `Disputed`, `Executed` or `Cancelled`. |
 | `collateralized` | The bond held now meets the staking contract's current minimum. `active` is a stored status and does not change when the minimum is raised, so an `Active` agent can hold less than the minimum asks. `isTrusted` requires this. |
+| `scoreUpdatedAt` | When the score was last written, or zero if it never was. Nothing decays a score on chain, so one left over from an oracle outage keeps its old time here. See [How old the score is](#how-old-the-score-is). |
 
 ### Spendable and earned score
 
@@ -91,6 +93,24 @@ people to see that an agent is rising.
 
 The score also moves with time alone, so no event announces some changes. Poll `trust()` for
 the current number and use events to learn when to look again.
+
+## How old the score is
+
+Nothing on chain ages a score. The oracle writes one each epoch; if it stops, or proposals are
+paused (ADR 0005), the last score stays as it was and `isTrusted` keeps answering from it. For a
+gate that is the difference between "this agent is in good standing" and "this agent was in good
+standing the last time anyone looked". `trust(agent).scoreUpdatedAt` is the time the score was last
+written, and `isTrustedFresh(agent, minScore, maxAgeSeconds)` is `isTrusted` plus a limit on that
+age. It fails closed: an agent that has never been scored is not fresh at any age, and a score older
+than the limit is refused with no other change.
+
+Choose the age against how often a live oracle writes. On mainnet the primary proposes once a day
+and a proposal finalizes after the 6 hour score challenge window, so a healthy agent's score is
+about a day old just before the next one lands, and older when an epoch runs late. Two days
+tolerates one late epoch; a shorter limit shows a missed one sooner and turns a late one into
+refusals; a much longer one is the stale read this replaces. If you read `trust()` and apply your
+own limit, compare `scoreUpdatedAt` with `block.timestamp`. A score that is current still moves
+with maturity, so freshness answers when it was written, not whether it is still rising.
 
 ## Patterns
 
