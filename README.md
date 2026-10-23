@@ -79,7 +79,9 @@ what is not yet true.
 > matches the chain. The contract changes merged since are on `main` and described in this
 > README, but they are not deployed on the testnet: timelocked role grants, the guardian
 > pause, admin-ruled disputes with a veto and a lapse, launch floors and ceilings, operator
-> signers, and the stake view and operator registry wiring behind the timelock.
+> signers, the stake view and operator registry wiring behind the timelock, the reporter
+> check at slash execution, a withdrawal's claim time fixed when it is queued, and the
+> refusal of evidence the admin rejected.
 > `SigvaraReader` has not been deployed anywhere. `test/SlashDrillFork.t.sol` rehearses the
 > deployed behaviour, so it will need updating when the testnet proxies are upgraded.
 
@@ -668,7 +670,7 @@ CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on every push t
 
 The permissions column describes the contracts on `main`. The Arc testnet proxies still run their
 21 September implementations, in which the admin also grants the slasher, committee and staking-core
-roles, the committee rules on disputes, and there is no guardian, veto or lapse (see
+roles, the committee rules on disputes, and there is no guardian, veto, lapse or reporter check (see
 [Deployed contracts](#deployed-contracts-arc-testnet)).
 
 | Role | Holder (Testnet) | Mainnet target | Permissions |

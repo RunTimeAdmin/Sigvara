@@ -594,9 +594,11 @@ code.
 **Deployed contracts versus `main`.** The Arc testnet proxies still run the
 implementations recorded in `deployments/5042002.json`, last changed on 21 September 2026.
 The contract changes made after that, among them timelocked role grants, the guardian
-pause, admin-ruled disputes with a veto and a lapse, launch floors and ceilings and
-operator signers, are on `main` and described in this document, but they are not deployed
-on the testnet. `node scripts/record-implementations.mjs --check` shows what is live.
+pause, admin-ruled disputes with a veto and a lapse, launch floors and ceilings, operator
+signers, the reporter check at slash execution, a withdrawal's claim time fixed when it
+is queued and the refusal of evidence the admin rejected, are on `main` and described in
+this document, but they are not deployed on the testnet.
+`node scripts/record-implementations.mjs --check` shows what is live.
 
 **Test coverage**, all passing as of 23 October 2026: 693 contract tests across 30 Foundry test files
 including fuzz and invariant tests (two fork suites need an RPC, and the seven in
