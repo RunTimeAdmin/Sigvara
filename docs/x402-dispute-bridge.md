@@ -23,7 +23,7 @@ Sigvara already is a dispute layer — aimed at agent misbehavior rather than tr
 
 - Slashable bonds (ERC-8004)
 - Challenge windows
-- Evaluator/attestation machinery
+- Attestation machinery (payment-backed outcomes)
 - Six-factor reputation score feeding gate decisions
 
 The x402-trust protocol solves payer-versus-provider at settlement time. Sigvara solves agent-versus-agent trust over time. These overlap more than either side admits. Whoever connects them first owns the trust stack on top of the payment rail.
@@ -36,7 +36,7 @@ Do not build escrow. Make Sigvara the referee that x402's missing layer assumes 
 
 1. **Settle:** An x402 payment settles on-chain (USDC, typically Base or Arc).
 2. **Attest:** The seller's Sigvara attestation auto-attaches to that settlement tx as the proof-of-delivery claim. The attestation binds: seller identity, service identity, deliverable hash or response commitment, timestamp, payment tx hash.
-3. **Challenge:** If the buyer disputes within the Sigvara challenge window, Sigvara's bond + evaluator set adjudicates. This is the same machinery as agent-misbehavior challenges — a new dispute *type*, not a new system.
+3. **Challenge:** If the buyer disputes within the Sigvara challenge window, an evaluator set that Sigvara would add adjudicates, backed by the seller's bond. The bond and challenge-window machinery exist for agent-misbehavior slashes; a buyer-initiated challenge and an evaluator set do not exist yet, so this is a new dispute *type* on existing machinery plus a new adjudicator path.
 4. **Resolve:** The outcome feeds back into (a) the seller's six-factor score and (b) a refund path that releases or claws back via a second micropayment (Circle nanopayments / x402), never a chargeback.
 
 Design rule borrowed from GOAT Network's receipt guidance: a payment receipt makes feedback *eligible*; it must not make feedback *positive*. The attestation proves the interaction happened. The challenge window decides whether it counted.
@@ -89,7 +89,7 @@ BUYER                         x402 FACILITATOR              SELLER (resource ser
 
 1. **Non-delivery** — settlement tx exists, no response or empty response within timeout. Strongest case; near-automatic.
 2. **Malformed delivery** — response fails schema/content-type check declared in the payment requirement.
-3. **Quality dispute** — response delivered but buyer claims it fails the stated spec. Subjective; requires evaluator judgment. This is where Sigvara's multi-evaluator design earns its keep (cf. GenLayer's "Optimistic Democracy" pitch, but using Sigvara's existing bonded evaluator set instead of a new network).
+3. **Quality dispute** — response delivered but buyer claims it fails the stated spec. Subjective; requires evaluator judgment. This is where a multi-evaluator design would earn its keep (cf. GenLayer's "Optimistic Democracy" pitch, but using a bonded evaluator set that Sigvara would add instead of a new network).
 4. **Duplicate charge** — same payment ID presented twice (the retry-dedup problem called out by Mohammad Vazin on X). Facilitator-side, but Sigvara can record it as evidence.
 
 ## Refund Semantics
@@ -103,7 +103,7 @@ BUYER                         x402 FACILITATOR              SELLER (resource ser
 
 - **Differentiation:** Every other reputation system scores *after the fact* from self-reported outcomes. Sigvara becomes the system that *decides* outcomes. That is a category shift from scoreboard to referee.
 - **x402 Foundation alignment:** The Foundation's four deciding questions include "whether a dispute scheme lands in the core spec" and "whether any facilitator can offer escrow and arbitration under the open standard." Sigvara is a ready-made arbitration primitive any facilitator could plug in — without waiting for the Foundation to ship one.
-- **Arc wedge:** x402-trust is already deployed on Arc testnet with a DisputeManager. Sigvara's SVR mainnet target is Q4 2026 on Arc. One integration demo — pay, attest, challenge, resolve — on Arc beats any whitepaper argument. Shared chain, shared settlement asset (USDC), shared identity standard (ERC-8004).
+- **Arc wedge:** x402-trust is already deployed on Arc testnet with a DisputeManager. Sigvara's SVR mainnet target is Q4 2026 on Arc. One integration demo — pay, attest, challenge, resolve — on Arc beats any whitepaper argument. Shared chain and identity standard (ERC-8004). The oracle scores SVR payments today, so USDC settlement needs the `PAYMENT_ASSET` work in [ecosystem.md](ecosystem.md) first.
 
 ## Open Questions / Judgment Calls
 

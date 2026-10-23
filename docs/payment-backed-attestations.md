@@ -50,7 +50,7 @@ come from CounterAudit, which holds a token, and can be added to a payment that 
 credited without one (once; a recorded outcome is final). The response says which
 happened with `outcomeRecorded`.
 
-**A negative attestation still needs the admin token.** The asymmetry is deliberate.
+**A negative attestation still needs a write credential.** The asymmetry is deliberate.
 `successScore` is `successful / (total + prior)`, so a negative lowers the score
 directly, and a verified payment proves money moved but never that the work failed.
 Leaving that open would mean anyone could downgrade any agent for the price of one
@@ -206,7 +206,10 @@ that made it can open is not a commitment to anyone else.
 A verifier takes each payment, reads the transaction off the chain to confirm the payer,
 the amount and the settlement time, rebuilds the leaf, and checks it against the root the
 contract holds, either locally or through `verifyEvidence(didHash, leaf, proof)`. Nothing
-in that path requires trusting the oracle.
+in that path requires trusting the oracle. The root the contract holds is the one the
+oracle committed to in the proposal that was last finalized, so the check applies to the payments as
+they stood then: a payment that arrived or aged out afterwards changes what the endpoint
+serves, not what was committed.
 
 The leaf is `keccak256(keccak256(abi.encode(bytes32 txHash, address payer, uint256 amount,
 uint256 settledAt, uint8 outcome)))`, where `outcome` is **0 failed, 1 succeeded, 2 not
@@ -249,9 +252,8 @@ chain independently, which is the watcher this does not replace.
 ## What this does not fix
 
 The payer is verified, the payment is verified, and the amount is verified. The
-*opinion* is not. Someone who genuinely pays an agent can still report
-`success: false` out of spite, or pay themselves through an agent they control to
-manufacture volume. Payment raises the cost of a fake attestation from zero to the
+*opinion* is not. A credentialed service can still report a wrong outcome, and anyone can
+pay themselves through an agent they control to manufacture volume. Payment raises the cost of a fake attestation from zero to the
 agent's price; it does not make attestations honest.
 
 Self-dealing is the sharper of the two, and the counterparty checks above blunt it
@@ -260,6 +262,6 @@ version; funding a separate wallet still works. The per-payer cap then forces th
 into at least five wallets to max the factor, each with its own funding trail, but
 a determined attacker with capital can still build one.
 
-Attestation state also still lives in the oracle's JSON file rather than on chain,
-so the inputs to a score remain unverifiable by a third party even though each one
-is now backed by a transaction they could check.
+Attestation state also still lives in the oracle's JSON file rather than on chain.
+The payments in it are checkable through the evidence root, but an outcome is a
+credentialed service's word: the leaf commits to it, and nothing on chain can confirm it.

@@ -9,6 +9,13 @@
 
 > ## Status since this review — 2026-09-20
 >
+> **Later changes.** This status was last revised on 17 October. The mainnet-readiness work of
+> 22 October (split upgrade and admin authority, the guardian pause, launch floors and ceilings,
+> reader freshness) is recorded in [ADR 0005](adr/0005-governance-and-emergency-powers.md), the
+> [launch checklist](launch-checklist.md), the README's
+> [access control summary](../README.md#access-control-summary) and, for the reader,
+> the [integration guide](integration.md), not here.
+>
 > The body below is left as written on 17 September and is **not** a current statement
 > of readiness. What has changed since:
 >
@@ -36,7 +43,7 @@
 >
 > **Still open, and still mainnet blockers.**
 > - No external security audit.
-> - Mainnet bond asset undecided; SVR has not launched.
+> - The mainnet bond asset is decided (SVR, see [token.md](token.md)), but SVR has not launched.
 > - Both oracle operators are run by the same party. A second bonded operator has run in
 >   checker mode since 20 September on separate hardware and a separate RPC provider, and
 >   `activeCount` is 2, but two independent recomputations agreeing is not two independent

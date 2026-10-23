@@ -148,7 +148,7 @@ The master avatar is `site/assets/sigvara-avatar.svg`. Use it for:
 
 - Browser favicon.
 - Social profile image.
-- Open Graph preview image.
+- Source for the Open Graph preview image (the pages publish `sigvara-card.png`).
 - GitHub organization or repository avatar.
 - Product shell icon.
 
@@ -557,13 +557,13 @@ Avoid:
 
 ## 15. Implementation checklist
 
-- [ ] Add the token variables to the shared stylesheet (`site/assets/style.css`).
+- [x] Add the token variables to the shared stylesheet (`site/assets/style.css`).
 - [ ] Replace one-off colors with named Sigvara tokens.
-- [ ] Add `sigvara-avatar.svg` as favicon and social image on every page.
+- [x] Use `sigvara-avatar.svg` as the favicon and `sigvara-card.png` as the social image on every page.
 - [ ] Use the S-shaped signal mark consistently across navigation and cards.
-- [ ] Implement the 1160px container and 30px mobile gutter.
-- [ ] Add visible focus states to all links, buttons, and controls.
-- [ ] Add reduced-motion handling.
+- [x] Implement the 1160px container and 30px mobile gutter.
+- [x] Add visible focus states to all links, buttons, and controls.
+- [x] Add reduced-motion handling.
 - [ ] Test text contrast and mobile wrapping.
 - [ ] Verify the visual hierarchy at 320px, 768px, and 1440px widths.
 - [ ] Confirm no page carries legacy branding.

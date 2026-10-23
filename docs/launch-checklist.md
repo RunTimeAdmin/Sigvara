@@ -4,15 +4,15 @@ Sequenced against the Q4 2026 SVR mainnet milestone. Dates are targets, not comm
 
 ## Phase 1 — Prove the mechanism (testnet, weeks 1–2)
 
-- [ ] **Live slash drill on a throwaway agent.** Fork test passes, but the real drill has never run against a non-demo identity. Register a throwaway at exactly `minimumStake` (1,000 SVR on testnet), file `initiateSlash` from the committee key, let the seven-day challenge window elapse, call `executeSlash` permissionlessly, claim proceeds, publish every tx hash with explorer links. State first in the write-up that it was a drill. Do **not** target the demo agent — `Slashed` is terminal.
-- [ ] **Publish the drill log** at `docs/slash-drill-log.md` and link it from the whitepaper roadmap, item 2.
-- [ ] **Disclose the self-administered property**: all three drill keys are held by one operator. That is a property of the drill, not a governance proof. Say so in the write-up.
+- [x] **Live slash drill on a throwaway agent.** Done. A throwaway was registered at exactly `minimumStake` (1,000 SVR on testnet), `initiateSlash` was filed from the committee key on 20 September 2026, and `executeSlash` was called permissionlessly on 3 October 2026 after the seven-day challenge window. The log carries the filing and execution transactions with explorer links and says first that it was a drill; the registration, bond and claim transactions are not listed. The demo agent was not targeted: `Slashed` is terminal.
+- [x] **Publish the drill log** at `docs/slash-drill-log.md` and link it from the whitepaper roadmap, item 2. Done.
+- [x] **Disclose the self-administered property**: all three drill keys are held by one operator. That is a property of the drill, not a governance proof. The log and the whitepaper both say so.
 
 ## Phase 2 — External audit (weeks 2–6, overlaps Phase 1)
 
 - [ ] **Engage an external auditor** for the Sigvara registries (`SigvaraIdentity`, `SigvaraStaking`, `SigvaraReputation`, `SigvaraOracleBond`). `SigvaraEpochFees` is left out of launch and of this audit ([ADR 0005](adr/0005-governance-and-emergency-powers.md)). Audits and development are funded separately from the token — ecosystem grants and CounterAudit integration revenue, not SVR.
 - [ ] **Fix findings, re-audit critical items** before any mainnet deployment transaction is signed.
-- [ ] **Publish the audit report** on sigvara.xyz and in the repo. A token with no audit and a single-operator oracle is exactly what a skeptic attacks first.
+- [ ] **Publish the audit report** on sigvara.xyz and in the repo. A token with no audit and an oracle run by one party is exactly what a skeptic attacks first.
 
 ## Phase 3 — SVR token launch on Tolly (Arc)
 
@@ -37,7 +37,7 @@ Sequenced against the Q4 2026 SVR mainnet milestone. Dates are targets, not comm
 ## Phase 5 — Flip monetization on
 
 - [ ] **Deploy the epoch-fee module and set `epochFee` > 0** once real volume exists. The module is left out of launch and of the first audit ([ADR 0005](adr/0005-governance-and-emergency-powers.md)); its charge moves into the proposal transaction, and it is audited before it is deployed. This is when metered monetization (verification lookups, bond checks, challenge windows via Circle nanopayments/x402 at sub-cent rates) turns on. Bootstrap at zero is deliberate — charging before utility exists is the POAP mistake.
-- [ ] **Meter per-event fees** aligned with the Circle/Proof x401+x402 demo pricing precedent (Proof bills $1.50 per identity verification).
+- [ ] **Meter per-event fees** aligned with the Circle x401+x402 demo pricing precedent.
 - [ ] **Staking rewards stay off** until treasury buybacks have built inventory. Cap: 5% of treasury SVR balance per quarter, published before the period, not after. Only bonded agents and bonded oracle operators are eligible — holding SVR earns nothing.
 
 ## Phase 6 — Bond governance (ongoing, min. every 2 quarters)

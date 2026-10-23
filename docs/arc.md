@@ -11,8 +11,11 @@ with SVR as the bond asset ([token.md](token.md)).
 | Arc mainnet | `5042` | `https://rpc.mainnet.arc.io` | [explorer.arc.io](https://explorer.arc.io) | none |
 
 Official docs: [Connect to Arc](https://docs.arc.io/arc/references/connect-to-arc).
-Alchemy, QuickNode, dRPC and Blockdaemon also serve Arc; use one of those for
-oracle indexing rather than the public endpoint.
+Other providers serve Arc too, but they are not interchangeable for oracle indexing. Of the
+alternatives to the public endpoint only QuickNode worked when measured: dRPC accepts
+`eth_getLogs` ranges of only about 100 blocks and Blockdaemon returns nothing for older
+transactions. The measurements are in the
+[second-operator runbook](../oracle/RUNBOOK-second-operator.md).
 
 ## What is different about Arc
 
@@ -89,7 +92,7 @@ needs it as `FROM_BLOCK`.
 Copy `oracle/.env.example` to `oracle/.env`, then set:
 
 ```bash
-RPC_URL=https://rpc.testnet.arc.io   # or your Alchemy / QuickNode Arc URL
+RPC_URL=https://rpc.testnet.arc.io   # or your QuickNode Arc URL
 IDENTITY_ADDRESS=0x...               # from deployments/5042002.json
 REPUTATION_ADDRESS=0x...
 FROM_BLOCK=<deploy block minus a small buffer>
@@ -154,12 +157,14 @@ Two operational notes:
 
 - **Only one instance may run at a time.** They share the oracle wallet, so two
   instances submit transactions with colliding nonces.
-- **`paymentEvents` is the only state that cannot be recovered by rescanning.**
-  Attestations arrive over HTTP, so a fresh state file loses them and every
-  payment-derived factor collapses to zero. They can be re-seeded by re-posting the
-  settlement hashes to `/attest`: the oracle re-verifies each against the chain and
+- **`paymentEvents` is the state a rescan cannot fully recover.** Outcomes arrive over
+  HTTP, and the payment scan on this deployment runs forward only from block 65199000,
+  so a fresh state file loses every outcome and every payment before that block, and the
+  payment-derived factors fall with them. The payments can be re-seeded by re-posting
+  their settlement hashes to `/attest` with a token, adding `success` only where the primary holds that
+  outcome (runbook step 7a): the oracle re-verifies each against the chain and
   re-reads the settlement time from the block, so decay and tenure come out
-  identical. Everything else — the log scan cursor, the agent set — rebuilds itself.
+  identical. Everything else, the log scan cursor and the agent set, rebuilds itself.
 
 
 ## Payment evidence by pull
@@ -351,6 +356,10 @@ What it checks is the proposer. A pending proposal whose proposer no longer hold
 whatever that key proposed from going live unreviewed. The cost is that such a proposal
 is stranded until a successor replaces it: the oracle does that on its next epoch after
 the window has passed, and a checking operator does it at once with `proposeIfEmpty`.
+
+> The finalization paragraph above and everything in this section describe `main`. The Arc testnet
+> proxies still run the September code, which has no signer registry (`setSigner`), no proposer check
+> when a score is finalized, and a `proposeIfEmpty` that reverts for any pending proposal.
 
 ### Keeping the bond off the signing key
 
@@ -717,18 +726,21 @@ second, verify third. Full sequence in
 
 ```bash
 cast call <oracleBond proxy> "operators(address)(uint256,uint8,uint256)" <operator> --rpc-url arc_mainnet
-cast send <oracleBond proxy> "setBondAmount(uint256)" <new floor wei> --private-key $ADMIN_KEY --rpc-url arc_mainnet
+# setBondAmount needs DEFAULT_ADMIN_ROLE, which on mainnet is the Admin Safe, so no single key can send it.
+# Build the calldata here and submit it as a Safe transaction to the oracleBond proxy.
+cast calldata "setBondAmount(uint256)" <new floor wei>
 cast call <oracleBond proxy> "isActiveOperator(address)(bool)" <operator> --rpc-url arc_mainnet   # must stay true
 ```
 
 ## Checklist
 
-- [ ] `pwsh scripts/check-arc.ps1` returns `5042002`
-- [ ] deployer funded from faucet.circle.com
-- [ ] `forge script script/Deploy.s.sol --rpc-url arc_testnet --broadcast`
-- [ ] `deployments/5042002.json` committed
-- [ ] oracle `.env` pointed at Arc, `ORACLE_ROLE` confirmed, first epoch scored
-- [ ] SDK integration tests green against Arc
+- [x] `pwsh scripts/check-arc.ps1` returns `5042002`
+- [x] deployer funded from faucet.circle.com
+- [x] `forge script script/Deploy.s.sol --rpc-url arc_testnet --broadcast`
+- [x] `deployments/5042002.json` committed
+- [x] oracle `.env` pointed at Arc, `ORACLE_ROLE` confirmed, first epoch scored
+- [ ] SDK integration tests green against Arc (they send transactions from an operator key, so
+      they skip in CI and have to be run by hand with the `SIGVARA_*` variables set)
 - [x] verify whether native USDC exposes a usable `IERC20` for bonds (address, decimals)
       — **it does.** `0x3600000000000000000000000000000000000000`, symbol USDC,
       **6 decimals**, real code, standard Transfer events. Confirmed on testnet

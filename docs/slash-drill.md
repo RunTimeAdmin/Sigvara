@@ -80,12 +80,12 @@ cast call 0xA69d62B2a6774D21A2c15d5d83b27277eD31d35B "hasRole(bytes32,address)(b
 fresh one, and asserts the role in `setUp`, so the rehearsal fails loudly if it ever moves.
 
 **Knowing the address is not the same as holding the key, and that is the actual blocker.**
-Confirm custody **before** step 1. A proposal filed with no way to resolve it leaves an
-agent suspended and its bond frozen until someone calls `cancelSlash`, which needs the
-same key.
+Confirm custody **before** step 1. Filing and `cancelSlash` both need that key, and a
+proposal you cannot cancel leaves the agent suspended with its bond frozen until the
+deadline, after which anyone can execute it.
 
 **Do not target the demo agent.** `0x8414ce0b…` is the agent the site, the on-ramp and the
-whitepaper all point at, with a live score of 12 and a public evidence root. Slashing it
+whitepaper all point at, with a live score and a public evidence root. Slashing it
 zeroes that score permanently. `Slashed` is terminal: the agent cannot be topped back up
 or restored. The fork test targets it because a fork is disposable; the live drill must
 not.
@@ -223,12 +223,17 @@ change to `challengePeriod` cannot move it.
 
 ### Days 0 to 7: the window
 
-This is the part worth showing. The agent can dispute:
+This is the part worth showing. The operator can dispute:
 
 ```bash
 cast send <staking> "disputeSlash(bytes32)" <TARGET_DID_HASH> \
   --rpc-url arc_testnet --private-key <TARGET_OPERATOR_KEY>
 ```
+
+> The rest of this section describes `main`. The Arc testnet proxies still run the September
+> code, where the committee rules on a dispute with `resolveDispute` and the veto, the lapse
+> and the re-file cooldown below do not exist yet. `test/SlashDrillFork.t.sol` rehearses the
+> deployed behaviour.
 
 Disputing **freezes** the bond rather than releasing it, and does not un-suspend the agent.
 The admin then rules with `resolveDispute(didHash, uphold)`; the committee that filed the

@@ -31,7 +31,7 @@ returning true for it until it tops up. `trust(agent).collateralized` reports th
 | A yes or no that refuses a stale score | `reader.isTrustedFresh(agent, minScore, maxAgeSeconds)` | `isTrusted`, and the score was written no more than `maxAgeSeconds` ago. See [How old the score is](#how-old-the-score-is) |
 | The standing behind it | `reader.trust(agent)`, or `trustByDid(didHash)` | One struct, described below |
 | One registry fact | the interfaces in `src/interfaces/ISigvara.sol` | Keyed by didHash, from `computeDidHash(agent)` |
-| An off-chain service that wants proof the caller controls the agent | `SigvaraGate` in the SDK | Challenge and response, then the same checks. See the [README](../README.md#refusing-work-to-an-agent-without-standing) |
+| An off-chain service that wants proof the caller controls the agent | `SigvaraGate` in the SDK | Challenge and response, then Active status and the spendable score. It does not check the bond against the current minimum, which `isTrusted` does. See the [README](../README.md#refusing-work-to-an-agent-without-standing) |
 
 ## Getting the interfaces
 
@@ -53,12 +53,14 @@ move, though the code behind them does.
 1. The agent is registered and its status is Active. An agent becomes Active when its bond
    reaches `minimumStake`. It stops being Active when its operator suspends it, when a slash
    proposal is opened against it, or when it is slashed.
-2. Its spendable score is at least `minScore`.
+2. The bond it holds now meets the staking contract's current `minimumStake`.
+3. Its spendable score is at least `minScore`.
 
-It does not check how much is staked. If you need a floor, read `stake` from `trust()` and
-apply your own. The status is stored, so an agent that was Active when governance raised
-`minimumStake` stays Active until something else changes its status, and the oracle cannot
-write a new score for an agent that sits below the minimum.
+It does not ask for more stake than that minimum. If you need a higher floor, read `stake`
+from `trust()` and apply your own. The status is stored, so an agent that was Active when
+governance raised `minimumStake` stays Active until something else changes its status;
+the second check is what makes `isTrusted` false for it until it tops up, and the oracle
+cannot write a new score for an agent that sits below the minimum.
 
 ### Why not call `meetsThreshold` directly
 
@@ -116,7 +118,7 @@ with maturity, so freshness answers when it was written, not whether it is still
 
 A consumer of the Reader trusts the parties that govern the registries, and should know which of their powers move an answer without warning. The detail is in [ADR 0005](adr/0005-governance-and-emergency-powers.md).
 
-- **Parameters, at once.** The admin Safe sets the minimum stake, the challenge and unbonding periods, the score window and the maturity rate, each between a floor and a ceiling. A raised minimum stake makes `isTrusted` false for an agent that holds less, immediately.
+- **Parameters, at once.** The admin Safe sets the minimum stake, the challenge and unbonding periods, the score window and the maturity rate. All but the minimum stake sit between a floor and a ceiling; the minimum stake only has to be above zero. A raised minimum stake makes `isTrusted` false for an agent that holds less, immediately.
 - **Standing, through a slash.** The committee files a slash. It executes after the challenge period unless the operator disputes it, in which case the admin Safe rules, or the admin Safe vetoes it. A slashed agent is terminal: `isTrusted` is false for good.
 - **Code, after 48 hours.** Upgrades and the wiring between registries go through a timelock, and its delay is the public notice. Watch the timelock if you cannot accept a change in behaviour.
 - **Inflows, for up to three days.** A guardian can pause registrations, stake deposits, score proposals and bond deposits. Reads, exits, slashes and finalization carry on, so a pause shows up as a score that stops moving, which `isTrustedFresh` catches.
@@ -151,7 +153,7 @@ Show the facts and the date they were read:
 Avoid wording that claims more than the data does: "Trusted by Sigvara", "Verified safe",
 "Audited", "Insured", "Guaranteed". Next to the score, one line is enough:
 
-> An oracle computes the score from payments verified on chain, outcomes reported by the payer
+> An oracle computes the score from payments verified on chain, outcomes reported by a credentialed service
 > and the other signals in the reputation model. A bond stands behind it that a committee can
 > slash. It is not an audit, insurance or a guarantee.
 
@@ -194,7 +196,7 @@ protocol reads from it, so deploying or replacing one carries no protocol risk. 
 different registries, deploy another.
 
 ```bash
-IDENTITY_ADDRESS=... REPUTATION_ADDRESS=... STAKING_ADDRESS=... \
+DEPLOYER_PRIVATE_KEY=... IDENTITY_ADDRESS=... REPUTATION_ADDRESS=... STAKING_ADDRESS=... \
 SMOKE_AGENT=<a registered agent> \
 forge script script/DeployReader.s.sol --rpc-url $RPC --broadcast -vvvv
 ```

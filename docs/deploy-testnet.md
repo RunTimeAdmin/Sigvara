@@ -133,9 +133,10 @@ cast call <reputation> "hasRole(bytes32,address)(bool)" $(cast keccak "ORACLE_RO
 cast call <staking>    "hasRole(bytes32,address)(bool)" $(cast keccak "SLASHING_COMMITTEE_ROLE") <committee> --rpc-url arc_testnet
 ```
 
-Check that every address in the artifact is a contract on this chain. The script reads
-each proxy's implementation slot, exits non-zero on any address that is not a proxy, and
-records which implementation is live:
+Check that every proxy in the artifact is a proxy on this chain. The script loads ethers
+from `oracle/node_modules`, so run `cd oracle && npm ci` once first. It reads each proxy's
+implementation slot, exits non-zero on any that is not a proxy, and records which
+implementation is live:
 
 ```bash
 node scripts/record-implementations.mjs
@@ -166,9 +167,11 @@ cd oracle && npm ci && node index.js
 
 Once `deployments/5042002.json` exists, these stop being placeholders:
 
-- `site/app.html` — the four `0x0000…` constants at the top of `assets/app.js`
-- `docs/quickstart.md` and `site/docs/quickstart.html` — the `0x…` samples
-- SDK integration tests — export `SIGVARA_*` and run `npx vitest run test/integration.test.ts`
+- `site/assets/app.js`: the `IDENTITY`, `REPUTATION`, `SVR` and `STAKING` constants (`FEES`
+  stays zero while `SigvaraEpochFees` is not deployed)
+- `docs/quickstart.md` and `site/docs/quickstart.html`: the address samples
+- SDK integration tests: from `packages/sdk`, export the `SIGVARA_*` variables listed in
+  [arc.md](arc.md) section 4 and run `npx vitest run test/integration.test.ts`
 
 ## 8. Deploying the site
 

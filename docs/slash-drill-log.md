@@ -161,7 +161,9 @@ documented, to the wei; and that a live, nonzero reputation is destroyed with it
   unreachable. `activityWindow` returns `null` for an agent with no payment events at all,
   and `ageScore` reads a null activity window as "measure from registration". The target
   never received a payment, so it took that branch for its whole life. Checked against the
-  live state file: the only agent with payment events is the demo agent.
+  live state file: the only agent with payment events is the demo agent. That branch is gone
+  where payment verification is on: since 22 October 2026 an agent with no payment events
+  gets an empty window and scores 0 tenure.
 
   The 15 is therefore the community 5 plus an `ageScore` of 10, and `ageCurve` returns
   exactly 10 on days ten and eleven. The slash landed on day twelve, where the curve reads

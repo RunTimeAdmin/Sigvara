@@ -10,10 +10,12 @@
 >
 > **Outcome reporting is live too.** Add `outcome` (`success`/`failure`) and
 > `payment_tx_hash` to an ingest and the result is attested to the oracle, feeding the
-> agent's Success Rate and Fee Activity. The settlement hash is required because the
-> payment is the credential: the oracle re-reads that transaction from the chain and
-> takes the payer from the transfer log rather than trusting the caller. CounterAudit
-> relays it and is not trusted for it — a forged hash fails at the oracle.
+> agent's Success Rate and Fee Activity. The settlement hash is required: the oracle
+> re-reads that transaction from the chain and takes the payer from the transfer log
+> rather than trusting the caller, so a forged hash fails at the oracle. The outcome is
+> recorded because CounterAudit presents an oracle token (`SIGVARA_ORACLE_URL` and
+> `SIGVARA_ORACLE_TOKEN`, below). A request without a token credits the payment and
+> records no outcome.
 
 CounterAudit is a tamper-evident AI audit trail service. An `agent_did` field on an ingest
 call enriches each sealed packet with the agent's on-chain Sigvara identity and reputation
@@ -57,6 +59,14 @@ SIGVARA_CHAIN_ID=5042002
 
 # Optional — default is 5000ms
 SIGVARA_ENRICH_TIMEOUT_MS=5000
+
+# Outcome reporting back to the oracle. Both are needed; without them CounterAudit still
+# enriches packets and reports nothing.
+SIGVARA_ORACLE_URL=https://oracle.sigvara.xyz
+SIGVARA_ORACLE_TOKEN=...   # a write credential the oracle operator issued for CounterAudit
+
+# Optional, default is 4000ms
+SIGVARA_ORACLE_TIMEOUT_MS=4000
 ```
 
 
