@@ -38,7 +38,7 @@ Other open-source work in the same practice area:
 Same builder, different trust models.
 
 - **Countersig** ([countersig.com](https://countersig.com)) is a hosted non-human-identity verification platform — centralized, with its own trust assumptions.
-- **Sigvara** (this repo) is the decentralized protocol: on-chain reputation and bonds on ERC-8004. Trust is enforced by cryptography and cryptoeconomics.
+- **Sigvara** (this repo) is the protocol: on-chain reputation and bonds on ERC-8004. It is permissionless to use and not ownerless: the contracts are governed by a timelock, a multisig and a committee, and the oracle is run by the project today ([ADR 0005](adr/0005-governance-and-emergency-powers.md)).
 
 Countersig does not read from or write to Sigvara state today. Planned CounterAegis policy gating on `meetsThreshold()` would have Countersig reading Sigvara standing, not writing it. They are separate products that happen to share an author. See [docs/lineage.md](lineage.md) for the naming history.
 

@@ -112,6 +112,16 @@ refusals; a much longer one is the stale read this replaces. If you read `trust(
 own limit, compare `scoreUpdatedAt` with `block.timestamp`. A score that is current still moves
 with maturity, so freshness answers when it was written, not whether it is still rising.
 
+## What can change under you
+
+A consumer of the Reader trusts the parties that govern the registries, and should know which of their powers move an answer without warning. The detail is in [ADR 0005](adr/0005-governance-and-emergency-powers.md).
+
+- **Parameters, at once.** The admin Safe sets the minimum stake, the challenge and unbonding periods, the score window and the maturity rate, each between a floor and a ceiling. A raised minimum stake makes `isTrusted` false for an agent that holds less, immediately.
+- **Standing, through a slash.** The committee files a slash. It executes after the challenge period unless the operator disputes it, in which case the admin Safe rules, or the admin Safe vetoes it. A slashed agent is terminal: `isTrusted` is false for good.
+- **Code, after 48 hours.** Upgrades and the wiring between registries go through a timelock, and its delay is the public notice. Watch the timelock if you cannot accept a change in behaviour.
+- **Inflows, for up to three days.** A guardian can pause registrations, stake deposits, score proposals and bond deposits. Reads, exits, slashes and finalization carry on, so a pause shows up as a score that stops moving, which `isTrustedFresh` catches.
+- **Scores, from an oracle the project runs today.** A proposal waits out a challenge window the committee can use to reject it, and a second operator re-scores each one and logs a divergence. Both are run by the same party, so that is a check on mistakes and not an independent source.
+
 ## Patterns
 
 - **Gate at entry.** `isTrusted` at the point where the agent asks for something. The example

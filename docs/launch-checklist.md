@@ -26,6 +26,11 @@ Sequenced against the Q4 2026 SVR mainnet milestone. Dates are targets, not comm
 ## Phase 4 — Mainnet registry deployment (gated on Phase 2)
 
 - [ ] **Deploy registries to Arc mainnet** (chain ID 5042) initialized with the SVR address, `minimumStake` = 10,000 SVR, and `bondAmount` = 2,500,000 SVR. The deploy scripts refuse less than either on this chain ([ADR 0005](adr/0005-governance-and-emergency-powers.md), decision 11). `SigvaraEpochFees` is not deployed at launch.
+- [ ] **Run an execution keeper.** Slash execution is permissionless on purpose, so nothing executes a slash
+  unless someone does: a funded, redundant job that calls `executeSlash` as soon as a window closes, and
+  watches for `expireSlash` and `expireDispute`. A slash that is not executed within 14 days of its deadline
+  lapses and has to be filed again after the cooldown ([ADR 0005](adr/0005-governance-and-emergency-powers.md),
+  decision 7). It also races its own expiry: until `expireSlash` lands, execution is still allowed.
 - [ ] **Initialize oracle bonds** for admitted operators. `admit()` is governance-gated — nobody buys their way in. The bond is what a corrupt oracle can lose.
 - [ ] **Verify impersonation guidance**: only the published address is genuine SVR. `countersig.network` redirects to sigvara.xyz and serves nothing.
 

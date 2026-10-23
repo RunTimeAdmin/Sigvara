@@ -279,7 +279,10 @@ script, which merges the proxy address into `deployments/<chainId>.json` under
 
 Use three distinct addresses. If the deployer is also the slasher and the payee, one
 key can seize an operator's bond and send it to itself, which is the opposite of what
-a performance bond is for. The script warns on testnet and refuses on mainnet.
+a performance bond is for. The script warns on testnet and refuses on mainnet when the
+deployer holds either role. The slasher and the payee must differ on every chain: the
+registry refuses the pairing itself, so a deploy that names the same address for both, or
+neither (both default to the deployer), stops before anything is sent.
 
 PowerShell:
 
