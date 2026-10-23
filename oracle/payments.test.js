@@ -301,6 +301,31 @@ test('readConfig: half-life defaults to 90 days and 0 turns decay off', () => {
   assert.equal(readConfig({ PAYMENT_HALF_LIFE_DAYS: '30' }).halfLifeMs, 30 * DAY);
 });
 
+// A blank is how a template says unset, and checkNumericConfig and the README both read it that
+// way. `Number(env.X ?? default)` read it as zero, which switched the control off: no decay, no
+// per-payer cap, no trust weighting.
+test('readConfig: a blank half-life, cap or trust weight is unset and not zero', () => {
+  const unset = readConfig({});
+  assert.equal(unset.halfLifeMs, 90 * DAY);
+  assert.equal(unset.maxPerPayer, 4);
+  assert.equal(unset.trustWeight, 1);
+  for (const blank of ['', '   ']) {
+    const c = readConfig({
+      PAYMENT_HALF_LIFE_DAYS: blank, PAYMENT_MAX_PER_PAYER: blank, PAYMENT_TRUST_WEIGHT: blank,
+    });
+    assert.equal(c.halfLifeMs, unset.halfLifeMs, `half-life for ${JSON.stringify(blank)}`);
+    assert.equal(c.maxPerPayer, unset.maxPerPayer, `cap for ${JSON.stringify(blank)}`);
+    assert.equal(c.trustWeight, unset.trustWeight, `trust weight for ${JSON.stringify(blank)}`);
+  }
+});
+
+test('readConfig: zero still switches decay, the cap and the weighting off when it is written', () => {
+  const c = readConfig({ PAYMENT_HALF_LIFE_DAYS: '0', PAYMENT_MAX_PER_PAYER: '0', PAYMENT_TRUST_WEIGHT: '0' });
+  assert.equal(c.halfLifeMs, 0);
+  assert.equal(c.maxPerPayer, 0);
+  assert.equal(c.trustWeight, 0);
+});
+
 // ---- self-payment ----------------------------------------------------------
 
 const IDENT = { operator: '0x45D8c79e1188A429dbDfd8400A2869316d6fCe8D', agentAddress: '0xCc52Cd92963f8A86d04dB29a4810d1e01D193910' };

@@ -291,6 +291,28 @@ const DAY = 86_400_000;
 const HL = 30 * DAY;
 const DID_D = '0xdecay';
 
+// The configured half-life is read once, when the module loads, so each value gets a process of its
+// own. A blank FLAG_HALF_LIFE_DAYS used to read as zero, which switched flag decay off.
+test('FLAG_HALF_LIFE_DAYS: blank is the default, and zero still turns decay off', () => {
+  const { spawnSync } = require('node:child_process');
+  const read = (value) => {
+    const env = { ...process.env, ORACLE_STATE_PATH: '/nonexistent/state.json' };
+    if (value === undefined) delete env.FLAG_HALF_LIFE_DAYS; else env.FLAG_HALF_LIFE_DAYS = value;
+    const r = spawnSync(
+      process.execPath,
+      ['-e', "process.stdout.write(String(require('./store').FLAG_HALF_LIFE_MS))"],
+      { cwd: __dirname, env, encoding: 'utf8' },
+    );
+    assert.equal(r.status, 0, r.stderr);
+    return r.stdout;
+  };
+  assert.equal(read(undefined), String(30 * DAY));
+  assert.equal(read(''), String(30 * DAY));
+  assert.equal(read('   '), String(30 * DAY));
+  assert.equal(read('10'), String(10 * DAY));
+  assert.equal(read('0'), '0');
+});
+
 test('decayedFlagCount: a fresh flag counts in full', () => {
   const now = 1_000_000_000_000;
   flags.set(DID_D, [now]);
