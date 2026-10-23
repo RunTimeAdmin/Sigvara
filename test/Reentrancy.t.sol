@@ -183,6 +183,7 @@ contract StakingReentrancyTest is Test, RegistrationHelper {
         staking.initiateSlash(didHash, victim, "evidence");
         vm.prank(operator);
         staking.disputeSlash(didHash);
+        vm.warp(block.timestamp + CHALLENGE + 1); // an upheld ruling waits for the deadline
 
         token.arm(
             ReentrantToken.Hook.OnTransfer,

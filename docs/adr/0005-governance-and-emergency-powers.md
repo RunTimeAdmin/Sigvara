@@ -19,7 +19,9 @@ was not:
 - the committee could drop a proposal and file the next in the same block, so a stake could be held
   frozen for good;
 - the committee also ruled on the operator's dispute, and could uphold it the moment it was filed, which
-  cut short the whole challenge period the admin's veto relies on;
+  cut short the whole challenge period the admin's veto relies on. Moving the ruling to the admin did
+  not by itself fix the timing: an upheld ruling had no deadline of its own, so a disputed slash could
+  still be settled in the block its dispute was filed in, sooner than an undisputed one could;
 - the reputation challenge window was read live when a score finalized or was rejected, so an admin
   who changed it moved the end of every proposal already pending;
 - a slash proposal that nobody executed or cancelled never lapsed. Once its window closed the operator
@@ -44,9 +46,12 @@ This ADR records what was decided about each, and what was left as a stated trus
 2. **A second key stops a slash and rules on disputes.** `SigvaraStaking.vetoSlash(didHash)` lets the
    admin drop a Pending proposal, including after its challenge deadline and before anyone executes
    it, or a Disputed one. `resolveDispute` is the admin's too: the committee files a slash and no longer
-   rules on it, so nobody is accuser, judge and payee at once, and a dispute cannot be upheld before the
-   admin has had the whole window. If the admin never rules, anyone can expire the dispute after 14
-   days and the agent keeps its stake. The committee still files and cancels.
+   rules on it, so nobody is accuser, judge and payee at once. A dispute cannot bring a slash forward
+   either: `resolveDispute(didHash, true)` reverts until the challenge deadline fixed when the slash was
+   filed has passed, which is the moment `executeSlash` opens for an undisputed slash, while dropping is
+   open at any time. A dispute filed on the first day can be upheld from day 7 and expires on day 14. If
+   the admin never rules, anyone can expire the dispute after 14 days and the agent keeps its stake. The
+   committee still files and cancels.
 3. **The committee cannot file again at once.** Every drop (cancelled, vetoed, expired after a
    dispute, resolved in the agent's favour) records `lastDroppedAt`, and `initiateSlash` refuses
    for one challenge period after it. An operator always gets a window to act, and a withdrawal it
@@ -141,6 +146,9 @@ stated trust assumption, not an oversight:
   and the guardian.
 - A slash that is legitimate has to be executed within 14 days of its deadline, or it lapses and has to
   be filed again after the cooldown, so it should be executed as soon as the window closes.
+- A dispute turns an automatic slash into one the admin has to uphold, and it cannot be upheld sooner
+  than an undisputed slash could have been executed. Disputing buys the operator a ruling, never a
+  faster loss.
 - A pause can be used against the protocol by a compromised guardian: it can close new registrations,
   deposits, proposals and bonds for three of every four days until the admin revokes it. That is a
   nuisance with an instant remedy, and the price of being able to stop a live bug while a fix is built.

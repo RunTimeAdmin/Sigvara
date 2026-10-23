@@ -259,7 +259,7 @@ sequenceDiagram
         Op->>ST: disputeSlash(didHash)
         Note over ST: Proposal → Disputed. Bond stays frozen,<br/>agent stays Suspended
         AD->>ST: resolveDispute(didHash, uphold)
-        Note over ST: Upheld slashes; rejected cancels and reinstates.<br/>Unruled after 14 days, anyone may expireDispute()
+        Note over ST: Upheld slashes, but not before the 7-day deadline;<br/>rejected cancels and reinstates at once.<br/>Unruled after 14 days, anyone may expireDispute()
     else Challenge period elapses undisputed
         Anyone->>ST: executeSlash(didHash)
         ST->>ID: updateStatus(didHash, Slashed)
