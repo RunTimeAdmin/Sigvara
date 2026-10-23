@@ -5,6 +5,12 @@ import type { Challenge, ParsedChallenge } from './types';
 
 const DEFAULT_TTL = 300;
 
+/**
+ * How far ahead of this clock a challenge's signed timestamp may be: allowance for two
+ * hosts' clocks disagreeing, and no more. See isChallengeExpired.
+ */
+export const MAX_FUTURE_SKEW_SECONDS = 60;
+
 const V1_PREFIX = 'SIGVARA-VERIFY:';
 const V2_HEADER = 'SIGVARA-VERIFY-V2';
 
@@ -135,6 +141,15 @@ function parseV1(payload: string): ParsedChallenge {
   return { did, nonce, timestamp, version: 1 };
 }
 
+/**
+ * True when the payload is not fresh: older than `maxAgeSeconds`, dated more than
+ * MAX_FUTURE_SKEW_SECONDS ahead of this clock, or unparseable.
+ *
+ * A future timestamp used to count as fresh for as long as it stayed in the future, since
+ * only the age was compared. Anyone who got an agent to sign a payload dated ten years
+ * ahead held a proof that stayed valid for ten years, and a gate stored its nonce for as
+ * long, which also stalled the gate's pruning behind it.
+ */
 export function isChallengeExpired(payload: string, maxAgeSeconds = DEFAULT_TTL): boolean {
   let timestamp: number;
   try {
@@ -145,7 +160,8 @@ export function isChallengeExpired(payload: string, maxAgeSeconds = DEFAULT_TTL)
     // other check could still read as fresh.
     return true;
   }
-  return Math.floor(Date.now() / 1000) - timestamp > maxAgeSeconds;
+  const age = Math.floor(Date.now() / 1000) - timestamp;
+  return age > maxAgeSeconds || age < -MAX_FUTURE_SKEW_SECONDS;
 }
 
 function assertNoNewline(field: string, value: string): void {

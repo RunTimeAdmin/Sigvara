@@ -124,8 +124,15 @@ function chainState() {
 
 function configured() { return enabled; }
 
-const withTimeout = (promise) =>
-  Promise.race([promise, new Promise((_, rej) => setTimeout(() => rej(new Error('external read timeout')), READ_TIMEOUT_MS))]);
+// The timer is cleared once the read settles. Left running, every read held a pending
+// timer for the full timeout after it had already answered.
+function withTimeout(promise) {
+  let timer;
+  const timeout = new Promise((_, rej) => {
+    timer = setTimeout(() => rej(new Error('external read timeout')), READ_TIMEOUT_MS);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
 
 // getClients -> per-client getLastIndex -> readFeedback. The registry is not
 // enumerable and public RPCs cap getLogs ranges, so per-agent reads beat event

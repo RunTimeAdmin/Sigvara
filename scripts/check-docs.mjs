@@ -58,8 +58,10 @@ function signatureOf(name) {
     if (mapping) return `${name}(${mapping[1]})`;
     // A public scalar generates a getter too, and it takes no arguments. Without this
     // branch `minimumStake` resolves to null and the selector check skips it in
-    // silence, which is indistinguishable from not checking it at all.
-    const scalar = text.match(new RegExp(`\\b(?:address|bool|bytes\\d*|u?int\\d*|string)\\s+public\\s+(?:constant\\s+|immutable\\s+)?${name}\\s*[;=]`));
+    // silence, which is indistinguishable from not checking it at all. A contract-typed
+    // one too (`IERC20 public svr`): its getter takes no arguments either, and leaving it
+    // out let a wrong `svr` selector sit in the site unchecked.
+    const scalar = text.match(new RegExp(`\\b(?:address|bool|bytes\\d*|u?int\\d*|string|[A-Z]\\w*)\\s+public\\s+(?:constant\\s+|immutable\\s+)?${name}\\s*[;=]`));
     if (scalar) return `${name}()`;
   }
   return null;
@@ -81,7 +83,13 @@ for (const file of ['site/assets/app.js', 'site/assets/testnet.js']) {
   for (const [, name, sel] of selBlock[1].matchAll(/(\w+)\s*:\s*"(0x[0-9a-fA-F]{8})"/g)) {
     if (externalSelectors.has(name)) continue;
     const sig = signatureOf(name);
-    if (!sig) continue;              // struct params, or defined outside src/
+    // Unresolved is a failure, not a skip: a skip is indistinguishable from a pass, and
+    // that is how a wrong `svr` selector went unnoticed. A function with struct
+    // parameters, or one not defined in src/, belongs in externalSelectors on purpose.
+    if (!sig) {
+      fail(`${file} SEL`, `${name}: no signature found in src/ to check it against`);
+      continue;
+    }
     const want = ethers.id(sig).slice(0, 10);
     if (want.toLowerCase() !== sel.toLowerCase()) {
       fail(`${file} SEL`, `${name}: table has ${sel}, ${sig} is ${want}`);

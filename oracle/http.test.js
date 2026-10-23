@@ -190,6 +190,34 @@ test('/flag files the flag under the one stored spelling of the hash', async () 
   assert.equal(s.body.flags, 1, 'a score reads the flag, which a mixed-case key would hide');
 });
 
+test('/score reads the stored spelling whatever case the caller writes the hash in', async () => {
+  const lower = `0x${'9e'.repeat(32)}`;
+  assert.equal((await oracle.call('POST', '/flag', { didHash: lower }, ADMIN)).status, 200);
+  const s = await oracle.call('GET', `/score/0x${'9E'.repeat(32)}`);
+  assert.equal(s.status, 200, s.text);
+  assert.equal(s.body.flags, 1, 'the flag is found from an upper-case request');
+  assert.equal(s.body.didHash, lower, 'and the hash is answered in the stored spelling');
+});
+
+test('GET /jobs/:address answers from the job registry when one is configured', async () => {
+  // The scan bound used to be declared inside the epoch function, out of the handler's
+  // reach, so every /jobs request threw a ReferenceError and answered 502.
+  const jobsWorld = new World();
+  const withJobs = await startOracle({ world: jobsWorld, env: { ...ENV, JOBS_REGISTRY_ADDRESS: `0x${'44'.repeat(20)}` } });
+  try {
+    const r = await withJobs.call('GET', `/jobs/0x${'55'.repeat(20)}`);
+    assert.equal(r.status, 200, r.text);
+    assert.equal(r.body.counts.jobsSeen, 0);
+    assert.deepEqual(
+      [r.body.window.fromBlock, r.body.window.toBlock],
+      [jobsWorld.data.head - 50_000, jobsWorld.data.head],
+      'bounded to the default JOBS_MAX_SPAN',
+    );
+  } finally {
+    await withJobs.stop();
+  }
+});
+
 test('/flag/resolve and /link refuse a didHash that is not a 32-byte hash', async () => {
   for (const [path, body] of [
     ['/flag/resolve', { didHash: 'nope' }],

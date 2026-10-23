@@ -22,7 +22,7 @@ const SEL = {
   epochFee: "0x41e4cfa8", balance: "0x89eba421", isCovered: "0xcb607e4f",
   depositFor: "0x1da1bbfb", withdraw: "0x040cf020",
   approve: "0x095ea7b3", allowance: "0xdd62ed3e", balanceOf: "0x70a08231", faucet: "0x57915897",
-  svr: "0x0b5ae4d9", symbol: "0x95d89b41", decimals: "0x313ce567", registerAgent: "0x367260d7", registrationDigest: "0x9aad085f",
+  svr: "0x39e1a28a", symbol: "0x95d89b41", decimals: "0x313ce567", registerAgent: "0x367260d7", registrationDigest: "0x9aad085f",
   getReputation: "0xd14519d2", getPendingScore: "0x56cf76e7", challengeWindow: "0x861a1412",
   // SigvaraStaking. Verified with `cast sig`, not guessed: getStake and minimumStake
   // match the pair testnet.js already uses against the same deployment.

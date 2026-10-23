@@ -4,7 +4,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { checkNumericConfig, numberProblem, NUMERIC } = require('./config');
+const { checkNumericConfig, numberProblem, oracleModeError, NUMERIC } = require('./config');
 
 // These are the values that used to turn a control off. Each parsed to NaN, a comparison
 // against NaN is never true, and the failure was silent and in the unsafe direction.
@@ -93,5 +93,12 @@ test('the env templates we ship pass the startup check', () => {
     }
     assert.ok(Object.keys(env).length > 3, `${name} was read`);
     assert.deepEqual(checkNumericConfig(env), [], name);
+  }
+});
+
+test('oracleModeError: unset, blank, primary and checker are modes; anything else is refused', () => {
+  for (const ok of [undefined, '', 'primary', 'checker']) assert.equal(oracleModeError(ok), null, String(ok));
+  for (const bad of ['Checker', 'CHECKER', ' checker', 'checker ', 'chekcer', 'watcher']) {
+    assert.match(oracleModeError(bad), /is not a mode/, bad);
   }
 });

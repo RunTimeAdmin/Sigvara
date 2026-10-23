@@ -186,6 +186,23 @@ describe('SigvaraVerifier.verifySignature against the registered key', () => {
     expect(await v.verifySignature(DID, p, '0'.repeat(88))).toBe(false);
   });
 
+  it('refuses a payload dated in the future, however well it is signed', async () => {
+    // The attack: a peer the agent authenticates to hands it a payload naming a victim
+    // verifier as the audience and dated ten years ahead. Only the age used to be checked,
+    // so the signature worked at the victim for as long as the date stayed in the future.
+    const { v } = verifierWith();
+    const later = Math.floor(Date.now() / 1000) + 10 * 365 * 86_400;
+    const p = ['SIGVARA-VERIFY-V2', `did: ${DID}`, `aud: ${AUDIENCE}`, 'nonce: deadbeef', `ts: ${later}`].join('\n');
+    expect(await v.verifySignature(DID, p, signChallenge(p, kp.secretKey), 300, AUDIENCE)).toBe(false);
+  });
+
+  it('accepts a payload a little ahead of this clock, as two hosts\' clocks may be', async () => {
+    const { v } = verifierWith();
+    const ahead = Math.floor(Date.now() / 1000) + 30;
+    const p = ['SIGVARA-VERIFY-V2', `did: ${DID}`, `aud: ${AUDIENCE}`, 'nonce: deadbeef', `ts: ${ahead}`].join('\n');
+    expect(await v.verifySignature(DID, p, signChallenge(p, kp.secretKey), 300, AUDIENCE)).toBe(true);
+  });
+
   it('honours a custom maxAge', async () => {
     const { v } = verifierWith();
     const ts = Math.floor(Date.now() / 1000) - 120;

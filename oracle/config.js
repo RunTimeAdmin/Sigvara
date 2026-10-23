@@ -93,4 +93,17 @@ function requireValidNumericConfig(label, env = process.env) {
   process.exit(1);
 }
 
-module.exports = { checkNumericConfig, requireValidNumericConfig, numberProblem, NUMERIC };
+/**
+ * Why ORACLE_MODE cannot be used, or null. Unset, blank or `primary` runs a primary and
+ * `checker` a checker, exactly as written. Anything else used to run a primary without a
+ * word: `CHECKER` or `Checker` on the checker host would then overwrite and finalize the
+ * real primary's proposals, the one thing a checker must never do.
+ */
+function oracleModeError(raw) {
+  // Untrimmed, because index.js compares it exactly: ' checker' would pass a trimmed check
+  // and still run a primary.
+  if (raw === undefined || ['', 'primary', 'checker'].includes(raw)) return null;
+  return `ORACLE_MODE="${String(raw).slice(0, 40)}" is not a mode: leave it unset (or primary), or set checker`;
+}
+
+module.exports = { checkNumericConfig, requireValidNumericConfig, numberProblem, oracleModeError, NUMERIC };

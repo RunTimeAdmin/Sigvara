@@ -5,6 +5,14 @@ require('dotenv').config();
 // Before any module reads its own settings. A typo in a numeric one used to turn a control
 // off without a word: PAYMENT_MAX_PER_PAYER=four removed the per-payer cap. See config.js.
 require('./config').requireValidNumericConfig('oracle');
+// Likewise the mode: a typo here does not turn a control off, it picks the wrong role.
+{
+  const modeErr = require('./config').oracleModeError(process.env.ORACLE_MODE);
+  if (modeErr) {
+    console.error(`[oracle] ${modeErr}`);
+    process.exit(1);
+  }
+}
 
 const http = require('http');
 const chain = require('./chain');
@@ -50,6 +58,12 @@ if (payments.required(paymentCfg) && paymentCfg.minAmount <= 0n) {
 // request, the same way the payment config does.
 const paymentScanCfg = paymentScan.readConfig();
 const jobsCfg = jobs.readConfig();
+/**
+ * Widest block range one /jobs request may scan. Module scope because the /jobs handler
+ * reads it: declared inside runEpochInner it was out of reach there, and every /jobs
+ * request threw a ReferenceError and answered 502.
+ */
+const JOBS_MAX_SPAN = Number(process.env.JOBS_MAX_SPAN || 50_000);
 let jobsProvider = null;
 let jobsChainId = null;
 
@@ -303,6 +317,28 @@ async function payerScoresFor(didHash) {
   const out = {};
   for (const [key] of unique) out[key] = payerScoreCache.get(key);
   return out;
+}
+
+/**
+ * One agent's score at `nowMs` (the chain's clock, in milliseconds): the single assembly
+ * shared by the epoch, the checker's re-score at a proposal's own time, and GET /score.
+ * It was written out three times, and the point of each copy was to match the others,
+ * so the number served is the number proposed. Returns the measured factors too, which
+ * callers report.
+ */
+async function scoreAt(didHash, { registeredAt, att, flagWeight, externalScore }, nowMs) {
+  const measured = measuredFactorsFor(didHash, nowMs, await payerScoresFor(didHash));
+  const scores = computeScore({
+    registeredAt,
+    attestations: measured.measuredAttestations ?? att,
+    flags: flagWeight,
+    externalScore,
+    measuredFeeScore: measured.measuredFeeScore,
+    activity: measured.activity,
+    propagation: measured.propagation,
+    now: nowMs,
+  });
+  return { measured, scores };
 }
 
 // ---- Epoch -----------------------------------------------------------------
@@ -658,10 +694,7 @@ async function runEpochInner() {
   // agent count instead of linear. See mapChunked for what chunking costs. It preserves
   // input order, so agentInfos stays aligned with agents exactly as the single
   // Promise.all left it and candidate ordering downstream is unchanged.
-  /** Widest block range one /jobs request may scan. */
-const JOBS_MAX_SPAN = Number(process.env.JOBS_MAX_SPAN || 50_000);
-
-const PHASE_ONE_CHUNK = 32;
+  const PHASE_ONE_CHUNK = 32;
   const agentInfos = await mapChunked(agents, PHASE_ONE_CHUNK, async ({ didHash }) => {
     try {
       const [info, pending, covered] = await Promise.all([
@@ -805,17 +838,8 @@ const PHASE_ONE_CHUNK = 32;
         // enough to move no integer factor, large enough that the two were not computing
         // the same function. A divergence tolerance hid it rather than fixing it.
         const scoringNowMs = chainNow * 1000;
-        const measured  = measuredFactorsFor(didHash, scoringNowMs, await payerScoresFor(didHash));
-        const scores    = computeScore({
-          registeredAt,
-          attestations: measured.measuredAttestations ?? att,
-          flags: flagWeight,
-          externalScore,
-          measuredFeeScore: measured.measuredFeeScore,
-          activity: measured.activity,
-          propagation: measured.propagation,
-          now: scoringNowMs,
-        });
+        const inputs = { registeredAt, att, flagWeight, externalScore };
+        const { measured, scores } = await scoreAt(didHash, inputs, scoringNowMs);
 
         // Checker mode: compare rather than compete. This oracle holds ORACLE_ROLE and a
         // bond like any other, so it *could* overwrite the primary's proposal — and must
@@ -876,17 +900,7 @@ const PHASE_ONE_CHUNK = 32;
           let auditScores = scores;
           if (freshPending.exists && freshPending.proposedAt > 0) {
             const atProposalMs = freshPending.proposedAt * 1000;
-            const m = measuredFactorsFor(didHash, atProposalMs, await payerScoresFor(didHash));
-            auditScores = computeScore({
-              registeredAt,
-              attestations: m.measuredAttestations ?? att,
-              flags: flagWeight,
-              externalScore,
-              measuredFeeScore: m.measuredFeeScore,
-              activity: m.activity,
-              propagation: m.propagation,
-              now: atProposalMs,
-            });
+            auditScores = (await scoreAt(didHash, inputs, atProposalMs)).scores;
           }
 
           // auditScores for every comparison; `scores` stays as-is for the propose path
@@ -1653,8 +1667,10 @@ async function handleRequest(req, res) {
         divergences: recent,
       });
     }
-    const didHash = pathname.slice('/divergence/'.length);
-    if (!/^0x[0-9a-fA-F]{64}$/.test(didHash)) {
+    // Lowercased like every other route: divergences are recorded under the hash as the
+    // chain returns it, so a mixed-case query read as "checked, nothing found".
+    const didHash = parseDidHash(pathname.slice('/divergence/'.length));
+    if (!didHash) {
       return json(res, 400, { error: 'didHash must be a 32-byte hex string' });
     }
     return json(res, 200, {
@@ -1939,17 +1955,7 @@ async function handleRequest(req, res) {
       //
       // One extra chain read per request, on an endpoint that already makes several.
       const scoringNowMs = (await chain.getLatestBlockTimestamp()) * 1000;
-      const measured  = measuredFactorsFor(didHash, scoringNowMs, await payerScoresFor(didHash));
-      const scores    = computeScore({
-        registeredAt,
-        attestations: measured.measuredAttestations ?? att,
-        flags: flagWeight,
-        externalScore,
-        measuredFeeScore: measured.measuredFeeScore,
-        activity: measured.activity,
-        propagation: measured.propagation,
-        now: scoringNowMs,
-      });
+      const { measured, scores } = await scoreAt(didHash, { registeredAt, att, flagWeight, externalScore }, scoringNowMs);
       return json(res, 200, {
         didHash,
         status,

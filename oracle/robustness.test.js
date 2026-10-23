@@ -130,6 +130,31 @@ test('a state file from a newer build is refused even when an older backup would
   assert.equal(files['state.json.bak'], GOOD_STATE, 'the older backup is not promoted over newer data');
 });
 
+test('a fresh start beside a backup keeps the old backup out of the save rotation', async () => {
+  // The live file is missing and the backup is the only copy of the old state left. The
+  // fresh start's saves used to rotate it away: the first removed it, the second replaced
+  // it with the new empty state.
+  await withOracle({ world: new World(), env: BASE_ENV, files: { 'state.json.bak': GOOD_STATE } }, async (oracle) => {
+    assert.equal((await oracle.call('GET', '/health')).body.stateSource, 'fresh', 'the fresh start is kept');
+    await eventually(oracle, () => oracle.files()['state.json'], 'the first save');
+    // A second save, so the rotation that used to lose it has run.
+    assert.equal((await oracle.call('POST', '/flag', { didHash: DID }, ADMIN)).status, 200);
+    await eventually(oracle, () => oracle.files()['state.json.bak'], 'the second save');
+    const orphaned = Object.entries(oracle.files()).filter(([n]) => n.startsWith('state.json.bak.orphaned-'));
+    assert.equal(orphaned.length, 1, 'the old backup is kept under its own name');
+    assert.equal(orphaned[0][1], GOOD_STATE);
+    assert.match(oracle.logs(), /a backup with no state file beside it was kept at/);
+  });
+});
+
+test('an ORACLE_MODE that is not a mode stops the process instead of starting a primary', async () => {
+  for (const mode of ['Checker', 'CHECKER', 'checker ', 'chekcer']) {
+    const { code, log } = await runToExit({ world: new World(), env: { ...BASE_ENV, ORACLE_MODE: mode } });
+    assert.equal(code, 1, `ORACLE_MODE=${JSON.stringify(mode)}`);
+    assert.match(log, /ORACLE_MODE=".*" is not a mode/);
+  }
+});
+
 test('a first start records which chain the state belongs to, and a restart keeps it', async () => {
   const first = await withOracle({ world: new World(), env: BASE_ENV }, async (oracle) => {
     assert.equal((await oracle.call('GET', '/health')).body.stateSource, 'fresh');
@@ -276,6 +301,28 @@ test('the watcher refuses a setting that is not a number', () => {
 // ---- the epoch ---------------------------------------------------------------------------
 
 const FEES = { feeGating: true, epochFee: '1000' };
+
+test('the score an epoch proposes is the score GET /score serves for that agent', async () => {
+  // Both go through scoreAt. They used to be separate copies of one computation, each
+  // kept in step with the other by hand.
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  const state = JSON.stringify({
+    schemaVersion: 1,
+    chainId: 5042,
+    attestations: { [agent.didHash]: { successful: 7, total: 9 } },
+    flags: { [agent.didHash]: [world.data.nowSec * 1000] },
+  });
+  await inEpoch({ world, env: BASE_ENV, files: { 'state.json': state } }, async ({ oracle, calls }) => {
+    const sent = calls.find((c) => c.name === 'proposeScore');
+    assert.ok(sent, 'the agent was proposed');
+    const served = await oracle.call('GET', `/score/${agent.didHash}`);
+    assert.equal(served.status, 200, served.text);
+    assert.equal(served.body.attestations.total, 9, 'the seeded evidence is what was scored');
+    assert.equal(served.body.flags, 1);
+    assert.deepEqual(served.body.scores, sent.args[1]);
+  });
+});
 
 test('the fee is taken only after the contract has said the proposal would be accepted', async () => {
   const world = new World();

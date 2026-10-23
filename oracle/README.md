@@ -932,7 +932,7 @@ Before each save the file it replaces is kept as `<state>.bak`. It is a hard lin
 
 | What is found | What happens |
 |---|---|
-| No state file | Starts empty. Deleting the file is the documented way to rescan |
+| No state file | Starts empty. Deleting the file is the documented way to rescan. A `.bak` left beside it is moved aside as `<state>.bak.orphaned-<time>` first, so the fresh start's own saves cannot rotate the old state away |
 | A file that reads | It is used |
 | A file that exists and cannot be read (cut off, or hand-edited wrongly) | The `.bak` is used instead, the bad file is moved aside as `<state>.corrupt-<time>`, and `/health` reports `stateSource: "backup"`. Anything recorded since that save is gone |
 | An unreadable file and no usable `.bak` | The process stops and says why. Restore the file from a copy, or move it aside to start empty on purpose |

@@ -343,6 +343,7 @@ function readStateFile(file) {
  * to credit the same settlement a second time.
  *
  *  - No file: a fresh start, as before. Deleting the file is the documented way to rescan.
+ *    A backup left beside it is moved aside first (keepOrphanedBackup), not rotated away.
  *  - A file that reads: used.
  *  - A file that does not: the previous save (.bak) is used instead, the bad file is moved
  *    aside rather than overwritten, and /health says so.
@@ -357,6 +358,7 @@ function load() {
     if (err.code === 'ENOENT') {
       console.log(`[oracle] no prior state at ${STATE_PATH}, starting fresh`);
       loadReport = { source: 'fresh', detail: null };
+      keepOrphanedBackup();
       return;
     }
     if (err.noFallback) throw err;
@@ -426,6 +428,25 @@ function paymentEventError(e) {
     return `amount is not an integer string (${JSON.stringify(e.amount)})`;
   }
   return null;
+}
+
+/**
+ * On a fresh start, move an existing backup out of the save rotation.
+ *
+ * With no live file, the backup is the only copy of the old state left, and the saves of
+ * the fresh state rotate through BACKUP_PATH: the first removed it, the second replaced it
+ * with the new empty state. The fresh start stays what the operator asked for; the old
+ * state is kept beside it under its own name, as an unusable state file is.
+ */
+function keepOrphanedBackup() {
+  if (!fs.existsSync(BACKUP_PATH)) return;
+  const aside = `${BACKUP_PATH}.orphaned-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+  try {
+    fs.renameSync(BACKUP_PATH, aside);
+    console.warn(`[oracle] a backup with no state file beside it was kept at ${aside}; restore it from there if the fresh start was not intended.`);
+  } catch (err) {
+    console.warn(`[oracle] could not move the backup ${BACKUP_PATH} aside (${err.message}); the next saves replace it.`);
+  }
 }
 
 /**

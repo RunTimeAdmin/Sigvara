@@ -5,6 +5,7 @@ import {
   verifyChallenge,
   parseChallengePayload,
   isChallengeExpired,
+  MAX_FUTURE_SKEW_SECONDS,
 } from '../src/challenge';
 import { seedToKeyPair, base58Decode } from '../src/keys';
 import nacl from 'tweetnacl';
@@ -94,6 +95,14 @@ describe('isChallengeExpired', () => {
 
   it('malformed payload is expired', () => {
     expect(isChallengeExpired('garbage', 300)).toBe(true);
+  });
+
+  it('a timestamp beyond the allowed clock skew is not fresh; one within it is', () => {
+    const now = Math.floor(Date.now() / 1000);
+    const at = (ts: number) => `SIGVARA-VERIFY:${PEER_DID}:abc123:${ts}`;
+    expect(isChallengeExpired(at(now + 10 * 365 * 86_400), 300)).toBe(true);
+    expect(isChallengeExpired(at(now + MAX_FUTURE_SKEW_SECONDS + 5), 300)).toBe(true);
+    expect(isChallengeExpired(at(now + MAX_FUTURE_SKEW_SECONDS - 5), 300)).toBe(false);
   });
 });
 

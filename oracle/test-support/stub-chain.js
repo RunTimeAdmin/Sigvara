@@ -17,6 +17,8 @@
 //     chainId:   the chain id the fake node reports (default 5042)
 //     nonceGap:  how many of the wallet's transactions the node holds pending (default 0)
 //     operatorStanding: { enforced, allowed, operatorBond } what the boot check finds (default not enforced)
+//     jobs:      { head, logs } what the ERC-8183 job registry's node answers, when the oracle
+//                is given JOBS_REGISTRY_ADDRESS (head defaults to `head`, logs to none)
 //   }
 //
 // Keys are lowercase. Unless the world lists agents to score, epochs are switched off: the
@@ -178,3 +180,13 @@ for (const [file, fake] of [['chain.js', chain], ['external.js', external]]) {
   stub.exports = fake;
   require.cache[filename] = stub;
 }
+
+// The job registry's node. Only the provider is replaced, so the real jobs.js scans,
+// decodes and turns logs into evidence for GET /jobs/:address.
+const jobs = require(path.join(oracleDir, 'jobs.js'));
+jobs.makeProvider = (cfg) => (jobs.enabled(cfg) ? {
+  getNetwork: async () => ({ chainId: BigInt(world().chainId ?? 5042) }),
+  getBlockNumber: async () => world().jobs?.head ?? world().head,
+  getLogs: async () => world().jobs?.logs ?? [],
+  getBlock: async (n) => ({ number: n, timestamp: world().nowSec }),
+} : null);
