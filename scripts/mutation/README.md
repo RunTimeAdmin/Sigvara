@@ -40,21 +40,21 @@ substitution `s/from/to/` on that line only. Finding the line by content and not
 valid when unrelated code moves. A `[` in `from` is a bracket expression in `sed`; escape it (`\[i\]`). The
 other eleven use an earlier helper, `run`, which applies a `sed` expression to a whole file. Five of them (`mutate-guard`, `-guard-extra`, `-guard-extra2`, `-epochfees` and `-p3-roles`) report with the labels in the table above. The six oldest (`mutate-pf`, `-c01`, `-floors`, `-reader`, `-slash` and `-wiring`) report differently: a result line with no `[FAIL` is a survivor, and a break that could not be applied reads `NO CHANGE APPLIED` or `PATTERN NOT FOUND`.
 
-`mutate-invariants.sh` runs the two invariant suites alone (`ReputationInvariantTest` and `EpochFeesInvariantTest`),
-so its count is what the invariants notice without the unit tests behind them. Its `runl id suite file anchor
+`mutate-invariants.sh` runs the three invariant suites alone (`ReputationInvariantTest`, `EpochFeesInvariantTest`
+and `IdentityInvariantTest`), so its count is what the invariants notice without the unit tests behind them. Its `runl id suite file anchor
 target from to what` also names the test contract that has to catch the break, and delimits the substitution
 with `#`, so a `/` can appear in it and a `.` can stand for the `[` and `]` of an index expression.
 `ONLY="R2 E9"` runs just those breaks, and `--fail-fast` ends a caught break as soon as one invariant fails. A
 full compile of this repository takes minutes per break, so point `REPO` at a small git repository holding
-`src/`, `test/helpers`, the two invariant test files, `foundry.toml`, a `lib` link and a tracked
-`script/.gitkeep`; a break then takes about a minute. Never run two campaigns against one tree, or stop one
+`src/`, `test/helpers`, the three invariant test files, `foundry.toml`, a `lib` link and a tracked
+`script/.gitkeep`; a break then takes one to two minutes. Never run two campaigns against one tree, or stop one
 while another is using it: each restores the tree with `git checkout`, and a break left behind corrupts the
 other's results.
 
 ## Campaigns
 
 Each was run against the pull request or range listed, when it was written, and every break was caught, apart
-from the two expected survivors noted under the table. They apply to the code as it stood then. Re-run them on the commit that is going to be frozen, which is what
+from the four expected survivors noted under the table. They apply to the code as it stood then. Re-run them on the commit that is going to be frozen, which is what
 shows a pattern that has drifted (`NO CHANGE APPLIED`) and a test that has since gone.
 
 | Campaign | Covers | Breaks | Caught |
@@ -76,19 +76,21 @@ shows a pattern that has drifted (`NO CHANGE APPLIED`) and a test that has since
 | `mutate-p4-floors.sh` | mainnet launch floors | 8 | 8 |
 | `mutate-p4-reader.sh` | score age on the Reader | 9 | 9 |
 | `mutate-p4-handover.sh` | fail-closed renounce, upgrade shape check | 12 | 12 |
-| `mutate-invariants.sh` | the Reputation and EpochFees invariant suites, without the unit tests (PR 66) | 61 | 59 |
+| `mutate-invariants.sh` | the Reputation, EpochFees and Identity invariant suites, without the unit tests (PRs 66 and 69) | 113 | 109 |
 
 Survivors found and closed on the way: two exits that no test exercised while a pause was running
 (`executeSlash` and `withdrawBond`) in the pause campaign, and a `_grantRole` that refused the slash
 beneficiary every role, not only the slasher role, in the payee campaign. Each got a test, and the table
 is the run after it.
 
-The invariant campaign is the exception to "every break was caught", on purpose. It leaves two alive, R8 and
-R10: the slashed and the unregistered checks in `SigvaraReputation._requireScorable`. A slash zeroes the
+The invariant campaign is the exception to "every break was caught", on purpose. It leaves four alive. R8 and
+R10 are the slashed and the unregistered checks in `SigvaraReputation._requireScorable`: a slash zeroes the
 stake, a slashed agent cannot bond again and a hash nobody registered holds no stake, so the bond check
 refuses the same proposals whether or not those two checks are there, and only the name of the error differs.
-The invariants check what is refused, not why; `E2E.t.sol` and `SigvaraReputation.t.sol` pin the names. Its
-first run also let a cap enforced one point late survive, because the handler drew factors uniformly and
+The invariants check what is refused, not why; `E2E.t.sol` and `SigvaraReputation.t.sol` pin the names. I44
+and I45 are the position hints in `SigvaraIdentity`'s operator index. Removal falls back to a scan whenever a
+recorded position does not match the list, so a stale or missing position changes what a removal costs in gas
+and nothing it does. The Reputation run's first pass also let a cap enforced one point late survive, because the handler drew factors uniformly and
 almost never landed on a boundary. It now draws each factor at its cap one time in four and most over-cap
 factors exactly one over, and that break is caught.
 
