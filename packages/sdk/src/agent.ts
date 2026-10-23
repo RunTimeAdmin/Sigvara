@@ -5,7 +5,9 @@ import { generateChallenge, parseChallengePayload, signChallenge } from './chall
 import type { Challenge } from './types';
 
 export class SigvaraAgent {
-  private readonly keyPair: { publicKey: Uint8Array; secretKey: Uint8Array };
+  // A true private field, not TypeScript's `private`. The keyword is erased at compile time, so the key was an
+  // ordinary property: JSON.stringify(agent), a logged agent and an error reporter's snapshot all carried it.
+  readonly #keyPair: { publicKey: Uint8Array; secretKey: Uint8Array };
   private readonly _agentAddress: string;
   private readonly _chainId: number;
   private readonly _challengeTtl: number;
@@ -16,7 +18,7 @@ export class SigvaraAgent {
     chainId: number;
     challengeTtlSeconds?: number;
   }) {
-    this.keyPair = seedToKeyPair(options.privateKey);
+    this.#keyPair = seedToKeyPair(options.privateKey);
     this._agentAddress = options.agentAddress.toLowerCase();
     this._chainId = options.chainId;
     this._challengeTtl = options.challengeTtlSeconds ?? 300;
@@ -62,7 +64,7 @@ export class SigvaraAgent {
 
   // Returns the bytes32 hex public key for on-chain registration.
   get publicKeyBytes32(): string {
-    return pubKeyToBytes32(this.keyPair.publicKey);
+    return pubKeyToBytes32(this.#keyPair.publicKey);
   }
 
   // Generate a challenge to send to a peer agent. The payload names the peer as the
@@ -103,7 +105,7 @@ export class SigvaraAgent {
     if (parsed.audience !== audience) {
       throw new Error('signChallengeFor: the challenge is addressed to a different audience, nothing signed');
     }
-    return signChallenge(payload, this.keyPair.secretKey);
+    return signChallenge(payload, this.#keyPair.secretKey);
   }
 
   // Sign a challenge payload received from a peer. Returns a base58-encoded signature.
@@ -112,6 +114,6 @@ export class SigvaraAgent {
   // signChallengeFor, which refuses a payload that is not addressed to the verifier you mean. This
   // is for code that built the payload itself.
   signChallenge(payload: string): string {
-    return signChallenge(payload, this.keyPair.secretKey);
+    return signChallenge(payload, this.#keyPair.secretKey);
   }
 }
