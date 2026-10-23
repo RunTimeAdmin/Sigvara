@@ -778,6 +778,20 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
             staking.unbondingClaimableAt(didHash), "slot 10 is unbondingClaimableAt");
     }
 
+    /// Appended after `unbondingClaimableAt`. A nested mapping: the inner slot is keyed by the evidence.
+    function test_storageLayout_evidenceRejectedPinnedToSlot11() public {
+        _deposit();
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "evidence");
+        vm.prank(admin);
+        staking.vetoSlash(didHash);
+        bytes32 evidenceKey = keccak256("evidence");
+        assertTrue(staking.evidenceRejected(didHash, evidenceKey));
+        bytes32 inner = keccak256(abi.encode(didHash, uint256(11)));
+        assertEq(uint256(vm.load(address(staking), keccak256(abi.encode(evidenceKey, inner)))), 1,
+            "slot 11 is evidenceRejected");
+    }
+
     /**
      * SigvaraStaking inherits the NON-upgradeable ReentrancyGuard. That is safe only
      * because OpenZeppelin >= 5.1 keeps `_status` in a namespaced slot; the older version
