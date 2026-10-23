@@ -596,7 +596,7 @@ pause, admin-ruled disputes with a veto and a lapse, launch floors and ceilings 
 operator signers, are on `main` and described in this document, but they are not deployed
 on the testnet. `node scripts/record-implementations.mjs --check` shows what is live.
 
-**Test coverage**, all passing as of 23 October 2026: 661 contract tests across 26 Foundry test files
+**Test coverage**, all passing as of 23 October 2026: 665 contract tests across 27 Foundry test files
 including fuzz and invariant tests (two fork suites need an RPC, and the seven in
 `SplitAuthorityFork` skip without `--fork-url`), 760 oracle tests and 168 in the SDK (8 of them
 need a live deployment and skip without one). CI runs Foundry, the oracle and

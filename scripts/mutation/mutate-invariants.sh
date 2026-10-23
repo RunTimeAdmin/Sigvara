@@ -1,11 +1,11 @@
 #!/bin/bash
-# Deliberate breaks of SigvaraReputation and SigvaraEpochFees, run against the invariant suites alone. Each must
-# fail an invariant, except the two marked as expected survivors: the point is what the invariants notice without
-# the unit tests behind them. Run only against a committed tree: the restore uses git checkout. REPO defaults to
-# the repository this script is in.
+# Deliberate breaks of SigvaraReputation, SigvaraEpochFees and SigvaraIdentity, run against the invariant suites
+# alone. Each must fail an invariant, except the ones marked as expected survivors: the point is what the
+# invariants notice without the unit tests behind them. Run only against a committed tree: the restore uses git
+# checkout. REPO defaults to the repository this script is in.
 #
 # A full compile of this repository takes minutes, and this campaign compiles once per break. For speed, point
-# REPO at a small git repository holding src/, test/helpers, the two invariant test files, foundry.toml and a
+# REPO at a small git repository holding src/, test/helpers, the three invariant test files, foundry.toml and a
 # lib link, with an empty script/ directory tracked by a placeholder file.
 REPO_DEFAULT="$(cd "$(dirname "$0")/../.." && pwd)"
 REPO=${REPO:-$REPO_DEFAULT}
@@ -37,8 +37,10 @@ runl() {
 }
 R=src/SigvaraReputation.sol
 F=src/SigvaraEpochFees.sol
+I=src/SigvaraIdentity.sol
 RS=ReputationInvariantTest
 FS=EpochFeesInvariantTest
+IS=IdentityInvariantTest
 
 # ---- SigvaraReputation: what may be proposed, and by whom --------------------------------------------------------
 runl R1  $RS $R 'function _propose(' 'if (data.feeScore > MAX_FEE_SCORE)' 'data.feeScore > MAX_FEE_SCORE' 'false' 'the fee cap is not enforced'
@@ -119,4 +121,69 @@ runl E17 $FS $F 'function _burnBps(' 'if (s == Stage.Transition) return 2_000;' 
 runl E18 $FS $F 'function _burnBps(' 'if (s == Stage.Mature) return 5_000;' '5_000' '4_000' 'the mature stage burns 40 percent'
 runl E19 $FS $F 'function _setEpochLength(' 'if (newLength < MIN_EPOCH_LENGTH)' 'newLength < MIN_EPOCH_LENGTH' 'false' 'the epoch length has no floor'
 runl E20 $FS $F 'uint256 public constant MIN_EPOCH_LENGTH' 'uint256 public constant MIN_EPOCH_LENGTH' '= 1 hours;' '= 0;' 'the epoch length floor is zero'
+# ---- SigvaraIdentity: registering --------------------------------------------------------------------------------
+runl I1  $IS $I 'function registerAgent(' 'if (!verifyRegistration(' '!verifyRegistration(agentAddress, msg.sender, ed25519PubKey, signature)' 'false' 'any signature registers an agent'
+runl I2  $IS $I 'function registerAgent(' 'if (identities[didHash].registeredAt != 0)' 'identities.didHash..registeredAt != 0' 'false' 'an agent can be registered twice'
+runl I3  $IS $I 'function registerAgent(' 'status: AgentStatus.PendingBond,' 'AgentStatus.PendingBond' 'AgentStatus.Active' 'a new agent starts Active'
+runl I4  $IS $I 'function registerAgent(' '_pushToOperatorIndex(msg.sender, didHash);' '_pushToOperatorIndex(msg.sender, didHash);' '' 'a new agent is not listed under its operator'
+runl I5  $IS $I 'function registerAgent(' 'whenInflowsOpen' 'whenInflowsOpen' '' 'a pause does not stop registrations'
+runl I6  $IS $I 'function registerAgent(' 'if (ed25519PubKey == bytes32(0))' 'ed25519PubKey == bytes32(0)' 'false' 'a zero public key registers'
+runl I7  $IS $I 'function registrationDigest(' '            operator,' '            operator,' '' 'the signature does not cover the operator'
+runl I8  $IS $I 'function registrationDigest(' '            ed25519PubKey' 'ed25519PubKey' 'bytes32(0)' 'the signature does not cover the public key'
+runl I9  $IS $I 'function registrationDigest(' '            block.chainid,' 'block.chainid' 'uint256(0)' 'the signature does not cover the chain'
+runl I10 $IS $I 'function registrationDigest(' '            address(this),' 'address(this)' 'address(0)' 'the signature does not cover the registry'
+runl I11 $IS $I 'function computeDidHash(' 'return keccak256(abi.encodePacked("did:sigvara:"' 'did:sigvara:' 'did:sigvara' 'the DID is derived with another prefix'
+
+# ---- SigvaraIdentity: keys ---------------------------------------------------------------------------------------
+runl I12 $IS $I 'function rotatePublicKey(' '_requireOperator(id, didHash);' '_requireOperator(id, didHash);' '' 'anyone can rotate an agent key'
+runl I13 $IS $I 'function rotatePublicKey(' 'if (id.status == AgentStatus.Slashed)' 'id.status == AgentStatus.Slashed' 'false' 'a slashed agent can rotate its key'
+runl I14 $IS $I 'function rotatePublicKey(' 'if (newEd25519PubKey == bytes32(0))' 'newEd25519PubKey == bytes32(0)' 'false' 'a key can be rotated to zero'
+runl I15 $IS $I 'function rotatePublicKey(' 'id.ed25519PubKey = newEd25519PubKey;' 'id.ed25519PubKey = newEd25519PubKey;' '' 'a rotation is not stored'
+
+# ---- SigvaraIdentity: status -------------------------------------------------------------------------------------
+runl I16 $IS $I 'function updateStatus(' 'if (id.status == AgentStatus.Slashed)' 'id.status == AgentStatus.Slashed' 'false' 'a slashed agent can change status'
+runl I17 $IS $I 'function updateStatus(' 'if (newStatus == AgentStatus.PendingBond)' 'newStatus == AgentStatus.PendingBond' 'false' 'an agent can go back to PendingBond'
+runl I18 $IS $I 'function updateStatus(' '_checkRole(STAKING_CORE_ROLE);' '_checkRole(STAKING_CORE_ROLE);' '' 'anyone allowed to change status can slash'
+runl I19 $IS $I 'function updateStatus(' '_requireOperator(id, didHash);' '_requireOperator(id, didHash);' '' 'anyone can change an agent status'
+runl I20 $IS $I 'function updateStatus(' 'if (slashSuspended[didHash]) revert SlashSuspensionLocked' 'slashSuspended.didHash.' 'false' 'an operator can lift a suspension the staking core applied'
+runl I21 $IS $I 'function updateStatus(' 'if (!stakeView.hasMinimumStake(didHash))' '!stakeView.hasMinimumStake(didHash)' 'false' 'an agent can become Active without its bond'
+runl I22 $IS $I 'function updateStatus(' 'slashSuspended[didHash] = true;' 'slashSuspended.didHash. = true;' '' 'the staking core suspends without applying the lock'
+runl I23 $IS $I 'function updateStatus(' 'slashSuspended[didHash] = false;' 'slashSuspended.didHash. = false;' '' 'the staking core reinstates without lifting the lock'
+runl I24 $IS $I 'function updateStatus(' 'id.status = newStatus;' 'id.status = newStatus;' '' 'a status change is not stored'
+
+# ---- SigvaraIdentity: handover -----------------------------------------------------------------------------------
+runl I25 $IS $I 'function offerOperatorTransfer(' '_requireOperator(id, didHash);' '_requireOperator(id, didHash);' '' 'anyone can offer an agent'
+runl I26 $IS $I 'function offerOperatorTransfer(' 'if (id.status == AgentStatus.Slashed)' 'id.status == AgentStatus.Slashed' 'false' 'a slashed agent can be offered'
+runl I27 $IS $I 'function offerOperatorTransfer(' 'if (slashSuspended[didHash]) revert TransferWhileSlashPending' 'slashSuspended.didHash.' 'false' 'an agent can be offered while a slash is pending'
+runl I28 $IS $I 'function offerOperatorTransfer(' 'if (newOperator == address(0))' 'newOperator == address(0)' 'false' 'an agent can be offered to nobody'
+runl I29 $IS $I 'function offerOperatorTransfer(' 'if (newOperator == id.operator)' 'newOperator == id.operator' 'false' 'an agent can be offered to its own operator'
+runl I30 $IS $I 'function cancelOperatorTransfer(' 'if (msg.sender != id.operator && msg.sender != offered)' 'msg.sender != id.operator && msg.sender != offered' 'false' 'anyone can cancel an offer'
+runl I31 $IS $I 'function cancelOperatorTransfer(' 'delete pendingOperator[didHash];' 'delete pendingOperator.didHash.;' '' 'a cancelled offer stays outstanding'
+runl I32 $IS $I 'function acceptOperatorTransfer(' 'if (msg.sender != offered)' 'msg.sender != offered' 'false' 'anyone can accept an offer'
+runl I33 $IS $I 'function acceptOperatorTransfer(' 'if (id.status == AgentStatus.Slashed)' 'id.status == AgentStatus.Slashed' 'false' 'a slashed agent can be accepted'
+runl I34 $IS $I 'function acceptOperatorTransfer(' 'if (slashSuspended[didHash]) revert TransferWhileSlashPending' 'slashSuspended.didHash.' 'false' 'an agent can be accepted while a slash is pending'
+runl I35 $IS $I 'function acceptOperatorTransfer(' 'if (!stakeView.hasMinimumStake(didHash))' '!stakeView.hasMinimumStake(didHash)' 'false' 'an agent without its bond can be accepted'
+runl I36 $IS $I 'function acceptOperatorTransfer(' 'id.operator = msg.sender;' 'id.operator = msg.sender;' '' 'a handover does not change the operator'
+runl I37 $IS $I 'function acceptOperatorTransfer(' 'delete pendingOperator[didHash];' 'delete pendingOperator.didHash.;' '' 'an accepted offer stays outstanding'
+runl I38 $IS $I 'function acceptOperatorTransfer(' '_removeFromOperatorIndex(previous, didHash);' '_removeFromOperatorIndex(previous, didHash);' '' 'a handover leaves the agent in the old operator list'
+runl I39 $IS $I 'function acceptOperatorTransfer(' '_pushToOperatorIndex(msg.sender, didHash);' '_pushToOperatorIndex(msg.sender, didHash);' '' 'a handover does not list the agent under the new operator'
+runl I40 $IS $I 'function acceptOperatorTransfer(' 'operatorChangedAt[didHash] = block.timestamp;' 'operatorChangedAt.didHash. = block.timestamp;' '' 'a handover is not dated'
+runl I41 $IS $I 'function acceptOperatorTransfer(' 'operatorTransferCount[didHash] += 1;' 'operatorTransferCount.didHash. += 1;' '' 'a handover is not counted'
+
+# ---- SigvaraIdentity: the operator index and the views -----------------------------------------------------------
+runl I42 $IS $I 'function _removeFromOperatorIndex(' 'list[target] = moved;' 'list.target. = moved;' '' 'removing an agent does not move the last one into its place'
+runl I43 $IS $I 'function _removeFromOperatorIndex(' 'list.pop();' 'list.pop();' '' 'removing an agent leaves the list the same length'
+# I44 and I45 are expected survivors. Removal falls back to a scan whenever a recorded position does not match,
+# so a stale or missing position changes the gas a removal costs and nothing it does.
+runl I44 $IS $I 'function _removeFromOperatorIndex(' 'operatorAgentIndex[moved] = target + 1;' 'operatorAgentIndex.moved. = target + 1;' '' 'the moved agent keeps a stale position'
+runl I45 $IS $I 'function _removeFromOperatorIndex(' 'delete operatorAgentIndex[didHash];' 'delete operatorAgentIndex.didHash.;' '' 'a removed agent keeps its position'
+runl I46 $IS $I 'function isActive(' 'return id.registeredAt != 0 && id.status == AgentStatus.Active;' 'id.registeredAt != 0 && ' '' 'an unregistered hash reads as Active'
+runl I47 $IS $I 'function getOperatorAgentsPaged(' 'uint256 count = limit < remaining ? limit : remaining;' 'limit < remaining ? limit : remaining' 'limit' 'a page can run past the end of the list'
+runl I48 $IS $I 'function operatorAgentCount(' 'return operatorAgents[operator].length;' '.length;' '.length + 1;' 'the count is one too many'
+
+# ---- SigvaraIdentity: the collateral oracle and the slash lock ---------------------------------------------------
+runl I49 $IS $I 'function setStakeView(' 'if (stakeView_ == address(0))' 'stakeView_ == address(0)' 'false' 'the collateral oracle can be set to zero'
+runl I50 $IS $I 'function setStakeView(' 'onlyRole(UPGRADER_ROLE)' 'onlyRole(UPGRADER_ROLE)' '' 'anyone can repoint the collateral oracle'
+runl I51 $IS $I 'function clearSlashSuspension(' 'onlyRole(STAKING_CORE_ROLE)' 'onlyRole(STAKING_CORE_ROLE)' '' 'anyone can lift a slash suspension'
+runl I52 $IS $I 'function clearSlashSuspension(' 'slashSuspended[didHash] = false;' 'slashSuspended.didHash. = false;' '' 'lifting a slash suspension does nothing'
 echo "DONE: $(grep -c '=> \[FAIL' "$OUT") caught, $(grep -c SURVIVED "$OUT") survived, $(grep -cE 'NOT FOUND|NO CHANGE|COMPILE ERROR' "$OUT") did not test anything" >> "$OUT"
