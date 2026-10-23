@@ -4,10 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Sigvara Demo</title>
-  <meta name="description" content="Walk an autonomous agent through the full Sigvara lifecycle: identity, bond, reputation, verification, and slashing. Runs in your browser with real Ed25519 keys and the protocol's actual rules.">
+  <meta name="description" content="Walk an autonomous agent through the full Sigvara lifecycle: identity, bond, reputation, verification, and slashing. Runs in your browser with real Ed25519 keys and a simulated chain that uses the protocol's bond and slash rules.">
   <link rel="canonical" href="https://sigvara.xyz/demo">
   <meta property="og:title" content="Sigvara Demo">
-  <meta property="og:description" content="Walk an autonomous agent through the full Sigvara lifecycle: identity, bond, reputation, verification, and slashing. Runs in your browser with real Ed25519 keys and the protocol's actual rules.">
+  <meta property="og:description" content="Walk an autonomous agent through the full Sigvara lifecycle: identity, bond, reputation, verification, and slashing. Runs in your browser with real Ed25519 keys and a simulated chain that uses the protocol's bond and slash rules.">
   <meta property="og:url" content="https://sigvara.xyz/demo">
   <meta property="og:image" content="https://sigvara.xyz/assets/sigvara-card.png">
   <meta name="twitter:card" content="summary">
@@ -49,9 +49,9 @@
       <div class="wrap">
         <div class="eyebrow">Interactive walkthrough</div>
         <h1>One agent, <span class="gradient">start to finish.</span></h1>
-        <p class="lede">Register an agent, post its bond, earn a score, prove who it is to a counterparty, and see what slashing costs. The keys and signatures are real Ed25519. The chain is simulated with the protocol's actual rules, so every window and every number is the one the contracts enforce.</p>
+        <p class="lede">Register an agent, post its bond, earn a score, prove who it is to a counterparty, and see what slashing costs. The keys and signatures are real Ed25519. The chain is simulated. The bond and slash rules follow the contracts on the main branch. Scoring and registration are simplified: score maturity, the per-payer fee cap and the PendingBond step are left out.</p>
         <div class="net-strip" role="note">
-          <span><b>Rules</b> Arc testnet parameters · chain ID <span class="mono">5042002</span></span>
+          <span><b>Parameters</b> Arc testnet values · chain ID <span class="mono">5042002</span></span>
           <span><b>Bond</b> a testnet faucet ERC-20 that carries the SVR name and symbol but is <em>not</em> the token — anyone can mint it, it is worth nothing · mainnet SVR <span class="pending">not launched</span>, its address will appear on this site first</span>
           <span><b>Mode</b> browser simulation, no wallet, nothing leaves this page</span>
           <span><a href="app">Live testnet app →</a></span>
@@ -128,15 +128,20 @@
         <article class="step" data-step="5" data-state="locked">
           <div class="step-head" role="button" tabindex="0" aria-expanded="false"><div><div class="step-num">05 / SLASH</div><h2>What misbehaviour costs</h2></div><span class="step-state">Locked</span></div>
           <div class="step-body">
-            <p>A counterparty reports harm and a committee member files the slash, naming the victim. The agent is suspended immediately and a 7-day challenge window opens. If nobody disputes, once the window closes anyone can execute it. If the operator does dispute, the bond stays frozen and the proposal goes to the committee to rule on: upholding it slashes, rejecting it reinstates the agent. A dispute the committee never resolves can be expired by anyone after 14 days, so neither side can stall forever. On a slash, half the bond burns and the victim and reporter quarters are credited for them to claim. Queued withdrawals are swept too. Status becomes Slashed, which is terminal, and the score is zeroed.</p>
+            <p>A counterparty reports harm and a committee member files the slash, naming the victim. The agent is suspended at once and a 7-day challenge window opens. If nobody disputes, anyone can execute the slash once the window closes. If the operator disputes, the bond stays frozen and the admin rules. Upholding slashes, but never before the window closes. Rejecting reinstates the agent.</p>
+            <p>A dispute the admin never rules on can be expired by anyone after 14 days, and so can a proposal nobody executed, 14 days after its deadline, so neither side can stall it forever. The admin can also veto a proposal, the committee can cancel a pending one, and after any dropped proposal the committee waits one challenge period before filing again. Each press of Advance past 7 days moves the clock a little over a week. These are the rules on the main branch. The Arc testnet contracts still run the 21 September code, where the committee rules on a dispute, an upheld ruling takes effect at once, and there is no veto, no expiry of an unexecuted slash and no re-file cooldown.</p>
+            <p>On a slash, half the bond burns and the victim and reporter quarters are credited for them to claim. Queued withdrawals are swept too. Status becomes Slashed, which is terminal, and the score is zeroed.</p>
             <div class="controls">
               <button class="button button-danger" id="btnInitiateSlash">Committee initiates slash</button>
               <button class="button" id="btnDispute">Operator disputes (freezes)</button>
               <button class="button" id="btnAdvance7d">Advance past 7 days</button>
               <button class="button button-primary" id="btnExecuteSlash">Execute slash</button>
-              <button class="button button-danger" id="btnUphold">Committee upholds</button>
-              <button class="button" id="btnRejectDispute">Committee rejects</button>
+              <button class="button button-danger" id="btnUphold">Admin upholds</button>
+              <button class="button" id="btnRejectDispute">Admin rejects</button>
+              <button class="button" id="btnVeto">Admin vetoes</button>
+              <button class="button" id="btnCancelSlash">Committee cancels</button>
               <button class="button" id="btnExpire">Expire unresolved dispute</button>
+              <button class="button" id="btnExpireSlash">Expire an unexecuted slash</button>
             </div>
             <div class="result" id="outSlash" aria-live="polite"></div>
           </div>
@@ -204,8 +209,8 @@
 
   <script src="assets/vendor/nacl-fast.min.js?v=e5a6705"></script>
   <script src="assets/did.js?v=32000f8"></script>
-  <script src="assets/demo.js?v=acabdd1"></script>
-  <script src="assets/demo-page.js?v=e5a6705"></script>
+  <script src="assets/demo.js?v=25c9117"></script>
+  <script src="assets/demo-page.js?v=25c9117"></script>
 
 </body>
 </html>
