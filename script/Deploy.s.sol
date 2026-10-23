@@ -23,8 +23,8 @@ import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
  * Usage — Arc mainnet (chain ID 5042): same command with --rpc-url arc_mainnet, plus the
  * mainnet inputs below. On chain 5042 the script refuses to run without SVR_ADDRESS, with
  * a bond token that has no code or is not 18 decimals, with the oracle or committee equal
- * to the deployer or to each other, or with periods under the floors the contracts'
- * setters enforce.
+ * to the deployer or to each other, or with periods outside the floors and ceilings the
+ * contracts' setters enforce.
  *
  * Forge runs the script locally before it sends anything, so deployments/{chainId}.json is
  * written at that point, not after the transactions confirm. A broadcast that fails or is
@@ -49,7 +49,8 @@ import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
  *   CHALLENGE_PERIOD       — slash challenge window in seconds (default: 7 days)
  *   SCORE_CHALLENGE_WINDOW — reputation-score challenge window in seconds (default: 6 hours)
  *   UNBONDING_PERIOD       — seconds a queued withdrawal is still slashable before claim (default: 21 days)
- *   MATURITY_RATE_PER_DAY  — points of score released per day (default: 4, so 100 takes 25 days)
+ *   MATURITY_RATE_PER_DAY  — points of score released per day (default: 4, so 100 takes 25 days;
+ *                            at most 100)
  *   GUARDIAN_ADDRESS         the key granted GUARDIAN_ROLE on identity, reputation and staking.
  *                            It can pause new inflows for three days at a time, and nothing
  *                            else. Required on mainnet, where it may not be the deployer, the
@@ -83,10 +84,18 @@ contract Deploy is Script {
     uint256 constant MIN_UNBONDING_PERIOD = 1 days;
     uint256 constant MIN_CHALLENGE_WINDOW = 1 hours;
 
+    /// The ceilings the contracts enforce in the same places, checked first on mainnet for the same reason.
+    /// test/DeployScripts.t.sol pins these to the contracts' own constants too.
+    uint256 constant MAX_CHALLENGE_PERIOD = 30 days;
+    uint256 constant MAX_UNBONDING_PERIOD = 90 days;
+    uint256 constant MAX_CHALLENGE_WINDOW = 7 days;
+    uint256 constant MAX_MATURITY_RATE_PER_DAY = 100;
+
     error RolesNotSeparated(address deployer, address oracle, address committee);
     error BondTokenNotSet();
     error BondTokenInvalid(address token);
     error PeriodBelowFloor(string name, uint256 value, uint256 floor);
+    error AboveCeiling(string name, uint256 value, uint256 ceiling);
     error DefaultAmountOnMainnet(string name, uint256 value);
     error GuardianNotSet();
     error GuardianNotSeparated(address guardian);
@@ -105,6 +114,7 @@ contract Deploy is Script {
         _checkRoleSeparation(deployer, oracle, committee);
         _checkMainnetToken(vm.envOr("SVR_ADDRESS", address(0)));
         _checkMainnetPeriods(period, unbondPeriod, scoreWindow);
+        _checkMainnetMaturityRate(vm.envOr("MATURITY_RATE_PER_DAY", DEFAULT_MATURITY_RATE));
         _checkMainnetMinimumStake(minStake);
         _checkMainnetGuardian(deployer, oracle, committee, vm.envOr("GUARDIAN_ADDRESS", address(0)));
 
@@ -243,6 +253,20 @@ contract Deploy is Script {
         if (scoreWindow < MIN_CHALLENGE_WINDOW) {
             revert PeriodBelowFloor("SCORE_CHALLENGE_WINDOW", scoreWindow, MIN_CHALLENGE_WINDOW);
         }
+        if (period > MAX_CHALLENGE_PERIOD) revert AboveCeiling("CHALLENGE_PERIOD", period, MAX_CHALLENGE_PERIOD);
+        if (unbondPeriod > MAX_UNBONDING_PERIOD) {
+            revert AboveCeiling("UNBONDING_PERIOD", unbondPeriod, MAX_UNBONDING_PERIOD);
+        }
+        if (scoreWindow > MAX_CHALLENGE_WINDOW) {
+            revert AboveCeiling("SCORE_CHALLENGE_WINDOW", scoreWindow, MAX_CHALLENGE_WINDOW);
+        }
+    }
+
+    /// @dev Mainnet only, like the periods: the contract refuses a rate above its ceiling itself, and
+    ///      this names the variable first. A rate of 100 already releases a whole score in a day.
+    function _checkMainnetMaturityRate(uint256 rate) internal view {
+        if (block.chainid != ARC_MAINNET) return;
+        if (rate > MAX_MATURITY_RATE_PER_DAY) revert AboveCeiling("MATURITY_RATE_PER_DAY", rate, MAX_MATURITY_RATE_PER_DAY);
     }
 
     /// @dev Mainnet only. A forgotten MINIMUM_STAKE leaves the testnet default, which is a valid

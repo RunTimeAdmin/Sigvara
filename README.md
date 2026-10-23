@@ -594,7 +594,7 @@ Key scenarios tested:
 
 | Role | Holder (Testnet) | Mainnet target | Permissions |
 |---|---|---|---|
-| `DEFAULT_ADMIN_ROLE` | Deployer EOA `0x18CBcE50…` | Admin Safe | Grant `ORACLE_ROLE` and `GUARDIAN_ROLE`, revoke any role except `UPGRADER_ROLE`, set parameters (each has a floor), rule on a disputed slash, veto a pending or disputed slash. It cannot wire the stake view, the oracle bond or the slash beneficiary, and cannot grant the slasher, committee or staking-core roles: those need `UPGRADER_ROLE` |
+| `DEFAULT_ADMIN_ROLE` | Deployer EOA `0x18CBcE50…` | Admin Safe | Grant `ORACLE_ROLE` and `GUARDIAN_ROLE`, revoke any role except `UPGRADER_ROLE`, set parameters (each has a floor and a ceiling), rule on a disputed slash, veto a pending or disputed slash. It cannot wire the stake view, the oracle bond or the slash beneficiary, and cannot grant the slasher, committee or staking-core roles: those need `UPGRADER_ROLE` |
 | `UPGRADER_ROLE` | Deployer EOA `0x18CBcE50…` | Governance timelock (48 hours) | Authorize UUPS upgrades, wire the stake view, the oracle bond and the slash beneficiary (`setStakeView`, `setOperatorBond`, `setSlashBeneficiary`), and grant the slasher, slashing committee and staking core roles. On a registry initialised by the current code it is administered by itself, so the admin cannot grant it |
 | `GUARDIAN_ROLE` | Not granted on the current testnet deployment | A separate, lighter key | Pause new inflows (registrations, stake deposits, score proposals, bond deposits) for three days at a time. Never exits, slash rulings or finalization, and the admin can revoke it at once |
 | `STAKING_CORE_ROLE` | `SigvaraStaking` `0xA69d62B2…` | `SigvaraStaking` | Suspend / slash agents, zero reputation, clear slash suspensions |

@@ -438,6 +438,61 @@ contract SigvaraOracleBondTest is Test {
         assertEq(b.bondAmount(), 1);
     }
 
+    /// The unbonding period is read when a bond is withdrawn, so a value far above any sane one locks every
+    /// exiting operator. The ceiling keeps it to a number of weeks, where it is set.
+    function test_unbondingCeiling_isPinned() public view {
+        assertEq(bond.MAX_UNBONDING_PERIOD(), 90 days);
+    }
+
+    function test_initialize_refusesAnUnbondingPeriodAboveTheCeiling() public {
+        uint256 ceiling = bond.MAX_UNBONDING_PERIOD();
+        _expectInit(
+            BOND, ceiling + 1,
+            abi.encodeWithSelector(SigvaraOracleBond.PeriodTooLong.selector, ceiling + 1, ceiling)
+        );
+        _expectInit(
+            BOND, type(uint256).max,
+            abi.encodeWithSelector(SigvaraOracleBond.PeriodTooLong.selector, type(uint256).max, ceiling)
+        );
+    }
+
+    function test_initialize_acceptsTheUnbondingCeiling() public {
+        SigvaraOracleBond b = SigvaraOracleBond(address(new ERC1967Proxy(
+            address(new SigvaraOracleBond()),
+            abi.encodeCall(SigvaraOracleBond.initialize, (admin, slasher, address(svr), BOND, 90 days, beneficiary))
+        )));
+        assertEq(b.unbondingPeriod(), 90 days);
+    }
+
+    function test_setUnbondingPeriod_ceiling() public {
+        uint256 ceiling = bond.MAX_UNBONDING_PERIOD();
+        vm.prank(admin);
+        bond.setUnbondingPeriod(ceiling);
+        assertEq(bond.unbondingPeriod(), ceiling);
+
+        vm.expectRevert(abi.encodeWithSelector(SigvaraOracleBond.PeriodTooLong.selector, ceiling + 1, ceiling));
+        vm.prank(admin);
+        bond.setUnbondingPeriod(ceiling + 1);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraOracleBond.PeriodTooLong.selector, type(uint256).max, ceiling));
+        vm.prank(admin);
+        bond.setUnbondingPeriod(type(uint256).max);
+        assertEq(bond.unbondingPeriod(), ceiling, "unchanged after the refusals");
+    }
+
+    /// An operator that starts to leave under the longest period can withdraw once it has run.
+    function test_withdrawalAtTheUnbondingCeilingWorksAfterIt() public {
+        uint256 ceiling = bond.MAX_UNBONDING_PERIOD(); // read before the prank, which an external call would use up
+        vm.prank(admin);
+        bond.setUnbondingPeriod(ceiling);
+        _bondAndAdmit(op1, BOND);
+        vm.prank(op1);
+        bond.initiateUnbond();
+        vm.warp(block.timestamp + 90 days);
+        vm.prank(op1);
+        bond.withdrawBond();
+        assertEq(svr.balanceOf(op1), 10_000e18);
+    }
+
     function test_setUnbondingPeriod_refusesBelowTheFloor() public {
         vm.expectRevert(abi.encodeWithSelector(SigvaraOracleBond.PeriodTooShort.selector, 0, 1 days));
         vm.prank(admin);

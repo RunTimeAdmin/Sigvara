@@ -35,6 +35,10 @@ contract Deploy_Harness is Deploy {
     function floors() external pure returns (uint256, uint256, uint256) {
         return (MIN_CHALLENGE_PERIOD, MIN_UNBONDING_PERIOD, MIN_CHALLENGE_WINDOW);
     }
+    function checkMaturityRate(uint256 r) external view { _checkMainnetMaturityRate(r); }
+    function ceilings() external pure returns (uint256, uint256, uint256, uint256) {
+        return (MAX_CHALLENGE_PERIOD, MAX_UNBONDING_PERIOD, MAX_CHALLENGE_WINDOW, MAX_MATURITY_RATE_PER_DAY);
+    }
 }
 
 contract DeployOracleBond_Harness is DeployOracleBond {
@@ -43,6 +47,7 @@ contract DeployOracleBond_Harness is DeployOracleBond {
     function checkGuardian(address d, address s, address g) external view { _checkMainnetGuardian(d, s, g); }
     function checkRoles(address d, address s, address ben) external view { _checkRoleSeparation(d, s, ben); }
     function floor() external pure returns (uint256) { return MIN_UNBONDING; }
+    function ceiling() external pure returns (uint256) { return MAX_UNBONDING; }
 }
 
 contract DeployEpochFees_Harness is DeployEpochFees {
@@ -166,6 +171,71 @@ contract DeployScriptGuardsTest is Test {
         assertEq(unbonding, s.MIN_UNBONDING_PERIOD());
         assertEq(window, new SigvaraReputation().MIN_CHALLENGE_WINDOW());
         assertEq(b.floor(), new SigvaraOracleBond().MIN_UNBONDING_PERIOD());
+    }
+
+    // ---- the ceilings
+
+    /// The contracts refuse a period above their ceiling themselves, in the initializers and the setters,
+    /// but that reverts the whole transaction with the contract's error. On mainnet the script names the
+    /// variable first.
+    function test_mainnet_refusesAPeriodAboveTheCeiling() public {
+        vm.chainId(5042);
+        vm.expectRevert(
+            abi.encodeWithSelector(Deploy.AboveCeiling.selector, "CHALLENGE_PERIOD", 30 days + 1, 30 days)
+        );
+        h.checkPeriods(30 days + 1, 21 days, 6 hours);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(Deploy.AboveCeiling.selector, "UNBONDING_PERIOD", 90 days + 1, 90 days)
+        );
+        h.checkPeriods(7 days, 90 days + 1, 6 hours);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(Deploy.AboveCeiling.selector, "SCORE_CHALLENGE_WINDOW", 7 days + 1, 7 days)
+        );
+        h.checkPeriods(7 days, 21 days, 7 days + 1);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(Deploy.AboveCeiling.selector, "CHALLENGE_PERIOD", type(uint256).max, 30 days)
+        );
+        h.checkPeriods(type(uint256).max, 21 days, 6 hours);
+    }
+
+    function test_mainnet_acceptsTheCeilingsThemselves() public {
+        vm.chainId(5042);
+        h.checkPeriods(30 days, 90 days, 7 days);
+    }
+
+    function test_mainnet_refusesAMaturityRateAboveTheCeiling() public {
+        vm.chainId(5042);
+        vm.expectRevert(abi.encodeWithSelector(Deploy.AboveCeiling.selector, "MATURITY_RATE_PER_DAY", 101, 100));
+        h.checkMaturityRate(101);
+        vm.expectRevert(
+            abi.encodeWithSelector(Deploy.AboveCeiling.selector, "MATURITY_RATE_PER_DAY", type(uint256).max, 100)
+        );
+        h.checkMaturityRate(type(uint256).max);
+
+        h.checkMaturityRate(100);
+        h.checkMaturityRate(4);
+    }
+
+    function test_oracleBond_mainnet_refusesAnUnbondingPeriodAboveTheCeiling() public {
+        vm.chainId(5042);
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployOracleBond.AboveCeiling.selector, "ORACLE_UNBONDING", 90 days + 1, 90 days)
+        );
+        b.checkUnbonding(90 days + 1);
+        b.checkUnbonding(90 days);
+    }
+
+    /// Like the floors, the script carries copies of the ceilings, and this is what stops them drifting.
+    function test_ceilingsMatchTheContracts() public {
+        (uint256 challenge, uint256 unbonding, uint256 window, uint256 rate) = h.ceilings();
+        assertEq(challenge, new SigvaraStaking().MAX_CHALLENGE_PERIOD());
+        assertEq(unbonding, new SigvaraStaking().MAX_UNBONDING_PERIOD());
+        assertEq(window, new SigvaraReputation().MAX_CHALLENGE_WINDOW());
+        assertEq(rate, new SigvaraReputation().MAX_MATURITY_RATE_PER_DAY());
+        assertEq(b.ceiling(), new SigvaraOracleBond().MAX_UNBONDING_PERIOD());
     }
 
     function test_oracleBond_mainnet_refusesAnUnbondingPeriodUnderTheFloor() public {

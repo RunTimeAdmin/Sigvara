@@ -888,6 +888,111 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
         assertEq(s.unbondingPeriod(), 1 days);
     }
 
+    // -------------------------------------------------------------------------
+    // Ceilings: a period nobody meant
+    // -------------------------------------------------------------------------
+
+    /// The unbonding period is read when a withdrawal is claimed, so a value far above any sane one
+    /// locks every queued withdrawal, and a challenge period far above one stops a slash from ever being
+    /// executable. The ceilings keep both to a number of weeks, in every place they are set.
+    function test_ceilings_arePinned() public view {
+        assertEq(staking.MAX_CHALLENGE_PERIOD(), 30 days);
+        assertEq(staking.MAX_UNBONDING_PERIOD(), 90 days);
+    }
+
+    function test_setChallengePeriod_ceiling() public {
+        uint256 ceiling = staking.MAX_CHALLENGE_PERIOD();
+        vm.prank(admin);
+        staking.setChallengePeriod(ceiling);
+        assertEq(staking.challengePeriod(), ceiling);
+
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.PeriodTooLong.selector, ceiling + 1, ceiling));
+        vm.prank(admin);
+        staking.setChallengePeriod(ceiling + 1);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.PeriodTooLong.selector, type(uint256).max, ceiling));
+        vm.prank(admin);
+        staking.setChallengePeriod(type(uint256).max);
+        assertEq(staking.challengePeriod(), ceiling, "unchanged after the refusals");
+    }
+
+    function test_setUnbondingPeriod_ceiling() public {
+        uint256 ceiling = staking.MAX_UNBONDING_PERIOD();
+        vm.prank(admin);
+        staking.setUnbondingPeriod(ceiling);
+        assertEq(staking.unbondingPeriod(), ceiling);
+
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.PeriodTooLong.selector, ceiling + 1, ceiling));
+        vm.prank(admin);
+        staking.setUnbondingPeriod(ceiling + 1);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.PeriodTooLong.selector, type(uint256).max, ceiling));
+        vm.prank(admin);
+        staking.setUnbondingPeriod(type(uint256).max);
+        assertEq(staking.unbondingPeriod(), ceiling, "unchanged after the refusals");
+    }
+
+    function test_initialize_refusesPeriodsAboveTheCeilings() public {
+        uint256 maxChallenge = staking.MAX_CHALLENGE_PERIOD();
+        uint256 maxUnbonding = staking.MAX_UNBONDING_PERIOD();
+        _expectStakingInit(
+            MIN_STAKE, maxChallenge + 1, UNBONDING,
+            abi.encodeWithSelector(SigvaraStaking.PeriodTooLong.selector, maxChallenge + 1, maxChallenge)
+        );
+        _expectStakingInit(
+            MIN_STAKE, type(uint256).max, UNBONDING,
+            abi.encodeWithSelector(SigvaraStaking.PeriodTooLong.selector, type(uint256).max, maxChallenge)
+        );
+        _expectStakingInit(
+            MIN_STAKE, CHALLENGE, maxUnbonding + 1,
+            abi.encodeWithSelector(SigvaraStaking.PeriodTooLong.selector, maxUnbonding + 1, maxUnbonding)
+        );
+        _expectStakingInit(
+            MIN_STAKE, CHALLENGE, type(uint256).max,
+            abi.encodeWithSelector(SigvaraStaking.PeriodTooLong.selector, type(uint256).max, maxUnbonding)
+        );
+    }
+
+    function test_initialize_acceptsTheCeilings() public {
+        SigvaraStaking s = SigvaraStaking(address(new ERC1967Proxy(
+            address(new SigvaraStaking()),
+            abi.encodeCall(SigvaraStaking.initialize, (
+                admin, address(identity), address(rep), address(svr), MIN_STAKE, 30 days, 90 days
+            ))
+        )));
+        assertEq(s.challengePeriod(), 30 days);
+        assertEq(s.unbondingPeriod(), 90 days);
+    }
+
+    function test_initializeV2_refusesAnUnbondingPeriodAboveTheCeiling() public {
+        uint256 ceiling = staking.MAX_UNBONDING_PERIOD();
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.PeriodTooLong.selector, ceiling + 1, ceiling));
+        vm.prank(admin);
+        staking.initializeV2(ceiling + 1);
+
+        // A refused call did not use the version up.
+        vm.prank(admin);
+        staking.initializeV2(ceiling);
+        assertEq(staking.unbondingPeriod(), ceiling);
+    }
+
+    /// A withdrawal queued under the longest unbonding period the contract allows is still claimable once
+    /// it has run: the ceiling does not make the arithmetic fail.
+    function test_unbondingAtTheCeilingIsClaimableAfterIt() public {
+        uint256 ceiling = staking.MAX_UNBONDING_PERIOD(); // read before the prank, which an external call would use up
+        vm.prank(admin);
+        staking.setUnbondingPeriod(ceiling);
+        vm.prank(operator);
+        staking.depositStake(didHash, MIN_STAKE * 2);
+        vm.prank(operator);
+        identity.updateStatus(didHash, SigvaraIdentity.AgentStatus.Suspended);
+        vm.prank(operator);
+        staking.initiateWithdrawal(didHash, MIN_STAKE * 2);
+
+        vm.warp(block.timestamp + 90 days);
+        vm.prank(operator);
+        staking.claimWithdrawal(didHash);
+        assertEq(svr.balanceOf(operator), 10_000e18);
+    }
+
     function test_setMinimumStake_refusesZero() public {
         vm.expectRevert(SigvaraStaking.MinimumStakeZero.selector);
         vm.prank(admin);

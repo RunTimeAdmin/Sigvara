@@ -184,6 +184,7 @@ contract SigvaraStaking is
     error UnbondingPeriodActive(bytes32 didHash, uint256 claimableAt);
     error VictimIsReporter(address victim);
     error PeriodTooShort(uint256 provided, uint256 minimum);
+    error PeriodTooLong(uint256 provided, uint256 maximum);
     error MinimumStakeZero();
     error SlashNotDisputed(bytes32 didHash);
     /// A proposal against this agent was dropped less than one challenge period ago.
@@ -227,7 +228,9 @@ contract SigvaraStaking is
         // of zero is met by an agent with nothing staked.
         if (minimumStake_ == 0) revert MinimumStakeZero();
         if (challengePeriod_ < MIN_CHALLENGE_PERIOD) revert PeriodTooShort(challengePeriod_, MIN_CHALLENGE_PERIOD);
+        if (challengePeriod_ > MAX_CHALLENGE_PERIOD) revert PeriodTooLong(challengePeriod_, MAX_CHALLENGE_PERIOD);
         if (unbondingPeriod_ < MIN_UNBONDING_PERIOD) revert PeriodTooShort(unbondingPeriod_, MIN_UNBONDING_PERIOD);
+        if (unbondingPeriod_ > MAX_UNBONDING_PERIOD) revert PeriodTooLong(unbondingPeriod_, MAX_UNBONDING_PERIOD);
 
         __AccessControl_init();
 
@@ -271,6 +274,7 @@ contract SigvaraStaking is
         reinitializer(2)
     {
         if (unbondingPeriod_ < MIN_UNBONDING_PERIOD) revert PeriodTooShort(unbondingPeriod_, MIN_UNBONDING_PERIOD);
+        if (unbondingPeriod_ > MAX_UNBONDING_PERIOD) revert PeriodTooLong(unbondingPeriod_, MAX_UNBONDING_PERIOD);
         unbondingPeriod = unbondingPeriod_;
         emit UnbondingPeriodUpdated(unbondingPeriod_);
     }
@@ -721,6 +725,11 @@ contract SigvaraStaking is
     /// @notice Lower bound on unbonding, so queued withdrawals cannot be made
     ///         instantly claimable while a slash is being prepared.
     uint256 public constant MIN_UNBONDING_PERIOD = 1 days;
+    /// @notice Upper bounds on the same two periods. The unbonding period is read when a withdrawal is
+    ///         claimed, so a value far above any sane one locks every queued withdrawal, and a challenge
+    ///         period far above one leaves a slash that cannot be executed for as long.
+    uint256 public constant MAX_CHALLENGE_PERIOD = 30 days;
+    uint256 public constant MAX_UNBONDING_PERIOD = 90 days;
 
     /// @notice How long the admin has to rule on a dispute before anyone may
     ///         expire it. A dispute freezes the stake, so without this cap a bond
@@ -736,12 +745,14 @@ contract SigvaraStaking is
 
     function setChallengePeriod(uint256 newPeriod) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (newPeriod < MIN_CHALLENGE_PERIOD) revert PeriodTooShort(newPeriod, MIN_CHALLENGE_PERIOD);
+        if (newPeriod > MAX_CHALLENGE_PERIOD) revert PeriodTooLong(newPeriod, MAX_CHALLENGE_PERIOD);
         challengePeriod = newPeriod;
         emit ChallengePeriodUpdated(newPeriod);
     }
 
     function setUnbondingPeriod(uint256 newPeriod) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (newPeriod < MIN_UNBONDING_PERIOD) revert PeriodTooShort(newPeriod, MIN_UNBONDING_PERIOD);
+        if (newPeriod > MAX_UNBONDING_PERIOD) revert PeriodTooLong(newPeriod, MAX_UNBONDING_PERIOD);
         unbondingPeriod = newPeriod;
         emit UnbondingPeriodUpdated(newPeriod);
     }

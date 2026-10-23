@@ -28,7 +28,7 @@ import "../src/SigvaraOracleBond.sol";
  *   SLASH_BENEFICIARY     — destination for slashed bonds (defaults to deployer)
  *   ORACLE_BOND_AMOUNT    — minimum bond in wei (default 1,000 SVR; the default is refused on
  *                           mainnet, so state the number there)
- *   ORACLE_UNBONDING      — unbonding cooldown seconds (default 7 days)
+ *   ORACLE_UNBONDING      — unbonding cooldown seconds (default 7 days; between 1 and 90 days)
  *   GUARDIAN_ADDRESS        the key granted GUARDIAN_ROLE. It can pause new bonds for three days
  *                           at a time, and nothing else. Required on mainnet, where it may not be
  *                           the deployer or the slasher. Unset elsewhere means no guardian.
@@ -45,10 +45,14 @@ contract DeployOracleBond is Script {
     /// pins it to the contract's own constant.
     uint256 constant MIN_UNBONDING = 1 days;
 
+    /// The ceiling it enforces in the same two places, pinned the same way.
+    uint256 constant MAX_UNBONDING = 90 days;
+
     error RolesNotSeparated(address deployer, address slasher, address beneficiary);
     error SlasherIsBeneficiary(address account);
     error DefaultAmountOnMainnet(string name, uint256 value);
     error PeriodBelowFloor(string name, uint256 value, uint256 floor);
+    error AboveCeiling(string name, uint256 value, uint256 ceiling);
     error GuardianNotSet();
     error GuardianNotSeparated(address guardian);
 
@@ -117,6 +121,7 @@ contract DeployOracleBond is Script {
     function _checkMainnetUnbonding(uint256 unbonding) internal view {
         if (block.chainid != ARC_MAINNET) return;
         if (unbonding < MIN_UNBONDING) revert PeriodBelowFloor("ORACLE_UNBONDING", unbonding, MIN_UNBONDING);
+        if (unbonding > MAX_UNBONDING) revert AboveCeiling("ORACLE_UNBONDING", unbonding, MAX_UNBONDING);
     }
 
     /// @dev Mainnet only. The pause guardian is the only fast response to a live bug, since the

@@ -96,6 +96,16 @@ contract SigvaraReputation is Initializable, TimelockedGrants, UUPSUpgradeable, 
     /// elapsed, so the committee would have no moment in which to object.
     uint256 public constant MIN_CHALLENGE_WINDOW = 1 hours;
 
+    /// Longest challenge window the contract will hold. A window with no end holds every proposal for good,
+    /// and one near the integer limit overflows the sum that dates a proposal, which stops proposals
+    /// altogether.
+    uint256 public constant MAX_CHALLENGE_WINDOW = 7 days;
+
+    /// Highest maturity rate the contract will hold, in points of score per day. The score runs 0 to 100, so
+    /// a rate of 100 already releases all of it in a day, and a higher one adds nothing but the risk of
+    /// overflowing the product it is multiplied into.
+    uint256 public constant MAX_MATURITY_RATE_PER_DAY = 100;
+
     // -------------------------------------------------------------------------
     // Score caps (sum to 100)
     //
@@ -240,6 +250,8 @@ contract SigvaraReputation is Initializable, TimelockedGrants, UUPSUpgradeable, 
     error AgentNotBonded(bytes32 didHash);
     error MaturityRateZero();
     error ChallengeWindowTooShort(uint256 provided, uint256 minimum);
+    error ChallengeWindowTooLong(uint256 provided, uint256 maximum);
+    error MaturityRateTooHigh(uint256 provided, uint256 maximum);
     error OracleNotBonded(address oracle);
     /// The proposer of a pending score no longer holds ORACLE_ROLE or, when an operator set
     /// is configured, is no longer an active operator in it. Its proposal will not be made
@@ -273,6 +285,9 @@ contract SigvaraReputation is Initializable, TimelockedGrants, UUPSUpgradeable, 
     ) external initializer {
         if (challengeWindow_ < MIN_CHALLENGE_WINDOW) {
             revert ChallengeWindowTooShort(challengeWindow_, MIN_CHALLENGE_WINDOW);
+        }
+        if (challengeWindow_ > MAX_CHALLENGE_WINDOW) {
+            revert ChallengeWindowTooLong(challengeWindow_, MAX_CHALLENGE_WINDOW);
         }
 
         __AccessControl_init();
@@ -315,6 +330,9 @@ contract SigvaraReputation is Initializable, TimelockedGrants, UUPSUpgradeable, 
     {
         if (challengeWindow_ < MIN_CHALLENGE_WINDOW) {
             revert ChallengeWindowTooShort(challengeWindow_, MIN_CHALLENGE_WINDOW);
+        }
+        if (challengeWindow_ > MAX_CHALLENGE_WINDOW) {
+            revert ChallengeWindowTooLong(challengeWindow_, MAX_CHALLENGE_WINDOW);
         }
         if (slashingCommittee != address(0)) _grantRole(SLASHING_COMMITTEE_ROLE, slashingCommittee);
         challengeWindow = challengeWindow_;
@@ -551,6 +569,9 @@ contract SigvaraReputation is Initializable, TimelockedGrants, UUPSUpgradeable, 
         reinitializer(4)
     {
         if (pointsPerDay == 0) revert MaturityRateZero();
+        if (pointsPerDay > MAX_MATURITY_RATE_PER_DAY) {
+            revert MaturityRateTooHigh(pointsPerDay, MAX_MATURITY_RATE_PER_DAY);
+        }
         maturityRatePerDay = pointsPerDay;
         emit MaturityRateUpdated(pointsPerDay);
     }
@@ -636,12 +657,16 @@ contract SigvaraReputation is Initializable, TimelockedGrants, UUPSUpgradeable, 
 
     function setMaturityRate(uint256 pointsPerDay) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (pointsPerDay == 0) revert MaturityRateZero();
+        if (pointsPerDay > MAX_MATURITY_RATE_PER_DAY) {
+            revert MaturityRateTooHigh(pointsPerDay, MAX_MATURITY_RATE_PER_DAY);
+        }
         maturityRatePerDay = pointsPerDay;
         emit MaturityRateUpdated(pointsPerDay);
     }
 
     function setChallengeWindow(uint256 newWindow) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (newWindow < MIN_CHALLENGE_WINDOW) revert ChallengeWindowTooShort(newWindow, MIN_CHALLENGE_WINDOW);
+        if (newWindow > MAX_CHALLENGE_WINDOW) revert ChallengeWindowTooLong(newWindow, MAX_CHALLENGE_WINDOW);
         challengeWindow = newWindow;
         emit ChallengeWindowUpdated(newWindow);
     }
