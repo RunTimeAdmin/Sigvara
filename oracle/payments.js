@@ -27,6 +27,7 @@
 
 const { ethers } = require('ethers');
 const { numberSetting } = require('./config');
+const { CAPS } = require('./score-caps');
 
 // keccak256("Transfer(address,address,uint256)")
 const TRANSFER_TOPIC = ethers.id('Transfer(address,address,uint256)');
@@ -439,7 +440,7 @@ function propagationScore(events, payerScores, max = 5) {
 /// what getAgentScore reads. The two moved together from 15 to 25 in the reweight. If
 /// they ever drift apart, a fully-trusted counterparty stops counting as fully trusted
 /// and the whole web of trust quietly weakens by the ratio between them.
-const MAX_HARD_SCORE = 25;
+const MAX_HARD_SCORE = CAPS.external;
 
 /// Scale for the fractional trust multiplier: a float cannot survive BigInt arithmetic,
 /// so it is scaled up, applied, and divided back.
@@ -540,7 +541,7 @@ function distinctPayers(events, halfLifeMs, now = Date.now()) {
  * The old proxy was attestation count divided by ten, which meant the factor
  * documented as on-chain fee volume was really a count of HTTP requests.
  */
-function feeScoreFromVolume(volume, feeUnit, max = 20) {
+function feeScoreFromVolume(volume, feeUnit, max = CAPS.fee) {
   if (feeUnit <= 0n) return 0;
   const points = BigInt(volume) / BigInt(feeUnit);
   return points > BigInt(max) ? max : Number(points);

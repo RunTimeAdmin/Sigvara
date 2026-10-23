@@ -6,6 +6,8 @@
 // externalScore (ERC-8004 cross-protocol feedback) is 0 unless the EXTERNAL_* env is
 // configured. propagationScore is inherited trust: see payments.propagationScore.
 
+const { CAPS } = require('./score-caps');
+
 function feeScore(attestationTotal) {
   // Proxy for fee activity: 1 point per 10 attestations received, capped at 20.
   //
@@ -13,7 +15,7 @@ function feeScore(attestationTotal) {
   // so with an unauthenticated /attest the largest factor in the score was whatever
   // the loudest caller chose to send. When PAYMENT_VERIFICATION=required the oracle
   // passes measured volume instead and this is not consulted. See payments.js.
-  return Math.min(20, Math.floor(attestationTotal / 10));
+  return Math.min(CAPS.fee, Math.floor(attestationTotal / 10));
 }
 
 // Pseudo-observations added to the denominator of the success rate.
@@ -32,7 +34,7 @@ const SUCCESS_PRIOR = 5;
 
 function successScore(successful, total, prior = SUCCESS_PRIOR) {
   if (total <= 0) return 0;
-  return Math.floor((successful / (total + prior)) * 15);
+  return Math.floor((successful / (total + prior)) * CAPS.success);
 }
 
 // Logarithmic curve over the span of paid activity, reaching the cap of 30 around day
@@ -54,7 +56,7 @@ function successScore(successful, total, prior = SUCCESS_PRIOR) {
 // distinguishes nobody.
 function ageCurve(days) {
   if (!(days > 0)) return 0;
-  return Math.min(30, Math.floor(Math.log2(days + 1) * 3));
+  return Math.min(CAPS.age, Math.floor(Math.log2(days + 1) * 3));
 }
 
 /**
@@ -104,7 +106,7 @@ function communityScore(unresolvedFlags) {
   // total is fractional and proposeReputation takes uint8s. Flooring rather than
   // rounding matches every other factor here, and keeps the penalty until the flag has
   // genuinely decayed instead of writing it off early.
-  return Math.max(0, Math.floor(5 - unresolvedFlags * 2));
+  return Math.max(0, Math.floor(CAPS.community - unresolvedFlags * 2));
 }
 
 /**
@@ -133,7 +135,7 @@ function computeScore({
 
   // measuredFeeScore is supplied when payments are verified: real volume beats the
   // attestation-count proxy. null means payment verification is off.
-  const fs = measuredFeeScore === null ? feeScore(total) : Math.max(0, Math.min(20, measuredFeeScore));
+  const fs = measuredFeeScore === null ? feeScore(total) : Math.max(0, Math.min(CAPS.fee, measuredFeeScore));
   const ss = successScore(successful, total, successPrior);
   const as = ageScore(registeredAt, activity, now);
   // externalScore comes from ERC-8004 cross-protocol feedback (see external.js),
@@ -141,12 +143,12 @@ function computeScore({
   // can never make proposeReputation revert. The cap is 25: it was 15, and it took
   // 10 of the 20 points released by cutting fee and success, because standing in a
   // registry this protocol does not control is not something an attacker can mint.
-  const es = Math.max(0, Math.min(25, Math.trunc(externalScore) || 0));
+  const es = Math.max(0, Math.min(CAPS.external, Math.trunc(externalScore) || 0));
   const cs = communityScore(flags ?? 0);
   // Inherited trust from counterparties that are themselves scored agents. 0 when
   // payment verification is off, since there are no identified counterparties to
   // inherit from. Clamped so a bad input cannot make proposeReputation revert.
-  const ps = Math.max(0, Math.min(5, Math.trunc(propagation) || 0));
+  const ps = Math.max(0, Math.min(CAPS.propagation, Math.trunc(propagation) || 0));
 
   // Sum all six factors so total stays correct once es/ps become nonzero in Phase 2.
   return { feeScore: fs, successScore: ss, ageScore: as, externalScore: es, communityScore: cs, propagationScore: ps, total: fs + ss + as + es + cs + ps };
