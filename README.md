@@ -24,7 +24,9 @@ The [**wiki**](https://github.com/RunTimeAdmin/Sigvara/wiki) is the browsable re
 pages covering the contracts, the oracle, the scoring model, the SDK and operations, with
 every claim linked to the line of source it was derived from. It is generated from the tree
 and edited for publication, so where it disagrees with the code or the tables below, the
-code wins.
+code wins. It was last published on 7 October 2026, before the mainnet-readiness changes of
+22 October (timelocked role grants, the guardian pause, launch floors and ceilings, reader
+freshness), which the documents below cover.
 
 The documents below are written by hand and are the authority on intent, trade-offs and
 what is not yet true.
@@ -46,6 +48,17 @@ what is not yet true.
 | [Payment-backed attestations](docs/payment-backed-attestations.md) | Developers — how an attestation is tied to a settled payment, and the decay, diversity and evidence-root rules around it |
 | [Lineage](docs/lineage.md) | Everyone — the Robinhood Chain testnet run this protocol came from (addresses, oracle activity, what changed) |
 | [Security & Mainnet Readiness Review](docs/SECURITY_AND_MAINNET_READINESS_REVIEW.md) | Everyone — a point-in-time review dated 17 Sep 2026: conditional no-go for mainnet, with the blockers named |
+| [Governance and emergency powers](docs/adr/0005-governance-and-emergency-powers.md) | Everyone: who can do what in an emergency and who can stop whom, with the decisions behind the role split, the guardian pause and the launch floors |
+| [Architecture decision records](docs/adr) | Reviewers: why the ERC-8004 identity layer, accepted analyzer findings, evidence intake, operator custody and governance were decided the way they were |
+| [Oracle](oracle/README.md) | Operators: endpoints, settings, state file, monitoring and the production checklist |
+| [Second operator runbook](oracle/RUNBOOK-second-operator.md) | Operators: bond, admit and run a checking operator, step by step |
+| [TypeScript SDK](packages/sdk/README.md) | Developers: install, the gate, and what each release changed ([changelog](packages/sdk/CHANGELOG.md)) |
+| [Slash drill](docs/slash-drill.md) and [its log](docs/slash-drill-log.md) | Reviewers: the procedure for a live slash and the record of the first one |
+| [Divergence log](docs/divergence-log.md) | Reviewers: every disagreement the checking operator recorded, and what it turned out to be |
+| [Launch checklist](docs/launch-checklist.md) | Everyone: the sequence from testnet proof to an Arc mainnet launch |
+| [x402 dispute bridge](docs/x402-dispute-bridge.md) | Everyone: a captured design for disputes over x402 payments, not yet implemented |
+| [Mutation testing](scripts/mutation/README.md) | Reviewers: how the strength of the contract tests was measured |
+| [Security policy](SECURITY.md) | Everyone: how to report a vulnerability |
 
 ---
 
@@ -59,6 +72,15 @@ what is not yet true.
 > reads. Those records are read back off the chain, not written from intent:
 > `node scripts/record-implementations.mjs --check` fails if the file and the chain
 > disagree.
+>
+> **The testnet runs older code than this repository.** The implementations behind these
+> proxies were last changed on 21 September 2026, and `--check` confirms the file still
+> matches the chain. The contract changes merged since are on `main` and described in this
+> README, but they are not deployed on the testnet: timelocked role grants, the guardian
+> pause, admin-ruled disputes with a veto and a lapse, launch floors and ceilings, operator
+> signers, and the stake view and operator registry wiring behind the timelock.
+> `SigvaraReader` has not been deployed anywhere. `test/SlashDrillFork.t.sol` rehearses the
+> deployed behaviour, so it will need updating when the testnet proxies are upgraded.
 
 
 Chain ID `5042002`, RPC `https://rpc.testnet.arc.io`, USDC as native gas. Canonical
@@ -106,7 +128,7 @@ graph TB
 
     CA -->|"success / fail"| OR
     WD -->|"flags"| OR
-    EID -->|"identity + age"| OR
+    EID -->|"ownership check"| OR
     EREP -->|"feedback to externalScore"| OR
     OR -->|"propose / finalize"| REP
     ST -->|"slash · zero score"| REP
@@ -127,9 +149,12 @@ graph TB
 | [`SigvaraReputation`](src/SigvaraReputation.sol) | **Computed-score anchor.** Stores the oracle's normalized, capped 6-factor score — the layer *above* ERC-8004's raw feedback. Exposes `getTotalScore()` and `meetsThreshold()` for on-chain consumers. |
 | [`SigvaraStaking`](src/SigvaraStaking.sol) | **Staked accountability.** Agent bond management with committee-initiated slashing (7-day challenge window, permissionless execution after timelock). No ERC-8004 equivalent — this is the differentiator. Bond token is set by address at deploy: the faucet `SVRToken` on testnet, [SVR](docs/token.md) on mainnet — the contracts treat it as a plain `IERC20` either way. |
 | [`SigvaraIdentity`](src/SigvaraIdentity.sol) | **The registry in use today.** `did:sigvara` registration with proof of control by the agent address, on-chain Ed25519 PKI, bond-gated status (`PendingBond` → `Active`) and two-step operator transfer. ERC-8004 is the long-term identity layer ([ADR 0001](docs/adr/0001-erc8004-as-identity-layer.md)); until that migration lands this contract is what every deployed component reads and writes. Its non-redundant part (the Ed25519 auth key, bond-gated status, transfer history) becomes an extension keyed to an ERC-8004 agent id. |
-| [`SigvaraOracleBond`](src/SigvaraOracleBond.sol) | **Oracle accountability.** Performance bonds for oracle operators. When wired into `SigvaraReputation.operatorBond`, only an admitted, bonded operator, or the signer it has named, can propose a score, so the key that signs need not be the key that holds the bond. Deployed on Arc testnet and wired. |
+| [`SigvaraOracleBond`](src/SigvaraOracleBond.sol) | **Oracle accountability.** Performance bonds for oracle operators. When wired into `SigvaraReputation.operatorBond`, only an admitted, bonded operator, or the signer it has named, can propose a score, so the key that signs need not be the key that holds the bond. Deployed on Arc testnet and wired (the signer registry is on `main` only). |
+| [`SigvaraEpochFees`](src/SigvaraEpochFees.sol) | **Scoring fee module, not deployed.** A prepaid fee per scoring epoch that gates an agent's inclusion in a run; an `epochFee` of 0 disables it. Built and tested, never deployed on Arc, and left out of launch and of the first audit ([ADR 0005](docs/adr/0005-governance-and-emergency-powers.md)). |
 
 The retained contracts use UUPS upgradeable proxies (OpenZeppelin v5), controlled by a governance timelock on mainnet.
+
+All four registries inherit two small shared contracts, neither deployed on its own. Each registry administers the roles that can move bonded funds or an agent's standing with `UPGRADER_ROLE`, which the timelock holds, so granting one waits out the delay. [`TimelockedGrants`](src/TimelockedGrants.sol) adds the other direction: the admin can still revoke any of those roles at once. [`InflowGuard`](src/InflowGuard.sol) lets a guardian key pause new registrations, deposits and score proposals for three days at a time. It never covers exits, rulings or slash execution.
 
 [`SigvaraReader`](src/SigvaraReader.sol) is separate: a stateless, non-upgradeable convenience for contracts that read an agent's standing. It is not a registry, holds nothing and is not read by the protocol. Its interfaces, and those of the three registries, are in [`src/interfaces/ISigvara.sol`](src/interfaces/ISigvara.sol). See the [integration guide](docs/integration.md).
 
@@ -215,11 +240,11 @@ Scores are computed off-chain by the oracle network and written to `SigvaraReput
 | Factor | Max | Source | Formula | Status |
 |---|---|---|---|---|
 | Fee Activity | 20 | Settled payment volume to the agent, verified on chain | `min(20, decayedVolume / PAYMENT_FEE_UNIT)`, capped per payer | live |
-| Success Rate | 15 | Outcome reported by whoever paid (e.g. CounterAudit) | `floor(successful / (total + 5) × 15)`, on decayed weights | live |
+| Success Rate | 15 | Outcome reported by a credentialed service (e.g. CounterAudit) | `floor(successful / (total + 5) × 15)`, on decayed weights | live |
 | Tenure | 30 | Span of verified paid activity, faded by how long since the last of it | `min(30, floor(log₂(spanDays+1) × 3)) × recency` | live |
 | External Trust | 25 | Normalized ERC-8004 feedback (linked agents) | mean of recognized tags × 25 | live |
 | Community | 5 | Flags from watchdog feeds (e.g. HoodScan), age-weighted | `max(0, 5 − flags × 2)`, flags decay on a 30-day half-life | live |
-| Propagation | 5 | Standing of the counterparties that paid the agent | 1 pt per fully-trusted counterparty, pro-rated by its score | live |
+| Propagation | 5 | Standing of the counterparties that paid the agent | 1 pt per fully-trusted counterparty, pro-rated by its external standing | live |
 | **Total** | **100** | | | |
 
 All six factors are live. Four things shape what the number actually means:
@@ -338,7 +363,7 @@ sequenceDiagram
     B->>ID: getIdentity(didHash)
     ID-->>B: { ed25519PubKey, status: Active }
     B->>B: verify Ed25519 signature against pubKey
-    B->>REP: meetsThreshold(didHash, 60)
+    B->>REP: meetsThreshold(didHash, 40)
     REP-->>B: true / false
     alt threshold met and signature valid
         B-->>A: action permitted
@@ -412,7 +437,7 @@ npm install @sigvara/protocol-sdk
 ### Refusing work to an agent without standing
 
 The shortest path from a score to a decision. `SigvaraGate` issues a challenge, checks
-the proof before touching the chain, spends the nonce so a captured response cannot be
+the proof before it reads status or score, spends the nonce so a captured response cannot be
 replayed, and refuses with a reason you can act on.
 
 ```typescript
@@ -472,12 +497,15 @@ const verifier = new SigvaraVerifier({
 // B issues a challenge to A
 const challenge = agentB.issueChallenge(agentA.did);
 
-// A signs and returns its DID + signature
+// A signs and returns its DID + signature. signChallenge signs whatever it is handed.
+// signChallengeFor(payload, audience) first checks that the challenge is addressed to the
+// verifier A means to prove itself to. It is in this repository but not in the 1.0.0-alpha.9
+// release on npm, so on alpha.9 check the payload's audience before you sign.
 const signature = agentA.signChallenge(challenge.payload);
 
 // B verifies: resolves pubkey from chain, checks signature + reputation
 const valid = await verifier.verifySignature(agentA.did, challenge.payload, signature);
-const trusted = await verifier.meetsThreshold(agentA.did, 60);
+const trusted = await verifier.meetsThreshold(agentA.did, 40);
 ```
 
 ### On-chain registration (operator)
@@ -533,15 +561,15 @@ FOUNDRY_PROFILE=ci forge test
 
 ## Testing
 
-Everything below runs offline, with no network access and no deployed contracts, except `test/SlashDrillFork.t.sol` and `test/SplitAuthorityFork.t.sol`, which fork Arc testnet.
+Everything below runs offline, with no deployed contracts, except two fork suites. `test/SlashDrillFork.t.sol` forks Arc testnet on every run, so it needs the `arc_testnet` endpoint in `foundry.toml` to answer. `test/SplitAuthorityFork.t.sol` skips its seven tests unless you pass `--fork-url https://rpc.testnet.arc.io`.
 
 | Suite | Count | Command |
 |---|---|---|
-| Contracts — unit, fuzz, E2E, upgrade, deploy-script, handover and 12 invariants | 487 | `forge test` |
-| Oracle | 700 | `cd oracle && node --test` |
-| SDK | 140 | `cd packages/sdk && npx vitest run` |
+| Contracts: unit, fuzz, E2E, upgrade, deploy-script, handover and 11 invariants | 654 | `forge test` |
+| Oracle | 751 | `cd oracle && node --test` |
+| SDK | 168 | `cd packages/sdk && npx vitest run` |
 
-Counts are test functions, so each of the 12 invariants counts once. The two fork suites need an RPC and skip without one. The SDK's 140 includes 8 integration tests that skip without a live deployment.
+Counts are individual tests as of 22 October 2026, so each of the 11 invariants counts once. Without a fork URL, 647 of the contract tests run and 7 skip. The SDK's 168 include 8 integration tests that skip without a live deployment. [`scripts/mutation`](scripts/mutation/README.md) holds the harnesses that measure whether these tests would catch a deliberate break in the contracts or deploy scripts.
 
 ### Unit Tests (default)
 
@@ -588,15 +616,40 @@ Key scenarios tested:
 - Multiple epochs of score evolution
 - Multiple independent agents
 
+### Repository checks and tools
+
+The first three run in CI on every push. Run them from the repository root.
+
+| Script | What it does |
+|---|---|
+| `node scripts/check-docs.mjs` | Fails when the site or the docs state something the contracts do not: selectors, status labels, deployed addresses, factor caps, launch amounts |
+| `node scripts/check-headers.mjs` | Fails if the site's response headers have more than one source or lose a CSP directive. `site/.htaccess` is the only source |
+| `node scripts/check-evidence-fixture.mjs` | Regenerates the Merkle evidence fixture in `test/SigvaraReputation.t.sol` from `oracle/merkle.js` and compares it, so the oracle and the contract cannot drift apart on leaf encoding. `--write` updates it after a deliberate format change |
+| `node scripts/record-implementations.mjs` | Reads each proxy's implementation slot from the chain and records it in `deployments/<chainId>.json`. `--check` fails if the file and the chain disagree |
+| `node scripts/check-role-holders.mjs` | After the mainnet handover, replays every role grant and revocation and fails unless each role is held by exactly the expected addresses. Needs `SAFE`, `TIMELOCK`, `COMMITTEE`, `ORACLE` and `GUARDIAN` in the environment |
+| `source scripts/check-mainnet.sh` | Post-deploy assertions for the Arc mainnet deployment. Export the addresses its header lists, then call the checks that match the step just finished, such as `check_core` |
+| `pwsh scripts/check-arc.ps1` | Confirms the Arc RPC endpoints answer with the expected chain ids |
+| `node scripts/package-site.mjs` | Builds the site archive and refuses a bad one. `--check` runs the checks only |
+| `node scripts/serve-site.mjs` | Serves `site/` locally with the production URL rewriting. `--csp` sends the real headers |
+| `node scripts/backfill-payment-blocks.mjs` | One-off repair for payment events saved before they carried a block number. Needs `--state`, `--rpc` and `--asset`, is a dry run until `--write` is given, and has to run with the oracle stopped |
+| `node scripts/fat-path.mjs` | Testnet only. Funds separate payer wallets that each pay a live agent and attest the settlements, so its fee factor rests on distinct counterparties (the attestations carry no outcome, so the success rate does not move). Needs `--agent` and `DEPLOYER_PRIVATE_KEY` |
+
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on every push to `main` and every pull request, with read-only repository permissions. It builds and tests the contracts (`forge build --sizes`, then `forge test` on the `ci` profile with 5,000 fuzz runs, including the testnet-forking `SlashDrillFork`), builds and tests the SDK, runs the oracle tests and the first three scripts above, and runs Slither, which fails the build on High findings only. The Medium and Low findings that were reviewed and accepted are recorded in [ADR 0002](docs/adr/0002-analyzer-accepted-findings.md).
+
 ---
 
 ## Access Control Summary
 
+The permissions column describes the contracts on `main`. The Arc testnet proxies still run their
+21 September implementations, in which the admin also grants the slasher, committee and staking-core
+roles, the committee rules on disputes, and there is no guardian, veto or lapse (see
+[Deployed contracts](#deployed-contracts-arc-testnet)).
+
 | Role | Holder (Testnet) | Mainnet target | Permissions |
 |---|---|---|---|
-| `DEFAULT_ADMIN_ROLE` | Deployer EOA `0x18CBcE50…` | Admin Safe | Grant `ORACLE_ROLE` and `GUARDIAN_ROLE`, revoke any role except `UPGRADER_ROLE`, set parameters (each has a floor and a ceiling), rule on a disputed slash, veto a pending or disputed slash. It cannot wire the stake view, the oracle bond or the slash beneficiary, and cannot grant the slasher, committee or staking-core roles: those need `UPGRADER_ROLE` |
+| `DEFAULT_ADMIN_ROLE` | Deployer EOA `0x18CBcE50…` | Admin Safe | Grant `ORACLE_ROLE` and `GUARDIAN_ROLE`, revoke any role except `UPGRADER_ROLE`, set parameters (the periods, the score window and the maturity rate each have a floor and a ceiling; the minimum stake and the bond amount only have to be above zero), rule on a disputed slash, veto a pending or disputed slash. It cannot wire the stake view, the oracle bond or the slash beneficiary, and cannot grant the slasher, committee or staking-core roles: those need `UPGRADER_ROLE` |
 | `UPGRADER_ROLE` | Deployer EOA `0x18CBcE50…` | Governance timelock (48 hours) | Authorize UUPS upgrades, wire the stake view, the oracle bond and the slash beneficiary (`setStakeView`, `setOperatorBond`, `setSlashBeneficiary`), and grant the slasher, slashing committee and staking core roles. On a registry initialised by the current code it is administered by itself, so the admin cannot grant it |
-| `GUARDIAN_ROLE` | Not granted on the current testnet deployment | A separate, lighter key | Pause new inflows (registrations, stake deposits, score proposals, bond deposits) for three days at a time. Never exits, slash rulings or finalization, and the admin can revoke it at once |
+| `GUARDIAN_ROLE` | Does not exist on the current testnet deployment, which predates it | A separate, lighter key | Pause new inflows (registrations, stake deposits, score proposals, bond deposits) for three days at a time. Never exits, slash rulings or finalization, and the admin can revoke it at once |
 | `STAKING_CORE_ROLE` | `SigvaraStaking` `0xA69d62B2…` | `SigvaraStaking` | Suspend / slash agents, zero reputation, clear slash suspensions |
 | `ORACLE_ROLE` | Primary `0x6352b8FF…` + checker `0x989aabd6…`, both bonded | Multiple independently operated bonded operators, each signing with a key its cold bond owner has named | Propose reputation scores (and charge epoch fees on `SigvaraEpochFees`, which is not deployed at launch) |
 | `SLASHING_COMMITTEE_ROLE` | EOA `0x045d6c1D…` | 3-of-5 multisig | Initiate and cancel slash proposals, reject bad scores. It does not rule on disputes |
@@ -625,7 +678,7 @@ Sigvara is designed as an open identity layer. Any system that needs to know *wh
 
 > **Enrichment is live as of 19 September 2026.** It had been broken since the rename two days earlier: the code still parsed `did:countersig:` and hashed that prefix, so every current DID was rejected and the derived hash would not have matched the registry anyway. It was also pointed at the predecessor deployment on Robinhood Chain. Both are fixed, and a verification packet on `api.counteraudit.io` carries `agent_chain_id: 5042002` with the correct hash and live score.
 >
-> **The reverse path went live the same day.** It had posted outcomes without the `payment.txHash` the oracle requires, so every one was rejected. The fix was not to relax the oracle — the payment is the credential, which is what stops attestations being free to manufacture — but to carry the settlement hash through from the caller, who is a party to the payment and knows it. CounterAudit relays it and the oracle still verifies it against the chain independently, so CounterAudit is not a trusted party in that path.
+> **The reverse path went live the same day.** It had posted outcomes without the `payment.txHash` the oracle requires, so every one was rejected. The fix was not to relax the oracle — the payment is the credential, which is what stops attestations being free to manufacture — but to carry the settlement hash through from the caller, who is a party to the payment and knows it. CounterAudit relays it and the oracle still verifies it against the chain independently, so CounterAudit is not trusted for the payment. Its outcome is a credentialed service's word, which is what its token is for.
 
 How it works: an ingest call carrying `agent_did` makes CounterAudit query the Sigvara contracts at seal time and embed the agent's identity and reputation score inside the AES-GCM seal, covered by an RFC 3161 timestamp — proving what the agent's reputation was at the moment of each action rather than today. An ingest also carrying an `outcome` (`success` / `failure`) is reported to the oracle, feeding audited work outcomes back into Success Rate and Fee Activity. Reading and writing the same reputation is what closes the loop.
 
@@ -661,7 +714,7 @@ Any smart contract can gate operations on an agent's standing:
 ```solidity
 import {ISigvaraReader} from "sigvara/src/interfaces/ISigvara.sol";
 
-require(ISigvaraReader(READER).isTrusted(agent, 60), "agent not in good standing");
+require(ISigvaraReader(READER).isTrusted(agent, 40), "agent not in good standing");
 ```
 
 `isTrusted` checks that the agent is Active, that the bond it holds now meets the current minimum stake, and that its spendable score is at least the threshold. `SigvaraReputation.meetsThreshold` compares the score alone, so a suspended agent passes it. The [integration guide](docs/integration.md) covers the full read, the registry interfaces and a worked example.
@@ -677,7 +730,7 @@ require(ISigvaraReader(READER).isTrusted(agent, 60), "agent not in good standing
 | External Trust | Q4 2026 | externalScore from ERC-8004 feedback — **built and tested**, reading the ERC-8004 registries on Arc testnet; it contributes **0 until an agent is linked** to an 8004 id whose NFT is held by the same wallet and which carries feedback in a tag the oracle normalizes. No agent is linked today, so this factor is 0 for everyone · agent-vouching graph (propagationScore) — **built and live**, computed every epoch; it inherits only a counterparty's *external* standing, so like externalScore it reads 0 network-wide until ERC-8004 standing exists. Reachable ceiling today is 70/100 · deeper ERC-8004 interop (publish CounterAudit validations to the Validation Registry) |
 | Sybil resistance | Q4 2026 | ~~payment-backed attestations~~ · ~~half-life decay + shrinkage prior~~ · ~~bond required before scoring~~ · ~~self-payment and per-payer diversity caps~~ · ~~tenure in place of calendar age~~ · ~~maturity time-lock~~ · ~~two-step operator transfer~~ · ~~on-chain evidence roots~~ — all **done**, see [payment-backed attestations](docs/payment-backed-attestations.md) |
 | Oracle decentralization | Q1 2027 | ~~oracle operator bonds deployed and wired~~ **done** · ~~a second bonded operator with challenge-based disagreement~~ **done** (checker mode, `activeCount` 2, separate host and RPC provider) · ~~public challenge watcher~~ **done** (third host, holds no key) · deterministic scoring off the chain clock · operators run by *independent parties*, which is the part that still matters |
-| Mainnet Registries | Q1 2027 | Tier-1 security audit · admin and upgrade roles onto a timelock or Safe · ~~one documented end-to-end testnet slash~~ **done** · registry deployment on Arc mainnet (`5042`) with bonds and scoring fees in SVR |
+| Mainnet Registries | Q1 2027 | Tier-1 security audit · admin and upgrade roles onto a timelock or Safe (`script/SplitAuthority.s.sol`, rehearsed on a fork of the testnet, not yet run on a live deployment) · ~~one documented end-to-end testnet slash~~ **done** · registry deployment on Arc mainnet (`5042`) with bonds in SVR. The deploy scripts already refuse less than the [published launch amounts](docs/token.md#mainnet-parameters). The epoch-fee module is left out of launch and out of the first audit ([ADR 0005](docs/adr/0005-governance-and-emergency-powers.md)), so scoring fees follow later |
 | Delivery and disputes | After the first audit | not started · outcomes bound to a settled payment by a payer signature (EIP-712), in place of a trusted attester · a payer-initiated challenge against the agent's bond · an arbiter path beyond the committee · built to plug into x402's escrow and delivery-receipt work, so Sigvara supplies the bonded verifier and the seller's standing rather than a payment scheme |
 | Cross-Chain | Q2 2027 | Solana + Base state mirroring via LayerZero |
 

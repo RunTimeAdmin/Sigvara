@@ -2,7 +2,7 @@
 
 **Computed reputation and staked accountability for autonomous agents.**
 
-Version 0.4, 20 September 2026. Live on Arc testnet (chain 5042002). Not yet audited,
+Version 0.4, 20 September 2026, revised 23 October 2026. Live on Arc testnet (chain 5042002). Not yet audited,
 not on mainnet.
 
 ---
@@ -88,8 +88,9 @@ Deriving it means any party can compute an agent's key offline from its address,
 round trip and nothing to look up. It also means an address maps to exactly one identity
 per chain, so an agent cannot quietly hold two.
 
-Registration requires proof of control of the agent key: the operator submits a signature
-over a registration digest, so an operator cannot register an address it does not hold.
+Registration requires proof of control of the agent address: the operator submits a
+signature from that address over a registration digest, so an operator cannot register an
+address it does not hold.
 
 An agent has four states:
 
@@ -97,7 +98,7 @@ An agent has four states:
 |---|---|
 | `PendingBond` | Registered and visible, below `minimumStake`. Not scoreable. |
 | `Active` | Bonded at or above the minimum. Scoreable and slashable. |
-| `Suspended` | Withdrew below the minimum, or frozen by a pending slash. |
+| `Suspended` | Suspended by its operator (required before withdrawing below the minimum), or frozen by a pending slash. |
 | `Slashed` | Terminal. Score zeroed, cannot be topped back up. |
 
 `PendingBond` exists so that registering is free and meaningless. An agent that has not
@@ -151,9 +152,11 @@ get to supply the facts, only to point at them. A payment that never happened ca
 attested, because there is no log to read.
 
 Negative outcomes are different: they need a credential, because an uncredentialed
-negative attestation is a free denial-of-service against a competitor. Positive
-payment-backed attestations are open to anyone, since the payment is itself the
-credential and forging it means forging a chain transfer.
+negative attestation is a free denial-of-service against a competitor. Anyone may
+submit a payment-backed attestation, since the payment is itself the credential for the
+payment and forging it means forging a chain transfer. Only a credentialed service can
+attach an outcome to it, because a settlement hash is public and proves neither who paid
+nor that the work went well.
 
 What this does not fix, on the deployment as it runs today: a payment that settled but
 which nobody submits. Detecting unreported work requires an independent watcher of the
@@ -229,10 +232,13 @@ proposeReputation(bytes32 didHash, ReputationData data, bytes32 evidenceRoot)
 The contract rejects any factor above its cap and refuses to score an unbonded agent. The
 proposal then sits for a challenge window, 6 hours on Arc. During it,
 `SLASHING_COMMITTEE_ROLE` may reject the proposal outright. After it, **anyone** may call
-`finalizeReputation(didHash)` to make the score live.
+`finalizeReputation(didHash)` to make the score live, provided the proposer still holds
+`ORACLE_ROLE` and is still an active operator or the signer of one.
 
-Finalization is permissionless on purpose. It is mechanical and cannot change the number,
-and gating it would let an operator's absence strand every score it had proposed.
+Who calls it is not gated, on purpose. Finalizing is mechanical and cannot change the
+number, and gating the caller would let an operator's absence strand every score it had
+proposed. What is checked is the proposer: a proposal from an operator that has since
+been removed is not made live unreviewed, and its successor replaces it (on `main`; the testnet proxies predate that check).
 
 `pendingScores` holds one proposal per agent. A second `proposeReputation` overwrites the
 first and restarts its window, which is why the oracle skips an agent whose proposal is
@@ -241,11 +247,17 @@ still inside its window rather than re-proposing every epoch.
 ### 3.2 Bonded operators
 
 An oracle cannot propose unless it both holds `ORACLE_ROLE` and is an admitted, bonded
-operator in `SigvaraOracleBond`:
+operator in `SigvaraOracleBond`, or the signer one has named:
 
 ```solidity
+address operator = operatorOfSigner[account];
+if (operator == address(0)) operator = account;
+Operator storage op = operators[operator];
 return op.status == Status.Active && op.bond >= bondAmount;
 ```
+
+A named signer answers for its operator, so the key that signs on a server need not be
+the key that holds the bond.
 
 That check is evaluated live, so raising the bond floor immediately stops any operator
 that falls below it. Admission is by governance vote, not by posting capital, so the bond
@@ -344,14 +356,17 @@ the thing it claims to replace.
 - **The slashing committee.** It can reject any pending proposal and propose slashes. On
   testnet it is a single EOA. On mainnet it must be a multisig, and that is a stated
   precondition for mainnet, not an aspiration.
-- **`DEFAULT_ADMIN_ROLE`.** It admits operators, sets `minimumStake`, `bondAmount` and
-  the challenge window, and can upgrade the UUPS proxies.
+- **`DEFAULT_ADMIN_ROLE`.** It admits operators and sets `minimumStake`, `bondAmount` and
+  the challenge window. Upgrading the UUPS proxies takes `UPGRADER_ROLE`: one deployer key
+  holds both roles on testnet, and on mainnet the upgrader is a 48 hour timelock.
 
 ### 5.2 What you need not trust
 
 - **That a payment happened.** Attested payments are read from transfer logs. You can
   refetch every one.
-- **That the score matches its inputs.** Fetch the evidence, rebuild the root, compare.
+- **That the score matches its inputs.** Fetch the evidence, rebuild the root, compare
+  it with the contract's. They match while no payment has arrived or aged out since the
+  proposal.
 - **That a proposal is final.** It is not, for the length of the challenge window.
 - **That the oracle is bonded.** `isActiveOperator` is a public view.
 - **That an agent is collateralised.** `getStake` and `hasMinimumStake` are public views.
@@ -402,8 +417,9 @@ An attacker willing to buy outside standing is a different matter, and the weigh
 not stop one. A ring that acquires a full ERC-8004 identity reaches the high seventies
 under every weighting that was measured, including the two rejected ones. Weighting
 bounds cheap attacks. Only a slashing path that actually executes bounds expensive ones,
-and Sigvara's has been rehearsed against a fork but never run on the live chain. Until
-it has, treat the numbers above as the cost of a *cheap* forgery, not of any forgery.
+and Sigvara's has run once on the live chain, as a drill against a throwaway agent and
+never against an adversary. Treat the numbers above as the cost of a *cheap* forgery, not
+of any forgery.
 
 **This measurement changed the protocol, twice.** Tenure previously reached its cap at
 day 31, which handed the entire factor to six weeks of wash payments and made the same
@@ -413,9 +429,9 @@ factor was always documented to represent. That took the ring to 66.
 The weights then followed. Fee and success were 30 and 25, so 55 of the 100 points rested
 on the two inputs a ring manufactures for the price of gas. They are now 20 and 15, and
 the 20 points released went to tenure (20 to 30) and external trust (15 to 25), the two
-factors that cannot be bought with wallets. That took the ring from 66 to **55** and an
-honest agent with outside standing from 91 to 89, which is the trade: nine points off the
-forgery for two off the genuine article.
+factors that cannot be bought with wallets. That took the ring from 66 to **53** and an
+honest agent with outside standing from 91 to 89, which is the trade: thirteen points off
+the forgery for two off the genuine article.
 
 A bond-coverage factor was designed, implemented and measured as the alternative, and
 rejected. It scored the agent on how much stake stood behind its volume, which reads well
@@ -501,7 +517,8 @@ SVR is the bond and fee asset. It is not a governance token and it is not a clai
 revenue.
 
 **Supply** is 1,000,000,000, fixed at creation. The contract is a plain ERC-20 with no
-owner, no mint, no pause, no blacklist and no transfer tax.
+owner, no mint, no pause, no blacklist and no transfer tax. Its one deviation is a cap of
+3% of supply per wallet for the first 300 seconds after launch.
 
 **Distribution** has no team allocation, no treasury allocation, no vesting and no sale.
 The whole supply enters the liquidity pool at launch. Every position the team holds is
@@ -523,7 +540,7 @@ Providing liquidity earns nothing. The reward is for bonded, slashable service.
 |---|---|---|---|
 | `bondAmount` | 25,000 SVR | 2,500,000 SVR | 0.25% |
 | `minimumStake` | 1,000 SVR | 10,000 SVR | 0.001% |
-| `epochFee` | 0 (registry not deployed) | 0 at launch | n/a |
+| `epochFee` | 0 (registry not deployed) | registry not deployed at launch | n/a |
 
 The testnet bond was raised from 1,000 to 25,000 on 20 September 2026. The faucet mints
 10,000 per address per day, so a 1,000 bond was a tenth of one free claim and bonded
@@ -557,7 +574,7 @@ All are UUPS proxies except the token.
 
 **Running:** hourly oracle epochs proposing and finalizing scores; payment-verified
 attestations with evidence roots; public unauthenticated reads at `/health`, `/score`,
-`/evidence`; third-party `POST /attest` for positive payment-backed outcomes; flag
+`/evidence`; `POST /attest`, which credits a verified payment without a token and takes an outcome only from a credentialed service; flag
 raising and resolution with half-life decay; a two-way integration with CounterAudit that
 both enriches audit packets with Sigvara identity and reports settlement outcomes back.
 
@@ -565,15 +582,23 @@ both enriches audit packets with Sigvara identity and reports settlement outcome
 hardware from the primary and a separate RPC provider, with its own 25,000 SVR bond and
 its own state; and the divergence watcher that consumes its output, on a third host with
 no key and no state. `activeCount` on `SigvaraOracleBond` is 2. The checker exposes
-`/health` and `/divergence` publicly at `checker.sigvara.xyz`; every write path 404s
-before reaching the service.
+`/health`, `/divergence` and `/evidence` publicly at `checker.sigvara.xyz`; every write
+path 404s before reaching the service.
 
 **Not deployed:** `SigvaraEpochFees`. Scoring on Arc testnet is free and nothing is
 charged. The app disables every fee control rather than pointing at an address with no
 code.
 
-**Test coverage**, all passing: 487 contract tests across 22 Foundry test files including
-fuzz and invariant tests (the fork suites need an RPC), 700 oracle tests and 140 in the SDK (8 of them
+**Deployed contracts versus `main`.** The Arc testnet proxies still run the
+implementations recorded in `deployments/5042002.json`, last changed on 21 September 2026.
+The contract changes made after that, among them timelocked role grants, the guardian
+pause, admin-ruled disputes with a veto and a lapse, launch floors and ceilings and
+operator signers, are on `main` and described in this document, but they are not deployed
+on the testnet. `node scripts/record-implementations.mjs --check` shows what is live.
+
+**Test coverage**, all passing as of 22 October 2026: 654 contract tests across 24 Foundry test files
+including fuzz and invariant tests (two fork suites need an RPC, and the seven in
+`SplitAuthorityFork` skip without `--fork-url`), 751 oracle tests and 168 in the SDK (8 of them
 need a live deployment and skip without one). CI runs Foundry, the oracle and
 SDK suites, and Slither static analysis on every push, plus a documentation check that
 fails when the site states something the contracts do not.
@@ -607,7 +632,7 @@ Ordered by what unblocks what, not by difficulty.
    against a fork of the live deployment).
 
    The log states its own limits and they are worth repeating here: the target's score of 15
-   came from tenure alone, so this demonstrates little about reputation being destroyed; reporter, operator and victim
+   was calendar tenure (10) plus the unflagged baseline (5), so this demonstrates little about reputation being destroyed; reporter, operator and victim
    are all addresses one party controls, so it demonstrates a mechanism and not a
    governance decision. It is a demonstration, not a proof.
 3. ~~**A divergence watcher.**~~ Running since 20 September 2026, on a third host that is
@@ -699,8 +724,10 @@ curl -s https://oracle.sigvara.xyz/evidence/$DID   # the payments, with proofs
 
 The evidence response gives you every settlement transaction hash behind the score.
 Fetch each from the chain, confirm the payer and amount match, rebuild the Merkle root
-from the leaves, and compare it with the `evidenceRoot` the contract holds. If they
-differ, the oracle is lying and you can prove it.
+from the leaves, and compare it with the `evidenceRoot` the contract holds. The endpoint
+serves the oracle's current payments and the contract holds the root as of the last
+finalized proposal, so the two match while no payment has arrived or aged out since. If they differ
+when nothing has changed, the oracle is lying and you can prove it.
 
 That last sentence is the whole design, compressed.
 
