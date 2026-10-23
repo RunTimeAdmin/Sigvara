@@ -332,6 +332,76 @@ contract SigvaraOracleBondTest is Test {
     }
 
     // -------------------------------------------------------------------------
+    // The slasher is never the payee
+    // -------------------------------------------------------------------------
+
+    /// One address that holds the slasher role and receives what is slashed takes an operator's bond and
+    /// pays itself, which is the opposite of a performance bond. The registry refuses the pairing at every
+    /// way in: the initializer, a later grant of the role, and a later change of the beneficiary.
+    function test_initialize_refusesASlasherThatIsTheBeneficiary() public {
+        address impl = address(new SigvaraOracleBond());
+        vm.expectRevert(abi.encodeWithSelector(SigvaraOracleBond.SlasherIsBeneficiary.selector, slasher));
+        new ERC1967Proxy(impl, abi.encodeCall(
+            SigvaraOracleBond.initialize, (admin, slasher, address(svr), BOND, UNBOND, slasher)
+        ));
+    }
+
+    function testFuzz_initialize_theSlasherAndTheBeneficiaryMustDiffer(address s, address ben) public {
+        vm.assume(ben != address(0));
+        address impl = address(new SigvaraOracleBond());
+        if (s == ben) vm.expectRevert(abi.encodeWithSelector(SigvaraOracleBond.SlasherIsBeneficiary.selector, s));
+        SigvaraOracleBond b = SigvaraOracleBond(address(new ERC1967Proxy(impl, abi.encodeCall(
+            SigvaraOracleBond.initialize, (admin, s, address(svr), BOND, UNBOND, ben)
+        ))));
+        if (s != ben) assertEq(b.slashBeneficiary(), ben);
+    }
+
+    function test_grantSlasher_refusesTheBeneficiary() public {
+        bytes32 role = bond.SLASHER_ROLE();
+        vm.expectRevert(abi.encodeWithSelector(SigvaraOracleBond.SlasherIsBeneficiary.selector, beneficiary));
+        vm.prank(admin); // holds UPGRADER_ROLE, which administers the slasher role
+        bond.grantRole(role, beneficiary);
+        assertFalse(bond.hasRole(role, beneficiary));
+    }
+
+    function test_setSlashBeneficiary_refusesAnAddressThatHoldsTheSlasherRole() public {
+        vm.expectRevert(abi.encodeWithSelector(SigvaraOracleBond.SlasherIsBeneficiary.selector, slasher));
+        vm.prank(admin);
+        bond.setSlashBeneficiary(slasher);
+        assertEq(bond.slashBeneficiary(), beneficiary, "unchanged after the refusal");
+    }
+
+    /// The refusal follows who holds the role and who is named now, not who once did: a slasher that has
+    /// been revoked can be named beneficiary, and the former beneficiary can then be granted the role.
+    function test_theRefusalFollowsTheCurrentHolders() public {
+        bytes32 role = bond.SLASHER_ROLE();
+        vm.startPrank(admin);
+        bond.revokeRole(role, slasher);
+        bond.setSlashBeneficiary(slasher);
+        bond.grantRole(role, beneficiary);
+        vm.stopPrank();
+        assertEq(bond.slashBeneficiary(), slasher);
+        assertTrue(bond.hasRole(role, beneficiary));
+        assertFalse(bond.hasRole(role, slasher));
+    }
+
+    /// Only the slasher role is kept from the beneficiary. The payee can hold every other role, and the rule
+    /// has to stay that narrow: a check on the account alone would refuse the beneficiary the admin and
+    /// upgrader roles too, which a few deployments and fixtures give to the same address.
+    function test_theBeneficiaryMayHoldEveryOtherRole() public {
+        bytes32 guardian = bond.GUARDIAN_ROLE();
+        bytes32 upgrader = bond.UPGRADER_ROLE();
+        vm.startPrank(admin);
+        bond.grantRole(guardian, beneficiary);
+        bond.grantRole(upgrader, beneficiary);
+        bond.grantRole(bond.DEFAULT_ADMIN_ROLE(), beneficiary);
+        vm.stopPrank();
+        assertTrue(bond.hasRole(guardian, beneficiary));
+        assertTrue(bond.hasRole(upgrader, beneficiary));
+        assertTrue(bond.hasRole(bond.DEFAULT_ADMIN_ROLE(), beneficiary));
+    }
+
+    // -------------------------------------------------------------------------
     // Floors: a bond requirement of zero, and an exit with no delay
     // -------------------------------------------------------------------------
 

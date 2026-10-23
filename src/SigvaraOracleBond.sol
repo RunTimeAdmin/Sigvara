@@ -134,6 +134,9 @@ contract SigvaraOracleBond is
     /// isActiveOperator could then not say which of the two it was answering for.
     error AlreadySigner(address account);
     error NoSigner(address operator);
+    /// One address would hold the slasher role and receive what is slashed. It could take an
+    /// operator's bond and pay itself, which is the opposite of a performance bond.
+    error SlasherIsBeneficiary(address account);
 
     // -------------------------------------------------------------------------
     // Constructor / Initializer
@@ -155,6 +158,9 @@ contract SigvaraOracleBond is
         if (admin == address(0) || svrToken == address(0) || slashBeneficiary_ == address(0)) {
             revert ZeroAddress();
         }
+        // The slasher takes bonds and the beneficiary receives them. Later grants of the role and
+        // changes of the beneficiary refuse the same pairing (_grantRole, setSlashBeneficiary).
+        if (slasher == slashBeneficiary_) revert SlasherIsBeneficiary(slasher);
         // The same two refusals the setters make. Left to the setters alone, a deployment that
         // did not go through the script could start with a bond requirement of zero, which puts
         // nothing at risk, or with no exit delay.
@@ -395,8 +401,10 @@ contract SigvaraOracleBond is
 
     /// @notice Where slashed bond goes. Upgrade-class: it decides where value flows, so it takes the
     ///         timelock. Left to the admin, a compromised Safe could point it at itself and slash.
+    ///         It cannot be an address that holds the slasher role.
     function setSlashBeneficiary(address newBeneficiary) external onlyRole(UPGRADER_ROLE) {
         if (newBeneficiary == address(0)) revert ZeroAddress();
+        if (hasRole(SLASHER_ROLE, newBeneficiary)) revert SlasherIsBeneficiary(newBeneficiary);
         slashBeneficiary = newBeneficiary;
         emit SlashBeneficiaryUpdated(newBeneficiary);
     }
@@ -449,6 +457,13 @@ contract SigvaraOracleBond is
         return operators[account].status == Status.None
             && signerOf[account] == address(0)
             && operatorOfSigner[account] == address(0);
+    }
+
+    /// @dev Every grant of the slasher role after initialize passes through here, whoever administers it,
+    ///      and refuses the address that receives what is slashed.
+    function _grantRole(bytes32 role, address account) internal override returns (bool) {
+        if (role == SLASHER_ROLE && account == slashBeneficiary) revert SlasherIsBeneficiary(account);
+        return super._grantRole(role, account);
     }
 
     // -------------------------------------------------------------------------

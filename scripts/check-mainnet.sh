@@ -15,7 +15,7 @@
 #   ORACLE     the oracle wallet
 #   COMMITTEE  the committee multisig
 #   GUARDIAN   the pause guardian    (check_core, check_bond_and_fees, check_holders)
-#   TREASURY   the slash beneficiary and reward pool
+#   TREASURY   the slash beneficiary and reward pool    (check_bond_and_fees, check_safes)
 #   SAFE       the admin Safe        (check_authority, check_timelock, check_safes, check_holders)
 #   TIMELOCK   the timelock          (check_authority, check_timelock, check_holders)
 # check_safes also reads SAFE_OWNERS, COMMITTEE_OWNERS and SAFE_THRESHOLD, which must be
@@ -158,6 +158,11 @@ check_bond_and_fees() {
   expect "oracleBond: initialized once (1)"    1              "$(initialized $BOND)"
   has $BOND $SLASHER_ROLE $COMMITTEE true  "oracleBond: committee holds SLASHER"
   has $BOND $SLASHER_ROLE $DEPLOYER  false "oracleBond: deployer does not hold SLASHER"
+  # The slasher takes bonds and the beneficiary receives them, so they must be different addresses.
+  # The registry refuses the pairing itself; this reads what was deployed.
+  has $BOND $SLASHER_ROLE $TREASURY  false "oracleBond: the slash beneficiary does not hold SLASHER"
+  if [ "${TREASURY,,}" = "${COMMITTEE,,}" ]; then echo "FAIL  the treasury is the committee ($TREASURY): the slasher would pay itself"; FAIL=1
+  else echo "ok    the treasury is not the committee"; fi
   has $BOND $GUARDIAN_ROLE $GUARDIAN true  "oracleBond: guardian holds GUARDIAN"
   has $BOND $GUARDIAN_ROLE $DEPLOYER false "oracleBond: deployer does not hold GUARDIAN"
   expect "oracleBond: SLASHER is granted by UPGRADER"          "$UPGRADER_ROLE" "$(val $BOND 'getRoleAdmin(bytes32)(bytes32)' $SLASHER_ROLE)"
@@ -269,6 +274,15 @@ check_safes() {
   else echo "ok    the admin Safe and the committee have no owner in common"; fi
   confirmed=" $(echo "$SAFE_OWNERS,$COMMITTEE_OWNERS" | owners_of) "
   case "$confirmed" in *" ${DEPLOYER,,} "*) echo "FAIL  the deployer is an owner of a Safe"; FAIL=1;; esac
+  # Slashed bonds go to the treasury. An owner of the committee, which files the slashes, or of the
+  # admin Safe, which rules on them, would be paid by its own decisions.
+  if [ -z "$TREASURY" ]; then echo "FAIL  TREASURY is not set"; FAIL=1
+  else
+    case "$confirmed" in
+      *" ${TREASURY,,} "*) echo "FAIL  the treasury is an owner of a Safe: $TREASURY"; FAIL=1;;
+      *) echo "ok    the treasury is not an owner of either Safe";;
+    esac
+  fi
   summary safes
 }
 
