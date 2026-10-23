@@ -9,7 +9,7 @@ Sigvara reputation is a deterministic 6-factor score between 0 and 100. It is co
 | Factor | Max Points | Source | Formula |
 |---|---|---|---|
 | Fee Activity | 20 | Settled payments to the agent, verified on chain | `min(20, decayedVolume / PAYMENT_FEE_UNIT)`, capped per payer |
-| Success Rate | 15 | Outcome reported by the party that paid | `floor(successful / (total + 5) × 15)`, on decayed weights |
+| Success Rate | 15 | Outcome reported by a credentialed service (CounterAudit today) | `floor(successful / (total + 5) × 15)`, on decayed weights |
 | Tenure | 30 | Span of verified trading, faded by how long since the last of it | `min(30, floor(log₂(spanDays+1) × 3)) × recency` |
 | External Trust | 25 | Normalized ERC-8004 feedback for a linked agent | mean of recognized rating tags × 25 |
 | Community | 5 | Unresolved flags | `max(0, 5 − flags × 2)` |
@@ -49,7 +49,8 @@ an address you do not control, repeatedly, from wallets that each had to be fund
 
 ### Success Rate (15 pts)
 
-Based on outcomes reported by the parties that paid for the work. An attestation must
+Based on outcomes reported by credentialed services, such as CounterAudit, which audits
+the work. An attestation must
 carry the settlement transaction of a real payment to the agent, and the attester is
 taken from the transfer log rather than asserted by the caller. The oracle aggregates
 these per agent, decaying each by age and capping any one payer's contribution.
@@ -158,7 +159,7 @@ Deducted based on unresolved community flags. The full 5 pts is the default for 
 3 flags → 0 pts
 ```
 
-Flags are submitted through a governance mechanism (separate from slashing). Slashing is economic; flags are reputational.
+Flags are raised by credentialed services, such as watchdog scanners, through `POST /flag` (separate from slashing). Slashing is economic; flags are reputational.
 
 ### Trust Propagation (5 pts)
 
@@ -215,9 +216,10 @@ visible from either call site and is easy to mistake for a bug.
 **It is damped against reflexivity.** The matured total caps what is inherited, and
 maturity lags what has just been earned, so a reciprocal pair cannot lift each other
 inside one epoch and a linked 8004 history cannot be propagated the same epoch it is
-linked. Unknown counterparties and unreachable nodes both read as zero, because no
-evidence of standing and no ability to check are the same thing as far as granting a
-bonus goes.
+linked. An unknown counterparty reads as zero, because no evidence of standing is the
+same thing as far as granting a bonus goes. A node that cannot answer is retried, and if
+it still fails the agent is skipped for that epoch: a failed read says nothing about the
+counterparty, and scoring on it would lower the proposal for the wrong reason.
 
 ## Maturity
 
@@ -333,7 +335,7 @@ import {ISigvaraReader} from "sigvara/src/interfaces/ISigvara.sol";
 
 function requireTrusted(address agent) internal view {
     require(
-        ISigvaraReader(READER).isTrusted(agent, 50),
+        ISigvaraReader(READER).isTrusted(agent, 40),
         "Agent is not in good standing at the minimum score"
     );
 }
@@ -364,7 +366,7 @@ factor, and proposes a score plus a Merkle root over the evidence it used.
 Two bonded operators run today, and only one of them writes. When
 `SigvaraReputation.operatorBond` is set — it is on Arc testnet — a proposer must also be
 admitted and bonded in `SigvaraOracleBond`, so a bad score costs its proposer something.
-Finalizing stays permissionless.
+Anyone may finalize, but not a proposal whose proposer has since been removed (on `main`; the testnet proxies predate that check).
 
 The second runs in checker mode: it recomputes each pending score independently and
 records disagreement rather than competing for the slot, because two operators writing to
@@ -376,16 +378,18 @@ State (attestations, flags, links, payment events, spent settlement hashes, scan
 progress) is a JSON file written atomically, not an in-memory map, so it survives
 restarts.
 
-### What multiple operators will need
+### What multiple operators needed
 
-Running a second operator today would not produce a second opinion, because the two
-would not be looking at the same thing, and a fresh proposal replaces a still-pending
-one — so they would race rather than check each other. Three things have to change
-first, and the design deliberately aims at the third rather than at consensus:
+A second operator that proposed alongside the first would not have produced a second
+opinion, because the two would not be looking at the same thing, and a fresh proposal
+replaces a still-pending one, so they would race rather than check each other. Three
+things had to change, and the design deliberately aims at the third rather than at
+consensus:
 
-1. **Shared inputs.** Payment evidence is derivable from chain logs and should be
-   scanned rather than submitted. What is genuinely off-chain is the success flag, the
-   payer's opinion, and only that needs a shared channel.
+1. **Shared inputs.** Done. Payment evidence is derivable from chain logs, so each
+   operator scans for it itself ([ADR 0003](adr/0003-evidence-intake.md), enabled on both
+   since 3 October 2026) instead of waiting to be told. What is genuinely off-chain is
+   the outcome of the work, and only that needs a shared channel.
 2. **Deterministic computation.** Half done, and the other half is currently paid for
    with a tolerance rather than fixed.
 
@@ -443,7 +447,8 @@ agent id. `oracle/external.js` does exactly this:
 4. The factor is the mean of the kept ratings times 25, rounded. No recognized feedback
    gives 0.
 
-The weights and decay parameters are in `oracle/scoring.js` and `oracle/payments.js`. When
+The factor caps are in `oracle/score-caps.js`, the curves in `oracle/scoring.js` and the
+decay parameters in `oracle/payments.js`. When
 payment verification is on, `GET /score/:didHash` also returns the half-life, per-payer cap
 and trust weight the operator is running with.
 

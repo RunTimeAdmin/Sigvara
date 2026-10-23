@@ -252,7 +252,9 @@ the two factors in the record:
   back to the calendar curve. The primary *has* the window (a three-second span between
   the agent's two payments) and correctly scores 0. The checker scoring *higher* here is
   the tell: it was not seeing less evidence and grading down, it was seeing none and
-  taking a different code path.
+  taking a different code path. Since 22 October 2026 that path is gone when payment
+  verification is on: an agent with no payment events scores 0 tenure, so a cold-start
+  checker now reads lower on `ageScore`, not higher.
 
 Resolved by seeding the checker at 20:39 with the two settlement transactions the primary
 had counted, re-verified against the chain by the checker itself rather than copied. Its

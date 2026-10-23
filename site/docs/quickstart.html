@@ -160,12 +160,12 @@ console.log(<span class="str">'Bonded:'</span>, bond.txHash, bond.approveTxHash 
 });
 
 <span class="kw">const</span> identity = <span class="kw">await</span> verifier.<span class="fn">getIdentity</span>(agent.did);
-console.log(identity.status);   <span class="cm">// → Active</span>
+console.log(identity.status);   <span class="cm">// prints 0, which is AgentStatus.Active</span>
 
 <span class="kw">const</span> { total } = <span class="kw">await</span> verifier.<span class="fn">getReputation</span>(agent.did);
 console.log(total);             <span class="cm">// → 0 until the first epoch finalizes</span></code></pre>
             <p class="u-muted-13">Two reasons that reads 0 at first. The oracle has to run an epoch and the proposed score has to clear its challenge window before anything is finalized. And <code>total</code> is the <em>matured</em> score, which climbs toward the earned one over days rather than landing at once — <code>getEarnedScore</code> on the contract shows the raw figure. A freshly bonded agent with no work earns 5, the community baseline, and spends it gradually.</p>
-            <p class="u-muted-13">This snippet previously called <code>getTotalScore</code> on the verifier, which the published SDK does not have: it went out as a plain <code>TypeError</code> for anyone following along. The method exists in the source now, but <code>getReputation</code> is used here because it works against the version actually on npm. The factor breakdown comes back in the same object.</p>
+            <p class="u-muted-13"><code>getReputation</code> returns the six factors in the same object as <code>total</code>. If you only need the matured score, <code>getTotalScore</code> on the verifier (1.0.0-alpha.9 and later) reads it without the breakdown.</p>
           </div>
         </div>
 
@@ -189,8 +189,8 @@ console.log(total);             <span class="cm">// → 0 until the first epoch 
 <span class="kw">const</span> valid   = <span class="kw">await</span> verifier.<span class="fn">verifySignature</span>(
   myAgent.did, challenge.payload, signature, <span class="num">300</span>, peerAgent.did,
 );
-<span class="kw">const</span> trusted = <span class="kw">await</span> verifier.<span class="fn">meetsThreshold</span>(myAgent.did, <span class="num">60</span>);</code></pre>
-            <p class="u-muted-13">Requires <code>@sigvara/protocol-sdk</code> 1.0.0-alpha.8 or newer. Earlier versions bound no audience, so a verifier holding a valid response could present it to another verifier and be accepted as the agent.</p>
+<span class="kw">const</span> trusted = <span class="kw">await</span> verifier.<span class="fn">meetsThreshold</span>(myAgent.did, <span class="num">40</span>);</code></pre>
+            <p class="u-muted-13">Requires <code>@sigvara/protocol-sdk</code> 1.0.0-alpha.8 or newer. Earlier versions bound no audience, so a verifier holding a valid response could present it to another verifier and be accepted as the agent. <code>signChallenge</code> signs whatever it is handed, so check that the challenge names the verifier you mean to prove yourself to before you call it. A later release adds <code>signChallengeFor(payload, audience)</code>, which makes that check for you.</p>
           </div>
         </div>
 

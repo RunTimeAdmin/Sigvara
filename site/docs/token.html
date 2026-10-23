@@ -72,7 +72,7 @@
       <main class="docs-content">
         <div class="section-label">Token</div>
         <h2>SVR</h2>
-        <p class="lead">SVR is the bond and fee token of the Sigvara protocol. Operators bond it to register agents, the slashing path burns it, oracle operators post it as a performance bond, and scoring epochs are charged in it.</p>
+        <p class="lead">SVR is the bond and fee token of the Sigvara protocol. Operators bond it to activate agents, the slashing path burns it, oracle operators post it as a performance bond, and scoring epochs will be charged in it once the epoch-fee module is deployed.</p>
 
         <div class="callout">
           <p><strong>This page is the canonical description.</strong> Anything about SVR that does not appear here and on <a href="../">sigvara.xyz</a> first is not from this project. That includes anything posted by an account using this name, and it includes contract addresses.</p>
@@ -163,7 +163,7 @@
           </tbody>
         </table>
 
-        <p>The operator bond is what a corrupt oracle loses. <code>slash()</code> can take up to the whole of it, so the deterrent is the full number rather than a fraction. The agent stake is a gate on who is worth scoring, which is a much smaller job than deterring an oracle, so it sits two orders of magnitude lower. On Arc testnet both were 1,000, which was coincidence rather than design.</p>
+        <p>The operator bond is what a corrupt oracle loses. <code>slash()</code> can take up to the whole of it, so the deterrent is the full number rather than a fraction. The agent stake is a gate on who is worth scoring, which is a much smaller job than deterring an oracle, so it sits two orders of magnitude lower. On Arc testnet both were 1,000 until the bond was raised to 25,000 on 20 September 2026, and the match was coincidence rather than design.</p>
 
         <p>Neither figure is the protocol's defence against a hostile operator set. <code>admit()</code> is governance-gated, so operators join by vote and nobody buys their way in. What the bond buys is something the slashing committee can take, and capital committed across the seven-day unbonding window.</p>
 
@@ -197,7 +197,7 @@
         <p class="u-muted-13"><code>countersig.network</code> is the pre-rename domain. It now redirects here and serves nothing of its own. Anything still presenting that hostname as a live Sigvara site is not us.</p>
 
         <h3>Not a promise</h3>
-        <p>SVR is a utility token for bonding and fees in an early protocol with no audit yet and a single-operator oracle. Nothing on this page is investment advice or a forecast of value.</p>
+        <p>SVR is a utility token for bonding and fees in an early protocol with no audit yet and an oracle run by one party. Nothing on this page is investment advice or a forecast of value.</p>
 
         <p class="u-muted-13">This page mirrors <a href="https://github.com/RunTimeAdmin/Sigvara/blob/main/docs/token.md" target="_blank" rel="noopener">docs/token.md</a> in the repository. If the two ever disagree, the repository history shows which changed and when.</p>
       </main>

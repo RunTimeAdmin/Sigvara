@@ -11,10 +11,12 @@ This guide shows how to add Sigvara identity to agents built with common AI fram
 > This was not flagged here until an outside review pointed out that the guide presents
 > Python as first-class across four frameworks while shipping no way to do it. Until a
 > Python SDK exists, a Python agent has two honest options: call the oracle's HTTP API
-> directly (`/score`, `/evidence`, `POST /attest` — see
+> directly (`/score`, `/evidence`, `POST /attest`; see
 > [oracle/README.md](../oracle/README.md)), which needs no SDK at all, or run the
-> TypeScript SDK in a sidecar. The HTTP route is the one to reach for: every read in
-> these examples is a plain GET.
+> TypeScript SDK in a sidecar. The HTTP route is simple, but `/score` is the oracle's
+> preview, not the finalized score. To gate on a threshold, read `getTotalScore` or
+> `meetsThreshold` from the reputation contract with a plain `eth_call`, which any
+> language can make.
 
 ---
 
@@ -259,11 +261,15 @@ function handleChallenge(challengePayload: string, peerDid: string): { did: stri
 const verifier = new SigvaraVerifier({ rpcUrl, addresses, chainId: 5042002 });
 
 async function trustAgent(did: string, payload: string, signature: string): Promise<boolean> {
-  const sigValid = await verifier.verifySignature(did, payload, signature);
-  const repOk = await verifier.meetsThreshold(did, 50);
+  const sigValid = await verifier.verifySignature(did, payload, signature, 300, myAgent.did);
+  const repOk = await verifier.meetsThreshold(did, 40);
   return sigValid && repOk;
 }
 ```
+
+`signChallengeFor` is in this repository but not in 1.0.0-alpha.9, the version on npm. On
+alpha.9 call `signChallenge`, after checking yourself that the payload names the verifier
+you mean to prove yourself to.
 
 ---
 

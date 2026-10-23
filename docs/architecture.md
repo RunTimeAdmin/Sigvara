@@ -31,7 +31,7 @@ graph TB
 
     CA -->|"success / fail"| OR
     WD -->|"flags"| OR
-    EID -->|"identity + age"| OR
+    EID -->|"ownership check"| OR
     EREP -->|"feedback to externalScore"| OR
     OR -->|"propose / finalize"| REP
     ST -->|"slash · zero score"| REP
@@ -53,7 +53,8 @@ The oracle recomputes every factor each epoch from observable data:
 - **Payments found on chain** — each operator can also scan `Transfer` logs to
   registered agent addresses and credit what it finds, so a payment counts because
   it happened rather than because somebody reported it to that particular operator.
-  See [ADR 0003](adr/0003-evidence-intake.md); implemented and **off by default**.
+  See [ADR 0003](adr/0003-evidence-intake.md); enabled on both operators since
+  3 October 2026 (the setting itself still defaults to off).
   A pulled payment carries no outcome, so it feeds fee activity and tenure and is
   excluded from both sides of the success ratio. Success stays push, because whether
   the work was good is not on chain and never will be.
@@ -83,7 +84,9 @@ Consumers read the finalized score with a single view call (`getTotalScore` /
 
 Two gates sit on that path. Only a bonded agent can be scored at all, and when
 `operatorBond` is wired only a bonded oracle operator can propose. Finalizing stays
-permissionless, so nobody can hold a score hostage by declining to write it.
+permissionless, so nobody can hold a score hostage by declining to write it. What
+finalizing checks is the proposer: a proposal from an operator that has since been
+removed cannot be made live, and its successor replaces it (on `main`; the testnet proxies predate that check).
 
 The evidence root is what makes the off-chain half checkable: the oracle serves the
 leaves it counted, and anyone can re-verify each payment against the chain, rebuild the
@@ -97,7 +100,7 @@ the design, not an accident of where things landed.
 | | Host | Chain view | Holds | Writes |
 |---|---|---|---|---|
 | **Primary oracle** | one | Circle | signing key, state | proposes and finalizes scores |
-| **Checker** | another | QuickNode | signing key, own state | only into an empty slot |
+| **Checker** | another | QuickNode | signing key, own state | proposes into an empty slot, finalizes a score it agrees with |
 | **Watcher** | a third | dRPC | nothing | nothing |
 
 The **checker** is a second bonded operator that audits instead of competing. It

@@ -24,4 +24,4 @@ The project aims to acknowledge reports within five business days, provide an in
 
 ## Deployment security requirements
 
-Before production launch, the team must activate the security mailbox, replace every placeholder contract address, confirm the deployment manifest, review CSP and security headers on the actual host, and verify that no private material is present in the repository or generated site bundle.
+Before a production change, confirm that the security mailbox is monitored, review the CSP and security headers on the actual host (`scripts/check-headers.mjs` checks the policy in `site/.htaccess`), and verify that no private material is present in the repository or generated site bundle.

@@ -20,7 +20,7 @@ The bond. An agent registers first and lands in `PendingBond`; the first deposit
 
 ### Oracle
 
-An off-chain service that watches the `AgentRegistered` events on Identity, aggregates its signals (payment volume verified on chain, outcomes reported by whoever paid, tenure, counterparty standing, watchdog flags, external ERC-8004 trust), and calls `proposeReputation()` on the Reputation contract every epoch, committing to the evidence it used with a Merkle root. Proposed scores sit through a challenge window (rejectable by the slashing committee) before anyone can call `finalizeReputation()` to make them live. The reference implementation is in `oracle/`. Two bonded operators run today. The primary proposes; a second, in checker mode on separate hardware and a separate RPC provider, recomputes each pending score from payment evidence it re-verified itself and records any disagreement, without ever overwriting a live proposal. A watcher on a third host polls that record and alerts while the challenge window is still open. Both operators are bonded in `SigvaraOracleBond`, so a bad proposal costs its proposer. What remains is operators run by *independent parties*: today they are not.
+An off-chain service that watches the `AgentRegistered` events on Identity, aggregates its signals (payment volume verified on chain, outcomes reported by token-holding attesters such as CounterAudit, tenure, counterparty standing, watchdog flags, external ERC-8004 trust), and calls `proposeReputation()` on the Reputation contract every epoch, committing to the evidence it used with a Merkle root. Proposed scores sit through a challenge window (rejectable by the slashing committee) before anyone can call `finalizeReputation()` to make them live. The reference implementation is in `oracle/`. Two bonded operators run today. The primary proposes; a second, in checker mode on separate hardware and a separate RPC provider, recomputes each pending score from payment evidence it re-verified itself and records any disagreement, without ever overwriting a live proposal. A watcher on a third host polls that record and alerts while the challenge window is still open. Both operators are bonded in `SigvaraOracleBond`, so a bad proposal costs its proposer. What remains is operators run by *independent parties*: today they are not.
 
 ### CounterAudit (first integration, common ownership — see below)
 
@@ -35,13 +35,13 @@ CounterAudit is a tamper-evident AI audit trail service. An ingest call carrying
 Sigvara shares an owner with [CounterAegis](https://counteraegis.com), a suite of three
 trust products. Stating that plainly matters more than the positioning does, so it comes
 first: **CounterAudit is not an arm's-length third party.** The same people run both. It is
-the intended source of negative outcome attestations, which are the ones that stay
-token-gated because they can be weaponised, so anyone weighing how independent this
-reputation signal is should weigh that too. It is a single-operator oracle today by the
+the intended source of outcome attestations, which all need a token, negative ones
+especially because they can be weaponised, so anyone weighing how independent this
+reputation signal is should weigh that too. It is an oracle run by one party today by the
 same token, which the README says as well.
 
 CounterAudit now both reads the score and writes to it, so that concentration is live
-rather than prospective. It is bounded by the same rules as any other attester: the
+rather than prospective. It is bounded by the same rules as any other credentialed attester: the
 payment is verified on chain, one counterparty's evidence is capped, and everything
 decays. Worth settling the independence question sooner rather than later.
 
@@ -341,9 +341,9 @@ the agent itself removed, as the scanner would see them:
 At the default the only point anyone earns is Vangrid's, and it is Vangrid's own money.
 Any unit small enough to register marketplace revenue lets 20 cents buy 17 of 20 points,
 and the ring shows that the distinct payers needed to clear the per-payer cap cost nothing.
-The default's problem is the reverse of the one recorded in `payments.js`, where a single
-2,548 USDC invoice saturates the factor: no one unit serves invoices and per-call
-payments at once. In a per-call market the weight has to come from who the payers are
+The default's problem is the reverse of an invoice market's, where a single 2,548 USDC
+invoice already earns its payer's whole cap of four points: no one unit serves invoices and
+per-call payments at once. In a per-call market the weight has to come from who the payers are
 (`trustWeight`, propagation), not from how much they paid.
 
 **The self-payment refusal needs a funding check.** Matching the payer against the

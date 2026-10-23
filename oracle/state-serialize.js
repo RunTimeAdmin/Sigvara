@@ -4,11 +4,11 @@
 //
 // persist() used to build the whole file with a single JSON.stringify and write that string. At 100,000
 // payment events that is a 38 MB string, a second 38 MB buffer made from it for the write, and a process that
-// peaked at 442 MB. At 200,000 events it peaked at 779 MB, which is over the 768 MB the mainnet compose file
-// allows, so the first save past about 190,000 events would have been killed by the kernel.
+// peaked at 449 MB. At 200,000 events it peaked at 700 MB, close to the 768 MB the mainnet compose file
+// allows, so a save past about 225,000 events would have been killed by the kernel.
 //
 // The pieces yielded here concatenate to exactly what JSON.stringify gives for the same object, byte for byte, but
-// none is much larger than `pieceChars`, so the peak is the live state plus one piece: 178 MB and 284 MB for the
+// none is much larger than `pieceChars`, so the peak is the live state plus one piece: 189 MB and 280 MB for the
 // same two sizes. Saving takes about as long as before, because the cost is the bytes written, not the string.
 
 const DEFAULT_PIECE_CHARS = 1 << 20;

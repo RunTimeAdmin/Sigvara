@@ -1,8 +1,9 @@
 # SVR
 
 SVR is the bond and fee token of the Sigvara protocol. Operators bond it to
-register agents, the slashing path burns it, oracle operators post it as a
-performance bond, and scoring epochs are charged in it.
+activate agents, the slashing path burns it, oracle operators post it as a
+performance bond, and scoring epochs will be charged in it once the epoch-fee
+module is deployed.
 
 This page is the canonical description. Anything about SVR that does not
 appear here and on [sigvara.xyz](https://sigvara.xyz) first is not from this
@@ -151,7 +152,8 @@ The operator bond is what a corrupt oracle loses. `slash()` can take up to the w
 it, so the deterrent is the full number rather than a fraction. The agent stake is a
 gate on who is worth scoring, and gating onboarding is a much smaller job than deterring
 an oracle, which is why it sits two orders of magnitude lower. On Arc testnet both were
-1,000, which was coincidence rather than design.
+1,000 until the bond was raised to 25,000 on 20 September 2026, and the match was
+coincidence rather than design.
 
 Neither figure is the protocol's defence against a hostile operator set. `admit()` is
 governance-gated, so operators join by vote and nobody buys their way in. What the bond
@@ -250,5 +252,5 @@ of its own. Anything still presenting that hostname as a live Sigvara site is no
 ## Not a promise
 
 SVR is a utility token for bonding and fees in an early protocol with no audit
-yet and a single-operator oracle. Nothing on this page is investment advice or a
+yet and an oracle run by one party. Nothing on this page is investment advice or a
 forecast of value.

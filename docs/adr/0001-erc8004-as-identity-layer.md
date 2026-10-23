@@ -48,6 +48,13 @@ is what makes the resolution clean.
 - The deployed `SigvaraIdentity` on Arc testnet `5042002` remains for
   continuity of already-registered testnet agents but is **legacy** — no new
   features, and it is not the go-forward registration path.
+> **Update, 22 October 2026.** The cutover has not happened. `SigvaraIdentity` has kept
+> gaining features since this was accepted (proof of control, `PendingBond`, operator
+> transfer, the stake view, the pause guardian and timelocked role grants),
+> `script/Deploy.s.sol` deploys it for mainnet, and every agent is still keyed by its
+> `didHash`. Read "legacy" above as the direction of travel, not the current state. The
+> README's contracts table describes what runs.
+
 - The read and write bridges to 8004 already exist: the oracle reads 8004
   feedback for `externalScore`, and CounterAudit publishes outcomes to the 8004
   Reputation Registry.
