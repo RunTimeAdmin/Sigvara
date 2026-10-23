@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
-const { readBody, readCredentials, identifyCaller, mayAttestUnauthenticated, parseScorePath, parseDidHash, rateLimited, RATE_MAX, RATE_WINDOW_MS, clientKey, adminTokenPolicyError, rateBucketCount, runningCommit } = require('./http-helpers');
+const { readBody, bodyErrorStatus, readCredentials, identifyCaller, mayAttestUnauthenticated, parseScorePath, parseDidHash, rateLimited, RATE_MAX, RATE_WINDOW_MS, clientKey, adminTokenPolicyError, rateBucketCount, runningCommit } = require('./http-helpers');
 
 // Minimal fake matching the subset of http.IncomingMessage that readBody uses:
 // an EventEmitter with data/end/error events plus a destroy() method.
@@ -142,16 +142,62 @@ test('readBody: invalid JSON rejects', async () => {
   await assert.rejects(promise, /Invalid JSON/);
 });
 
-test('readBody: oversized body destroys the request and rejects', async () => {
+test('readBody: an oversized body rejects as body_too_large', async () => {
+  const req = makeFakeRequest();
+  const promise = readBody(req, 10); // 10-byte limit for this test
+  req.emit('data', Buffer.from('this is way more than ten bytes'));
+
+  await assert.rejects(promise, { code: 'body_too_large', message: /too large/ });
+});
+
+test('readBody: the rest of an oversized body is read and dropped, and the request is cut only far past the limit', async () => {
+  // A client that is still writing needs the connection open to read the 413. Destroying the
+  // request at the limit left it with a reset and no answer.
   const req = makeFakeRequest();
   let destroyed = false;
   req.on('destroyed', () => { destroyed = true; });
 
-  const promise = readBody(req, 10); // 10-byte limit for this test
-  req.emit('data', Buffer.from('this is way more than ten bytes'));
+  const promise = readBody(req, 10);
+  req.emit('data', Buffer.from('x'.repeat(11)));
+  await assert.rejects(promise, { code: 'body_too_large' });
+  assert.equal(destroyed, false, 'not cut at the limit');
 
-  await assert.rejects(promise, /too large/);
-  assert.equal(destroyed, true);
+  req.emit('data', Buffer.from('x'.repeat(69))); // 80 bytes in all: eight times the limit
+  assert.equal(destroyed, false, 'not cut at eight times the limit');
+  req.emit('data', Buffer.from('x'));
+  assert.equal(destroyed, true, 'cut past eight times the limit');
+});
+
+test('readBody: a declared length over the limit is refused before any data arrives', async () => {
+  const req = makeFakeRequest();
+  req.headers = { 'content-length': '11' };
+  await assert.rejects(readBody(req, 10), { code: 'body_too_large' });
+});
+
+test('readBody: a body of exactly the limit is accepted', async () => {
+  const req = makeFakeRequest();
+  req.headers = { 'content-length': '10' };
+  const promise = readBody(req, 10);
+  req.emit('data', Buffer.from('{"a":"bc"}')); // 10 bytes
+  req.emit('end');
+
+  assert.deepEqual(await promise, { a: 'bc' });
+});
+
+test('bodyErrorStatus: 413 for an oversized body, 400 for anything else', async () => {
+  const big = makeFakeRequest();
+  const tooBig = readBody(big, 10);
+  big.emit('data', Buffer.from('x'.repeat(11)));
+  assert.equal(bodyErrorStatus(await tooBig.catch((e) => e)), 413);
+
+  const bad = makeFakeRequest();
+  const invalid = readBody(bad);
+  bad.emit('data', Buffer.from('not json'));
+  bad.emit('end');
+  assert.equal(bodyErrorStatus(await invalid.catch((e) => e)), 400);
+
+  assert.equal(bodyErrorStatus(new Error('something else')), 400);
+  assert.equal(bodyErrorStatus(undefined), 400);
 });
 
 test('readBody: chunks are reassembled in order', async () => {

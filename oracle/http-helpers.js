@@ -8,6 +8,11 @@ const net = require('net');
 
 const MAX_BODY_SIZE = 1024 * 1024; // 1 MB
 
+// Past this many bytes the connection is cut. Up to it, the rest of an oversize body is read and
+// thrown away, so a client that is still writing can finish and read the 413. Destroying the
+// request at the limit left it with a reset and no answer.
+const DRAIN_LIMIT_FACTOR = 8;
+
 const SCORE_PATH_RE = /^\/score\/(0x[0-9a-fA-F]{64})$/;
 
 function json(res, status, body) {
@@ -15,19 +20,34 @@ function json(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
+function bodyTooLarge() {
+  return Object.assign(new Error('Request body too large'), { code: 'body_too_large' });
+}
+
+// What a route answers when readBody rejects: 413 for an oversize body, 400 for anything else.
+function bodyErrorStatus(err) {
+  return err && err.code === 'body_too_large' ? 413 : 400;
+}
+
 // req only needs to be an EventEmitter emitting 'data' | 'end' | 'error' and
 // exposing destroy() — a real http.IncomingMessage satisfies this, and so
-// does a plain fake in tests.
+// does a plain fake in tests. A declared content-length is read from
+// req.headers when it has them.
 async function readBody(req, maxBodySize = MAX_BODY_SIZE) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
+    let refused = false;
+    const refuse = () => { refused = true; chunks.length = 0; reject(bodyTooLarge()); };
+    // A declared length over the limit is refused before any of the body is read.
+    if (Number(req.headers && req.headers['content-length']) > maxBodySize) refuse();
     req.on('data', c => {
       size += c.length;
-      if (size > maxBodySize) {
-        req.destroy();
-        return reject(new Error('Request body too large'));
+      if (refused) {
+        if (size > maxBodySize * DRAIN_LIMIT_FACTOR) req.destroy();
+        return;
       }
+      if (size > maxBodySize) return refuse();
       chunks.push(c);
     });
     req.on('end', () => {
@@ -409,6 +429,7 @@ module.exports = {
   RATE_MAX,
   json,
   readBody,
+  bodyErrorStatus,
   readCredentials,
   identifyCaller,
   mayAttestUnauthenticated,
