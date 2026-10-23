@@ -122,10 +122,14 @@ means a real, proven agent that is unbonded, suspended or slashed, and telling t
 caller to earn more points would be wrong. Only `below_threshold` is about reputation,
 and it carries the score so you can say how short they were.
 
-The proof is checked before anything is read from the chain, so an unauthenticated caller
-cannot make your gate do RPC work on its behalf, and a failed proof does not consume the
-nonce, so nobody can lock out a challenge's legitimate holder by spending it with
-garbage.
+The proof is checked before the status or the score is read, so a caller who cannot prove an
+identity cannot make your gate read either, and a failed proof does not consume the nonce, so
+nobody can lock out a challenge's legitimate holder by spending it with garbage. Checking the
+proof does cost one read of the agent's registered key, because the key it is checked against lives
+on chain: rate-limit callers where the gate is exposed.
+
+Reads give up after 30 seconds (`timeoutMs` on `SigvaraGate` and `SigvaraVerifier` changes it;
+ethers' own default is five minutes), and the status and the score are read together.
 
 **The default nonce store is per process.** It is correct for one instance and wrong for
 a fleet: two processes do not share a set, so a response accepted by one replays against

@@ -122,6 +122,8 @@ export interface GateConfig {
   /** How long an issued challenge stays valid. Default 300s. */
   ttlSeconds?: number;
   nonceStore?: NonceStore;
+  /** How long one chain read may take before it is abandoned, in milliseconds. Default 30000. */
+  timeoutMs?: number;
 }
 
 export class SigvaraGate {
@@ -142,6 +144,7 @@ export class SigvaraGate {
     }
     this.verifier = new SigvaraVerifier({
       rpcUrl: config.rpcUrl, addresses: config.addresses, chainId: config.chainId,
+      timeoutMs: config.timeoutMs,
     });
     this.threshold = config.threshold;
     this.audience = config.audience;
@@ -183,8 +186,11 @@ export class SigvaraGate {
   /**
    * Admit or refuse.
    *
-   * Order matters: the proof is checked before anything is read from the chain, so an
-   * unauthenticated caller cannot make this gate do RPC work on its behalf.
+   * Order matters: the signature is checked before the replay check, and both before the status
+   * and the score are read, so a caller who cannot prove an identity cannot make this gate read
+   * either. What the proof itself costs is one identity read, because the key it is checked
+   * against lives on chain: anyone who can form a well-sized signature for a registered agent
+   * makes the gate do that one read, so rate-limit callers where the gate is exposed.
    */
   async admit(did: string, challenge: Challenge, signatureBase58: string): Promise<AdmitResult> {
     const base = { threshold: this.threshold, did };
@@ -219,21 +225,23 @@ export class SigvaraGate {
       return { ...base, ok: false, reason: 'replayed' };
     }
 
-    // Status before score. An agent that is slashed or unbonded is refused on standing,
-    // and reporting "below_threshold" for it would be a misleading reason: topping up its
-    // score is not the fix.
-    if (!(await this.verifier.isActive(did))) {
+    // Status before score, in the answer. An agent that is slashed or unbonded is refused on
+    // standing, and reporting "below_threshold" for it would be a misleading reason: topping up
+    // its score is not the fix. The two reads do not depend on each other, so they go out
+    // together: an admit costs the identity read that verifying the signature needs and one more
+    // round trip, not three in a row.
+    const [active, score] = await Promise.all([
+      this.verifier.isActive(did),
+      // getTotalScore() is the MATURED score, which is what the contract's own meetsThreshold
+      // reads. Summing the raw factors gives the EARNED score instead, so a score earned minutes
+      // ago would pass this gate and be refused on chain. Two layers disagreeing about who is
+      // admitted is worse than either threshold being wrong. Read on its own rather than via
+      // getReputation: the factor breakdown is a second contract read this decision never looks at.
+      this.verifier.getTotalScore(did),
+    ]);
+    if (!active) {
       return { ...base, ok: false, reason: 'not_active' };
     }
-
-    // getTotalScore() is the MATURED score, which is what the contract's own
-    // meetsThreshold reads. Summing the raw factors gives the EARNED score instead, so a
-    // score earned minutes ago would pass this gate and be refused on chain. Two layers
-    // disagreeing about who is admitted is worse than either threshold being wrong.
-    //
-    // Reading the total on its own rather than via getReputation: the factor breakdown is
-    // a second contract read this decision never looks at.
-    const score = await this.verifier.getTotalScore(did);
 
     if (score < this.threshold) {
       return { ...base, ok: false, reason: 'below_threshold', score };

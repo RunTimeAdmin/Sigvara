@@ -57,6 +57,12 @@ export interface VerifierConfig {
   rpcUrl: string;
   addresses: ContractAddresses;
   chainId?: number;
+  /**
+   * How long one read may take before it is abandoned, in milliseconds. Default 30000.
+   * ethers' own default is five minutes, which holds a gate's request that long when the RPC is
+   * down. A positive number.
+   */
+  timeoutMs?: number;
 }
 
 export interface DidDocument {
