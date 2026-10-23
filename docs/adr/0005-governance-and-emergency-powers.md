@@ -143,8 +143,8 @@ This ADR records what was decided about each, and what was left as a stated trus
     argued again with every change in the token's price. What is fixed is the launch. Starting lower is
     an edit to a constant in a script, which is reviewed like any change. After launch,
     `scripts/check-mainnet.sh` compares the live figures with the targets, and the admin lowering either
-    later is visible to every consumer as `minimumStake` and `bondAmount`, and in `collateralized` on the
-    Reader. The three places the figures are written (the scripts, the check and `docs/token.md`) are
+    later is visible on chain as `minimumStake` and `bondAmount`; the Reader's `collateralized` follows
+    `minimumStake`. The three places the figures are written (the scripts, the check and `docs/token.md`) are
     compared by `scripts/check-docs.mjs`, which fails the build when they differ.
 
 ## What stays on the admin Safe, and why
