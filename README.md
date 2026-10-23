@@ -566,11 +566,11 @@ Everything below runs offline, with no deployed contracts, except two fork suite
 
 | Suite | Count | Command |
 |---|---|---|
-| Contracts: unit, fuzz, E2E, upgrade, deploy-script, handover and 11 invariants | 654 | `forge test` |
-| Oracle | 751 | `cd oracle && node --test` |
+| Contracts: unit, fuzz, E2E, upgrade, deploy-script, handover and 16 invariants | 661 | `forge test` |
+| Oracle | 760 | `cd oracle && node --test` |
 | SDK | 168 | `cd packages/sdk && npx vitest run` |
 
-Counts are individual tests as of 22 October 2026, so each of the 11 invariants counts once. Without a fork URL, 647 of the contract tests run and 7 skip. The SDK's 168 include 8 integration tests that skip without a live deployment. [`scripts/mutation`](scripts/mutation/README.md) holds the harnesses that measure whether these tests would catch a deliberate break in the contracts or deploy scripts.
+Counts are individual tests as of 23 October 2026, so each of the 16 invariants counts once. Without a fork URL, 654 of the contract tests run and 7 skip. The SDK's 168 include 8 integration tests that skip without a live deployment. [`scripts/mutation`](scripts/mutation/README.md) holds the harnesses that measure whether these tests would catch a deliberate break in the contracts or deploy scripts.
 
 ### Unit Tests (default)
 
@@ -598,6 +598,20 @@ is never also an operator, and an address is active only through a bonded, Activ
 
 ```bash
 forge test --match-contract OracleBondInvariantTest
+```
+
+The score store and the fee registry have campaigns too. Each handler keeps a model of what its
+contract should hold, and fails a campaign both when a call the model says must be refused goes
+through and when one it says must work is refused, which is how funds or scores get stuck. For
+`SigvaraReputation`: no factor above its cap, a pending proposal exactly as it was made (its review
+window included, whatever the admin does to the window afterwards), a rise released no faster than
+the maturity rate allows, and nothing left to a slashed agent. For `SigvaraEpochFees`: custody equals
+what is owed, each agent's balance equals its history, one charge per agent per epoch, and the
+stage split on every distribution.
+
+```bash
+forge test --match-contract ReputationInvariantTest
+forge test --match-contract EpochFeesInvariantTest
 ```
 
 ### E2E Integration Tests
