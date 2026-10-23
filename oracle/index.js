@@ -24,7 +24,7 @@ const {
   mapChunked, clockSkewError, scoringIsStale,
 } = require('./epoch-policy');
 const {
-  json, readBody, readCredentials, identifyCaller, mayAttestUnauthenticated, parseScorePath, parseDidHash,
+  json, readBody, bodyErrorStatus, readCredentials, identifyCaller, mayAttestUnauthenticated, parseScorePath, parseDidHash,
   rateLimited, clientKey, adminTokenPolicyError, runningCommit,
   parseTrustedProxies, parseRequestTarget, readScopes, mayUse, weakCredentials, MIN_TOKEN_LENGTH,
 } = require('./http-helpers');
@@ -1632,7 +1632,7 @@ async function handleRequest(req, res) {
       });
     } catch (err) {
       metrics.inc('attestRejectedOther');
-      return json(res, 400, { error: err.message });
+      return json(res, bodyErrorStatus(err), { error: err.message });
     }
   }
 
@@ -1741,7 +1741,7 @@ async function handleRequest(req, res) {
       console.log(`[oracle] flag raised on ${didHash} by ${caller} (now ${raised})`);
       return json(res, 200, { didHash, flags: raised });
     } catch (err) {
-      return json(res, 400, { error: err.message });
+      return json(res, bodyErrorStatus(err), { error: err.message });
     }
   }
 
@@ -1774,7 +1774,7 @@ async function handleRequest(req, res) {
       }
       return json(res, 200, { didHash, ...result });
     } catch (err) {
-      return json(res, 400, { error: err.message });
+      return json(res, bodyErrorStatus(err), { error: err.message });
     }
   }
 
@@ -1811,7 +1811,7 @@ async function handleRequest(req, res) {
       metrics.inc('linksCreated');
       return json(res, 200, { didHash, agentId: String(agentId), operator, linked: true });
     } catch (err) {
-      return json(res, 400, { error: err.message });
+      return json(res, bodyErrorStatus(err), { error: err.message });
     }
   }
 

@@ -7,6 +7,7 @@
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const net = require('node:net');
 const os = require('node:os');
 const {
   World, startOracle, runToExit, startWatcher, webhookSink,
@@ -238,6 +239,118 @@ test('/flag/resolve and /link refuse a didHash that is not a 32-byte hash', asyn
     assert.equal(r.status, 400, `${path} ${JSON.stringify(body)}`);
     assert.match(r.body.error, /32-byte/);
   }
+});
+
+// ---- request bodies --------------------------------------------------------------------
+
+const MAX_BODY = 1024 * 1024;
+
+// POSTs `bytes` of body with no declared length, so the oracle can only learn the size by counting, and
+// keeps writing whatever the oracle answers, as a client that has not noticed yet would. Resolves to the
+// status the oracle answered (null if it never did) and whether it ended the connection before the whole
+// body was sent. A client library hides both: it stops sending once it has the answer.
+function postChunked(port, urlPath, token, bytes, client) {
+  const crlf = String.fromCharCode(13, 10);
+  const size = 64 * 1024;
+  const chunk = Buffer.concat([Buffer.from(size.toString(16) + crlf), Buffer.alloc(size, 120), Buffer.from(crlf)]);
+  const head = [
+    `POST ${urlPath} HTTP/1.1`,
+    'Host: localhost',
+    'Content-Type: application/json',
+    'Transfer-Encoding: chunked',
+    `Authorization: Bearer ${token}`,
+    `X-Forwarded-For: ${client}`,
+    '',
+    '',
+  ].join(crlf);
+  return new Promise((resolve) => {
+    const result = { status: null, cut: true };
+    const socket = net.connect(port, '127.0.0.1');
+    const timer = setTimeout(() => socket.destroy(), 15_000);
+    let reply = '';
+    let sentAll = false;
+    socket.on('data', (d) => {
+      reply += d;
+      if (result.status === null && reply.includes(crlf)) result.status = Number(reply.split(' ')[1]);
+      if (sentAll && result.status !== null) socket.destroy();
+    });
+    socket.on('error', () => {});
+    socket.on('close', () => { clearTimeout(timer); resolve(result); });
+
+    let sent = 0;
+    const pump = () => {
+      while (sent < bytes) {
+        sent += size;
+        if (!socket.write(chunk)) return socket.once('drain', pump);
+      }
+      socket.write(`0${crlf}${crlf}`, (err) => {
+        if (err) return socket.destroy();
+        result.cut = false; // the last chunk went out: nothing cut the body short
+        sentAll = true;
+        if (result.status !== null) socket.destroy(); // otherwise the answer is still to come
+      });
+    };
+    socket.write(head);
+    pump();
+  });
+}
+
+test('a body over the 1 MB limit is answered 413 on every route that reads one', async () => {
+  const pad = 'x'.repeat(MAX_BODY + 1);
+  for (const [path, token, body] of [
+    ['/attest', AUDITOR, { didHash: DID, success: true, attester: 'counteraudit', pad }],
+    ['/flag', FLAGGER, { didHash: DID, pad }],
+    ['/flag/resolve', ADMIN, { didHash: DID, pad }],
+    ['/link', ADMIN, { didHash: DID, agentId: 1, pad }],
+  ]) {
+    const r = await oracle.call('POST', path, body, token);
+    assert.equal(r.status, 413, `${path}: ${r.text.slice(0, 120)}`);
+    assert.equal(r.body.error, 'Request body too large');
+  }
+});
+
+test('the limit is 1 MB to the byte', async () => {
+  const unflagged = `0x${'12'.repeat(32)}`;
+  const room = MAX_BODY - JSON.stringify({ didHash: unflagged, pad: '' }).length;
+  const atLimit = await oracle.call('POST', '/flag/resolve', { didHash: unflagged, pad: 'x'.repeat(room) }, ADMIN);
+  assert.equal(atLimit.status, 200, atLimit.text.slice(0, 120));
+  const over = await oracle.call('POST', '/flag/resolve', { didHash: unflagged, pad: 'x'.repeat(room + 1) }, ADMIN);
+  assert.equal(over.status, 413, over.text.slice(0, 120));
+});
+
+test('a declared length over the limit is answered 413 before any of the body is sent', async () => {
+  const crlf = String.fromCharCode(13, 10);
+  const head = [
+    'POST /flag HTTP/1.1',
+    'Host: localhost',
+    `Authorization: Bearer ${ADMIN}`,
+    'X-Forwarded-For: 10.9.0.3',
+    `Content-Length: ${5 * MAX_BODY}`,
+    'Connection: close',
+    '',
+    '',
+  ].join(crlf);
+  const statusLine = await new Promise((resolve) => {
+    const socket = net.connect(oracle.port, '127.0.0.1', () => socket.write(head)); // no body follows
+    socket.setTimeout(5_000, () => socket.destroy());
+    let data = '';
+    socket.on('data', (d) => { data += d; });
+    socket.on('close', () => resolve(data.split(crlf)[0]));
+    socket.on('error', () => {});
+  });
+  assert.match(statusLine, / 413 /);
+});
+
+test('a client still writing an oversize body with no declared length gets the 413, not a reset', async () => {
+  const r = await postChunked(oracle.port, '/flag', ADMIN, 3 * MAX_BODY, '10.9.0.1');
+  assert.deepEqual(r, { status: 413, cut: false });
+});
+
+test('a body far past the limit is cut off, and the oracle carries on', async () => {
+  const r = await postChunked(oracle.port, '/flag', ADMIN, 64 * MAX_BODY, '10.9.0.2');
+  assert.equal(r.cut, true, 'the oracle read all 64 MB');
+  assert.ok(oracle.alive(), 'the oracle is still running');
+  assert.equal((await oracle.call('GET', '/health')).status, 200);
 });
 
 // ---- the evidence cache ----------------------------------------------------------------
