@@ -110,8 +110,9 @@ that filled in a form.
 `SigvaraStaking` holds the agent's collateral. Only the operator can deposit or withdraw,
 and crossing `minimumStake` is what moves a `PendingBond` agent to `Active`.
 
-Withdrawal is a two-step with a 21-day unbonding period. That delay is the point: a
-window long enough that an agent cannot misbehave and exit before anyone notices.
+Withdrawal is a two-step with a 21-day unbonding period, fixed when the withdrawal is
+queued. That delay is the point: a window long enough that an agent cannot misbehave and
+exit before anyone notices.
 Slashing takes the unbonding amount too, so queueing a withdrawal does not protect
 capital that is already at risk:
 
@@ -120,8 +121,9 @@ uint256 totalSlashed = s.amount + s.unbondingAmount;
 ```
 
 A slash is proposed by the committee, sits for a 7-day challenge period, and can be
-disputed by the operator, which freezes the bond rather than releasing it. On execution
-the stake is distributed:
+disputed by the operator, which freezes the bond rather than releasing it. Anyone can
+execute it once the window closes, as long as the member who filed it is still on the
+committee. On execution the stake is distributed:
 
 | Share | Destination | Why |
 |---|---|---|
@@ -596,7 +598,7 @@ pause, admin-ruled disputes with a veto and a lapse, launch floors and ceilings 
 operator signers, are on `main` and described in this document, but they are not deployed
 on the testnet. `node scripts/record-implementations.mjs --check` shows what is live.
 
-**Test coverage**, all passing as of 23 October 2026: 665 contract tests across 27 Foundry test files
+**Test coverage**, all passing as of 23 October 2026: 693 contract tests across 30 Foundry test files
 including fuzz and invariant tests (two fork suites need an RPC, and the seven in
 `SplitAuthorityFork` skip without `--fork-url`), 760 oracle tests and 168 in the SDK (8 of them
 need a live deployment and skip without one). CI runs Foundry, the oracle and
