@@ -30,6 +30,16 @@
   Header always set Content-Security-Policy "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https://oracle.sigvara.xyz; font-src 'self'; connect-src 'self' https://rpc.testnet.arc.io; upgrade-insecure-requests"
 </IfModule>
 
+# Missing and refused paths get the site's own static page, not the host's default one.
+#
+# The default "This Page Does Not Exist" page loads Google Tag Manager, Google Analytics
+# and a DoubleClick frame on this origin and carries none of the headers above, on the
+# one origin where a wallet is connected (found 24 Oct 2026). 404.html is plain HTML with
+# no script, and the headers above apply to it. scripts/check-live.mjs fails if a missing
+# path ever loads third-party script again.
+ErrorDocument 404 /404.html
+ErrorDocument 403 /404.html
+
 # Extensionless URLs.
 #
 # /demo returned 404 while /demo.html served fine, so every link, QR code or slide that
