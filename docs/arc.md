@@ -118,9 +118,10 @@ RPC costs the factor, never the epoch.
 
 ### Where it runs
 
-The testnet oracle runs on a dedicated VPS as a Docker Compose project with
-`restart: unless-stopped`, cloning this repository at container start, so a push to
-`main` reaches it on the next restart. The host is deliberately not named here: it
+The testnet oracle runs on a VPS as a Docker Compose project with
+`restart: unless-stopped`, fetching one pinned commit of this repository at container start
+(`SIGVARA_COMMIT` in its environment file), so a push to `main` reaches it only when someone
+changes the pin and recreates the container. The host is deliberately not named here: it
 holds the oracle signing key, and nothing about operating the protocol requires a
 reader to know which machine it is.
 
@@ -179,8 +180,8 @@ scan is provable rather than merely reported. Three things that mattered when tu
 on, kept because they apply to any operator doing it later:
 
 - It is an **environment** change, so `docker compose restart` will not pick it up. The
-  container resolves `env_file` at creation, not at start, and a restart re-clones the
-  code while keeping the old environment. Use `up -d --force-recreate`.
+  container resolves `env_file` at creation, not at start, and a restart re-runs the
+  start script while keeping the old environment. Use `up -d --force-recreate`.
 - **Enable it on both operators or neither.** One scanning and one not is the same
   delivery asymmetry this removes, pointed the other way.
 - **It changes scores.** An operator that has been missing payments starts counting them.

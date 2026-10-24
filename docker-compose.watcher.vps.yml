@@ -2,8 +2,17 @@
 #
 # Use THIS file when the box has no repository checkout, which is how the Sigvara
 # components are actually deployed. docker-compose.watcher.yml builds from ./oracle and
-# needs a working tree; this one clones `main` in the container, so deploying a change
-# is `docker compose restart` and nothing else.
+# needs a working tree; this one fetches ONE PINNED COMMIT of the public repository inside
+# the container.
+#
+# Which code runs is decided by SIGVARA_COMMIT in .env: the full 40-character hash of a
+# commit on main that someone has read (use the same hash as the checker). It used to be
+# "whatever main is when the container starts", so a crash, a reboot or a Docker restart
+# deployed the head of main. A deploy is:
+#
+#   1. change SIGVARA_COMMIT in .env
+#   2. docker compose up -d        (a plain restart does NOT re-read .env)
+#   3. read the log: "[deploy] running <that hash>"
 #
 # Run it on a THIRD host: not the primary oracle, and not the checker. A watcher sharing
 # a machine with the thing it watches goes down with it, and its silence then reads as
@@ -14,7 +23,9 @@
 # It holds no private key, mounts no state and signs nothing. Every action is a read or
 # a notification, so a compromised watcher can lie to you but cannot touch the protocol.
 # That is why it gets no volumes and why CHECKER_URL should point at a read-only surface
-# exposing /health and /divergence rather than at the checker's full API.
+# exposing /health and /divergence rather than at the checker's full API. The HOST must
+# not hold an SSH key that is authorised on the oracle hosts either, or "cannot touch the
+# protocol" stops being true.
 #
 #   cd /docker/sigvara-watcher && docker compose up -d
 services:
@@ -23,29 +34,44 @@ services:
     container_name: sigvara-watcher
     restart: unless-stopped
     working_dir: /app
+    init: true
     env_file:
       - .env
+    environment:
+      SIGVARA_COMMIT: ${SIGVARA_COMMIT:?set SIGVARA_COMMIT in .env to the full 40-character commit hash}
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - NET_RAW
+    mem_limit: 256m
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
     command:
       - sh
       - -c
       - |
-        set -e
+        set -eu
+        case "$${SIGVARA_COMMIT:-}" in ""|*[!0-9a-f]*) echo "[deploy] SIGVARA_COMMIT must be 40 lowercase hex characters" >&2; exit 1;; esac
+        [ "$${#SIGVARA_COMMIT}" -eq 40 ] || { echo "[deploy] SIGVARA_COMMIT must be 40 characters" >&2; exit 1; }
         apk add --no-cache git >/dev/null
-        rm -rf /src && git clone --depth 1 --branch main https://github.com/RunTimeAdmin/Sigvara.git /src
-        # What got cloned, so /health can say which code is running. Reported, never
-        # trusted: an operator's container can print anything here. It catches a box
-        # that missed a deploy, which is the failure that actually happens.
-        SIGVARA_COMMIT=$$(git -C /src rev-parse HEAD)
-        export SIGVARA_COMMIT
-        echo "[deploy] running $$SIGVARA_COMMIT"
+        rm -rf /src && mkdir /src && cd /src
+        git init -q
+        git remote add origin https://github.com/RunTimeAdmin/Sigvara.git
+        git fetch -q --depth 1 origin "$$SIGVARA_COMMIT"
+        git checkout -q --detach FETCH_HEAD
+        [ "$$(git rev-parse HEAD)" = "$$SIGVARA_COMMIT" ] || { echo "[deploy] checkout is not $$SIGVARA_COMMIT, refusing to start" >&2; exit 1; }
+        rm -rf /app/node_modules /app/*.js /app/package.json /app/package-lock.json
         cp /src/oracle/*.js /src/oracle/package.json /src/oracle/package-lock.json /app/
         rm -f /app/*.test.js
-        # npm ci, not install: install resolves a fresh dependency graph on every
-        # container start and is free to pick versions nobody tested, which made the
-        # running oracles the one artifact in the pipeline not built from the reviewed
-        # tree. ci installs exactly the committed lockfile and fails loudly if the two
-        # have drifted.
-        npm ci --omit=dev --no-audit --no-fund
+        cd /app
+        # npm ci installs exactly the committed lockfile; --ignore-scripts keeps dependencies
+        # from running code at install time.
+        npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+        echo "[deploy] running $$SIGVARA_COMMIT"
         exec node watcher.js
     volumes:
       # /app only. The watcher is deliberately stateless: it re-reads the checker's

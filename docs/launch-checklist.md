@@ -34,6 +34,7 @@ Sequenced against the Q4 2026 SVR mainnet milestone. Dates are targets, not comm
   lapses and has to be filed again after the cooldown ([ADR 0005](adr/0005-governance-and-emergency-powers.md),
   decision 7). It also races its own expiry: until `expireSlash` lands, execution is still allowed.
 - [ ] **Initialize oracle bonds** for admitted operators. `admit()` is governance-gated — nobody buys their way in. The bond is what a corrupt oracle can lose.
+- [ ] **Pin and rehearse the operator deployment.** Operators run a pinned commit (`SIGVARA_REF` in `docker-compose.mainnet.yml`), never a branch. Each `.env` is mode 600 and the key is a file secret. State is copied off the box nightly and the restore drill in [incident-operator-key.md](incident-operator-key.md) has been run once. The key-compromise sequence in the same file has been walked through with the Safe signers.
 - [ ] **Verify impersonation guidance**: only the published address is genuine SVR. `countersig.network` redirects to sigvara.xyz and serves nothing.
 
 ## Phase 5 — Flip monetization on
