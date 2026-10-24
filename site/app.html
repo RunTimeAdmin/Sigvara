@@ -17,7 +17,7 @@
   <link rel="icon" type="image/png" sizes="512x512" href="assets/sigvara-card.png" />
   <link rel="apple-touch-icon" href="assets/sigvara-card.png" />
   <link rel="stylesheet" href="assets/style.css?v=e5a6705" />
-  <link rel="stylesheet" href="assets/app.css?v=3ccf76d" />
+  <link rel="stylesheet" href="assets/app.css?v=ac69814" />
 
 </head>
 <body>
@@ -54,6 +54,7 @@
       <button class="btn btn-primary" id="connectBtn">Connect Wallet</button>
       <span id="walletStatus" class="netnote">not connected</span>
     </div>
+    <p class="netnote">Slash proceeds you can claim: <span id="proceeds">&#8212;</span> <button class="btn btn-ghost btn-inline-sm" id="proceedsBtn" disabled>Claim</button></p>
   </div>
 
   <div class="app-card">
@@ -76,18 +77,26 @@
 
   <div class="app-card">
     <h2>Bond</h2>
-    <p class="sub">The bond is what makes a score cost something: slashing takes from it, so an agent with nothing staked has nothing to lose by lying. Below the minimum an agent sits in <b>PendingBond</b> &#8212; registered and visible, but not scoreable. Only the agent's operator wallet can bond or withdraw.</p>
+    <p class="sub">The bond is what makes a score cost something: slashing takes from it, so an agent with nothing staked has nothing to lose by lying. Below the minimum an agent sits in <b>PendingBond</b> &#8212; registered and visible, but not scoreable. Only the agent's operator wallet can bond or withdraw. The operator can also suspend and reactivate the agent, and dispute a slash proposal while its challenge period runs.</p>
     <dl class="kv">
+      <dt>Status</dt><dd class="prose" id="stakeStatus">&#8212;</dd>
       <dt>Bonded</dt><dd id="stakeAmt">&#8212;</dd>
       <dt>Minimum</dt><dd id="stakeMin">&#8212;</dd>
       <dt>Unbonding</dt><dd id="stakeUnbond">&#8212;</dd>
+      <dt>Slash proposal</dt><dd class="prose" id="slashInfo">&#8212;</dd>
     </dl>
+    <p class="netnote" id="pauseNote"></p>
     <p class="netnote" id="stakeNote">Look up an agent to see its bond.</p>
     <div class="row">
       <input type="text" id="stakeAmount" placeholder="amount, e.g. 1000" spellcheck="false" />
       <button class="btn btn-primary" id="bondBtn" disabled>Approve + Bond</button>
       <button class="btn btn-secondary" id="unbondBtn" disabled>Begin unbonding</button>
       <button class="btn btn-ghost" id="claimBtn" disabled>Claim</button>
+    </div>
+    <div class="row">
+      <button class="btn btn-secondary" id="disputeBtn" disabled>Dispute slash proposal</button>
+      <button class="btn btn-ghost" id="suspendBtn" disabled>Suspend agent</button>
+      <button class="btn btn-ghost" id="reactivateBtn" disabled>Reactivate agent</button>
     </div>
   </div>
 
@@ -128,6 +137,6 @@
 
 
 
-<script src="assets/app.js?v=587fe72"></script>
+<script src="assets/app.js?v=4647a12"></script>
 </body>
 </html>
