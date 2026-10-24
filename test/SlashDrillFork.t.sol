@@ -32,11 +32,9 @@ import "../src/SigvaraReputation.sol";
  * can execute it.
  *
  * The drill this rehearsed has run: filed on 20 September 2026 and executed on 3 October
- * (docs/slash-drill-log.md). These cases still run against the live fork, which is the
- * 21 September code, where the committee rules on a dispute with resolveDispute. On main
- * resolveDispute is admin-only and an upheld ruling waits for the deadline, so
- * test_drill_disputeUpheld and test_drill_disputeRejectedRestoresTheAgent will need
- * updating when the testnet proxies are upgraded. The other cases do not call it.
+ * (docs/slash-drill-log.md). The testnet proxies now run main, where resolveDispute is
+ * admin-only and an upheld ruling waits for the challenge deadline, so the two dispute
+ * cases below rule as the admin and check what the committee can no longer do.
  */
 contract SlashDrillForkTest is Test {
     // Live Arc testnet, from deployments/5042002.json
@@ -180,21 +178,35 @@ contract SlashDrillForkTest is Test {
         STAKING.initiateWithdrawal(DID, 1);
     }
 
-    /// Committee upholds the dispute: it settles exactly as an unchallenged slash would.
+    /// The admin upholds the dispute, and only once the challenge period is over: it then settles
+    /// exactly as an unchallenged slash would. The committee files; it does not rule.
     function test_drill_disputeUpheld() public {
         vm.prank(COMMITTEE);
         STAKING.initiateSlash(DID, victim, bytes("drill"));
+        SigvaraStaking.SlashProposal memory p = STAKING.getSlashProposal(DID);
         vm.prank(_operatorOf(DID));
         STAKING.disputeSlash(DID);
 
         vm.prank(COMMITTEE);
+        vm.expectRevert();
+        STAKING.resolveDispute(DID, true);
+
+        // A dispute cannot be used to cut the window short.
+        vm.prank(ADMIN);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.ChallengePeriodActive.selector, DID, p.challengeDeadline));
+        STAKING.resolveDispute(DID, true);
+
+        vm.warp(p.challengeDeadline + 1);
+        vm.prank(ADMIN);
         STAKING.resolveDispute(DID, true);
 
         assertEq(STAKING.getStake(DID), 0, "stake not taken when dispute upheld");
         assertEq(STAKING.claimable(victim), stakeBefore / 4, "victim share wrong");
     }
 
-    /// Committee rejects its own proposal: the agent gets its stake and standing back.
+    /// The admin rejects the proposal: the agent gets its stake and standing back, the committee
+    /// has to wait out a challenge period before it files again, and the evidence the admin
+    /// rejected is not accepted a second time.
     function test_drill_disputeRejectedRestoresTheAgent() public {
         vm.prank(COMMITTEE);
         STAKING.initiateSlash(DID, victim, bytes("drill"));
@@ -202,6 +214,10 @@ contract SlashDrillForkTest is Test {
         STAKING.disputeSlash(DID);
 
         vm.prank(COMMITTEE);
+        vm.expectRevert();
+        STAKING.resolveDispute(DID, false);
+
+        vm.prank(ADMIN);
         STAKING.resolveDispute(DID, false);
 
         assertEq(STAKING.getStake(DID), stakeBefore, "stake not returned");
@@ -210,6 +226,18 @@ contract SlashDrillForkTest is Test {
             s == SigvaraIdentity.AgentStatus.Active || s == SigvaraIdentity.AgentStatus.PendingBond,
             "agent left suspended after a rejected slash"
         );
+
+        uint256 refileAt = STAKING.lastDroppedAt(DID) + challengePeriod;
+        vm.prank(COMMITTEE);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.SlashCooldownActive.selector, DID, refileAt));
+        STAKING.initiateSlash(DID, victim, bytes("drill"));
+
+        vm.warp(refileAt);
+        vm.prank(COMMITTEE);
+        vm.expectRevert(
+            abi.encodeWithSelector(SigvaraStaking.EvidenceAlreadyRejected.selector, DID, keccak256(bytes("drill")))
+        );
+        STAKING.initiateSlash(DID, victim, bytes("drill"));
     }
 
     /// Queuing a withdrawal must not shelter the stake. This was a real escape hatch.
