@@ -50,7 +50,7 @@ function selfTest() {
   const h64 = 'ab'.repeat(32);
   const cases = [
     [`ORACLE_PRIVATE_KEY=0x${h64}`, 1], [`const privateKey = "${h64}"`, 1], [`"seed": "0x${h64}"`, 1],
-    [`PK: ${h64}`, 1], ['-----BEGIN OPENSSH PRIVATE KEY-----', 1],
+    [`PK: ${h64}`, 1], ['-----BEGIN OPENSSH ' + 'PRIVATE KEY-----', 1],
     [`mnemonic = "${Array(12).fill('abandon').join(' ')}"`, 1],
     [`txHash = 0x${h64}`, 0], [`didHash: ${h64}`, 0], [`ORACLE_PRIVATE_KEY=0x${h64} // secret-scan: allow`, 0],
     [`key=0x${[...PUBLIC_TEST_KEYS][0]}`, 0], ['ORACLE_PRIVATE_KEY=0x...', 0],
