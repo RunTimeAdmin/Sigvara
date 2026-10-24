@@ -5,7 +5,7 @@ Sigvara is built by **David Cooper** (CCIE #14019).
 - GitHub: [RunTimeAdmin](https://github.com/RunTimeAdmin)
 - Site: [runtimeadmin.com](https://runtimeadmin.com)
 - X: [@defiauditccie](https://x.com/defiauditccie)
-- Contact: david@runtimeadmin.com
+- Contact: through [sigvara.xyz](https://sigvara.xyz). Security reports go to security@sigvara.xyz, see [SECURITY.md](../SECURITY.md).
 
 The GitHub account is newer as a public publishing surface; the credentials and career behind it are longer.
 
