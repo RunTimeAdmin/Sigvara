@@ -29,6 +29,12 @@ const SEL = {
   depositStake: "0xbeb78671", initiateWithdrawal: "0xa3d6f72b", claimWithdrawal: "0x8e88eccc",
   getStake: "0xe765c122", minimumStake: "0xec5ffac2", getPendingWithdrawal: "0xd0fe00db",
   unbondingPeriod: "0x6cf6d675", getSlashProposal: "0xc984f6f8",
+  // Slash handling, status and the pause. Verified against src/ by scripts/check-docs.mjs.
+  // All but inflowsPausedUntil exist on the September contracts as well; inflowsPausedUntil
+  // exists only on main, so every read of it is optional.
+  disputeSlash: "0xa7af7008", claimSlashProceeds: "0xe61a2b5d", claimable: "0x402914f5",
+  DISPUTE_RESOLUTION_PERIOD: "0xf0d1dc00", slashSuspended: "0x72657d89", updateStatus: "0x054372ed",
+  inflowsPausedUntil: "0xeed6e97a",
 };
 // factor label, on-chain word index, and max — mirrors SigvaraReputation.ReputationData
 const FACTORS = [
@@ -152,9 +158,15 @@ async function rpcBatch(calls) {
   const arr = await res.json();
   if (!Array.isArray(arr)) throw new Error(arr?.error?.message ?? "batch call failed");
   const byId = new Map(arr.map(r => [r.id, r]));
-  return calls.map((_, i) => {
+  return calls.map((c, i) => {
     const r = byId.get(i);
-    if (!r || r.error) throw new Error(r?.error?.message ?? "missing result in batch");
+    if (!r || r.error) {
+      const msg = r?.error?.message ?? "missing result in batch";
+      // An optional read is for something only newer contracts have. Its absence is an
+      // answer (null); a rate limit is not, and must not pass for "the contract lacks it".
+      if (c.optional && r && !/rate limit/i.test(msg)) return null;
+      throw new Error(msg);
+    }
     return r.result;
   });
 }
@@ -231,6 +243,7 @@ async function connectWith(c) {
       .forEach(id => $(id).disabled = false);
     if (!$("agentAddr").value) $("agentAddr").value = account;
     refreshSvrBalance();
+    refreshProceeds();
     lookup();
   } catch (e) {
     wallet = null;
@@ -278,9 +291,20 @@ async function lookup() {
       { to: FEES, data: SEL.balance   + pad32(didHash) },
       { to: FEES, data: SEL.isCovered + pad32(didHash) },
     );
+    // What the bond panel needs beyond the core reads, appended after them in the same request
+    // so the positions above stay fixed. Whether the suspension was a slash's, and how long a
+    // dispute may sit unruled, exist on every version. The pause exists only on main.
+    const extraReads = [
+      { to: IDENTITY, data: SEL.slashSuspended + pad32(didHash) },
+      { to: STAKING,  data: SEL.DISPUTE_RESOLUTION_PERIOD },
+      { to: STAKING,  data: SEL.inflowsPausedUntil, optional: true },
+      { to: IDENTITY, data: SEL.inflowsPausedUntil, optional: true },
+    ];
+    const answers = await rpcBatch([...reads, ...extraReads]);
     const [ident, scoreRaw, pendingRaw, rep,
            stakeRaw, minStakeRaw, pendWRaw, slashRaw, unbondRaw,
-           balRaw, coveredRaw] = await rpcBatch(reads);
+           balRaw, coveredRaw] = answers.slice(0, reads.length);
+    const extra = answers.slice(reads.length);
 
     const registeredAt = BigInt(word(ident, 4));
     const statusNum = Number(BigInt(word(ident, 3)));
@@ -305,6 +329,11 @@ async function lookup() {
     } else if (account) {
       $("regStatus").innerHTML = '<span class="pill-warn">not registered</span> <button id="regBtn" class="btn btn-secondary btn-inline-sm">Register this agent</button>';
       $("regBtn").onclick = registerAgentFlow;
+      const regPausedUntil = pausedUntilOf(extra[3]);
+      if (regPausedUntil > Math.floor(Date.now() / 1000)) {
+        $("regBtn").disabled = true;
+        $("regStatus").insertAdjacentHTML("beforeend", ` <span class="pill-warn">registration is paused until ${esc(fmtWhen(regPausedUntil))}</span>`);
+      }
       $("score").textContent = "—";
       $("breakdown").textContent = "—";
     } else {
@@ -316,10 +345,16 @@ async function lookup() {
     $("covered").innerHTML = !FEES_LIVE
       ? '<span class="pill-warn">n/a, no fee registry on this deploy</span>'
       : covered ? '<span class="pill-ok">yes</span>' : '<span class="pill-err">no — deposit below</span>';
-    renderStake({ ident, stakeRaw, minStakeRaw, pendWRaw, slashRaw, unbondRaw });
+    renderStake({ ident, stakeRaw, minStakeRaw, pendWRaw, slashRaw, unbondRaw, extra });
     $("agentInfo").classList.remove("u-hidden");
   } catch (e) {
     logLine(`<span class="pill-err">lookup failed: ${esc(e.message)}</span>`);
+    // The Bond card still shows the previous agent and its buttons were enabled for that
+    // agent, not for the address now in the box. Leave nothing live until a lookup succeeds.
+    currentDidHash = null;
+    stakeCtx = null;
+    for (const id of ["bondBtn", "unbondBtn", "claimBtn", "disputeBtn", "suspendBtn", "reactivateBtn"]) $(id).disabled = true;
+    $("stakeNote").textContent = "The lookup failed, so the card may still show the previous agent. Look up again.";
   }
 }
 
@@ -345,7 +380,38 @@ function fmtDuration(sec) {
   return `${Math.max(1, m)}m`;
 }
 
-function renderStake({ ident, stakeRaw, minStakeRaw, pendWRaw, slashRaw, unbondRaw }) {
+// An optional read's answer: 0 when the contract does not have the function.
+const pausedUntilOf = (raw) => (raw === null ? 0 : Number(BigInt(raw)));
+const fmtWhen = (sec) => new Date(sec * 1000).toISOString().replace("T", " ").slice(0, 16) + " UTC";
+
+// What the slash proposal means for this agent, in words, with the dates that matter.
+// The September contracts and main share the proposal struct but not who rules on a dispute:
+// main's admin rules and cannot uphold before the deadline, the September committee rules and
+// an upheld ruling slashes at once. Only main answers inflowsPausedUntil, which is how the
+// page tells them apart (onMain).
+function slashSummary({ slashState, initiatedAt, deadline, disputedAt, resolutionSecs, now, isOperator, onMain }) {
+  if (slashState === 1) {
+    if (now <= deadline) {
+      return `<span class="pill-err">Pending</span>, filed ${esc(fmtWhen(initiatedAt))}. `
+        + `${isOperator ? "You can" : "The operator can"} dispute it until ${esc(fmtWhen(deadline))} (${esc(fmtDuration(deadline - now))} left). `
+        + "After that anyone can try to execute it.";
+    }
+    return `<span class="pill-err">Pending</span>: the challenge period ended ${esc(fmtWhen(deadline))}. `
+      + "It can no longer be disputed, and anyone can try to execute it.";
+  }
+  if (slashState === 4) {
+    const rules = onMain
+      ? `The admin has to rule: upholding is possible only after ${esc(fmtWhen(deadline))}, and ruling for the agent reinstates it. `
+      : "The slashing committee has to rule: upholding slashes the bond at once, and ruling for the agent reinstates it. ";
+    return `<span class="pill-warn">Disputed</span> on ${esc(fmtWhen(disputedAt))}. ${rules}`
+      + `If nobody rules, anyone can expire the dispute from ${esc(fmtWhen(disputedAt + resolutionSecs))}.`;
+  }
+  if (slashState === 2) return '<span class="pill-err">Executed</span>: the bond was slashed.';
+  if (slashState === 3) return '<span class="pill-ok">Cancelled</span>: the last proposal was dropped and the bond is no longer frozen.';
+  return "none";
+}
+
+function renderStake({ ident, stakeRaw, minStakeRaw, pendWRaw, slashRaw, unbondRaw, extra }) {
   const operator   = "0x" + strip(word(ident, 0)).slice(24);
   const statusNum  = Number(BigInt(word(ident, 3)));
   const registered = BigInt(word(ident, 4)) !== 0n;
@@ -362,6 +428,13 @@ function renderStake({ ident, stakeRaw, minStakeRaw, pendWRaw, slashRaw, unbondR
   const now        = Math.floor(Date.now() / 1000);
   const isOperator = !!account && account.toLowerCase() === operator.toLowerCase();
   const frozen     = slashState === 1 || slashState === 4;
+  const initiatedAt = Number(BigInt(word(slashRaw, 4)));
+  const deadline    = Number(BigInt(word(slashRaw, 7)));
+  const disputedAt  = Number(BigInt(word(slashRaw, 8)));
+  const suspendedBySlash = BigInt(extra[0]) === 1n;
+  const resolutionSecs   = Number(BigInt(extra[1]));
+  const stakePausedUntil = pausedUntilOf(extra[2]);
+  const paused           = stakePausedUntil > now;
 
   stakeCtx = { staked, minStake, pendAmt, claimAt, isOperator, frozen, statusNum, registered };
 
@@ -382,20 +455,45 @@ function renderStake({ ident, stakeRaw, minStakeRaw, pendWRaw, slashRaw, unbondR
     $("stakeUnbond").innerHTML = `none &mdash; unbonding takes ${esc(fmtDuration(unbondSecs))}`;
   }
 
+  // Status in words. A Suspended agent is suspended either by its operator, who can undo it,
+  // or by a slash proposal, which only the proposal's outcome undoes. The two look the same
+  // in `identities` and mean opposite things to the person holding the bond.
+  if (!registered) {
+    $("stakeStatus").innerHTML = "&mdash;";
+  } else if (statusNum === 1) {
+    $("stakeStatus").innerHTML = suspendedBySlash
+      ? '<span class="pill-warn">Suspended by a slash proposal</span>: reinstated only if the proposal is dropped'
+      : `<span class="pill-warn">Suspended by its operator</span>: ${isOperator ? "you can reactivate it" : "only the operator can reactivate it"}`;
+  } else {
+    $("stakeStatus").innerHTML = ['<span class="pill-ok">Active</span>', "", '<span class="pill-err">Slashed</span>', '<span class="pill-warn">Awaiting bond</span>'][statusNum] ?? "?";
+  }
+  $("slashInfo").innerHTML = registered
+    ? slashSummary({ slashState, initiatedAt, deadline, disputedAt, resolutionSecs, now, isOperator, onMain: extra[2] !== null })
+    : "&mdash;";
+  $("pauseNote").innerHTML = paused
+    ? `<span class="pill-warn">The guardian has paused deposits until ${esc(fmtWhen(stakePausedUntil))}.</span> Bonding is refused until then; unbonding, disputes and claims still work.`
+    : "";
+
   let note, why = null;
   if (!registered)            { note = "Register the agent first, above."; why = "unregistered"; }
   else if (statusNum === 2)   { note = "This agent has been slashed. Its bond cannot be topped up."; why = "slashed"; }
   else if (!account)          { note = "Connect a wallet to bond."; why = "no wallet"; }
   else if (!isOperator)       { note = `Only the operator wallet <code>${esc(operator.slice(0, 10))}…</code> can bond or withdraw for this agent.`; why = "not operator"; }
   else if (frozen)            { note = `A slash proposal is <b>${esc(SLASH_STATES[slashState])}</b>. The bond is frozen until it resolves &mdash; withdrawing is blocked, topping up is not.`; }
+  else if (statusNum === 1 && staked >= minStake) { note = "Suspended by its operator. Reactivate it to make the agent scoreable again."; }
   else if (staked < minStake) { note = `Bond at least ${formatUnits(minStake - staked)} more ${esc(tokenSymbol)} to make this agent scoreable.`; }
   else                        { note = "Bonded and scoreable."; }
   $("stakeNote").innerHTML = frozen ? `<span class="pill-err">${note}</span>` : note;
 
   const canWrite = isOperator && registered && statusNum !== 2;
-  $("bondBtn").disabled   = !canWrite;
+  $("bondBtn").disabled   = !canWrite || paused;
   $("unbondBtn").disabled = !canWrite || staked === 0n || pendAmt > 0n || frozen;
   $("claimBtn").disabled  = !canWrite || pendAmt === 0n || now < claimAt;
+  // Disputing is the operator's only answer to a slash proposal and the window is short, so
+  // the button is live exactly while the contract would accept it: Pending, deadline not passed.
+  $("disputeBtn").disabled    = !(isOperator && slashState === 1 && now <= deadline);
+  $("suspendBtn").disabled    = !(canWrite && statusNum === 0 && !frozen);
+  $("reactivateBtn").disabled = !(canWrite && statusNum === 1 && !suspendedBySlash && staked >= minStake);
   void why;
 }
 
@@ -418,11 +516,21 @@ async function beginUnbond() {
   try {
     if (!currentDidHash) await lookup();
     const amt = parseUnits($("stakeAmount").value);
-    // Said before the wallet opens, not after. Dropping below the minimum suspends the
-    // agent and stops it being scored, and the tokens are locked for the unbonding
-    // period either way — this is the least reversible thing the page can do.
+    // Said before the wallet opens, not after. The tokens are locked for the unbonding
+    // period once this is sent: it is the least reversible thing the page can do.
+    if (stakeCtx && amt > stakeCtx.staked) {
+      logLine(`<span class="pill-err">${formatUnits(stakeCtx.staked)} ${esc(tokenSymbol)} is bonded; that is more than can be unbonded.</span>`);
+      return;
+    }
     if (stakeCtx && stakeCtx.staked - amt < stakeCtx.minStake) {
-      logLine('<span class="pill-warn">this takes the bond below the minimum — the agent stops being scoreable until it is topped back up</span>');
+      if (stakeCtx.statusNum === 0) {
+        // The contract refuses this for an Active agent (InsufficientStake), on the September
+        // build as well as main. Saying so here saves a wallet prompt that can only revert.
+        const room = stakeCtx.staked > stakeCtx.minStake ? stakeCtx.staked - stakeCtx.minStake : 0n;
+        logLine(`<span class="pill-err">An active agent cannot unbond below the minimum. At most ${formatUnits(room)} ${esc(tokenSymbol)} can come out while it is Active; to take out more, suspend the agent first.</span>`);
+        return;
+      }
+      logLine('<span class="pill-warn">this takes the bond below the minimum, so the agent cannot be reactivated until it is bonded back to the minimum</span>');
     }
     logLine(`starting unbonding of ${formatUnits(amt)} ${esc(tokenSymbol)}…`);
     await sendTx(STAKING, SEL.initiateWithdrawal + pad32(currentDidHash) + encUint(amt));
@@ -439,6 +547,44 @@ async function claimUnbond() {
   } catch (e) { logLine(`<span class="pill-err">${esc(e.message)}</span>`); }
 }
 
+async function disputeSlash() {
+  try {
+    if (!currentDidHash) await lookup();
+    logLine("disputing the slash proposal (the bond stays frozen and the admin has to rule on it)…");
+    await sendTx(STAKING, SEL.disputeSlash + pad32(currentDidHash));
+    await lookup();
+  } catch (e) { logLine(`<span class="pill-err">${esc(e.message)}</span>`); }
+}
+
+// 1 = Suspended, 0 = Active. The contract lets an operator suspend its own agent at any time,
+// and reactivate it only with the minimum bonded and no slash proposal behind the suspension.
+async function setStatus(code, verb) {
+  try {
+    if (!currentDidHash) await lookup();
+    logLine(`${verb} the agent…`);
+    await sendTx(IDENTITY, SEL.updateStatus + pad32(currentDidHash) + encUint(BigInt(code)));
+    await lookup();
+  } catch (e) { logLine(`<span class="pill-err">${esc(e.message)}</span>`); }
+}
+
+// Slash proceeds belong to the connected wallet (a victim or a reporter), not to the looked-up
+// agent, so they have their own read and their own button.
+async function refreshProceeds() {
+  if (!account) return;
+  try {
+    const owed = BigInt(await rpcRead(STAKING, SEL.claimable + encAddr(account)));
+    $("proceeds").textContent = `${formatUnits(owed)} ${tokenSymbol}`;
+    $("proceedsBtn").disabled = owed === 0n;
+  } catch (e) { $("proceeds").textContent = "unavailable"; }
+}
+async function claimProceeds() {
+  try {
+    logLine("claiming slash proceeds…");
+    await sendTx(STAKING, SEL.claimSlashProceeds);
+    await Promise.all([refreshProceeds(), refreshSvrBalance()]);
+  } catch (e) { logLine(`<span class="pill-err">${esc(e.message)}</span>`); }
+}
+
 // Returns markup describing a score that is proposed but not yet finalized,
 // or an empty string when nothing is pending.
 // Takes the pending blob the lookup already fetched, rather than fetching it again.
@@ -446,7 +592,10 @@ async function pendingNote(raw) {
   try {
     if (BigInt(word(raw, 8)) !== 1n) return "";
     const total = FACTORS.reduce((sum, [, i]) => sum + Number(BigInt(word(raw, i))), 0);
-    const opensAt = Number(BigInt(word(raw, 7))) + await getChallengeWindow();
+    // main stores the time a proposal becomes final (word 11); the September contracts return ten
+    // words and the time is the proposal's plus the window as it stands now.
+    const stored = strip(raw).length >= 12 * 64 ? Number(BigInt(word(raw, 11))) : 0;
+    const opensAt = stored || Number(BigInt(word(raw, 7))) + await getChallengeWindow();
     const when = new Date(opensAt * 1000).toISOString().replace("T", " ").slice(0, 16);
     return ` <span class="pill-warn">${total} proposed, finalizes after ${esc(when)} UTC</span>`;
   } catch (_) {
@@ -582,6 +731,10 @@ async function faucet() {
   $("bondBtn").onclick = bondStake;
   $("unbondBtn").onclick = beginUnbond;
   $("claimBtn").onclick = claimUnbond;
+  $("disputeBtn").onclick = disputeSlash;
+  $("suspendBtn").onclick = () => setStatus(1, "suspending");
+  $("reactivateBtn").onclick = () => setStatus(0, "reactivating");
+  $("proceedsBtn").onclick = claimProceeds;
   try {
     // fee token metadata comes from the chain: SVR faucet token on testnet,
     // USDC/WETH at mainnet — nothing on this page assumes a native token

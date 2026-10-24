@@ -17,7 +17,11 @@
  *     and victim/reporter shares are credited for them to claim, not pushed. The Arc
  *     testnet proxies still run the 21 September code, where the committee rules on a
  *     dispute, an upheld ruling takes effect at once, and there is no veto, no expiry
- *     of an unexecuted slash and no re-file cooldown.
+ *     of an unexecuted slash and no re-file cooldown. Two newer rules are not modelled,
+ *     because the simulator has no committee that changes and no choice of evidence: the
+ *     reporter must still sit on the committee when a slash executes, and evidence the
+ *     admin rejected cannot be filed again. (A withdrawal's claim time is fixed when it
+ *     is queued; the simulated period never changes, so the result is the same.)
  *   - six-factor score with per-factor maxima and the 6h score challenge
  *     window (SigvaraReputation + docs/reputation-model.md)
  *   - challenge/response with the v1 payload of packages/sdk challenge.ts (the

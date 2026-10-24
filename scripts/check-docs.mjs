@@ -32,8 +32,11 @@ const problems = [];
 const fail = (what, detail) => problems.push({ what, detail });
 const read = p => readFileSync(join(root, p), 'utf8');
 
-const sources = ['SigvaraIdentity', 'SigvaraReputation', 'SigvaraStaking', 'SigvaraEpochFees', 'SVRToken']
+const sources = ['SigvaraIdentity', 'SigvaraReputation', 'SigvaraStaking', 'SigvaraEpochFees', 'SVRToken', 'InflowGuard']
   .map(n => ({ name: n, text: read(`src/${n}.sol`) }));
+
+// An enum parameter is a uint8 in the ABI (updateStatus takes an AgentStatus).
+const enums = new Set(sources.flatMap(({ text }) => [...text.matchAll(/enum\s+(\w+)/g)].map(m => m[1])));
 
 /**
  * The canonical signature of `name`, from the Solidity source.
@@ -48,9 +51,9 @@ function signatureOf(name) {
     if (fn) {
       const params = fn[1].trim();
       if (!params) return `${name}()`;
-      const types = params.split(',').map(p => p.trim().split(/\s+/)[0]);
-      // A struct or enum parameter needs flattening to be canonical; this script does
-      // not attempt it, and says so rather than emitting a wrong selector.
+      const types = params.split(',').map(p => p.trim().split(/\s+/)[0]).map(t => (enums.has(t) ? 'uint8' : t));
+      // A struct parameter needs flattening to be canonical; this script does not
+      // attempt it, and says so rather than emitting a wrong selector.
       if (types.some(t => !/^(address|bool|bytes\d*|u?int\d*|string)(\[\d*\])?$/.test(t))) return null;
       return `${name}(${types.join(',')})`;
     }
