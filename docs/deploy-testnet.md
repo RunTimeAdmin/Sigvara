@@ -175,9 +175,9 @@ Once `deployments/5042002.json` exists, these stop being placeholders:
 
 ## 8. Deploying the site
 
-The site is static and lives on Hostinger under `sigvara.xyz`, username `u373211336`,
-document root `/home/u373211336/domains/sigvara.xyz/public_html`. `site/*` maps onto that
-root one-to-one. There is no CI for it, so committing a change to `site/` does nothing
+The site is static and lives on Hostinger under `sigvara.xyz`. The hosting username and the
+document root are in hPanel (Websites, sigvara.xyz) and are deliberately not written here.
+`site/*` maps onto the document root one-to-one. There is no CI for it, so committing a change to `site/` does nothing
 until it is uploaded, and this has been forgotten more than once.
 
 Upload individual files over TUS rather than using the static-archive deploy: the archive

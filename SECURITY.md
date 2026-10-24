@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 
-Please report suspected vulnerabilities privately to **security@sigvara.xyz**. Do not open a public issue for an unpatched vulnerability or include private keys, seed phrases, API keys, access tokens, or personal information in a report.
+Please report suspected vulnerabilities privately to **security@sigvara.xyz**, or through GitHub: *Security, Report a vulnerability* on this repository. Do not open a public issue for an unpatched vulnerability or include private keys, seed phrases, API keys, access tokens, or personal information in a report.
 
 Include the affected component, impact, reproduction steps, relevant logs or request details with secrets removed, and any suggested mitigation. Good-faith research should avoid service degradation, privacy violations, credential theft, social engineering, spam, data destruction, and unauthorized access to third-party systems.
 

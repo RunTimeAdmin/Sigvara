@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/RunTimeAdmin/Sigvara/security/advisories/new
+    about: Do not open a public issue for an unpatched vulnerability. Report it privately here, or by email to security@sigvara.xyz.
