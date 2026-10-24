@@ -140,11 +140,11 @@ finished. `expectedChainId` is what `EXPECTED_CHAIN_ID` names, and `null` when i
 They are separate because only the first is a fact: a deployment with the second unset signs
 for whatever chain its RPC serves.
 
-`commit` is the git revision the container cloned at start (the VPS and mainnet compose files
-put it in `SIGVARA_COMMIT`), or `null` when the deployment did not report one. It answers "are these two operators running the same
+`commit` is the git revision the container runs (the VPS and mainnet compose files take it from
+`SIGVARA_COMMIT`, and the VPS files refuse to start unless the checkout equals it), or `null` when the deployment did not report one. It answers "are these two operators running the same
 scoring code", which is the first thing to rule out when a checker disagrees and was
-otherwise unanswerable from outside: the deployments clone `main` at container start,
-so the only alternative was inferring it from restart times. **It is not a trust
+otherwise unanswerable from outside: the VPS deployments used to clone `main` at container
+start, so the only alternative was inferring it from restart times. **It is not a trust
 anchor.** The value is whatever the operator's container put in an environment
 variable, so it catches a box that missed a deploy, not a dishonest operator. Anything
 adversarial belongs to `/evidence`, which recomputes against the chain.

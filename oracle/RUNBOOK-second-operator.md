@@ -17,6 +17,11 @@ Read step 10 before you start step 3.
 > read -rs -p "key: " KEY; echo
 > cast send ... --private-key "$KEY"
 > ```
+>
+> `--private-key` still puts the key in the command's arguments, which `ps` shows for as long as
+> the command runs. Prefer a keystore: import the key once with
+> `cast wallet import <name> --interactive` and pass `--account <name>` instead. Keep every `.env`
+> at mode 600 (`chmod 600 .env`): it holds the signing key.
 ## Addresses and parameters
 
 Arc testnet, chain ID `5042002`. All read off chain on 20 September 2026.
@@ -215,7 +220,14 @@ checker's own key, so whatever runs the operator has to be able to sign for its 
 as long as it holds one.
 
 ```bash
-curl -L https://foundry.paradigm.xyz | bash && ~/.foundry/bin/foundryup
+# Do not pipe an installer from the network into a shell on the box that holds the key.
+# Install a specific release and check it:
+#   1. Take the Foundry version your CI runs (the "forge" line of a recent CI log).
+#   2. Download that tag's linux amd64 archive and its checksum from
+#      https://github.com/foundry-rs/foundry/releases and compare the SHA-256.
+#   3. Unpack only the binaries you need:
+tar -xzf foundry_<TAG>_linux_amd64.tar.gz -C /usr/local/bin forge cast
+cast --version
 ```
 
 Then, on the checker box rather than on a laptop:
@@ -233,7 +245,7 @@ If you would rather not install a toolchain, the `node:20-alpine` image the orac
 uses can generate the pair without one. It does not solve the signing problem in step 3:
 
 ```bash
-docker run --rm node:20-alpine sh -c   "npm i -q ethers@6 >/dev/null 2>&1 && node -e \"const w=require('ethers').Wallet.createRandom();console.log(w.address);console.log(w.privateKey)\""
+docker run --rm node:20-alpine sh -c   "npm i -q ethers@6.17.0 >/dev/null 2>&1 && node -e \"const w=require('ethers').Wallet.createRandom();console.log(w.address);console.log(w.privateKey)\""
 ```
 
 This key is a distinct operator. It must not be the primary's key: two processes signing
@@ -379,22 +391,24 @@ stops at startup if the RPC is on another chain, and skips an epoch if it moves 
 is the most likely way to waste an afternoon here.
 
 `docker-compose.checker.vps.yml` is the one you almost certainly want. It has no build
-stage; it clones `main` from GitHub inside the container on every start, the same way the
-primary is deployed. Nothing on the host to check out, nothing to `git pull`, nothing to
-rebuild. Copy it and your `.env` to `/docker/sigvara-checker/` on the checker box:
+stage; it fetches the one commit named by `SIGVARA_COMMIT` in `.env` (the full 40-character
+hash of a commit on `main` that you have read; use the primary's) from GitHub inside the
+container on every start, the same way the primary is deployed. Nothing on the host to check
+out, nothing to `git pull`, nothing to rebuild. Copy it and your `.env` to
+`/docker/sigvara-checker/` on the checker box:
 
 ```bash
-cd /docker/sigvara-checker && docker compose -f docker-compose.checker.vps.yml up -d
+cd /docker/sigvara-checker && chmod 600 .env && docker compose -f docker-compose.checker.vps.yml up -d
 docker compose -f docker-compose.checker.vps.yml logs --tail=30 checker
 ```
 
 `docker-compose.checker.yml` builds from `./oracle` and needs a repository checkout on the
 host. Use it only if you actually have one.
 
-`up -d` on first run and after any `.env` change. A plain `restart` re-runs the clone and
-so does pick up new code, but it does **not** re-read `env_file`.
+`up -d` on first run, after any `.env` change, and to deploy: change `SIGVARA_COMMIT`, then
+`up -d`. A plain `restart` re-fetches the same pinned commit and does **not** re-read `env_file`.
 
-Because both oracles clone `main`, they run the same scoring code by construction. That
+Because both oracles are pinned to the same commit, they run the same scoring code by construction. That
 matters more than it sounds: the factor weights changed on 20 September 2026, and a
 checker left on older code would disagree with the primary about every single agent while
 reporting it as a divergence in the primary.
@@ -685,8 +699,10 @@ loopback, so the proxy target is simply `127.0.0.1:3031`: no Docker networking, 
 external network, and no reason to recreate the checker.
 
 ```bash
+# <COMMIT> is the SIGVARA_COMMIT you deploy, not "main". Read the file before you load it into
+# the web server: it will serve anything it is told to.
 curl -s -o /etc/nginx/sites-available/checker.<domain> \
-  https://raw.githubusercontent.com/RunTimeAdmin/Sigvara/main/oracle/nginx-checker.conf.example
+  https://raw.githubusercontent.com/RunTimeAdmin/Sigvara/<COMMIT>/oracle/nginx-checker.conf.example
 ln -sf /etc/nginx/sites-available/checker.<domain> /etc/nginx/sites-enabled/
 nginx -t            # NOT optional: a bad config takes down every site this nginx serves
 systemctl reload nginx
@@ -724,8 +740,10 @@ would pass in both cases and test nothing, which is how a check quietly stops ch
 
 ```bash
 mkdir -p /docker/sigvara-watcher && cd /docker/sigvara-watcher
-curl -sO https://raw.githubusercontent.com/RunTimeAdmin/Sigvara/main/docker-compose.watcher.vps.yml
-curl -s -o .env https://raw.githubusercontent.com/RunTimeAdmin/Sigvara/main/oracle/.env.watcher.example
+# <COMMIT> is the SIGVARA_COMMIT you deploy, not "main". Read both files before you use them.
+curl -sO https://raw.githubusercontent.com/RunTimeAdmin/Sigvara/<COMMIT>/docker-compose.watcher.vps.yml
+curl -s -o .env https://raw.githubusercontent.com/RunTimeAdmin/Sigvara/<COMMIT>/oracle/.env.watcher.example
+chmod 600 .env
 sed -i 's|^CHECKER_URL=.*|CHECKER_URL=https://checker.<domain>|' .env
 docker compose -f docker-compose.watcher.vps.yml up -d
 docker compose -f docker-compose.watcher.vps.yml logs --tail=20
