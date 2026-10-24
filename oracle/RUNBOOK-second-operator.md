@@ -334,8 +334,8 @@ once the operator is admitted it calls `setSigner(<CHECKER_ADDRESS>)` on `Sigvar
 grant above is unchanged and goes to the signer. The host's wallet needs gas and no SVR, and
 `isActiveOperator(<CHECKER_ADDRESS>)` reads true, so the checker logs `bonded operator check
 passed` at startup. `clearSigner()` from the owner revokes it in one transaction. See
-`docs/arc.md`, section 4b. `setSigner` is on `main` and not on the Arc testnet proxies, which still run
-the September code, so on the testnet the bonded address and the signing address have to be the same.
+`docs/arc.md`, section 4b. `setSigner` is on the Arc testnet bond registry since its upgrade to `main`, so
+there too the bonded address and the signing address can differ.
 
 ## 6. Configure
 
@@ -562,8 +562,8 @@ not announce itself.
 
 The proposal is live while `block.timestamp < finalizableAt`, which is word 11 of the
 returndata and is fixed when the proposal is made. Where that word is zero or absent (a
-proposal from before it existed, and the Arc testnet proxies, which still run the September
-code), the rule is `proposedAt + challengeWindow > block.timestamp`. If the
+proposal from before it existed, which on the Arc testnet means any made before its upgrade to
+`main`), the rule is `proposedAt + challengeWindow > block.timestamp`. If the
 pending slot is empty, or holds a *different* `proposedAt` than the record, the disputed
 proposal has already turned over: the record is `superseded`, still visible, no longer
 actionable.
