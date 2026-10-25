@@ -3,7 +3,6 @@ Allow: /
 Allow: /.well-known/security.txt
 Disallow: /app
 Disallow: /app.html
-Disallow: /admin/
 Disallow: /.well-known/
 
 Sitemap: https://sigvara.xyz/sitemap.xml

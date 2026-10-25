@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * One source of response headers for the site, and only one.
+ * One source of response headers for the site, and only one, and it says what it should.
  *
  * The site had four copies of the same policy: .htaccess, _headers, vercel.json and
  * nginx-security.conf. Only .htaccess did anything, because the site is served by
@@ -13,7 +13,11 @@
  * tree still carry `script-src 'self' 'unsafe-inline'`, which the live policy dropped.
  *
  * So this refuses to let a second source come back, rather than trying to keep several
- * in agreement.
+ * in agreement. It also compares the one source with an exact list below: every
+ * directive of the Content-Security-Policy and every other security header. Checking
+ * only that a few strings are present let a policy gain a CDN, `'unsafe-eval'` or a wider
+ * connect-src and still pass. Changing the policy on purpose now means changing it here
+ * as well, so the change is visible in review twice.
  *
  *   node scripts/check-headers.mjs
  *
@@ -47,17 +51,35 @@ const show = (p) => p.split(sep).join('/');
 const NAMES = /Content-Security-Policy/i;
 const VALUE = /default-src[^"\n]*/i;
 
-/** Directives whose loss would be silent: the page keeps working, the protection does not. */
-const REQUIRED = [
-  ["script-src 'self'", 'inline script must stay forbidden'],
-  ["style-src 'self'", 'inline style must stay forbidden'],
-  ["object-src 'none'", 'no plugins'],
-  ["frame-ancestors 'none'", 'no framing'],
-  ["base-uri 'self'", 'no base tag hijack'],
-  // The badge is served from the oracle, so this has to be present or /check renders a
-  // broken image on our own page.
-  ['https://oracle.sigvara.xyz', 'the badge host must be allowed in img-src'],
-];
+/**
+ * The policy, directive by directive. The badge is served from the oracle, so its host
+ * has to be in img-src or /check renders a broken image on our own page. The wallet talks
+ * to the Arc RPC from the page, so that host is the only connect-src entry.
+ */
+const EXPECTED_CSP = {
+  'default-src': ["'self'"],
+  'base-uri': ["'self'"],
+  'object-src': ["'none'"],
+  'frame-ancestors': ["'none'"],
+  'form-action': ["'self'"],
+  'script-src': ["'self'"],
+  'style-src': ["'self'"],
+  'img-src': ["'self'", 'data:', 'https://oracle.sigvara.xyz'],
+  'font-src': ["'self'"],
+  'connect-src': ["'self'", 'https://rpc.testnet.arc.io'],
+  'upgrade-insecure-requests': [],
+};
+
+/** Every other header the file may set, and its exact value. */
+const EXPECTED_HEADERS = {
+  'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'strict-origin-when-cross-origin',
+  'Permissions-Policy': 'accelerometer=(), autoplay=(), camera=(), display-capture=(), geolocation=(), gyroscope=(), microphone=(), payment=(), usb=()',
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Cross-Origin-Resource-Policy': 'same-origin',
+};
 
 async function* walk(dir) {
   for (const entry of await readdir(dir, { withFileTypes: true })) {
@@ -89,19 +111,52 @@ for await (const file of walk(SITE)) {
 if (policy === null) {
   problems.push(`${show(CANONICAL)} defines no Content-Security-Policy`);
 } else {
-  for (const [needle, why] of REQUIRED) {
-    if (!policy.includes(needle)) {
-      problems.push(`policy is missing "${needle}" (${why})`);
+  const actual = new Map();
+  for (const part of policy.split(';').map((s) => s.trim()).filter(Boolean)) {
+    const [name, ...sources] = part.split(/\s+/);
+    actual.set(name, sources);
+  }
+  for (const [name, want] of Object.entries(EXPECTED_CSP)) {
+    const got = actual.get(name);
+    if (!got) { problems.push(`policy is missing the directive "${name}"`); continue; }
+    if ([...got].sort().join(' ') !== [...want].sort().join(' ')) {
+      problems.push(`policy directive "${name}" is "${got.join(' ')}", expected "${want.join(' ')}"`);
     }
   }
-  const scriptSrc = policy.match(/script-src([^;]*)/);
-  if (scriptSrc && scriptSrc[1].includes('unsafe-inline')) {
-    problems.push("policy allows 'unsafe-inline' in script-src");
+  for (const name of actual.keys()) {
+    if (!(name in EXPECTED_CSP)) problems.push(`policy has an unexpected directive "${name}"`);
   }
-  const styleSrc = policy.match(/style-src([^;]*)/);
-  if (styleSrc && styleSrc[1].includes('unsafe-inline')) {
-    problems.push("policy allows 'unsafe-inline' in style-src");
+}
+
+// The other headers, read from the file's real directives (comments are skipped).
+const htaccess = await readFile(CANONICAL, 'utf8');
+const set = new Map();
+for (const line of htaccess.split('\n')) {
+  const m = /^\s*Header\s+always\s+set\s+(\S+)\s+"([^"]*)"\s*$/i.exec(line);
+  if (m && m[1].toLowerCase() !== 'content-security-policy') set.set(m[1], m[2]);
+}
+for (const [name, want] of Object.entries(EXPECTED_HEADERS)) {
+  if (!set.has(name)) problems.push(`header "${name}" is not set`);
+  else if (set.get(name) !== want) problems.push(`header "${name}" is "${set.get(name)}", expected "${want}"`);
+}
+for (const name of set.keys()) {
+  if (!(name in EXPECTED_HEADERS)) problems.push(`unexpected header "${name}" (add it to EXPECTED_HEADERS if it is intended)`);
+}
+
+// Missing and refused paths must get the site's own page, which carries these headers.
+// The host's default page loads third-party scripts and carries none of them.
+for (const code of [404, 403]) {
+  if (!new RegExp(`^\\s*ErrorDocument\\s+${code}\\s+/404\\.html\\s*$`, 'm').test(htaccess)) {
+    problems.push(`${show(CANONICAL)} has no "ErrorDocument ${code} /404.html"`);
   }
+}
+try {
+  const page = await readFile(join(SITE, '404.html'), 'utf8');
+  if (/<script/i.test(page)) problems.push('site/404.html contains a script');
+  if (/\sstyle\s*=/i.test(page)) problems.push('site/404.html contains an inline style');
+  if (/(?:src|href)\s*=\s*["']\s*(?:https?:)?\/\//i.test(page)) problems.push('site/404.html points at another origin');
+} catch {
+  problems.push('site/404.html is missing');
 }
 
 if (problems.length) {
@@ -110,4 +165,4 @@ if (problems.length) {
   process.exit(1);
 }
 
-console.log(`header check: ok (one source, ${show(CANONICAL)})`);
+console.log(`header check: ok (one source, ${show(CANONICAL)}, policy and ${Object.keys(EXPECTED_HEADERS).length} headers match, 404 page in place)`);

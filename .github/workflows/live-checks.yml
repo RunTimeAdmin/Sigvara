@@ -1,0 +1,52 @@
+name: Live checks
+
+# Looks at the deployment from outside, once an hour, from a place that shares no account,
+# host or credential with what it watches. A failed run emails the repository owner, which
+# is a second alert path beside the Discord watcher and does not depend on the three servers.
+#
+#   site      every deployed file equals what main says, the security headers match
+#             site/.htaccess, and a missing path gets the site's own page
+#   services  the oracle and checker answer and have completed an epoch recently, the
+#             checker records no divergence, and no certificate is within 14 days of expiry
+#
+# It also fails when a merged site change has not been uploaded yet, which is the point.
+# Reads only: every request is a GET to a public URL.
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-checks
+  cancel-in-progress: false
+
+jobs:
+  site:
+    name: Live site matches main
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 20
+      - run: node scripts/check-live.mjs site
+
+  services:
+    name: Oracle, checker and certificates
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 20
+      - run: node scripts/check-live.mjs services
