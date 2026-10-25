@@ -73,7 +73,7 @@ sigvara-site-*/
 sigvara-site-*.zip
 
 # Local probes that assert unfixed vulnerable behaviour. Kept out of the repo
-# until the corresponding fixes land (see D:\Sigvara-private\security-findings).
+# until the corresponding fixes land.
 test/Verify*.t.sol
 
 # Site deployment archive, rebuilt by scripts/package-site.mjs on every deploy
@@ -81,3 +81,34 @@ sigvara-site.zip
 
 # Private planning notes. Local only, deliberately not published.
 PLANNING-*.md
+
+# Keys, wallets and credentials. Nothing like this should ever be committed. The secret
+# scan (scripts/check-secrets.mjs, run in CI and by a local pre-commit hook) is the second
+# line of defence; this is the first.
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+*keystore*.json
+UTC--*
+wallet*.json
+mnemonic*.txt
+seed*.txt
+private-key*.txt
+.npmrc
+.netrc
+
+# Runtime state, logs and local overrides
+*.log
+oracle-state*.json
+docker-compose.override.yml
+coverage/
+*.tgz
+/node_modules/
+
+# Root-level scratch: brand images and script output are never committed
+/*.png
+/*.svg
+fat-path-*.json

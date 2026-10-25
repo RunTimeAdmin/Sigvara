@@ -22,10 +22,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
+        uses: foundry-rs/foundry-toolchain@dba66c27052e63476d886f22216e119ba7e615bf # v1
 
       # lib/ is gitignored (not vendored, not submodules), so CI fetches the
       # Solidity deps at the versions foundry.toml's remappings expect. Each is
@@ -49,8 +51,10 @@ jobs:
       run:
         working-directory: packages/sdk
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 20
       - run: npm ci
@@ -69,8 +73,10 @@ jobs:
       run:
         working-directory: oracle
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 20
       - run: npm ci
@@ -100,19 +106,28 @@ jobs:
         working-directory: .
         run: node scripts/check-evidence-fixture.mjs
 
+      # A raw private key is 64 hex characters, which GitHub's push protection does not
+      # recognise, and a key pushed to this public repository cannot be taken back. This reads
+      # every tracked file for a PEM key block or a 64-hex value assigned to a key-like name.
+      - name: No private key in tracked files
+        working-directory: .
+        run: node scripts/check-secrets.mjs --self-test && node scripts/check-secrets.mjs
+
   slither:
     name: Static analysis (slither)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Fetch Solidity dependencies
         run: sh scripts/fetch-deps.sh
 
       # Fails the build on High findings only. Medium/Low are reviewed by hand;
       # the accepted ones are recorded in docs/adr/0002-analyzer-accepted-findings.md.
-      - uses: crytic/slither-action@v0.4.2
+      - uses: crytic/slither-action@b52cc1cbfee9ca3e8722dd5224299d16c9a6b80f # v0.4.2
         with:
           fail-on: high
           slither-args: --filter-paths "lib/|test/|script/|archive/" --exclude-dependencies

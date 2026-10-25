@@ -19,6 +19,11 @@
 > The body below is left as written on 17 September and is **not** a current statement
 > of readiness. What has changed since:
 >
+> **Withdrawn (24 October 2026).** The body below recommends enabling Dependabot auto-merge
+> for patch updates. Do not: `main` is what the testnet servers clone when a container starts,
+> so a merged bump deploys without a review. Dependabot version updates stay manual, with a
+> seven day cooldown (`.github/dependabot.yml`).
+>
 > **Closed.**
 > - `deployments/5042002.json` is committed, and the protocol is deployed and running on
 >   Arc testnet.
