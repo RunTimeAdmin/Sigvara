@@ -2,7 +2,7 @@
 # Node 20 reached end of life on 30 April 2026 and the VPS compose files still run it.
 # To move to a newer base: pull it, read the release notes, then change this line and the
 # comment together.
-FROM node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53
+FROM node:25-alpine@sha256:bdf2cca6fe3dabd014ea60163eca3f0f7015fbd5c7ee1b0e9ccb4ced6eb02ef4
 
 ENV NODE_ENV=production
 
