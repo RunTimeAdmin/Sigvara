@@ -164,7 +164,7 @@ curl https://api.counteraudit.io/v1/audit/verify/$PACKET_ID \
   -H "Authorization: Bearer $CA_API_KEY"
 ```
 
-The decrypted `packet` object contains:
+The decrypted `packet` object contains (the values here are illustrative):
 
 ```json
 {
@@ -240,8 +240,8 @@ import { SigvaraVerifier } from '@sigvara/protocol-sdk';
 const verifier = new SigvaraVerifier({ rpcUrl, addresses, chainId: 5042002 });
 
 async function handleAgentAction(agentDid: string, action: object) {
-  // Block agents below threshold before their action is even audited
-  const meets = await verifier.meetsThreshold(agentDid, 30);
+  // Block agents below threshold, or not Active, before their action is even audited
+  const meets = (await verifier.isActive(agentDid)) && (await verifier.meetsThreshold(agentDid, 30));
   if (!meets) {
     throw new Error(`Agent ${agentDid} does not meet minimum reputation threshold`);
   }
@@ -251,7 +251,7 @@ async function handleAgentAction(agentDid: string, action: object) {
 }
 ```
 
-The threshold check (`meetsThreshold`) is a view call — no gas, <100ms on a good RPC.
+The status and threshold checks (`isActive`, `meetsThreshold`) are view calls — no gas, <100ms on a good RPC.
 
 ---
 

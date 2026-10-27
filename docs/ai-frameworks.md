@@ -15,8 +15,9 @@ This guide shows how to add Sigvara identity to agents built with common AI fram
 > [oracle/README.md](../oracle/README.md)), which needs no SDK at all, or run the
 > TypeScript SDK in a sidecar. The HTTP route is simple, but `/score` is the oracle's
 > preview, not the finalized score. To gate on a threshold, read `getTotalScore` or
-> `meetsThreshold` from the reputation contract with a plain `eth_call`, which any
-> language can make.
+> `meetsThreshold` from the reputation contract and `isActive` from the identity contract
+> (a suspended agent keeps its score), each with a plain `eth_call`, which any language
+> can make.
 
 ---
 
@@ -262,8 +263,8 @@ const verifier = new SigvaraVerifier({ rpcUrl, addresses, chainId: 5042002 });
 
 async function trustAgent(did: string, payload: string, signature: string): Promise<boolean> {
   const sigValid = await verifier.verifySignature(did, payload, signature, 300, myAgent.did);
-  const repOk = await verifier.meetsThreshold(did, 40);
-  return sigValid && repOk;
+  const standing = (await verifier.isActive(did)) && (await verifier.meetsThreshold(did, 40));
+  return sigValid && standing;
 }
 ```
 
@@ -281,7 +282,7 @@ Whatever framework you use, the integration is three things:
 
 2. **Audit on action** — include `agent_did` in every `POST /v1/audit/ingest` call. This can be fire-and-forget if you don't want it on the critical path.
 
-3. **Verify before trust** — before accepting work from or delegating to another agent, call `verifySignature` and `meetsThreshold`. Both are read-only view calls; no gas required.
+3. **Verify before trust** — before accepting work from or delegating to another agent, call `verifySignature`, `isActive` and `meetsThreshold`, or use `SigvaraGate`, which does all three. They are read-only view calls; no gas required.
 
 ---
 

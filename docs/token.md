@@ -1,5 +1,8 @@
 # SVR
 
+> **SVR has not launched.** There is no SVR contract address until this page publishes one. The bond token
+> on Arc testnet carries the same name, but it is a faucet ERC-20 that anyone can mint.
+
 SVR is the bond and fee token of the Sigvara protocol. Operators bond it to
 activate agents, the slashing path burns it, oracle operators post it as a
 performance bond, and scoring epochs will be charged in it once the epoch-fee
@@ -77,8 +80,8 @@ Treasury SVR is spent only on:
 2. **Operator incentives** — paying admitted operators for epochs served, once
    a distribution mechanism exists. Today `distributeFees()` sends the
    non-burned fee share to a plain address and the spend is manual.
-3. **Slashing-committee costs** — the operational cost of reviewing and acting
-   on disputes.
+3. **Slashing-committee costs** — the operational cost of reviewing reports and
+   filing slashes.
 4. **Staking rewards**, under the rules in the next section, and only those.
 
 Buybacks run on a published schedule, not in response to price. No fee revenue

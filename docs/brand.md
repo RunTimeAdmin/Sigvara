@@ -543,7 +543,7 @@ Prefer:
 - "Computed reputation."
 - "Stake-backed action."
 - "Read an agent's score before routing a task."
-- "Built on ERC-8004. Deploying on Arc."
+- "Built on ERC-8004. Live on Arc testnet."
 
 Avoid:
 

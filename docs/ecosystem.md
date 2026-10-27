@@ -1,6 +1,6 @@
 # The Sigvara Ecosystem
 
-Sigvara is a protocol, not a single product. It works by connecting three components that reinforce each other. This document explains each component and how data flows between them.
+Sigvara is a protocol, not a single product. It works by connecting five components that reinforce each other. This document explains each component and how data flows between them.
 
 ---
 
@@ -16,7 +16,7 @@ The reputation store. The oracle writes a 6-factor score (0–100) here every ep
 
 ### SigvaraStaking (on-chain)
 
-The bond. An agent registers first and lands in `PendingBond`; the first deposit that carries it over `minimumStake` is what makes it `Active`, scoreable and slashable. If the agent misbehaves, the slashing committee initiates a slash: the agent is suspended, a 7-day challenge window opens, and if unchallenged the bond is burned/distributed, reputation is zeroed, and the agent is permanently terminated.
+The bond. An agent registers first and lands in `PendingBond`; the first deposit that carries it over `minimumStake` is what makes it `Active`, scoreable and slashable. If the agent misbehaves, the slashing committee initiates a slash: the agent is suspended, a 7-day challenge window opens, and if unchallenged the bond is burned/distributed, reputation is zeroed, and the agent is permanently terminated. If the operator disputes it, the admin rules; the admin can also veto it, and a proposal nobody executes lapses after 14 days.
 
 ### Oracle
 
