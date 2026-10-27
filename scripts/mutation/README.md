@@ -70,7 +70,7 @@ shows a pattern that has drifted (`NO CHANGE APPLIED`) and a test that has since
 | `mutate-p3-slash.sh` | admin rules disputes, lapsing slash (PR 38) | 9 | 9 |
 | `mutate-p3-roles.sh` | fund-moving roles through the timelock (PR 39) | 11 | 11 |
 | `mutate-p3-window.sh` | score window fixed at proposal (PR 40) | 6 | 6 |
-| `mutate-p4-dispute.sh` | an upheld dispute waits for the deadline | 7 | 7 |
+| `mutate-p4-dispute.sh` | an upheld dispute waits for the deadline and stops at the expiry | 11 | 11 |
 | `mutate-p4-payee.sh` | the slasher is never the payee | 10 | 10 |
 | `mutate-p4-ceilings.sh` | ceilings on periods, window and rate | 27 | 27 |
 | `mutate-p4-floors.sh` | mainnet launch floors | 8 | 8 |

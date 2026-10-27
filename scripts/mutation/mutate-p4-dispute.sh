@@ -36,4 +36,11 @@ runl A4 $F "$A" "$D" 'proposal.challengeDeadline' 'proposal.initiatedAt + challe
 runl A5 $F "$A" "$D" 'proposal.challengeDeadline' 'proposal.disputedAt + challengePeriod' 'the gate counts from the dispute and not from the filing'
 runl A6 $F "$A" "$D" 'proposal.challengeDeadline' 'proposal.initiatedAt' 'the gate counts from the filing with no period at all'
 runl A7 $F "$A" 'revert SlashNotDisputed(didHash);' 'revert SlashNotDisputed(didHash);' 'revert SlashNotDisputed(didHash); if (block.timestamp <= proposal.challengeDeadline) revert ChallengePeriodActive(didHash, proposal.challengeDeadline);' 'the gate also holds back a drop'
+# The other end of an upheld ruling: it stops where the dispute can be expired, so an uphold and an expiry never overlap.
+X='if (block.timestamp > expiresAt) revert DisputeResolutionExpired(didHash, expiresAt);'
+E='uint256 expiresAt = proposal.disputedAt + DISPUTE_RESOLUTION_PERIOD;'
+runl B1 $F "$A" "$X" 'block.timestamp > expiresAt' 'false' 'the bound is gone, so a late uphold still lands after the dispute can be expired'
+runl B2 $F "$A" "$X" '> expiresAt' '>= expiresAt' 'the bound closes at the last second expireDispute still refuses'
+runl B3 $F "$A" "$X" 'block.timestamp > expiresAt' 'block.timestamp < expiresAt' 'the bound is inverted'
+runl B4 $F "$A" "$E" 'proposal.disputedAt + DISPUTE_RESOLUTION_PERIOD' 'proposal.challengeDeadline + DISPUTE_RESOLUTION_PERIOD' 'the bound counts from the deadline and not from the dispute'
 echo "DONE" >> "$OUT"
