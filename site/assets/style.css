@@ -317,6 +317,8 @@ footer { border-top: 1px solid var(--sig-line); padding: var(--sig-space-7) 0; m
 .docs-content { min-width: 0; max-width: 760px; padding-bottom: var(--sig-space-11); }
 .docs-content h2 { margin-top: var(--sig-space-9); margin-bottom: 12px; }
 .docs-content h2:first-child { margin-top: 0; }
+/* The page title is the h1. It keeps the look it had as an h2, so the pages do not change. */
+.docs-content h1 { font-size: clamp(26px, 3vw, 34px); font-weight: 700; letter-spacing: -.045em; line-height: 1.15; margin-top: var(--sig-space-9); margin-bottom: 12px; }
 .docs-content h3 { margin-top: var(--sig-space-7); margin-bottom: 10px; }
 .docs-content p { color: var(--sig-text-muted); margin-bottom: var(--sig-space-4); font-size: 15px; }
 .docs-content ul, .docs-content ol { color: var(--sig-text-muted); font-size: 15px; padding-left: 20px; margin-bottom: var(--sig-space-4); }

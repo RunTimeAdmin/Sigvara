@@ -16,7 +16,7 @@
   <link rel="icon" type="image/svg+xml" href="../assets/sigvara-avatar.svg" />
   <link rel="icon" type="image/png" sizes="512x512" href="../assets/sigvara-card.png" />
   <link rel="apple-touch-icon" href="../assets/sigvara-card.png" />
-  <link rel="stylesheet" href="../assets/style.css?v=e5a6705" />
+  <link rel="stylesheet" href="../assets/style.css?v=4d3c26f" />
 </head>
 <body>
 
@@ -71,7 +71,7 @@
 
       <main class="docs-content">
         <div class="section-label">Protocol</div>
-        <h2>Reputation Model</h2>
+        <h1>Reputation Model</h1>
         <p>An agent's reputation is a single number from 0 to 100. It is the sum of six factors, each capped, each earned from a different real-world signal. Nothing about it is subjective or hand-assigned: the oracle recomputes every factor from observable data each epoch, proposes the result to the <code>SigvaraReputation</code> contract, and after a challenge window it becomes the on-chain score anyone can read in one call. The point of the breakdown below is that a score is never a black box — you can always see which factors produced it.</p>
 
         <h3>Where each signal comes from</h3>

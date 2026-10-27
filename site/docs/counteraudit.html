@@ -16,7 +16,7 @@
   <link rel="icon" type="image/svg+xml" href="../assets/sigvara-avatar.svg" />
   <link rel="icon" type="image/png" sizes="512x512" href="../assets/sigvara-card.png" />
   <link rel="apple-touch-icon" href="../assets/sigvara-card.png" />
-  <link rel="stylesheet" href="../assets/style.css?v=e5a6705" />
+  <link rel="stylesheet" href="../assets/style.css?v=4d3c26f" />
 </head>
 <body>
 
@@ -69,7 +69,7 @@
 
       <main class="docs-content">
         <div class="section-label">Integration</div>
-        <h2>CounterAudit Integration</h2>
+        <h1>CounterAudit Integration</h1>
         <div class="callout"><strong>Status: live since 19 September 2026, both directions.</strong> Enrichment runs on <code>api.counteraudit.io</code> against Arc testnet, verified against a real sealed packet. Outcome reporting works too: add <code>outcome</code> and <code>payment_tx_hash</code> to an ingest and the result is attested to the oracle. The settlement hash is required because the payment is the credential &mdash; the oracle re-reads that transaction from the chain rather than trusting the caller. The outcome is recorded because CounterAudit presents an oracle token; without one the payment would be credited and no outcome recorded.</div>
         <p>Adding Sigvara identity to CounterAudit requires one field: <code>agent_did</code>. When CounterAudit receives an ingest call with a valid <code>agent_did</code>, it queries the live on-chain identity and reputation score and seals both inside the AES-GCM-encrypted, RFC 3161-timestamped packet. The reputation score is frozen at the moment of the action — it does not change retroactively even if the agent is later slashed.</p>
 
