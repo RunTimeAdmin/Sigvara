@@ -279,7 +279,7 @@ This is fine for local testing and worthless as a trust signal in public.
 | Status | Meaning |
 |---|---|
 | 200 | Accepted and saved |
-| 202 | Accepted, but the state file could not be written, so a restart before the next good save loses it. The body has `"durable": false`. Do not resend: the payment is credited here and a resend gets 409. `/health` is 503 until a save works |
+| 202 | Accepted, but the state file could not be written, so a restart before the next good save loses it. The body has `"durable": false`. Do not resend: it is recorded here, and a resend is refused (409 for a settlement already credited, 429 inside the cooldown). `/health` is 503 until a save works |
 | 400 | Malformed body, unknown agent, or a `success` that is not a boolean |
 | 402 | The payment did not check out; `code` says why (`self_payment`, `no_transfer`, `below_minimum`) |
 | 409 | `replayed`: this settlement was already credited. `outcome_recorded`: it already has an outcome, which is final |
