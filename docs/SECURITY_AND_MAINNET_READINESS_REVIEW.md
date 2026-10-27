@@ -9,7 +9,7 @@
 
 > ## Status since this review — 2026-09-20
 >
-> **Later changes.** This status was last revised on 17 October. The mainnet-readiness work of
+> **Later changes.** This status was last revised on 27 October. The mainnet-readiness work of
 > 22 October (split upgrade and admin authority, the guardian pause, launch floors and ceilings,
 > reader freshness) is recorded in [ADR 0005](adr/0005-governance-and-emergency-powers.md), the
 > [launch checklist](launch-checklist.md), the README's
@@ -20,9 +20,10 @@
 > of readiness. What has changed since:
 >
 > **Withdrawn (24 October 2026).** The body below recommends enabling Dependabot auto-merge
-> for patch updates. Do not: `main` is what the testnet servers clone when a container starts,
-> so a merged bump deploys without a review. Dependabot version updates stay manual, with a
-> seven day cooldown (`.github/dependabot.yml`).
+> for patch updates. Do not. When this was written `main` was what the testnet servers cloned
+> when a container started, so a merged bump deployed without a review; since 26 October they
+> run a commit pinned by hand, and an auto-merged bump would still reach that pin unread.
+> Dependabot version updates stay manual, with a seven day cooldown (`.github/dependabot.yml`).
 >
 > **Closed.**
 > - `deployments/5042002.json` is committed, and the protocol is deployed and running on
@@ -52,8 +53,9 @@
 > - Both oracle operators are run by the same party. A second bonded operator has run in
 >   checker mode since 20 September on separate hardware and a separate RPC provider, and
 >   `activeCount` is 2, but two independent recomputations agreeing is not two independent
->   parties agreeing. Only the primary writes scores; the checker makes a disagreement
->   legible and a committee must still act on it.
+>   parties agreeing. In normal running only the primary proposes scores; the checker
+>   finalizes what it agrees with and makes a disagreement legible, and a committee must
+>   still act on it.
 > - ~~Scoring reads the wall clock rather than the chain clock.~~ Closed 20 September.
 >   The epoch scores against the block timestamp, and the checker rescores a pending
 >   proposal at its own `proposedAt` before comparing. The second half is the one that

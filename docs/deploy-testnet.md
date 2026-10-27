@@ -177,8 +177,10 @@ Once `deployments/5042002.json` exists, these stop being placeholders:
 
 The site is static and lives on Hostinger under `sigvara.xyz`. The hosting username and the
 document root are in hPanel (Websites, sigvara.xyz) and are deliberately not written here.
-`site/*` maps onto the document root one-to-one. There is no CI for it, so committing a change to `site/` does nothing
-until it is uploaded, and this has been forgotten more than once.
+`site/*` maps onto the document root one-to-one, except `SECURITY.md` and `SECURITY_DEPLOYMENT_CHECKLIST.md`,
+which are notes for people working in the repository and are never uploaded. Nothing deploys the site, so committing a change to `site/` does nothing
+until it is uploaded, and this has been forgotten more than once. The Live checks workflow now notices: it compares every deployed file with `main`
+on a schedule and fails, with an email to the owner, when they differ.
 
 Upload individual files over TUS rather than using the static-archive deploy: the archive
 replaces the entire document root, which would drop anything not in it.
@@ -204,6 +206,11 @@ replaces the entire document root, which would drop anything not in it.
 3. **Clear the cache.** Not optional. This edge has been observed serving a copy six days
    old against a one-hour `max-age`. An upload can return 201/204 with the live URL still
    serving the previous file.
+
+Do the merge and the upload close together. The Live checks workflow fails in both orders:
+files uploaded before the merge are ahead of `main`, and a merge before the upload leaves
+`main` ahead of the files. It runs every few hours, so a gap of half a day can mean two failed runs. Running `node scripts/check-live.mjs site` after the cache clear shows what the
+next run will say.
 
 Then verify against the live URL with a cache-busting query string, rather than assuming:
 

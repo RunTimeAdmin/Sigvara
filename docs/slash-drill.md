@@ -103,8 +103,8 @@ cast logs --from-block <deploy> --to-block latest \
 
 Use the on-ramp at [sigvara.xyz/testnet](https://sigvara.xyz/testnet): faucet gas, faucet
 SVR, register, bond. Bond it at `minimumStake` exactly (1,000 SVR), since half of whatever
-it holds is burned. Registering the target is step 0 of the drill and it costs a real
-1,000 SVR that does not come back.
+it holds is burned. Registering the target is step 0 of the drill and it costs 500 SVR in
+the end: half the bond is burned, and the rest returns through the victim and reporter shares (see below).
 
 **Pick a victim address that is not the reporter.** `initiateSlash` reverts with
 `VictimIsReporter` if they match, because one committee signature would otherwise be a 50%
