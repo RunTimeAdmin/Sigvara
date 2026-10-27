@@ -208,6 +208,7 @@ contract SigvaraStaking is
     /// The admin already ruled against this evidence for this agent. File new evidence.
     error EvidenceAlreadyRejected(bytes32 didHash, bytes32 evidenceKey);
     error DisputeResolutionActive(bytes32 didHash, uint256 expiresAt);
+    error DisputeResolutionExpired(bytes32 didHash, uint256 expiredAt);
     /// A Pending proposal is still inside the fortnight in which anyone may execute it.
     error ExecutionPeriodActive(bytes32 didHash, uint256 expiresAt);
     /// The reporter of this slash no longer holds SLASHING_COMMITTEE_ROLE, so it will not be
@@ -569,6 +570,12 @@ contract SigvaraStaking is
      *         the moment executeSlash opens for an undisputed one, so disputing can never bring a
      *         slash forward. Dropping is open at any time. A dispute filed on the first day is
      *         therefore upheld between the end of the challenge period and the dispute's expiry.
+     *
+     *         A ruling to uphold ends where the dispute does. Once DISPUTE_RESOLUTION_PERIOD has
+     *         passed, which is the second expireDispute stops refusing, it reverts and only
+     *         dropping and expiry are left. Without that bound the timeout was a race between an
+     *         admin who ruled late and an operator who expired the dispute, and whoever landed
+     *         first won it.
      */
     function resolveDispute(bytes32 didHash, bool uphold)
         external
@@ -581,6 +588,8 @@ contract SigvaraStaking is
         if (uphold) {
             uint256 deadline = proposal.challengeDeadline;
             if (block.timestamp <= deadline) revert ChallengePeriodActive(didHash, deadline);
+            uint256 expiresAt = proposal.disputedAt + DISPUTE_RESOLUTION_PERIOD;
+            if (block.timestamp > expiresAt) revert DisputeResolutionExpired(didHash, expiresAt);
             _settleSlash(didHash, proposal);
         } else {
             _rejectEvidence(didHash, proposal);
