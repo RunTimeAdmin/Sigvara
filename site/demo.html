@@ -129,7 +129,7 @@
           <div class="step-head" role="button" tabindex="0" aria-expanded="false"><div><div class="step-num">05 / SLASH</div><h2>What misbehaviour costs</h2></div><span class="step-state">Locked</span></div>
           <div class="step-body">
             <p>A counterparty reports harm and a committee member files the slash, naming the victim. The agent is suspended at once and a 7-day challenge window opens. If nobody disputes, anyone can execute the slash once the window closes. If the operator disputes, the bond stays frozen and the admin rules. Upholding slashes, but never before the window closes. Rejecting reinstates the agent.</p>
-            <p>A dispute the admin never rules on can be expired by anyone after 14 days, and so can a proposal nobody executed, 14 days after its deadline, so neither side can stall it forever. The admin can also veto a proposal, the committee can cancel a pending one, and after any dropped proposal the committee waits one challenge period before filing again. Each press of Advance past 7 days moves the clock a little over a week. These are the rules on the main branch. The Arc testnet contracts still run the 21 September code, where the committee rules on a dispute, an upheld ruling takes effect at once, and there is no veto, no expiry of an unexecuted slash and no re-file cooldown.</p>
+            <p>A dispute the admin never rules on can be expired by anyone after 14 days, and so can a proposal nobody executed, 14 days after its deadline, so neither side can stall it forever. The admin can also veto a proposal, the committee can cancel a pending one, and after any dropped proposal the committee waits one challenge period before filing again. Each press of Advance past 7 days moves the clock a little over a week. These are the rules on the main branch, and the Arc testnet contracts have run them since their upgrade on 26 October 2026.</p>
             <p>On a slash, half the bond burns and the victim and reporter quarters are credited for them to claim. Queued withdrawals are swept too. Status becomes Slashed, which is terminal, and the score is zeroed.</p>
             <div class="controls">
               <button class="button button-danger" id="btnInitiateSlash">Committee initiates slash</button>
@@ -209,7 +209,7 @@
 
   <script src="assets/vendor/nacl-fast.min.js?v=e5a6705"></script>
   <script src="assets/did.js?v=32000f8"></script>
-  <script src="assets/demo.js?v=88a7116"></script>
+  <script src="assets/demo.js?v=a89c101"></script>
   <script src="assets/demo-page.js?v=25c9117"></script>
 
 </body>
