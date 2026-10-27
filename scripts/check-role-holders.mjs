@@ -9,7 +9,17 @@
  *
  *   SAFE=0x.. TIMELOCK=0x.. COMMITTEE=0x.. ORACLE=0x.. GUARDIAN=0x.. node scripts/check-role-holders.mjs
  *
- * Run it after the handover, not before: until then the deployer holds admin and upgrader.
+ * Run it twice. The step that hands authority over cannot be undone (script/SplitAuthority.s.sol, the
+ * last phase: the deployer renounces UPGRADER_ROLE), and a holder nobody expected is cheap to remove
+ * before it and slow to remove after, because the upgrader role then answers only to the timelock. So:
+ *
+ *   1. After the Safe has removed the deployer's admin and before the last phase, with
+ *      BEFORE_RENOUNCE=1. The deployer is then expected to hold UPGRADER_ROLE beside the timelock, and
+ *      nothing else about the table changes. A second upgrader, a missing grant or an admin that is
+ *      not the Safe alone stops it. The script's own checks read the contracts it is shown; this reads
+ *      the history, which is the only way to see a holder it was not looking for.
+ *   2. After the last phase, without it. Now the timelock alone holds UPGRADER_ROLE.
+ *
  * The proxies and the deploy block come from deployments/5042.json: four, and a fifth
  * (epochFees) only if the artifact has one, since the epoch-fee module is left out of the
  * mainnet launch (docs/adr/0005). The holders come from the environment, so a wrong artifact
@@ -45,6 +55,8 @@ const need = name => {
   if (!v || !ethers.isAddress(v)) { fail(`${name} is not set to an address`); return null; }
   return v.toLowerCase();
 };
+// Before the deployer drops UPGRADER_ROLE it is still one of its holders, by design.
+const BEFORE_RENOUNCE = process.env.BEFORE_RENOUNCE === '1';
 const SAFE = need('SAFE');
 const TIMELOCK = need('TIMELOCK');
 const COMMITTEE = need('COMMITTEE');
@@ -54,7 +66,11 @@ for (const k of ['identity', 'reputation', 'staking', 'oracleBond']) {
   if (!artifact[k]) fail(`deployments/${CHAIN_ID}.json has no ${k}`);
 }
 if (!Number.isInteger(artifact.deployBlock)) fail(`deployments/${CHAIN_ID}.json has no deployBlock`);
+if (BEFORE_RENOUNCE && !ethers.isAddress(artifact.deployer)) fail(`deployments/${CHAIN_ID}.json has no deployer`);
 if (failed) process.exit(1);
+console.log(BEFORE_RENOUNCE
+  ? 'mode  before the renounce: the deployer is expected to still hold UPGRADER_ROLE, beside the timelock'
+  : 'mode  after the handover: the timelock alone is expected to hold UPGRADER_ROLE');
 // Checked when the artifact has it, said aloud when it does not, so a missing entry cannot pass
 // for a clean result.
 if (!artifact.epochFees) {
@@ -65,41 +81,42 @@ const ZERO_ADDR = ethers.ZeroAddress.toLowerCase();
 const ADMIN = ethers.ZeroHash;
 const R = n => ethers.id(n);
 const STAKING = artifact.staking.toLowerCase();
+const UPGRADERS = BEFORE_RENOUNCE ? [TIMELOCK, artifact.deployer.toLowerCase()] : [TIMELOCK];
 
 // role name -> the only addresses that may hold it
 const expected = {
   identity: {
     address: artifact.identity,
     roles: {
-      DEFAULT_ADMIN_ROLE: [SAFE], UPGRADER_ROLE: [TIMELOCK], STAKING_CORE_ROLE: [STAKING],
+      DEFAULT_ADMIN_ROLE: [SAFE], UPGRADER_ROLE: UPGRADERS, STAKING_CORE_ROLE: [STAKING],
       GUARDIAN_ROLE: [GUARDIAN],
     },
   },
   reputation: {
     address: artifact.reputation,
     roles: {
-      DEFAULT_ADMIN_ROLE: [SAFE], UPGRADER_ROLE: [TIMELOCK], STAKING_CORE_ROLE: [STAKING],
+      DEFAULT_ADMIN_ROLE: [SAFE], UPGRADER_ROLE: UPGRADERS, STAKING_CORE_ROLE: [STAKING],
       ORACLE_ROLE: [ORACLE], SLASHING_COMMITTEE_ROLE: [COMMITTEE], GUARDIAN_ROLE: [GUARDIAN],
     },
   },
   staking: {
     address: artifact.staking,
     roles: {
-      DEFAULT_ADMIN_ROLE: [SAFE], UPGRADER_ROLE: [TIMELOCK], SLASHING_COMMITTEE_ROLE: [COMMITTEE],
+      DEFAULT_ADMIN_ROLE: [SAFE], UPGRADER_ROLE: UPGRADERS, SLASHING_COMMITTEE_ROLE: [COMMITTEE],
       GUARDIAN_ROLE: [GUARDIAN],
     },
   },
   oracleBond: {
     address: artifact.oracleBond,
     roles: {
-      DEFAULT_ADMIN_ROLE: [SAFE], UPGRADER_ROLE: [TIMELOCK], SLASHER_ROLE: [COMMITTEE],
+      DEFAULT_ADMIN_ROLE: [SAFE], UPGRADER_ROLE: UPGRADERS, SLASHER_ROLE: [COMMITTEE],
       GUARDIAN_ROLE: [GUARDIAN],
     },
   },
   ...(artifact.epochFees && {
     epochFees: {
       address: artifact.epochFees,
-      roles: { DEFAULT_ADMIN_ROLE: [SAFE], UPGRADER_ROLE: [TIMELOCK], ORACLE_ROLE: [ORACLE] },
+      roles: { DEFAULT_ADMIN_ROLE: [SAFE], UPGRADER_ROLE: UPGRADERS, ORACLE_ROLE: [ORACLE] },
     },
   }),
   timelock: {

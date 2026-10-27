@@ -79,6 +79,13 @@ import {TimelockController} from "@openzeppelin/contracts/governance/TimelockCon
  *   PHASE=safe-calldata SAFE=0x... \
  *     forge script script/SplitAuthority.s.sol --rpc-url arc_testnet -vv
  *
+ *   # 4b. Before dropping anything, read the grant history. This script checks the contracts it is
+ *   #     shown, and only the history shows a holder nobody expected. The upgrader role answers only to
+ *   #     the timelock once the deployer is gone, so an extra holder is cheap to remove now and slow
+ *   #     to remove later. Go on only if it passes; run it again without BEFORE_RENOUNCE afterwards.
+ *   BEFORE_RENOUNCE=1 SAFE=0x... TIMELOCK=0x... COMMITTEE=0x... ORACLE=0x... GUARDIAN=0x... \
+ *     node scripts/check-role-holders.mjs
+ *
  *   # 5. Only now does the EOA drop anything. Refuses unless step 4 actually landed.
  *   PHASE=renounce SAFE=0x... TIMELOCK=0x... CONFIRM=yes-drop-the-deployer \
  *     forge script script/SplitAuthority.s.sol --rpc-url arc_testnet --broadcast -vv
@@ -106,10 +113,14 @@ contract SplitAuthority is Script {
 
     uint256 internal constant DEFAULT_MIN_DELAY = 48 hours;
 
-    /// Every contract in the artifact that gates anything on these two roles. A name
-    /// absent from the artifact is skipped, so this picks up epochFees once it deploys
-    /// rather than silently leaving the deployer as its admin.
+    /// Every contract in the artifact that gates anything on these two roles. The first four are the
+    /// launch registries and are required in every phase: one that is missing from the artifact, holds
+    /// the zero address or has no code stops the script. Skipped, that proxy would keep the deployer's
+    /// admin and upgrade rights through every phase, and the last would still print "done". epochFees
+    /// is optional because the mainnet launch leaves it out (docs/adr/0005); it is picked up if the
+    /// artifact has it, rather than silently leaving the deployer as its admin.
     string[5] internal NAMES = ["identity", "reputation", "staking", "oracleBond", "epochFees"];
+    uint256 internal constant REQUIRED_TARGETS = 4;
 
     struct Target {
         string name;
@@ -121,7 +132,7 @@ contract SplitAuthority is Script {
     error TimelockNotSet();
     error SafeHasNoCode(address safe);
     error SafeIsTheDeployer(address safe);
-    error NoTargets(uint256 chainId);
+    error MissingTarget(string name);
     error NotConfirmed();
     error SafeMissingAdmin(string target, address safe);
     error TimelockMissingUpgrader(string target, address timelock);
@@ -359,7 +370,8 @@ contract SplitAuthority is Script {
      *          exists at that address on some other chain)
      *        - a Safe that is the deployer, which renounces nothing
      *        - a contract that never received the admin grant, because phase 3 ran
-     *          before it was deployed or its name was missing from the artifact
+     *          before it was deployed (a name missing from the artifact never gets this far:
+     *          the four launch registries are required, and `_targets` stops at one that is not there)
      *        - a timelock that never received upgrader
      *        - a deployer that still holds DEFAULT_ADMIN_ROLE, which is the evidence that
      *          the Safe has not in fact executed phase 4
@@ -431,12 +443,13 @@ contract SplitAuthority is Script {
         uint256 n;
         for (uint256 i = 0; i < NAMES.length; i++) {
             string memory key = string.concat(".", NAMES[i]);
-            if (!vm.keyExistsJson(json, key)) continue;
-            address addr = vm.parseJsonAddress(json, key);
-            if (addr == address(0) || addr.code.length == 0) continue;
+            address addr = vm.keyExistsJson(json, key) ? vm.parseJsonAddress(json, key) : address(0);
+            if (addr == address(0) || addr.code.length == 0) {
+                if (i < REQUIRED_TARGETS) revert MissingTarget(NAMES[i]);
+                continue;
+            }
             buf[n++] = Target(NAMES[i], addr);
         }
-        if (n == 0) revert NoTargets(block.chainid);
 
         Target[] memory out = new Target[](n);
         for (uint256 i = 0; i < n; i++) out[i] = buf[i];

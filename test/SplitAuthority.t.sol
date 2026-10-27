@@ -254,6 +254,9 @@ contract SplitAuthorityTest is Test {
 
         // And what it refuses to do on a registry that would leave the Safe a way round the timelock.
         _renounceRefusesRegistriesThatWouldLeaveAWayRound();
+
+        // And that it will not run at all on an artifact that is missing one of the four launch registries.
+        _theHandoverNeedsAllFourRegistries();
     }
 
     MockSafe internal mSafe;
@@ -323,6 +326,82 @@ contract SplitAuthorityTest is Test {
         }
         _clearEnv();
         vm.removeFile(_artifactPath());
+    }
+
+    /// The artifact with one of the four launch registries damaged: `how` 0 leaves it out, 1 sets it to the zero
+    /// address, 2 points it at an address with no code.
+    function _writeArtifactDamaged(uint256 which, uint256 how) internal {
+        string memory json = string.concat(
+            '{"chainId":', vm.toString(block.chainid),
+            ',"deployer":"', vm.toString(deployer), '"'
+        );
+        for (uint256 i = 0; i < targets.length; i++) {
+            if (i == which && how == 0) continue;
+            address a = targets[i];
+            if (i == which) a = how == 1 ? address(0) : makeAddr("no code here");
+            json = string.concat(json, ',"', names[i], '":"', vm.toString(a), '"');
+        }
+        vm.createDir("deployments", true);
+        vm.writeFile(_artifactPath(), string.concat(json, "}"));
+    }
+
+    /// The artifact is the script's whole idea of what exists, and it used to skip a registry that was missing from
+    /// it, held the zero address or had no code. Skipped, that proxy kept the deployer's admin and upgrade rights
+    /// in every phase, and the last one printed "done". The renounce phase checks the contracts it was shown, so
+    /// it could not notice one it was never shown. The four launch registries are now required in every phase;
+    /// epochFees, which the mainnet launch leaves out, stays optional.
+    /// Run from the migration test, because the environment is process-wide.
+    function _theHandoverNeedsAllFourRegistries() internal {
+        vm.chainId(7777005);
+        _deployRegistries();
+        address[] memory owners = new address[](2);
+        owners[0] = makeAddr("owner1");
+        owners[1] = makeAddr("owner2");
+        MockSafe safe = new MockSafe(owners, 2);
+        address[] memory proposers = new address[](1);
+        proposers[0] = address(safe);
+        address[] memory executors = new address[](1);
+        TimelockController timelock = new TimelockController(48 hours, proposers, executors, address(0));
+        SplitAuthority s = new SplitAuthority();
+
+        string[4] memory phases = ["plan", "grant", "safe-calldata", "renounce"];
+        for (uint256 which = 0; which < 4; which++) {
+            for (uint256 how = 0; how < 3; how++) {
+                _writeArtifactDamaged(which, how);
+                for (uint256 p = 0; p < phases.length; p++) {
+                    _env(phases[p], address(safe), address(timelock), "yes-drop-the-deployer");
+                    vm.expectRevert(abi.encodeWithSelector(SplitAuthority.MissingTarget.selector, names[which]));
+                    s.run();
+                }
+            }
+        }
+        for (uint256 i = 0; i < targets.length; i++) {
+            assertFalse(IAccessControl(targets[i]).hasRole(ADMIN_ROLE, address(safe)), "none of those runs granted anything");
+        }
+
+        // An artifact with the four and no epochFees is a whole one, and epochFees is left alone.
+        _writeArtifactWithoutEpochFees();
+        _env("grant", address(safe), address(timelock), "");
+        s.run();
+        for (uint256 i = 0; i < 4; i++) {
+            assertTrue(IAccessControl(targets[i]).hasRole(ADMIN_ROLE, address(safe)), names[i]);
+        }
+        assertFalse(IAccessControl(targets[4]).hasRole(ADMIN_ROLE, address(safe)), "epochFees was not in the artifact");
+
+        _clearEnv();
+        vm.removeFile(_artifactPath());
+    }
+
+    function _writeArtifactWithoutEpochFees() internal {
+        string memory json = string.concat(
+            '{"chainId":', vm.toString(block.chainid),
+            ',"deployer":"', vm.toString(deployer), '"'
+        );
+        for (uint256 i = 0; i < 4; i++) {
+            json = string.concat(json, ',"', names[i], '":"', vm.toString(targets[i]), '"');
+        }
+        vm.createDir("deployments", true);
+        vm.writeFile(_artifactPath(), string.concat(json, "}"));
     }
 
     function _afterTheHandover(MockSafe safe, TimelockController timelock) internal {
