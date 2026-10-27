@@ -74,16 +74,18 @@ what is not yet true.
 > `node scripts/record-implementations.mjs --check` fails if the file and the chain
 > disagree.
 >
-> **The testnet runs older code than this repository.** The implementations behind these
-> proxies were last changed on 21 September 2026, and `--check` confirms the file still
-> matches the chain. The contract changes merged since are on `main` and described in this
-> README, but they are not deployed on the testnet: timelocked role grants, the guardian
-> pause, admin-ruled disputes with a veto and a lapse, launch floors and ceilings, operator
-> signers, the stake view and operator registry wiring behind the timelock, the reporter
-> check at slash execution, a withdrawal's claim time fixed when it is queued, and the
-> refusal of evidence the admin rejected.
+> **The testnet runs this repository's contracts, with older role administrators.** The four
+> proxies were upgraded in place to `main` with `script/Upgrade.s.sol`, and `--check` confirms
+> the file matches the chain. The guardian pause, admin-ruled disputes with a veto and a lapse,
+> launch floors and ceilings, operator signers, the reporter check at slash execution, a
+> withdrawal's claim time fixed when it is queued, and the refusal of evidence the admin rejected
+> are live. An upgrade does not rewrite role administrators, so the proxies keep what the
+> 21 September code set up: the admin still grants the slasher, committee and staking-core roles
+> and administers `UPGRADER_ROLE`, and the timelocked role grants described below do not apply to
+> them. A withdrawal queued before the upgrade follows the live unbonding period until it is
+> claimed; one queued after it is fixed when queued.
 > `SigvaraReader` has not been deployed anywhere. `test/SlashDrillFork.t.sol` rehearses the
-> deployed behaviour, so it will need updating when the testnet proxies are upgraded.
+> deployed behaviour.
 
 
 Chain ID `5042002`, RPC `https://rpc.testnet.arc.io`, USDC as native gas. Canonical
@@ -668,16 +670,16 @@ CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on every push t
 
 ## Access Control Summary
 
-The permissions column describes the contracts on `main`. The Arc testnet proxies still run their
-21 September implementations, in which the admin also grants the slasher, committee and staking-core
-roles, the committee rules on disputes, and there is no guardian, veto, lapse or reporter check (see
-[Deployed contracts](#deployed-contracts-arc-testnet)).
+The permissions column describes the contracts on `main`. The Arc testnet proxies run the same
+implementations, but they were initialised by the 21 September code and an upgrade does not rewrite
+role administrators, so on them the admin also grants the slasher, committee and staking-core roles
+and administers `UPGRADER_ROLE` (see [Deployed contracts](#deployed-contracts-arc-testnet)).
 
 | Role | Holder (Testnet) | Mainnet target | Permissions |
 |---|---|---|---|
 | `DEFAULT_ADMIN_ROLE` | Deployer EOA `0x18CBcE50…` | Admin Safe | Grant `ORACLE_ROLE` and `GUARDIAN_ROLE`, revoke any role except `UPGRADER_ROLE`, set parameters (the periods, the score window and the maturity rate each have a floor and a ceiling; the minimum stake and the bond amount only have to be above zero), rule on a disputed slash, veto a pending or disputed slash. It cannot wire the stake view, the oracle bond or the slash beneficiary, and cannot grant the slasher, committee or staking-core roles: those need `UPGRADER_ROLE` |
 | `UPGRADER_ROLE` | Deployer EOA `0x18CBcE50…` | Governance timelock (48 hours) | Authorize UUPS upgrades, wire the stake view, the oracle bond and the slash beneficiary (`setStakeView`, `setOperatorBond`, `setSlashBeneficiary`), and grant the slasher, slashing committee and staking core roles. On a registry initialised by the current code it is administered by itself, so the admin cannot grant it |
-| `GUARDIAN_ROLE` | Does not exist on the current testnet deployment, which predates it | A separate, lighter key | Pause new inflows (registrations, stake deposits, score proposals, bond deposits) for three days at a time. Never exits, slash rulings or finalization, and the admin can revoke it at once |
+| `GUARDIAN_ROLE` | A guardian key chosen at the upgrade, granted by the deployer on all four proxies | A separate, lighter key | Pause new inflows (registrations, stake deposits, score proposals, bond deposits) for three days at a time. Never exits, slash rulings or finalization, and the admin can revoke it at once |
 | `STAKING_CORE_ROLE` | `SigvaraStaking` `0xA69d62B2…` | `SigvaraStaking` | Suspend / slash agents, zero reputation, clear slash suspensions |
 | `ORACLE_ROLE` | Primary `0x6352b8FF…` + checker `0x989aabd6…`, both bonded | Multiple independently operated bonded operators, each signing with a key its cold bond owner has named | Propose reputation scores (and charge epoch fees on `SigvaraEpochFees`, which is not deployed at launch) |
 | `SLASHING_COMMITTEE_ROLE` | EOA `0x045d6c1D…` | 3-of-5 multisig | Initiate and cancel slash proposals, reject bad scores. It does not rule on disputes |

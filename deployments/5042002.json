@@ -8,36 +8,58 @@
   "oracleBond": "0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171",
   "implementations": {
     "identity": {
-      "current": "0xb2616F4a449726b195951B6a576Aba6847e174ef",
-      "history": [],
-      "recordedAt": "2026-09-21T02:56:38.421Z"
+      "current": "0xfB54a76f5347d8898E950C1FC3c28e22B0F224af",
+      "history": [
+        {
+          "implementation": "0xb2616F4a449726b195951B6a576Aba6847e174ef",
+          "replacedAt": "2026-10-27T01:19:18.000Z",
+          "note": "replaced by the in-place upgrade to fdce1a7: upgradeToAndCall in block 69256838, tx 0xa0708524a15da6d0eddc28adeb8affd2adb87a6145a8712a71ce30c316f10aa1"
+        }
+      ],
+      "recordedAt": "2026-10-27T01:36:51.565Z"
     },
     "reputation": {
-      "current": "0x87492399E34e5247740d0280C329e7553403404c",
-      "history": [],
-      "recordedAt": "2026-09-21T02:56:38.421Z"
+      "current": "0xd23fffA937CFE37BbC6eE1e14C3c844c78BFE3CA",
+      "history": [
+        {
+          "implementation": "0x87492399E34e5247740d0280C329e7553403404c",
+          "replacedAt": "2026-10-27T01:19:27.000Z",
+          "note": "replaced by the in-place upgrade to fdce1a7: upgradeToAndCall in block 69256858, tx 0x853c5325bd9bc1a9e6a75370dd5bf53739a2c1dc3773a0954535e0d4dc7cde3b"
+        }
+      ],
+      "recordedAt": "2026-10-27T01:36:51.565Z"
     },
     "staking": {
-      "current": "0x169f1ADA8a3568E229d24E74515b4eF889B8a6BD",
+      "current": "0x147B687ab3299B454dB8E413D62e251CF89588D5",
       "history": [
         {
           "implementation": "0x3501f936f629dbC2E97AE0717C501456Ca8215E0",
           "replacedAt": "2026-09-21",
           "note": "reconstructed from the upgrade session on 2026-09-21, not recorded at the time"
+        },
+        {
+          "implementation": "0x169f1ADA8a3568E229d24E74515b4eF889B8a6BD",
+          "replacedAt": "2026-10-27T01:19:37.000Z",
+          "note": "replaced by the in-place upgrade to fdce1a7: upgradeToAndCall in block 69256869, tx 0x6ed2784c0c4ff49a467f65d7568d044b8e0bc0b0293abc785209a26d48cc6e7e"
         }
       ],
-      "recordedAt": "2026-09-21T02:56:38.421Z"
+      "recordedAt": "2026-10-27T01:36:51.565Z"
     },
     "oracleBond": {
-      "current": "0x9ED31f024E0C3E7dF853c411744bABB53f5AaFFA",
+      "current": "0xA33FC1b6EE82309BbF77FDE4113A223742C53931",
       "history": [
         {
           "implementation": "0xf8464144726850d222a06b85a230c8030673b933",
           "replacedAt": "2026-09-21",
           "note": "reconstructed from the upgrade session on 2026-09-21, not recorded at the time"
+        },
+        {
+          "implementation": "0x9ED31f024E0C3E7dF853c411744bABB53f5AaFFA",
+          "replacedAt": "2026-10-27T01:19:47.000Z",
+          "note": "replaced by the in-place upgrade to fdce1a7: upgradeToAndCall in block 69256882, tx 0xbf27ddd577bc182cd821006d9eaf60dc48cce3c10de9b3afaf74af94d8b244b8"
         }
       ],
-      "recordedAt": "2026-09-21T02:56:38.421Z"
+      "recordedAt": "2026-10-27T01:36:51.565Z"
     }
   }
 }

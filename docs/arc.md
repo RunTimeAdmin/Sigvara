@@ -358,9 +358,9 @@ whatever that key proposed from going live unreviewed. The cost is that such a p
 is stranded until a successor replaces it: the oracle does that on its next epoch after
 the window has passed, and a checking operator does it at once with `proposeIfEmpty`.
 
-> The finalization paragraph above and everything in this section describe `main`. The Arc testnet
-> proxies still run the September code, which has no signer registry (`setSigner`), no proposer check
-> when a score is finalized, and a `proposeIfEmpty` that reverts for any pending proposal.
+> The finalization paragraph above and everything in this section describe `main`, which the Arc
+> testnet proxies run. A proposal made before the upgrade carries no recorded proposer, and is
+> treated as live, which is how it behaved when it was made.
 
 ### Keeping the bond off the signing key
 

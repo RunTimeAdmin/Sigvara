@@ -230,9 +230,9 @@ cast send <staking> "disputeSlash(bytes32)" <TARGET_DID_HASH> \
   --rpc-url arc_testnet --private-key <TARGET_OPERATOR_KEY>
 ```
 
-> The rest of this section describes `main`. The Arc testnet proxies still run the September
-> code, where the committee rules on a dispute with `resolveDispute` and the veto, the lapse,
-> the re-file cooldown, the reporter check and the evidence rule below do not exist yet.
+> The Arc testnet proxies run `main`, so everything below applies to them. The first drill ran on
+> the 21 September code, where the committee ruled on a dispute with `resolveDispute` and the
+> veto, the lapse, the re-file cooldown, the reporter check and the evidence rule did not exist.
 > `test/SlashDrillFork.t.sol` rehearses the deployed behaviour.
 
 Disputing **freezes** the bond rather than releasing it, and does not un-suspend the agent.

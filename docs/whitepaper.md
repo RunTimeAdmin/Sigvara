@@ -591,13 +591,15 @@ path 404s before reaching the service.
 charged. The app disables every fee control rather than pointing at an address with no
 code.
 
-**Deployed contracts versus `main`.** The Arc testnet proxies still run the
-implementations recorded in `deployments/5042002.json`, last changed on 21 September 2026.
-The contract changes made after that, among them timelocked role grants, the guardian
-pause, admin-ruled disputes with a veto and a lapse, launch floors and ceilings, operator
-signers, the reporter check at slash execution, a withdrawal's claim time fixed when it
-is queued and the refusal of evidence the admin rejected, are on `main` and described in
-this document, but they are not deployed on the testnet.
+**Deployed contracts versus `main`.** The Arc testnet proxies run the implementations recorded in
+`deployments/5042002.json`, which are the contracts on `main`: the four proxies were upgraded in place
+with `script/Upgrade.s.sol`. The guardian pause, admin-ruled disputes with a veto and a lapse, launch
+floors and ceilings, operator signers, the reporter check at slash execution, a withdrawal's claim time
+fixed when it is queued and the refusal of evidence the admin rejected are live on the testnet. One
+thing the upgrade could not change: role administrators are written when a proxy is initialised, so
+the testnet keeps the older arrangement (the admin grants the slasher, committee and staking-core
+roles, and administers `UPGRADER_ROLE`), and the timelocked role grants described in this document
+apply to a fresh deployment, not to the testnet.
 `node scripts/record-implementations.mjs --check` shows what is live.
 
 **Test coverage**, all passing as of 23 October 2026: 693 contract tests across 30 Foundry test files

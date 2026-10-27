@@ -663,7 +663,7 @@ the primary came back first, and it is counted as
 proposal whose proposer has lost its authority (operator removed, signer cleared or
 `ORACLE_ROLE` revoked) does not hold the slot: it can never be finalized, so
 `proposeIfEmpty` replaces it, which is how a checker takes over from a removed primary. That clause is on
-`main`: the September contract code on the Arc testnet reverts for any pending proposal.
+`main`, which the Arc testnet proxies run since their upgrade; the September code reverted for any pending proposal.
 The primary keeps `proposeReputation`, because replacing its own stale proposal with a fresher
 one is the intended behaviour.
 
