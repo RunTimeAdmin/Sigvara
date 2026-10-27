@@ -3,20 +3,26 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AI Framework Integration — Sigvara</title>
+  <title>Agent identity for LangChain, AutoGen and CrewAI | Sigvara</title>
   <meta name="description" content="Integrate Sigvara identity with LangChain, AutoGen, CrewAI, and other AI agent frameworks." />
   <link rel="canonical" href="https://sigvara.xyz/docs/ai-frameworks" />
-  <meta property="og:title" content="AI Framework Integration — Sigvara" />
+  <meta property="og:title" content="Agent identity for LangChain, AutoGen and CrewAI | Sigvara" />
   <meta property="og:description" content="Integrate Sigvara identity with LangChain, AutoGen, CrewAI, and other AI agent frameworks." />
   <meta property="og:url" content="https://sigvara.xyz/docs/ai-frameworks" />
   <meta property="og:image" content="https://sigvara.xyz/assets/sigvara-card.png" />
   <meta name="twitter:card" content="summary" />
   <meta name="twitter:image" content="https://sigvara.xyz/assets/sigvara-card.png" />
+  <meta property="og:site_name" content="Sigvara">
+  <meta property="og:image:width" content="512">
+  <meta property="og:image:height" content="512">
+  <meta property="og:image:alt" content="The Sigvara mark: a purple and cyan letter S with a glowing node at each end, on a dark rounded square">
+  <meta name="twitter:image:alt" content="The Sigvara mark: a purple and cyan letter S with a glowing node at each end, on a dark rounded square">
+  <meta name="twitter:site" content="@SigvaraProtocol">
   <meta property="og:type" content="website" />
   <link rel="icon" type="image/svg+xml" href="../assets/sigvara-avatar.svg" />
   <link rel="icon" type="image/png" sizes="512x512" href="../assets/sigvara-card.png" />
   <link rel="apple-touch-icon" href="../assets/sigvara-card.png" />
-  <link rel="stylesheet" href="../assets/style.css?v=e5a6705" />
+  <link rel="stylesheet" href="../assets/style.css?v=4d3c26f" />
   <link rel="stylesheet" href="../assets/ai-frameworks.css?v=e5a6705" />
 
 </head>
@@ -71,7 +77,7 @@
 
       <main class="docs-content">
         <div class="section-label">Integration</div>
-        <h2>AI Framework Integration</h2>
+        <h1>AI Framework Integration</h1>
         <p>The pattern is the same in every framework: generate a Sigvara DID at agent startup, then include it in every CounterAudit ingest call. The DID travels with the agent's actions, creating a cryptographically-linked audit trail tied to an on-chain identity.</p>
 
         <div class="callout"><strong>Prerequisite:</strong> Your agent must be registered on Sigvara. Follow the <a href="quickstart">Quickstart</a> first, then set <code>AGENT_DID</code> in your environment.</div>

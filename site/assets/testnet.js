@@ -216,9 +216,9 @@
       setStep(5, "locked", "register first");
     } else if (hasPending) {
       var proposedAt = Number(BigInt(word(pending, 7)));
-      setStep(5, "active", warn("a score is proposed") + " and inside its challenge window, proposed "
+      setStep(5, "active", warn("a score is proposed") + " and waiting to be finalized, proposed "
         + new Date(proposedAt * 1000).toISOString().replace("T", " ").slice(0, 16)
-        + " UTC. Anyone may finalize it once the window closes.", "In window");
+        + " UTC. Anyone may finalize it once its challenge window has closed.", "Pending");
     } else if (score > 0) {
       setStep(5, "done", ok(score + " / 100") + " finalized on chain");
     } else {

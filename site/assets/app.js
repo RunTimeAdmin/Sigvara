@@ -480,7 +480,7 @@ function renderStake({ ident, stakeRaw, minStakeRaw, pendWRaw, slashRaw, unbondR
   else if (!account)          { note = "Connect a wallet to bond."; why = "no wallet"; }
   else if (!isOperator)       { note = `Only the operator wallet <code>${esc(operator.slice(0, 10))}…</code> can bond or withdraw for this agent.`; why = "not operator"; }
   else if (frozen)            { note = `A slash proposal is <b>${esc(SLASH_STATES[slashState])}</b>. The bond is frozen until it resolves &mdash; withdrawing is blocked, topping up is not.`; }
-  else if (statusNum === 1 && staked >= minStake) { note = "Suspended by its operator. Reactivate it to make the agent scoreable again."; }
+  else if (statusNum === 1 && staked >= minStake) { note = "Suspended by its operator. It is still scored, but anyone who checks status will refuse it until you reactivate it."; }
   else if (staked < minStake) { note = `Bond at least ${formatUnits(minStake - staked)} more ${esc(tokenSymbol)} to make this agent scoreable.`; }
   else                        { note = "Bonded and scoreable."; }
   $("stakeNote").innerHTML = frozen ? `<span class="pill-err">${note}</span>` : note;

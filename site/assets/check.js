@@ -24,7 +24,7 @@
     { min: 75, color: '#15803d', label: '75 – 100', reading: 'Long track record of settled payments. Little left to prove.' },
     { min: 50, color: '#a16207', label: '50 – 74', reading: 'Real history behind it. Worth checking the evidence for what you care about.' },
     { min: 25, color: '#c2410c', label: '25 – 49', reading: 'Some activity, not much of it. Treat as unproven rather than bad.' },
-    { min: 0, color: '#b91c1c', label: '0 – 24', reading: 'Almost nothing settled through this agent. Nothing has been staked on its behaviour.' }
+    { min: 0, color: '#b91c1c', label: '0 – 24', reading: 'Almost nothing has settled through this agent yet. It posted a bond, but there is little track record behind it.' }
   ];
 
   var $ = function (id) { return document.getElementById(id); };
@@ -93,7 +93,7 @@
     /* The badge carries the verdict; naming it again in prose would be a second source
      * of truth that can disagree with the picture beside it. This says where it came
      * from instead. */
-    $('reading').textContent = 'Read from the finalized on-chain score, not from this oracle’s pending proposal.';
+    $('reading').textContent = 'Read from the spendable on-chain score, not from this oracle’s pending proposal.';
     show(badgeFallback, false);
   });
 

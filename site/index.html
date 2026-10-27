@@ -3,21 +3,63 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Sigvara — Trust infrastructure for autonomous agents</title>
-  <meta name="description" content="Sigvara makes autonomous agents legible: payment-backed attestations, computed reputation, and stake-backed accountability.">
+  <title>Sigvara | ERC-8004 reputation and slashing for AI agents</title>
+  <meta name="description" content="Sigvara computes a trust score for autonomous AI agents and puts a slashable bond behind it, on top of ERC-8004. Open source, live on Arc testnet.">
   <link rel="canonical" href="https://sigvara.xyz/">
   <meta name="theme-color" content="#090b16">
-  <meta property="og:title" content="Sigvara — Trust infrastructure for autonomous agents">
-  <meta property="og:description" content="Payment-backed attestations, computed reputation, and stake-backed accountability for autonomous agents.">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Sigvara">
+  <meta property="og:title" content="Sigvara | ERC-8004 reputation and slashing for AI agents">
+  <meta property="og:description" content="A computed trust score for autonomous AI agents, with a slashable bond behind it, on top of ERC-8004. Open source, live on Arc testnet.">
   <meta property="og:url" content="https://sigvara.xyz/">
   <meta property="og:image" content="https://sigvara.xyz/assets/sigvara-card.png">
+  <meta property="og:image:width" content="512">
+  <meta property="og:image:height" content="512">
+  <meta property="og:image:alt" content="The Sigvara mark: a purple and cyan letter S with a glowing node at each end, on a dark rounded square">
   <meta name="twitter:card" content="summary">
+  <meta name="twitter:site" content="@SigvaraProtocol">
+  <meta name="twitter:image:alt" content="The Sigvara mark: a purple and cyan letter S with a glowing node at each end, on a dark rounded square">
   <meta name="twitter:image" content="https://sigvara.xyz/assets/sigvara-card.png">
   <link rel="icon" type="image/svg+xml" href="assets/sigvara-avatar.svg">
   <link rel="icon" type="image/png" sizes="512x512" href="assets/sigvara-card.png">
   <link rel="apple-touch-icon" href="assets/sigvara-card.png">
   <link rel="stylesheet" href="assets/landing.css?v=1a7b2ee">
-
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "Organization",
+        "@id": "https://sigvara.xyz/#organization",
+        "name": "Sigvara",
+        "url": "https://sigvara.xyz/",
+        "logo": "https://sigvara.xyz/assets/sigvara-card.png",
+        "description": "An open protocol that computes reputation scores for autonomous AI agents and puts slashable bonds behind them, on top of ERC-8004.",
+        "sameAs": [
+          "https://github.com/RunTimeAdmin/Sigvara",
+          "https://x.com/SigvaraProtocol",
+          "https://www.npmjs.com/package/@sigvara/protocol-sdk"
+        ]
+      },
+      {
+        "@type": "SoftwareSourceCode",
+        "name": "Sigvara protocol and SDK",
+        "description": "Contracts, oracle and TypeScript SDK for computed reputation and staked slashing on ERC-8004, live on Arc testnet.",
+        "codeRepository": "https://github.com/RunTimeAdmin/Sigvara",
+        "programmingLanguage": ["Solidity", "TypeScript"],
+        "license": "https://spdx.org/licenses/MIT.html",
+        "publisher": { "@id": "https://sigvara.xyz/#organization" }
+      },
+      {
+        "@type": "WebSite",
+        "@id": "https://sigvara.xyz/#website",
+        "name": "Sigvara",
+        "url": "https://sigvara.xyz/",
+        "publisher": { "@id": "https://sigvara.xyz/#organization" }
+      }
+    ]
+  }
+  </script>
 </head>
 <body>
   <div class="noise" aria-hidden="true"></div>
