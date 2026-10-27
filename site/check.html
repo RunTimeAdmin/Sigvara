@@ -3,20 +3,26 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Check an agent — Sigvara</title>
+  <title>Check an AI agent's reputation score | Sigvara</title>
   <meta name="description" content="Paste an agent's address and see its Sigvara score. Nothing to install, no wallet, no signup. Copy a badge to show the score anywhere.">
   <link rel="canonical" href="https://sigvara.xyz/check">
-  <meta property="og:title" content="Check an agent — Sigvara">
+  <meta property="og:title" content="Check an AI agent's reputation score | Sigvara">
   <meta property="og:description" content="Paste an agent's address and see its Sigvara score. Nothing to install, no wallet, no signup.">
   <meta property="og:url" content="https://sigvara.xyz/check">
   <meta property="og:image" content="https://sigvara.xyz/assets/sigvara-card.png">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:image" content="https://sigvara.xyz/assets/sigvara-card.png">
+  <meta property="og:site_name" content="Sigvara">
+  <meta property="og:image:width" content="512">
+  <meta property="og:image:height" content="512">
+  <meta property="og:image:alt" content="The Sigvara mark: a purple and cyan letter S with a glowing node at each end, on a dark rounded square">
+  <meta name="twitter:image:alt" content="The Sigvara mark: a purple and cyan letter S with a glowing node at each end, on a dark rounded square">
+  <meta name="twitter:site" content="@SigvaraProtocol">
   <meta property="og:type" content="website">
   <link rel="icon" type="image/svg+xml" href="assets/sigvara-avatar.svg">
   <link rel="icon" type="image/png" sizes="512x512" href="assets/sigvara-card.png">
   <link rel="apple-touch-icon" href="assets/sigvara-card.png">
-  <link rel="stylesheet" href="assets/demo-page.css?v=testnet1">
+  <link rel="stylesheet" href="assets/demo-page.css?v=5112d4e">
   <link rel="stylesheet" href="assets/check.css?v=1">
 </head>
 <body>
@@ -57,7 +63,7 @@
                  autocomplete="off" placeholder="0x… agent address">
           <button class="button button-primary" id="checkBtn" type="submit">Check</button>
         </form>
-        <p class="note-fine" id="formNote">Arc testnet, chain 5042002. Reads the finalized on-chain score. Nothing is sent anywhere but the score service.</p>
+        <p class="note-fine" id="formNote">Arc testnet, chain 5042002. Reads the spendable on-chain score. Nothing is sent anywhere but the score service.</p>
       </div>
     </section>
 
@@ -111,7 +117,7 @@
           <span class="step-state">Reference</span>
         </div>
         <div class="step-body">
-          <p>A score is out of 100 and is the sum of six factors: fees paid through the agent, successful jobs, how long it has been active, outside standing from ERC-8004, community flags, and vouching from agents that already have a score.</p>
+          <p>A score is out of 100 and is the sum of six factors: fees paid through the agent, successful jobs, how long it has been active, outside standing from ERC-8004, community flags, and vouching from paying counterparties that hold ERC-8004 standing.</p>
           <ul class="legend" id="legend"></ul>
           <p class="note-fine">A badge never shows <b>0 / 100</b> for an agent nobody has scored yet. Unscored says so, because &ldquo;we have not looked&rdquo; and &ldquo;we looked and it earned nothing&rdquo; are not the same claim.</p>
         </div>
@@ -126,6 +132,6 @@
     </div>
   </footer>
 
-  <script src="assets/check.js?v=2e3cde3"></script>
+  <script src="assets/check.js?v=d6c22f6"></script>
 </body>
 </html>

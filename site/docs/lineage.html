@@ -3,15 +3,21 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Lineage — Sigvara</title>
-  <meta name="description" content="The Robinhood Chain testnet run Sigvara came from: contract addresses, a month of hourly oracle epochs, what was exercised, why the name changed, and what changed on the way to Arc." />
+  <title>Lineage: the testnet run before Arc | Sigvara</title>
+  <meta name="description" content="The Robinhood Chain testnet run Sigvara came from: addresses, a month of hourly oracle epochs, why the name changed from Countersig, and what changed for Arc." />
   <link rel="canonical" href="https://sigvara.xyz/docs/lineage" />
-  <meta property="og:title" content="Lineage — Sigvara" />
-  <meta property="og:description" content="The Robinhood Chain testnet run Sigvara came from: contract addresses, a month of hourly oracle epochs, what was exercised, why the name changed, and what changed on the way to Arc." />
+  <meta property="og:title" content="Lineage: the testnet run before Arc | Sigvara" />
+  <meta property="og:description" content="The Robinhood Chain testnet run Sigvara came from: addresses, a month of hourly oracle epochs, why the name changed from Countersig, and what changed for Arc." />
   <meta property="og:url" content="https://sigvara.xyz/docs/lineage" />
   <meta property="og:image" content="https://sigvara.xyz/assets/sigvara-card.png" />
   <meta name="twitter:card" content="summary" />
   <meta name="twitter:image" content="https://sigvara.xyz/assets/sigvara-card.png" />
+  <meta property="og:site_name" content="Sigvara">
+  <meta property="og:image:width" content="512">
+  <meta property="og:image:height" content="512">
+  <meta property="og:image:alt" content="The Sigvara mark: a purple and cyan letter S with a glowing node at each end, on a dark rounded square">
+  <meta name="twitter:image:alt" content="The Sigvara mark: a purple and cyan letter S with a glowing node at each end, on a dark rounded square">
+  <meta name="twitter:site" content="@SigvaraProtocol">
   <meta property="og:type" content="website" />
   <link rel="icon" type="image/svg+xml" href="../assets/sigvara-avatar.svg" />
   <link rel="icon" type="image/png" sizes="512x512" href="../assets/sigvara-card.png" />
@@ -93,7 +99,7 @@
 
         <h3>What ran</h3>
         <ul>
-          <li><strong>Reputation oracle, hourly epochs.</strong> The oracle wallet called <code>proposeReputation</code> and <code>finalizeReputation</code> every hour. The reputation contract shows 2,470 transactions between deployment and the last epoch on 14 August 2026, 18:19 UTC: roughly 1,200 scoring epochs over 30 days.</li>
+          <li><strong>Reputation oracle, hourly epochs.</strong> The oracle wallet called <code>proposeReputation</code> and <code>finalizeReputation</code> every hour. The reputation contract shows 2,470 transactions between deployment and the last epoch on 14 August 2026, 18:19 UTC: roughly 1,200 proposal and finalization pairs over 30 days of hourly epochs.</li>
           <li><strong>Registered agents.</strong> Three agents registered through the identity registry, at blocks <code>90339181</code>, <code>90758493</code> and <code>90820089</code>. Their scores were rewritten every epoch; the last finalized values on chain are 24 and 63 out of 100, consistent with the <a href="reputation">six-factor model's</a> ramp-up curve for agents a few weeks old with mixed activity.</li>
           <li><strong>Attestation and flag feeds.</strong> <a href="counteraudit">CounterAudit</a> consumed scores and fed work-outcome attestations back; a rug-risk scanner reported red-verdict deployers as community flags. These were the live inputs behind the success and community factors.</li>
           <li><strong>SDK.</strong> The protocol SDK was published to npm and used for the live integration tests against this deployment.</li>
@@ -110,7 +116,7 @@
           <li>Contracts renamed from Countersig to Sigvara; storage layouts unchanged.</li>
           <li>Score challenge window set to 6 hours for Arc (30 minutes on the testnet).</li>
           <li>Slash exit-dodge closed via the unbonding queue (22 July 2026), which is why <code>executeSlash</code> sweeps queued withdrawals.</li>
-          <li>ERC-8004 adopted as the canonical identity registry; the on-chain Ed25519 key and slash status remain Sigvara's extension.</li>
+          <li>ERC-8004 chosen as the long-term identity layer. The cutover has not happened: every agent on Arc is still registered in <code>SigvaraIdentity</code> and keyed by its <code>didHash</code>. The on-chain Ed25519 key and slash status remain Sigvara's extension.</li>
           <li>Bond token moved from the faucet <code>CSIG</code> to a deploy-time address, so the same scripts serve testnet and mainnet.</li>
         </ul>
 

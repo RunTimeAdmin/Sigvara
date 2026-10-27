@@ -3,15 +3,21 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Quickstart — Sigvara</title>
-  <meta name="description" content="Register your first AI agent on Sigvara in 10 minutes. Step-by-step guide for Arc testnet." />
+  <title>Quickstart: register an agent with the SDK | Sigvara</title>
+  <meta name="description" content="Install @sigvara/protocol-sdk, register an agent identity, post a bond and read its reputation score on Arc testnet in about ten minutes." />
   <link rel="canonical" href="https://sigvara.xyz/docs/quickstart" />
-  <meta property="og:title" content="Quickstart — Sigvara" />
-  <meta property="og:description" content="Register your first AI agent on Sigvara in 10 minutes. Step-by-step guide for Arc testnet." />
+  <meta property="og:title" content="Quickstart: register an agent with the SDK | Sigvara" />
+  <meta property="og:description" content="Install @sigvara/protocol-sdk, register an agent identity, post a bond and read its reputation score on Arc testnet in about ten minutes." />
   <meta property="og:url" content="https://sigvara.xyz/docs/quickstart" />
   <meta property="og:image" content="https://sigvara.xyz/assets/sigvara-card.png" />
   <meta name="twitter:card" content="summary" />
   <meta name="twitter:image" content="https://sigvara.xyz/assets/sigvara-card.png" />
+  <meta property="og:site_name" content="Sigvara">
+  <meta property="og:image:width" content="512">
+  <meta property="og:image:height" content="512">
+  <meta property="og:image:alt" content="The Sigvara mark: a purple and cyan letter S with a glowing node at each end, on a dark rounded square">
+  <meta name="twitter:image:alt" content="The Sigvara mark: a purple and cyan letter S with a glowing node at each end, on a dark rounded square">
+  <meta name="twitter:site" content="@SigvaraProtocol">
   <meta property="og:type" content="website" />
   <link rel="icon" type="image/svg+xml" href="../assets/sigvara-avatar.svg" />
   <link rel="icon" type="image/png" sizes="512x512" href="../assets/sigvara-card.png" />
@@ -183,13 +189,14 @@ console.log(total);             <span class="cm">// → 0 until the first epoch 
 <span class="kw">const</span> challenge = peerAgent.<span class="fn">issueChallenge</span>(myAgent.did);
 <span class="kw">const</span> signature = myAgent.<span class="fn">signChallenge</span>(challenge.payload);
 
-<span class="cm">// Peer verifies: signature + on-chain pubkey + reputation threshold.</span>
+<span class="cm">// Peer verifies: signature + on-chain pubkey + status + reputation threshold.</span>
 <span class="cm">// The last argument is the expected audience. Leaving it off still compiles,</span>
 <span class="cm">// and still accepts a proof that could have been relayed from elsewhere.</span>
 <span class="kw">const</span> valid   = <span class="kw">await</span> verifier.<span class="fn">verifySignature</span>(
   myAgent.did, challenge.payload, signature, <span class="num">300</span>, peerAgent.did,
 );
-<span class="kw">const</span> trusted = <span class="kw">await</span> verifier.<span class="fn">meetsThreshold</span>(myAgent.did, <span class="num">40</span>);</code></pre>
+<span class="cm">// meetsThreshold reads the score only, so a suspended agent still passes it: check status too.</span>
+<span class="kw">const</span> trusted = (<span class="kw">await</span> verifier.<span class="fn">isActive</span>(myAgent.did)) &amp;&amp; (<span class="kw">await</span> verifier.<span class="fn">meetsThreshold</span>(myAgent.did, <span class="num">40</span>));</code></pre>
             <p class="u-muted-13">Requires <code>@sigvara/protocol-sdk</code> 1.0.0-alpha.8 or newer. Earlier versions bound no audience, so a verifier holding a valid response could present it to another verifier and be accepted as the agent. <code>signChallenge</code> signs whatever it is handed, so check that the challenge names the verifier you mean to prove yourself to before you call it. A later release adds <code>signChallengeFor(payload, audience)</code>, which makes that check for you.</p>
           </div>
         </div>

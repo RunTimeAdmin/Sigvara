@@ -3,15 +3,21 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Reputation Model — Sigvara</title>
-  <meta name="description" content="How the Sigvara 6-factor reputation algorithm works, oracle epochs, and Sybil resistance." />
+  <title>How the agent reputation score works | Sigvara</title>
+  <meta name="description" content="The six factors behind Sigvara's 0 to 100 agent reputation score: payments, outcomes, tenure, ERC-8004 feedback, flags and counterparties." />
   <link rel="canonical" href="https://sigvara.xyz/docs/reputation" />
-  <meta property="og:title" content="Reputation Model — Sigvara" />
-  <meta property="og:description" content="How the Sigvara 6-factor reputation algorithm works, oracle epochs, and Sybil resistance." />
+  <meta property="og:title" content="How the agent reputation score works | Sigvara" />
+  <meta property="og:description" content="The six factors behind Sigvara's 0 to 100 agent reputation score: payments, outcomes, tenure, ERC-8004 feedback, flags and counterparties." />
   <meta property="og:url" content="https://sigvara.xyz/docs/reputation" />
   <meta property="og:image" content="https://sigvara.xyz/assets/sigvara-card.png" />
   <meta name="twitter:card" content="summary" />
   <meta name="twitter:image" content="https://sigvara.xyz/assets/sigvara-card.png" />
+  <meta property="og:site_name" content="Sigvara">
+  <meta property="og:image:width" content="512">
+  <meta property="og:image:height" content="512">
+  <meta property="og:image:alt" content="The Sigvara mark: a purple and cyan letter S with a glowing node at each end, on a dark rounded square">
+  <meta name="twitter:image:alt" content="The Sigvara mark: a purple and cyan letter S with a glowing node at each end, on a dark rounded square">
+  <meta name="twitter:site" content="@SigvaraProtocol">
   <meta property="og:type" content="website" />
   <link rel="icon" type="image/svg+xml" href="../assets/sigvara-avatar.svg" />
   <link rel="icon" type="image/png" sizes="512x512" href="../assets/sigvara-card.png" />
@@ -164,11 +170,18 @@
   <span class="kw">function</span> <span class="fn">getTotalScore</span>(<span class="kw">bytes32</span> didHash) <span class="kw">external view returns</span> (<span class="kw">uint8</span>);
 }
 
+<span class="kw">interface</span> <span class="fn">ISigvaraIdentity</span> {
+  <span class="kw">function</span> <span class="fn">isActive</span>(<span class="kw">bytes32</span> didHash) <span class="kw">external view returns</span> (<span class="kw">bool</span>);
+}
+
 <span class="kw">contract</span> <span class="fn">TrustedAgentGate</span> {
+  <span class="fn">ISigvaraIdentity</span> <span class="kw">public</span> identity;
   <span class="fn">ISigvaraReputation</span> <span class="kw">public</span> reputation;
   <span class="kw">uint8 public</span> minScore = <span class="num">40</span>;
 
   <span class="kw">modifier</span> <span class="fn">onlyTrustedAgent</span>(<span class="kw">bytes32</span> agentDidHash) {
+    <span class="cm">// meetsThreshold reads the score only, and a suspended agent keeps its score</span>
+    <span class="kw">require</span>(identity.<span class="fn">isActive</span>(agentDidHash), <span class="str">"Agent not active"</span>);
     <span class="kw">require</span>(reputation.<span class="fn">meetsThreshold</span>(agentDidHash, minScore), <span class="str">"Insufficient reputation"</span>);
     _;
   }
@@ -183,8 +196,8 @@ console.log(rep.total);          <span class="cm">// 0–100</span>
 console.log(rep.feeScore);       <span class="cm">// 0–20</span>
 console.log(rep.ageScore);       <span class="cm">// 0–30 (tenure)</span>
 
-<span class="cm">// Simple threshold check (no gas)</span>
-<span class="kw">const</span> trusted = <span class="kw">await</span> verifier.<span class="fn">meetsThreshold</span>(agentDid, <span class="num">40</span>);</code></pre>
+<span class="cm">// Status and threshold check (no gas). meetsThreshold reads the score only, so check status too.</span>
+<span class="kw">const</span> trusted = (<span class="kw">await</span> verifier.<span class="fn">isActive</span>(agentDid)) &amp;&amp; (<span class="kw">await</span> verifier.<span class="fn">meetsThreshold</span>(agentDid, <span class="num">40</span>));</code></pre>
 
         <h3>Acting on a Score</h3>
         <p>Reading a score is the easy half. <code>SigvaraGate</code>, in the SDK from
@@ -228,7 +241,7 @@ console.log(rep.ageScore);       <span class="cm">// 0–30 (tenure)</span>
         </table>
 
         <h3>Slashing and Score Reset</h3>
-        <p>When an agent is slashed via <code>SigvaraStaking.executeSlash()</code>, the staking contract calls <code>zeroReputation(didHash)</code> on the reputation contract. All six factor scores are set to zero. The agent's identity status is permanently set to <code>Slashed</code> — it cannot be reinstated or re-registered at the same address. Historical audit records sealed before the slash retain the reputation score at the time of the action; the slash does not rewrite history.</p>
+        <p>When a slash settles, through <code>SigvaraStaking.executeSlash()</code> after an undisputed challenge period or through the admin upholding a disputed one with <code>resolveDispute</code>, the staking contract calls <code>zeroReputation(didHash)</code> on the reputation contract. All six factor scores are set to zero. The agent's identity status is permanently set to <code>Slashed</code> — it cannot be reinstated or re-registered at the same address. Historical audit records sealed before the slash retain the reputation score at the time of the action; the slash does not rewrite history.</p>
       </main>
 
     </div>
