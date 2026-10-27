@@ -52,8 +52,11 @@ This ADR records what was decided about each, and what was left as a stated trus
    either: `resolveDispute(didHash, true)` reverts until the challenge deadline fixed when the slash was
    filed has passed, which is the moment `executeSlash` opens for an undisputed slash, while dropping is
    open at any time. A dispute filed on the first day can be upheld from day 7 and expires on day 14. If
-   the admin never rules, anyone can expire the dispute after 14 days and the agent keeps its stake. The
-   committee still files and cancels.
+   the admin never rules, anyone can expire the dispute after 14 days and the agent keeps its stake. A
+   ruling to uphold is refused from that moment (`DisputeResolutionExpired`), so the two never overlap:
+   before day 14 only the admin can end a dispute in the committee's favour, and after it only the expiry
+   remains. With a challenge period of 14 days or more, a dispute filed early expires before an uphold
+   could open; the launch period is 7 days. The committee still files and cancels.
 3. **The committee cannot file again at once.** Every drop (cancelled, vetoed, expired after a
    dispute, resolved in the agent's favour) records `lastDroppedAt`, and `initiateSlash` refuses
    for one challenge period after it. An operator always gets a window to act, and a withdrawal it
@@ -62,6 +65,11 @@ This ADR records what was decided about each, and what was left as a stated trus
    `EvidenceAlreadyRejected`), so a re-file needs something new to point at. The committee chooses the
    evidence bytes, so this is a speed bump rather than a wall. A proposal the committee cancelled, that
    lapsed, or whose dispute expired unruled was never ruled against, and its evidence can be filed again.
+   With the launch figures (21 days of unbonding, a cooldown of one 7-day challenge period between filings)
+   a committee that files again as soon as the cooldown allows freezes a queued withdrawal each time, and
+   only the admin's veto and a committee that does not act alone stop it. That is the trust placed in the
+   committee, not a gap in the contract: a limit on refiling would only be a limit on honest filings, since
+   a hostile committee changes the evidence bytes.
 4. **Floors and ceilings are enforced where the value is set.** The reputation challenge window (one
    hour), the bond registry's unbonding period (one day) and bond requirement (above zero), staking's
    challenge (three days) and unbonding (one day) periods, and a minimum stake above zero are refused in

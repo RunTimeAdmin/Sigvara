@@ -1676,6 +1676,84 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
     }
 
     // -------------------------------------------------------------------------
+    // A dispute ends once: an uphold and an expiry never both open
+    // -------------------------------------------------------------------------
+    //
+    // expireDispute opens a second after DISPUTE_RESOLUTION_PERIOD, and resolveDispute(uphold) used to stay open
+    // after that too, until somebody called expireDispute. The timeout was then a race between an admin who ruled
+    // late and an operator who expired the dispute, not an end: ADR 0005 says a dispute "expires on day 14".
+
+    /// File a slash and have the operator dispute it at once. Returns the moment expireDispute opens, less a second.
+    function _disputedAtOnce() internal returns (uint256 expiresAt) {
+        _deposit();
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "evidence");
+        uint256 disputedAt = vm.getBlockTimestamp();
+        vm.prank(operator);
+        staking.disputeSlash(didHash);
+        expiresAt = disputedAt + staking.DISPUTE_RESOLUTION_PERIOD();
+    }
+
+    /// The last second expireDispute is refused is the last second an uphold is open, so there is no gap.
+    function test_resolveDispute_upholdIsStillOpenAtTheExactExpiry() public {
+        uint256 expiresAt = _disputedAtOnce();
+        vm.warp(expiresAt);
+        vm.prank(admin);
+        staking.resolveDispute(didHash, true);
+        assertEq(uint8(staking.getSlashProposal(didHash).state), uint8(SigvaraStaking.SlashState.Executed));
+    }
+
+    /// And the second after, the dispute belongs to expireDispute alone. A late uphold used to be accepted here,
+    /// so an operator who expired the dispute could lose the bond to a ruling that landed first.
+    function test_resolveDispute_upholdIsRefusedOnceTheDisputeCanBeExpired() public {
+        uint256 expiresAt = _disputedAtOnce();
+        uint256 staked = staking.getStake(didHash);
+
+        vm.warp(expiresAt + 1);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.DisputeResolutionExpired.selector, didHash, expiresAt));
+        vm.prank(admin);
+        staking.resolveDispute(didHash, true);
+        assertEq(uint8(staking.getSlashProposal(didHash).state), uint8(SigvaraStaking.SlashState.Disputed));
+        assertEq(staking.getStake(didHash), staked, "nothing was taken");
+        assertEq(staking.claimable(victim), 0, "nobody was credited");
+
+        staking.expireDispute(didHash); // permissionless, and nothing can overtake it now
+        assertTrue(identity.isActive(didHash), "reinstated");
+        assertEq(staking.getStake(didHash), staked, "the agent keeps its stake");
+    }
+
+    /// Dropping is never gated, so a ruling in the agent's favour is open after the timeout as well.
+    function test_resolveDispute_dropIsStillOpenAfterTheDisputeExpiry() public {
+        uint256 expiresAt = _disputedAtOnce();
+        vm.warp(expiresAt + 1);
+        vm.prank(admin);
+        staking.resolveDispute(didHash, false);
+        assertEq(uint8(staking.getSlashProposal(didHash).state), uint8(SigvaraStaking.SlashState.Cancelled));
+        assertTrue(identity.isActive(didHash), "reinstated");
+    }
+
+    /// At any moment after the challenge deadline exactly one of the two is available.
+    function testFuzz_aDisputeIsUpheldOrExpiredAtAnyMoment_neverBoth(uint256 afterDeadline, bool tryUphold) public {
+        uint256 expiresAt = _disputedAtOnce();
+        uint256 deadline = staking.getSlashProposal(didHash).challengeDeadline;
+        vm.warp(deadline + bound(afterDeadline, 1, 30 days));
+        bool upholdIsOpen = block.timestamp <= expiresAt;
+
+        if (tryUphold) {
+            if (!upholdIsOpen) {
+                vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.DisputeResolutionExpired.selector, didHash, expiresAt));
+            }
+            vm.prank(admin);
+            staking.resolveDispute(didHash, true);
+        } else {
+            if (upholdIsOpen) {
+                vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.DisputeResolutionActive.selector, didHash, expiresAt));
+            }
+            staking.expireDispute(didHash);
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // A proposal nobody finishes
     // -------------------------------------------------------------------------
 
