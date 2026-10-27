@@ -12,8 +12,9 @@
 #
 # What this file does that docker-compose.*.vps.yml does not, and why:
 #
-# - It builds from SIGVARA_REF, a full commit hash, not from `main`, which the VPS files
-#   clone on every start. A deploy is a decision here: change SIGVARA_REF in .env, run
+# - It builds an image once from SIGVARA_REF, a full commit hash. The VPS files pin a
+#   commit too (SIGVARA_COMMIT), but fetch it and run `npm ci` inside the container on every
+#   start. A deploy is a decision here: change SIGVARA_REF in .env, run
 #   `docker compose up -d`, and the new image is built from exactly that commit. A restart
 #   reruns the same image and fetches nothing. The Dockerfile refuses a SIGVARA_REF that is
 #   not 40 hex characters, so a branch name cannot slip in.

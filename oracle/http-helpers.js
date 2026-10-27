@@ -378,7 +378,7 @@ function adminTokenPolicyError(host, credentials) {
 /**
  * The commit this process is running, or null when it was not told.
  *
- * Deployments clone `main` inside the container at start, so "which code is this
+ * Deployments cloned `main` inside the container at start (before they were pinned to a commit), so "which code is this
  * operator running" had no answer from outside. During the reweight skew it was a live
  * question and could only be settled by inference: the container restarted, main was at
  * such-and-such, therefore it must be running that. Sound reasoning, not verification,

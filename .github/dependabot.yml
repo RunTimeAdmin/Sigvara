@@ -1,6 +1,7 @@
 # Version updates are proposed monthly and merged by hand. Do not turn on auto-merge for any
-# of these: main is what the testnet servers clone when a container starts, so a merged bump
-# is deployed without anyone reading it. The cooldown keeps a release that is only days old
+# of these: the testnet servers run the commit named by SIGVARA_COMMIT, and that pin moves by
+# hand after someone has read what main holds, so an auto-merged bump would reach it unread.
+# The cooldown keeps a release that is only days old
 # (and so not yet pulled by the registry if it was malicious) out of a proposal.
 version: 2
 updates:
