@@ -2,7 +2,7 @@
 
 **Computed reputation and staked accountability for autonomous agents.**
 
-Version 0.4, 20 September 2026, revised 23 October 2026. Live on Arc testnet (chain 5042002). Not yet audited,
+Version 0.4, 20 September 2026, revised 27 October 2026. Live on Arc testnet (chain 5042002). Not yet audited,
 not on mainnet.
 
 ---
@@ -121,9 +121,11 @@ uint256 totalSlashed = s.amount + s.unbondingAmount;
 ```
 
 A slash is proposed by the committee, sits for a 7-day challenge period, and can be
-disputed by the operator, which freezes the bond rather than releasing it. Anyone can
-execute it once the window closes, as long as the member who filed it is still on the
-committee. On execution the stake is distributed:
+disputed by the operator, which freezes the bond rather than releasing it. The admin rules
+on a dispute and cannot uphold one before the challenge deadline; if it never rules,
+anyone can expire the dispute 14 days after it was filed and the agent keeps its stake.
+Anyone can execute an undisputed slash once the window closes, as long as the member who
+filed it is still on the committee. On execution the stake is distributed:
 
 | Share | Destination | Why |
 |---|---|---|
@@ -240,7 +242,7 @@ proposal then sits for a challenge window, 6 hours on Arc. During it,
 Who calls it is not gated, on purpose. Finalizing is mechanical and cannot change the
 number, and gating the caller would let an operator's absence strand every score it had
 proposed. What is checked is the proposer: a proposal from an operator that has since
-been removed is not made live unreviewed, and its successor replaces it (on `main`; the testnet proxies predate that check).
+been removed is not made live unreviewed, and its successor replaces it.
 
 `pendingScores` holds one proposal per agent. A second `proposeReputation` overwrites the
 first and restarts its window, which is why the oracle skips an agent whose proposal is
@@ -259,7 +261,8 @@ return op.status == Status.Active && op.bond >= bondAmount;
 ```
 
 A named signer answers for its operator, so the key that signs on a server need not be
-the key that holds the bond.
+the key that holds the bond. Neither live operator has named a signer yet, so each
+still signs with the key that holds its bond.
 
 That check is evaluated live, so raising the bond floor immediately stops any operator
 that falls below it. Admission is by governance vote, not by posting capital, so the bond
@@ -352,15 +355,23 @@ the thing it claims to replace.
   A second bonded operator has run in checker mode since 20 September 2026, on separate
   hardware and a separate RPC provider, and a watcher polls it from a third host. That
   narrows the window in which a wrong score goes unnoticed; it does not remove this
-  entry. Only the primary writes scores, the checker can record a disagreement and not
-  reject one, and both operators are run by the same party. You are trusting fewer
-  unobserved steps, not fewer people.
+  entry. In normal running only the primary proposes scores. The checker finalizes the ones
+  it agrees with, proposes only into an empty slot, and can record a disagreement but not
+  reject one. Both operators are run by the same party. You are trusting fewer unobserved
+  steps, not fewer people.
 - **The slashing committee.** It can reject any pending proposal and propose slashes. On
   testnet it is a single EOA. On mainnet it must be a multisig, and that is a stated
   precondition for mainnet, not an aspiration.
-- **`DEFAULT_ADMIN_ROLE`.** It admits operators and sets `minimumStake`, `bondAmount` and
-  the challenge window. Upgrading the UUPS proxies takes `UPGRADER_ROLE`: one deployer key
-  holds both roles on testnet, and on mainnet the upgrader is a 48 hour timelock.
+- **`DEFAULT_ADMIN_ROLE`.** It admits and removes oracle operators, grants `ORACLE_ROLE` and
+  `GUARDIAN_ROLE`, revokes any role except `UPGRADER_ROLE`, rules on every disputed slash,
+  can veto any pending or disputed slash, and sets `minimumStake`, `bondAmount`, the
+  challenge and unbonding periods, the score window and the maturity rate (all but the
+  first two between a floor and a ceiling). Upgrading the UUPS proxies takes
+  `UPGRADER_ROLE`: one deployer key holds both roles on testnet, and on mainnet the
+  upgrader is a 48 hour timelock.
+- **The guardian (`GUARDIAN_ROLE`).** It can pause new registrations, stake deposits,
+  score proposals and bond deposits for three days at a time, and nothing else. The admin
+  revokes it at once.
 
 ### 5.2 What you need not trust
 
@@ -461,7 +472,7 @@ Stated because they are true, not because they are solved.
    separate RPC provider, and `activeCount` on `SigvaraOracleBond` is 2. On the first
    agent both recomputed independently and agreed exactly.
 
-   That reduces the concentration; it does not remove it. Only the primary writes scores.
+   That reduces the concentration; it does not remove it. In normal running only the primary proposes scores.
    The checker recomputes and reports disagreement, which makes a bad number visible
    inside the challenge window, but a committee still has to act on it. And both
    operators are run by the same party today, so what has been demonstrated is that two
@@ -515,8 +526,9 @@ Stated because they are true, not because they are solved.
 
 ## 6. The token
 
-SVR is the bond and fee asset. It is not a governance token and it is not a claim on
-revenue.
+SVR is the bond and fee asset. It has not launched: there is no SVR contract address until
+[token.md](token.md) publishes one, and the bond token on Arc testnet is a faucet ERC-20
+with the same name. It is not a governance token and it is not a claim on revenue.
 
 **Supply** is 1,000,000,000, fixed at creation. The contract is a plain ERC-20 with no
 owner, no mint, no pause, no blacklist and no transfer tax. Its one deviation is a cap of
@@ -587,13 +599,14 @@ no key and no state. `activeCount` on `SigvaraOracleBond` is 2. The checker expo
 `/health`, `/divergence` and `/evidence` publicly at `checker.sigvara.xyz`; every write
 path 404s before reaching the service.
 
-**Not deployed:** `SigvaraEpochFees`. Scoring on Arc testnet is free and nothing is
+**Not deployed:** `SigvaraEpochFees` and `SigvaraReader`. Scoring on Arc testnet is free and nothing is
 charged. The app disables every fee control rather than pointing at an address with no
 code.
 
 **Deployed contracts versus `main`.** The Arc testnet proxies run the implementations recorded in
-`deployments/5042002.json`, which are the contracts on `main`: the four proxies were upgraded in place
-with `script/Upgrade.s.sol`. The guardian pause, admin-ruled disputes with a veto and a lapse, launch
+`deployments/5042002.json`, which are the contracts at commit `fdce1a7`, the head of `main` on
+26 October 2026, when the four proxies were upgraded in place with `script/Upgrade.s.sol`. A contract
+change merged after that commit is not on the testnet until the next upgrade. The guardian pause, admin-ruled disputes with a veto and a lapse, launch
 floors and ceilings, operator signers, the reporter check at slash execution, a withdrawal's claim time
 fixed when it is queued and the refusal of evidence the admin rejected are live on the testnet. One
 thing the upgrade could not change: role administrators are written when a proxy is initialised, so
@@ -602,7 +615,7 @@ roles, and administers `UPGRADER_ROLE`), and the timelocked role grants describe
 apply to a fresh deployment, not to the testnet.
 `node scripts/record-implementations.mjs --check` shows what is live.
 
-**Test coverage**, all passing as of 23 October 2026: 693 contract tests across 30 Foundry test files
+**Test coverage**, all passing as of 27 October 2026: 693 contract tests across 30 Foundry test files
 including fuzz and invariant tests (two fork suites need an RPC, and the seven in
 `SplitAuthorityFork` skip without `--fork-url`), 760 oracle tests and 168 in the SDK (8 of them
 need a live deployment and skip without one). CI runs Foundry, the oracle and
