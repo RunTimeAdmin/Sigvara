@@ -1,7 +1,7 @@
 # Sigvara Security and Mainnet Readiness Review
 
 **Review Date:** 2026-09-17  
-**Reviewer:** External Security Review  
+**Reviewer:** External Security Review (informal; not a third-party audit, see the status below and the disclaimer at the end)  
 **Repository:** `RunTimeAdmin/sigvara`  
 **Scope:** Full protocol review — contracts, oracle, SDK, deployment configuration
 
