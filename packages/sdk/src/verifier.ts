@@ -113,6 +113,19 @@ export class SigvaraVerifier {
     return Number(await this.reputation().getTotalScore(didHash));
   }
 
+  /**
+   * When the agent's score was last written, in unix seconds, or 0 if it never was.
+   *
+   * Nothing on chain ages a score, so one left over from an oracle outage keeps satisfying a threshold. A
+   * gate that wants to refuse a score nobody has refreshed reads this and applies its own limit. Read on its
+   * own, like getTotalScore, because the breakdown is a second contract read the decision never looks at.
+   */
+  async getScoreUpdatedAt(did: string): Promise<number> {
+    const didHash = await this.didHashFromDid(did);
+    const raw = await this.reputation().getReputation(didHash);
+    return Number(raw.lastUpdated);
+  }
+
   async meetsThreshold(did: string, threshold: number): Promise<boolean> {
     const didHash = await this.didHashFromDid(did);
     return this.reputation().meetsThreshold(didHash, threshold) as Promise<boolean>;

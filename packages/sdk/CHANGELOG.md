@@ -67,6 +67,34 @@ The key was a TypeScript `private` property, which is erased at compile time, so
 true private field and none of them do. Code that read the key by reaching around the type system
 stops working; sign with `signChallengeFor` or `signChallenge`.
 
+### Changed: `SigvaraGate` also checks the bond held now
+
+`admit` read the stored status and the matured score. The status is written when an agent is admitted,
+slashed or unbonded, so a minimum stake raised afterwards left an agent Active while it held less than
+the contract now asked, and the gate admitted what `SigvaraReader.isTrusted` refuses. The gate now reads
+`hasMinimumStake` beside the status and the score, in the same parallel batch, and refuses an agent below
+the minimum with `not_active`, which already meant "not bonded, suspended or slashed". An agent that was
+admitted at an old minimum and has not topped up will be refused where it passed before.
+
+### New: `maxScoreAgeSeconds` on `SigvaraGate`, `stale_score`, and `verifier.getScoreUpdatedAt(did)`
+
+Nothing on chain ages a score, so one left over from an oracle outage keeps satisfying a threshold. A gate
+given `maxScoreAgeSeconds` refuses a score written longer ago than that, or never, with the new reason
+`stale_score`, named after standing and before the number. It is off by default, and a gate without it
+makes no extra read. It must be a positive finite number, and the constructor refuses anything else for
+the reason it refuses a `NaN` threshold. `getScoreUpdatedAt` is the read behind it: when the score was
+last written, in unix seconds, 0 if never. Code that switches exhaustively on `AdmitReason` needs a case for
+`stale_score` only if it sets the limit.
+
+### Tests: the built package is checked for the secret key
+
+`test/built-package.test.ts` loads `dist/` the way a consumer does and looks for the agent's seed in
+`JSON.stringify`, spread and `Object.assign` copies, a structured clone, `util.inspect` with hidden
+properties, `util.format` and an error message. 1.0.0-alpha.9 shipped with the key in an ordinary property
+while the tests of the source passed, because TypeScript's `private` keyword is erased when it compiles;
+run against that build the new test fails. `prepublishOnly` now builds and runs the tests, so a release
+cannot go out without it.
+
 ## 1.0.0-alpha.9
 
 ### New: `SigvaraGate`

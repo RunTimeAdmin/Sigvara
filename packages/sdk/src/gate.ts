@@ -27,21 +27,28 @@ import type { Challenge, ContractAddresses } from './types';
  *
  * ## What a refusal means
  *
- * Four different things, and they need different responses from the caller:
+ * Five different things, and they need different responses from the caller:
  *
  *   `bad_proof`       the signature does not verify, or names a different agent,
  *                     audience or challenge. Nothing was proven.
  *   `replayed`        a valid signature, already used. Someone is replaying, or the
  *                     caller retried without asking for a fresh challenge.
  *   `not_active`      real agent, proved itself, but it is not bonded, is suspended, or
- *                     has been slashed. Standing is not a score question here.
+ *                     has been slashed. "Bonded" is the bond held now against the minimum
+ *                     in force now, not the status stored when the agent was admitted: a
+ *                     minimum raised since leaves an agent Active on paper while it holds
+ *                     less than the contract asks. Standing is not a score question here.
+ *   `stale_score`     only when the gate was given `maxScoreAgeSeconds`: the score was last
+ *                     written longer ago than that, or never. Nothing on chain ages a score,
+ *                     so one left over from an oracle outage keeps passing a threshold. The
+ *                     fix is the oracle's, not the agent's.
  *   `below_threshold` real, active, proved itself, and the number is not high enough.
  *
  * Only the last is about reputation. Collapsing them into `false` is what makes a gate
  * impossible to debug from the caller's side.
  */
 
-export type AdmitReason = 'bad_proof' | 'replayed' | 'not_active' | 'below_threshold';
+export type AdmitReason = 'bad_proof' | 'replayed' | 'not_active' | 'stale_score' | 'below_threshold';
 
 export interface AdmitResult {
   ok: boolean;
@@ -124,12 +131,20 @@ export interface GateConfig {
   nonceStore?: NonceStore;
   /** How long one chain read may take before it is abandoned, in milliseconds. Default 30000. */
   timeoutMs?: number;
+  /**
+   * Refuse a score that was written longer ago than this many seconds, or never, with `stale_score`.
+   * Unset by default, which means a score is trusted however old it is: nothing on chain ages one, so
+   * a gate that should stop admitting when the oracle has stopped writing has to say how long is too long.
+   * Pick a number a few times your oracle's epoch. Measured against this host's clock.
+   */
+  maxScoreAgeSeconds?: number;
 }
 
 export class SigvaraGate {
   private readonly verifier: SigvaraVerifier;
   private readonly nonces: NonceStore;
   private readonly ttl: number;
+  private readonly maxScoreAge: number | undefined;
   /** In-flight nonces, so two concurrent admits in ONE process cannot both pass. */
   private readonly inFlight = new Set<string>();
   readonly threshold: number;
@@ -155,6 +170,12 @@ export class SigvaraGate {
     if (typeof ttl !== 'number' || !Number.isFinite(ttl) || ttl <= 0) {
       throw new Error(`SigvaraGate: ttlSeconds must be a positive number (got ${String(config.ttlSeconds)}).`);
     }
+    // Same reason: an age that is NaN is older than nothing, so a limit read from an unset variable would
+    // switch the freshness check off without a word.
+    const maxAge = config.maxScoreAgeSeconds;
+    if (maxAge !== undefined && (typeof maxAge !== 'number' || !Number.isFinite(maxAge) || maxAge <= 0)) {
+      throw new Error(`SigvaraGate: maxScoreAgeSeconds must be a positive number (got ${String(maxAge)}).`);
+    }
     this.verifier = new SigvaraVerifier({
       rpcUrl: config.rpcUrl, addresses: config.addresses, chainId: config.chainId,
       timeoutMs: config.timeoutMs,
@@ -162,6 +183,7 @@ export class SigvaraGate {
     this.threshold = config.threshold;
     this.audience = config.audience;
     this.ttl = ttl;
+    this.maxScoreAge = maxAge;
     this.nonces = config.nonceStore ?? new MemoryNonceStore();
   }
 
@@ -240,20 +262,35 @@ export class SigvaraGate {
 
     // Status before score, in the answer. An agent that is slashed or unbonded is refused on
     // standing, and reporting "below_threshold" for it would be a misleading reason: topping up
-    // its score is not the fix. The two reads do not depend on each other, so they go out
-    // together: an admit costs the identity read that verifying the signature needs and one more
-    // round trip, not three in a row.
-    const [active, score] = await Promise.all([
+    // its score is not the fix. The reads do not depend on each other, so they go out together:
+    // an admit costs the identity read that verifying the signature needs and one more round
+    // trip, not one per question.
+    const [active, bonded, score, writtenAt] = await Promise.all([
       this.verifier.isActive(did),
+      // The stored status is not enough. It is written when an agent is admitted, slashed or
+      // unbonded, so a minimum stake raised afterwards leaves it Active while it holds less than the
+      // contract now asks. SigvaraReader.isTrusted checks the bond held now for that reason, and a gate
+      // that did not would admit what the reader refuses.
+      this.verifier.hasMinimumStake(did),
       // getTotalScore() is the MATURED score, which is what the contract's own meetsThreshold
       // reads. Summing the raw factors gives the EARNED score instead, so a score earned minutes
       // ago would pass this gate and be refused on chain. Two layers disagreeing about who is
       // admitted is worse than either threshold being wrong. Read on its own rather than via
       // getReputation: the factor breakdown is a second contract read this decision never looks at.
       this.verifier.getTotalScore(did),
+      // Only asked when the gate was given a limit, so a gate without one makes no extra read.
+      this.maxScoreAge === undefined ? Promise.resolve(null) : this.verifier.getScoreUpdatedAt(did),
     ]);
-    if (!active) {
+    if (!active || !bonded) {
       return { ...base, ok: false, reason: 'not_active' };
+    }
+
+    // Before the number: a score nobody has refreshed cannot be trusted either way, and "the oracle has
+    // stopped writing" is the more useful thing to tell the operator than "the number is low". Zero means
+    // never written, which is no evidence of freshness, and is refused the same way SigvaraReader does.
+    if (writtenAt !== null && this.maxScoreAge !== undefined
+        && (writtenAt === 0 || nowSeconds - writtenAt > this.maxScoreAge)) {
+      return { ...base, ok: false, reason: 'stale_score', score };
     }
 
     if (score < this.threshold) {
