@@ -168,15 +168,27 @@ function readCalls(dir) {
   }
 }
 
+// stdout and stderr go to one file, not to two pipes. A parent gets no order between two pipes: when the
+// runner is busy it reads a later stdout line before an earlier stderr one, so a test that waited for
+// "epoch done" and then looked for the error logged just before it could fail to find it. In a file the
+// lines stay in the order they were written, and a read sees everything written so far. The file sits
+// beside `dir`, not in it, because a test lists the files in the oracle's own directory.
 function spawnOracle(dir, env) {
+  const logFile = `${dir}.log`;
+  const fd = fs.openSync(logFile, 'a');
   const child = spawn(
     process.execPath,
     ['--require', path.join(__dirname, 'stub-chain.js'), path.join(ORACLE_DIR, 'index.js')],
-    { cwd: dir, env },
+    { cwd: dir, env, stdio: ['pipe', fd, fd] },
   );
-  const out = { log: '', code: null };
-  child.stdout.on('data', (d) => { out.log += d; });
-  child.stderr.on('data', (d) => { out.log += d; });
+  fs.closeSync(fd);
+  const out = {
+    code: null,
+    kept: null,
+    get log() { return this.kept ?? fs.readFileSync(logFile, 'utf8'); },
+    // Keeps the text and removes the file, where the oracle's directory is removed.
+    drop() { this.kept = this.log; fs.rmSync(logFile, { force: true }); },
+  };
   const exited = new Promise((resolve) => child.on('exit', (code) => { out.code = code; resolve(code); }));
   return { child, out, exited };
 }
@@ -212,6 +224,7 @@ async function startOracle({ world, env = {}, files }) {
   if (!up) {
     child.kill();
     await exited;
+    out.drop();
     fs.rmSync(dir, { recursive: true, force: true });
     throw new Error(`the oracle did not start (exit ${out.code}):\n${out.log}`);
   }
@@ -275,6 +288,7 @@ async function startOracle({ world, env = {}, files }) {
     async stop() {
       child.kill();
       await exited;
+      out.drop();
       fs.rmSync(dir, { recursive: true, force: true });
     },
   };
@@ -296,6 +310,7 @@ async function runToExit({ world, env = {}, files }) {
   await exited;
   clearTimeout(timer);
   const left = snapshot(dir);
+  out.drop();
   fs.rmSync(dir, { recursive: true, force: true });
   return { code: out.code, log: out.log, files: left };
 }
