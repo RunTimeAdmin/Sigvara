@@ -10,10 +10,15 @@ npm install @sigvara/protocol-sdk
 
 Runtime dependencies are `ethers` v6 and `tweetnacl`. Node 18 or newer.
 
+Use the newest release. On 1.0.0-alpha.9 and earlier an agent object carries its secret key in an
+ordinary property, so `JSON.stringify(agent)` or logging one includes it; never log or serialize an
+agent from those versions.
+
 > **This README describes the repository.** npm has 1.0.0-alpha.9, and the items under
 > Unreleased in [CHANGELOG.md](CHANGELOG.md) are not in it: `signChallengeFor`, the 30 second
 > read timeout and the parallel status and score read, the fix for a challenge dated in the
-> future, the checks on a gate's `threshold` and `ttlSeconds`, and `SigvaraAgent` keeping its
+> future, the checks on a gate's `threshold` and `ttlSeconds`, the gate's check of the bond held
+> now and its optional `maxScoreAgeSeconds`, and `SigvaraAgent` keeping its
 > secret key in a private field. On alpha.9, `signChallenge` signs whatever it is handed, so
 > check the payload's audience yourself before you sign, and the secret key is an ordinary
 > property, so `JSON.stringify(agent)` or logging an agent includes it.
@@ -50,7 +55,7 @@ Runtime dependencies are `ethers` v6 and `tweetnacl`. Node 18 or newer.
   call, and is what moves a newly registered agent from `PendingBond` to
   `Active`.
 - **A gate.** `SigvaraGate` turns the reads above into one decision: issue a
-  challenge, admit or refuse, and say which of four reasons applies. It owns
+  challenge, admit or refuse, and say which reason applies. It owns
   the nonce, so replay protection is not left to the caller.
 
 Scores come in two forms. The earned score is what the oracle last finalized; the total
@@ -120,19 +125,30 @@ const challenge = gate.challenge(agentDid);
 // 3. decide
 const result = await gate.admit(agentDid, challenge, signature);
 if (!result.ok) {
-  // 'bad_proof' | 'replayed' | 'not_active' | 'below_threshold'
+  // 'bad_proof' | 'replayed' | 'not_active' | 'stale_score' | 'below_threshold'
   return refuse(result.reason);
 }
 ```
 
-The four reasons are separate because they need different responses. `bad_proof` means
+The reasons are separate because they need different responses. `bad_proof` means
 nothing was proven. `replayed` means a valid signature arrived twice. `not_active`
 means a real, proven agent that is unbonded, suspended or slashed, and telling that
-caller to earn more points would be wrong. Only `below_threshold` is about reputation,
-and it carries the score so you can say how short they were.
+caller to earn more points would be wrong. "Unbonded" is the bond held now against the
+minimum stake in force now, not the status stored when the agent was admitted: a minimum
+raised since leaves an agent marked Active while it holds less than the contract asks, and
+the gate reads the bond for that reason. `stale_score` appears only if you set
+`maxScoreAgeSeconds`. Only `below_threshold` is about reputation, and it carries the score
+so you can say how short they were.
+
+**A score nobody has refreshed.** Nothing on chain ages a score, so one left over from an
+oracle outage keeps passing a threshold. Set `maxScoreAgeSeconds` to refuse a score written
+longer ago than that, or never, with `stale_score`; choose a few times your oracle's epoch,
+and it is measured against your host's clock. Unset, a score is trusted however old it is.
+It costs one more read per admission. The same check exists on chain as
+`SigvaraReader.isTrustedFresh`, which is not deployed anywhere yet.
 
 The constructor refuses a `threshold` that is not a finite number of 0 or more, and a
-`ttlSeconds` that is not a positive number. A `NaN` threshold, for example
+`ttlSeconds` or `maxScoreAgeSeconds` that is not a positive number. A `NaN` threshold, for example
 `Number(process.env.THRESHOLD)` with the variable unset, would otherwise admit every active
 agent that can prove its key, whatever its score.
 
@@ -143,7 +159,7 @@ proof does cost one read of the agent's registered key, because the key it is ch
 on chain: rate-limit callers where the gate is exposed.
 
 Reads give up after 30 seconds (`timeoutMs` on `SigvaraGate` and `SigvaraVerifier` changes it;
-ethers' own default is five minutes), and the status and the score are read together.
+ethers' own default is five minutes), and the status, the bond and the score are read together.
 
 **The default nonce store is per process.** It is correct for one instance and wrong for
 a fleet: two processes do not share a set, so a response accepted by one replays against

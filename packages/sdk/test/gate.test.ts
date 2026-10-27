@@ -17,15 +17,26 @@ const AUDIENCE = 'https://tools.example';
  * reads are SigvaraVerifier's job and are tested there.
  */
 function gateWith(
-  opts: { active?: boolean; score?: number; rawSum?: number; proved?: boolean; store?: any } = {},
+  opts: {
+    active?: boolean; bonded?: boolean; score?: number; rawSum?: number; proved?: boolean; store?: any;
+    threshold?: number; maxScoreAgeSeconds?: number; scoreAgeSeconds?: number | 'never';
+  } = {},
 ) {
   const gate = new SigvaraGate({
     rpcUrl: 'http://unused', addresses: ADDRESSES, chainId: 5042002,
-    threshold: 40, audience: AUDIENCE, ...(opts.store ? { nonceStore: opts.store } : {}),
+    threshold: opts.threshold ?? 40, audience: AUDIENCE, ...(opts.store ? { nonceStore: opts.store } : {}),
+    ...(opts.maxScoreAgeSeconds === undefined ? {} : { maxScoreAgeSeconds: opts.maxScoreAgeSeconds }),
   });
   const v = (gate as any).verifier;
   v.verifySignature = vi.fn(async () => opts.proved ?? true);
   v.isActive = vi.fn(async () => opts.active ?? true);
+  // The bond held now against the minimum in force now. isActive is the stored status, which a
+  // raised minimum does not change, so the two have to be asked separately.
+  v.hasMinimumStake = vi.fn(async () => opts.bonded ?? true);
+  // When the score was written: `scoreAgeSeconds` ago, or never (0).
+  v.getScoreUpdatedAt = vi.fn(async () => (
+    opts.scoreAgeSeconds === 'never' ? 0 : Math.floor(Date.now() / 1000) - (opts.scoreAgeSeconds ?? 60)
+  ));
   // getTotalScore() is what admit() reads: the matured value the contract's own
   // meetsThreshold uses. getReputation is stubbed too, with raw factors that can sum
   // higher, so a gate that went back to reading the breakdown would be caught by the
@@ -69,20 +80,21 @@ describe('SigvaraGate', () => {
     expect(r.reason).toBe('not_active');
   });
 
-  it('asks for the status and the score together, not one after the other', async () => {
-    // The two reads do not depend on each other. Both have to be under way before either has
-    // answered, so an admit costs one round trip for them and not two.
+  it('asks for the status, the collateral and the score together, not one after the other', async () => {
+    // The reads do not depend on each other. All of them have to be under way before any has
+    // answered, so an admit costs one round trip for them and not three.
     const gate = gateWith();
     const v = (gate as any).verifier;
     const order: string[] = [];
     let release!: () => void;
     const hold = new Promise<void>((resolve) => { release = resolve; });
     v.isActive = vi.fn(async () => { order.push('status asked'); await hold; return true; });
+    v.hasMinimumStake = vi.fn(async () => { order.push('collateral asked'); await hold; return true; });
     v.getTotalScore = vi.fn(async () => { order.push('score asked'); await hold; return 50; });
 
     const c = gate.challenge(DID);
     const pending = gate.admit(DID, c, signChallenge(c.payload, kp.secretKey));
-    await vi.waitFor(() => expect(order).toEqual(['status asked', 'score asked']));
+    await vi.waitFor(() => expect(order).toEqual(['status asked', 'collateral asked', 'score asked']));
     release();
     expect((await pending).ok).toBe(true);
   });
@@ -103,7 +115,9 @@ describe('SigvaraGate', () => {
     const r = await gate.admit(DID, c, 'nonsense');
     expect(r.reason).toBe('bad_proof');
     expect(v.isActive).not.toHaveBeenCalled();
+    expect(v.hasMinimumStake).not.toHaveBeenCalled();
     expect(v.getTotalScore).not.toHaveBeenCalled();
+    expect(v.getScoreUpdatedAt).not.toHaveBeenCalled();
     expect(v.getReputation).not.toHaveBeenCalled();
   });
 
@@ -171,6 +185,7 @@ describe('SigvaraGate', () => {
     const v = (gate as any).verifier;
     v.verifySignature = vi.fn(async () => true);
     v.isActive = vi.fn(async () => true);
+    v.hasMinimumStake = vi.fn(async () => true);
     v.getTotalScore = vi.fn(async () => 50);
 
     const c = gate.challenge(DID);
@@ -231,6 +246,101 @@ describe('SigvaraGate — matured score, not raw factors', () => {
     // And it never asked for the breakdown: that is a second contract read this
     // decision does not use.
     expect((gate as any).verifier.getReputation).not.toHaveBeenCalled();
+  });
+});
+
+describe('SigvaraGate: collateral held now', () => {
+  // Status is stored. A minimum stake raised after an agent was admitted leaves it Active while it
+  // holds less than the contract now asks, and SigvaraReader.isTrusted refuses it for that. A gate
+  // that read only the status would admit what the reader refuses.
+  it('refuses an agent whose bond is under the minimum in force now, on standing', async () => {
+    const gate = gateWith({ bonded: false, score: 90 });
+    const c = gate.challenge(DID);
+    const r = await gate.admit(DID, c, signChallenge(c.payload, kp.secretKey));
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('not_active');
+  });
+
+  it('still requires the bond when the threshold is zero', async () => {
+    // A threshold of 0 is met by every score, so the bond and the status are all that is left to check.
+    const gate = gateWith({ bonded: false, score: 0, threshold: 0 });
+    const c = gate.challenge(DID);
+    const r = await gate.admit(DID, c, signChallenge(c.payload, kp.secretKey));
+    expect(r.reason).toBe('not_active');
+  });
+
+  it('admits a bonded, active agent at a threshold of zero', async () => {
+    const gate = gateWith({ score: 0, threshold: 0 });
+    const c = gate.challenge(DID);
+    const r = await gate.admit(DID, c, signChallenge(c.payload, kp.secretKey));
+    expect(r).toEqual({ ok: true, score: 0, threshold: 0, did: DID });
+  });
+});
+
+describe('SigvaraGate: a score nobody has refreshed', () => {
+  // Nothing on chain ages a score, so one left over from an oracle outage keeps passing. The limit is
+  // opt-in: an integrator picks an age that fits how often their oracle writes.
+  const HOUR = 3600;
+
+  it('admits a score written inside the limit', async () => {
+    const gate = gateWith({ maxScoreAgeSeconds: HOUR, scoreAgeSeconds: 600, score: 50 });
+    const c = gate.challenge(DID);
+    const r = await gate.admit(DID, c, signChallenge(c.payload, kp.secretKey));
+    expect(r).toEqual({ ok: true, score: 50, threshold: 40, did: DID });
+  });
+
+  it('refuses a score older than the limit, and says it is the age and not the number', async () => {
+    const gate = gateWith({ maxScoreAgeSeconds: HOUR, scoreAgeSeconds: 2 * HOUR, score: 90 });
+    const c = gate.challenge(DID);
+    const r = await gate.admit(DID, c, signChallenge(c.payload, kp.secretKey));
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('stale_score');
+    expect(r.score).toBe(90);
+  });
+
+  it('refuses a score that was never written', async () => {
+    // lastUpdated of 0 is no evidence of freshness; the reader refuses it the same way.
+    const gate = gateWith({ maxScoreAgeSeconds: HOUR, scoreAgeSeconds: 'never', score: 0, threshold: 0 });
+    const c = gate.challenge(DID);
+    const r = await gate.admit(DID, c, signChallenge(c.payload, kp.secretKey));
+    expect(r.reason).toBe('stale_score');
+  });
+
+  it('names standing before staleness, and staleness before the number', async () => {
+    const inactive = gateWith({ maxScoreAgeSeconds: HOUR, scoreAgeSeconds: 2 * HOUR, active: false, score: 1 });
+    const c1 = inactive.challenge(DID);
+    expect((await inactive.admit(DID, c1, signChallenge(c1.payload, kp.secretKey))).reason).toBe('not_active');
+
+    const stale = gateWith({ maxScoreAgeSeconds: HOUR, scoreAgeSeconds: 2 * HOUR, score: 1 });
+    const c2 = stale.challenge(DID);
+    expect((await stale.admit(DID, c2, signChallenge(c2.payload, kp.secretKey))).reason).toBe('stale_score');
+  });
+
+  it('does not read the write time, or limit the age, unless asked to', async () => {
+    const gate = gateWith({ scoreAgeSeconds: 365 * 24 * HOUR, score: 50 });
+    const c = gate.challenge(DID);
+    const r = await gate.admit(DID, c, signChallenge(c.payload, kp.secretKey));
+    expect(r.ok).toBe(true);
+    expect((gate as any).verifier.getScoreUpdatedAt).not.toHaveBeenCalled();
+  });
+
+  it('asks for the write time together with the other reads', async () => {
+    const gate = gateWith({ maxScoreAgeSeconds: HOUR });
+    const v = (gate as any).verifier;
+    const order: string[] = [];
+    let release!: () => void;
+    const hold = new Promise<void>((resolve) => { release = resolve; });
+    const slow = (name: string, value: unknown) => vi.fn(async () => { order.push(name); await hold; return value; });
+    v.isActive = slow('status', true);
+    v.hasMinimumStake = slow('collateral', true);
+    v.getTotalScore = slow('score', 50);
+    v.getScoreUpdatedAt = slow('written', Math.floor(Date.now() / 1000));
+
+    const c = gate.challenge(DID);
+    const pending = gate.admit(DID, c, signChallenge(c.payload, kp.secretKey));
+    await vi.waitFor(() => expect(order).toEqual(['status', 'collateral', 'score', 'written']));
+    release();
+    expect((await pending).ok).toBe(true);
   });
 });
 
@@ -330,5 +440,15 @@ describe('SigvaraGate configuration that would fail open', () => {
 
   it('still accepts a threshold of 0, and the default lifetime', () => {
     expect(() => new SigvaraGate({ ...base, threshold: 0 })).not.toThrow();
+  });
+
+  // A limit that is NaN compares false against every age, so a typo in how it was read from the
+  // environment would switch the freshness check off without a word.
+  it.each([NaN, 0, -5, Infinity, '3600' as any])('refuses maxScoreAgeSeconds of %s', (maxScoreAgeSeconds) => {
+    expect(() => new SigvaraGate({ ...base, threshold: 40, maxScoreAgeSeconds })).toThrow(/maxScoreAgeSeconds must be/);
+  });
+
+  it('accepts a positive maxScoreAgeSeconds', () => {
+    expect(() => new SigvaraGate({ ...base, threshold: 40, maxScoreAgeSeconds: 86_400 })).not.toThrow();
   });
 });

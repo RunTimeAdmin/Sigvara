@@ -111,6 +111,13 @@ describe('SigvaraVerifier reads', () => {
     expect(repc.getReputation).not.toHaveBeenCalled();
   });
 
+  it('getScoreUpdatedAt reads when the score was written, in seconds, and not the total', async () => {
+    const { v, repc } = verifierWith();
+    expect(await v.getScoreUpdatedAt(DID)).toBe(1_700_000_123);
+    expect(repc.getReputation).toHaveBeenCalledWith(DID_HASH);
+    expect(repc.getTotalScore).not.toHaveBeenCalled();
+  });
+
   it('meetsThreshold, isActive, getStake and hasMinimumStake pass the didHash through', async () => {
     const { v, idc, repc, stc } = verifierWith();
     expect(await v.meetsThreshold(DID, 40)).toBe(true);
