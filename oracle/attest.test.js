@@ -6,6 +6,8 @@
 // `if` block and read after it. Nothing since 25 September had been able to credit a payment
 // or an outcome through this route.
 
+const fs = require('node:fs');
+const path = require('node:path');
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { World, startOracle, runToExit, wallet, ASSET } = require('./test-support/oracle-harness');
@@ -335,5 +337,45 @@ test('with verification off, attestations keep their tally and their cooldown', 
     assert.deepEqual([other.body.successful, other.body.total], [1, 2]);
   } finally {
     await off.stop();
+  }
+});
+
+// ---- a save that failed -----------------------------------------------------------------------
+
+test('an attestation is not called saved while the state file cannot be written, and is once it can', async () => {
+  // A full disk, a permissions change, a volume that went read-only. The oracle keeps what it was told in memory
+  // and saves it at the next write that works, but a restart before that loses it, and an attested outcome is on
+  // no chain to be found again. So the reply must not say "counted" as though it were safe.
+  const w = new World();
+  const agent = w.addAgent();
+  const first = w.addTx([{ from: wallet(), to: agent.agentAddress, value: 5n * USDC }]);
+  const second = w.addTx([{ from: wallet(), to: agent.agentAddress, value: 5n * USDC }]);
+  const o = await startOracle({ world: w, env: REQUIRED_ENV });
+  try {
+    // A directory where the oracle writes its temporary file: every save fails until it is gone.
+    const blocker = path.join(o.dir, 'state.json.tmp');
+    fs.mkdirSync(blocker);
+
+    const unsaved = await o.call('POST', '/attest', { didHash: agent.didHash, success: true, payment: { txHash: first } });
+    assert.equal(unsaved.status, 202, unsaved.text);
+    assert.equal(unsaved.body.durable, false);
+    assert.equal(unsaved.body.payment.txHash, first, 'what was accepted is still reported');
+
+    const health = await o.call('GET', '/health');
+    assert.equal(health.status, 503);
+    assert.equal(health.body.statePersisted, false);
+    const metrics = (await o.call('GET', '/metrics')).text;
+    assert.match(metrics, /sigvara_oracle_attest_total\{result="accepted_not_durable"\} 1/);
+    assert.match(metrics, /sigvara_oracle_attest_total\{result="accepted"\} 0/);
+
+    fs.rmdirSync(blocker);
+    const saved = await o.call('POST', '/attest', { didHash: agent.didHash, success: true, payment: { txHash: second } });
+    assert.equal(saved.status, 200, saved.text);
+    assert.equal('durable' in saved.body, false, 'a saved attestation says nothing extra');
+    const onDisk = JSON.parse(o.files()['state.json']);
+    assert.equal(Object.values(onDisk.paymentEvents)[0].length, 2, 'the earlier one was saved with it');
+    assert.equal((await o.call('GET', '/health')).status, 200);
+  } finally {
+    await o.stop();
   }
 });

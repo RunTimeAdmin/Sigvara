@@ -436,6 +436,66 @@ test('getPendingScore: returns the factors for checker mode to compare', async (
   });
 });
 
+test('getPendingScore: returns the deadline the contract fixed when the proposal was made', async () => {
+  // finalizableAt is the proposal's own deadline. Judging readiness against proposedAt plus the window in force
+  // now moves it whenever the window is changed, which the contract does not.
+  chain.init(CFG, {
+    provider: makeFakeProvider(120),
+    identityContract: makeFakeIdentityContract(),
+    reputationContract: makeFakeReputationContract({
+      pending: { '0xaaa': { exists: true, proposedAt: 1_700_000_000n, finalizableAt: 1_700_021_600n, data: {
+        feeScore: 0n, successScore: 7n, ageScore: 0n, externalScore: 0n, communityScore: 5n, propagationScore: 0n,
+      } } },
+    }),
+  });
+  const pending = await chain.getPendingScore('0xaaa');
+  assert.equal(pending.finalizableAt, 1_700_021_600);
+  assert.equal(typeof pending.finalizableAt, 'number');
+});
+
+test('getPendingScore: a proposal from before the deadline was stored reads zero, and an empty slot does too', async () => {
+  chain.init(CFG, {
+    provider: makeFakeProvider(120),
+    identityContract: makeFakeIdentityContract(),
+    reputationContract: makeFakeReputationContract({
+      pending: { '0xaaa': { exists: true, proposedAt: 1_700_000_000n, finalizableAt: 0n, data: {
+        feeScore: 0n, successScore: 7n, ageScore: 0n, externalScore: 0n, communityScore: 5n, propagationScore: 0n,
+      } } },
+    }),
+  });
+  assert.equal((await chain.getPendingScore('0xaaa')).finalizableAt, 0);
+  assert.equal((await chain.getPendingScore('0xnotset')).finalizableAt, 0);
+});
+
+test('getPendingScore: a deadline that does not decode throws instead of reading as zero', async () => {
+  // Zero means "judge it against the live window", which is exactly the behaviour this field replaces. A value the
+  // ABI could not read must stop the agent with a reason, not quietly bring the old arithmetic back.
+  chain.init(CFG, {
+    provider: makeFakeProvider(120),
+    identityContract: makeFakeIdentityContract(),
+    reputationContract: makeFakeReputationContract({
+      pending: { '0xaaa': { exists: true, proposedAt: 1_700_000_000n, finalizableAt: 'soon', data: {
+        feeScore: 0n, successScore: 7n, ageScore: 0n, externalScore: 0n, communityScore: 5n, propagationScore: 0n,
+      } } },
+    }),
+  });
+  await assert.rejects(() => chain.getPendingScore('0xaaa'), /finalizableAt did not decode to a number/);
+});
+
+test('the pending-score ABI carries the whole struct, so finalizableAt is decoded and not ignored', () => {
+  // ethers ignores returned data the ABI does not describe, which is how the oracle came to read a struct
+  // that had grown two fields and never see either. Decode a struct built the way the contract returns it.
+  const { ethers } = require('ethers');
+  const iface = new ethers.Interface(chain.REPUTATION_ABI.filter((f) => f.includes('getPendingScore')));
+  const data = ethers.AbiCoder.defaultAbiCoder().encode(
+    ['tuple(tuple(uint8,uint8,uint8,uint8,uint8,uint8,uint256),uint256,bool,bytes32,address,uint256)'],
+    [[[1, 2, 3, 4, 5, 6, 7], 1_700_000_000, true, ethers.ZeroHash, ethers.ZeroAddress, 1_700_021_600]],
+  );
+  const [decoded] = iface.decodeFunctionResult('getPendingScore', data);
+  assert.equal(decoded.finalizableAt, 1_700_021_600n);
+  assert.equal(decoded.proposedAt, 1_700_000_000n);
+});
+
 test('getPendingScore: a factor that does not decode throws instead of reading as zero', async () => {
   // SigvaraReputation is upgradeable; inserting a field into ReputationData would shift
   // everything after it. A checker that treated an undecodable factor as 0 would quietly

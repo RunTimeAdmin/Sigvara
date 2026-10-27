@@ -28,6 +28,9 @@ const counters = {
   txCapped: 0,
   txUnconfirmed: 0,
   attestAccepted: 0,
+  // Accepted and held in memory, but the state file could not be written, so a restart before the next
+  // good save loses it. The reply says so (202, durable: false). Worth alerting on beside /health.
+  attestAcceptedNotDurable: 0,
   attestRejectedCooldown: 0,
   attestRejectedOther: 0,
   attestRejectedPayment: 0,
@@ -178,6 +181,7 @@ function toPrometheusText(extra = {}) {
   lines.push('# HELP sigvara_oracle_attest_total Attestation requests');
   lines.push('# TYPE sigvara_oracle_attest_total counter');
   lines.push(`sigvara_oracle_attest_total{result="accepted"} ${counters.attestAccepted}`);
+  lines.push(`sigvara_oracle_attest_total{result="accepted_not_durable"} ${counters.attestAcceptedNotDurable}`);
   lines.push(`sigvara_oracle_attest_total{result="rejected_cooldown"} ${counters.attestRejectedCooldown}`);
   lines.push(`sigvara_oracle_attest_total{result="rejected_payment"} ${counters.attestRejectedPayment}`);
   // Kept with the rest of its family. This line used to sit after the payment counters,

@@ -268,6 +268,8 @@ async function startOracle({ world, env = {}, files }) {
 
   return {
     port,
+    /** The oracle's working directory, for a test that has to break something in it. */
+    dir,
     call,
     raw,
     logs: () => out.log,

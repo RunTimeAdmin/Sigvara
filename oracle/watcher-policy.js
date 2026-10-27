@@ -1,5 +1,7 @@
 'use strict';
 
+const { finalizableAtOf } = require('./epoch-policy');
+
 // What a divergence watcher should do about what it sees. Pure functions, no I/O.
 //
 // The watcher exists because a checking operator can only record that it disagrees.
@@ -36,7 +38,9 @@ function classifyDivergence(divergence, pending, challengeWindowSec, nowSec) {
   if (Number(pending.proposedAt) !== Number(divergence.proposedAt)) {
     return { state: 'superseded', secondsLeft: 0 };
   }
-  const endsAt = Number(divergence.proposedAt) + Number(challengeWindowSec);
+  // The deadline the contract fixed when the proposal was made, not proposedAt plus the window in force
+  // now: the committee's chance to reject ends at the first, whatever the window has been changed to.
+  const endsAt = finalizableAtOf(pending, Number(challengeWindowSec));
   const secondsLeft = endsAt - nowSec;
   return secondsLeft > 0
     ? { state: 'actionable', secondsLeft }

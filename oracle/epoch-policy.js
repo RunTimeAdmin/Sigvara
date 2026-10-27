@@ -16,8 +16,25 @@
 function decideAction(pending, challengeWindowSeconds, nowSeconds) {
   if (!pending || !pending.exists) return 'propose';
 
-  const ready = nowSeconds >= pending.proposedAt + challengeWindowSeconds;
+  const ready = nowSeconds >= finalizableAtOf(pending, challengeWindowSeconds);
   return ready ? 'finalize-then-propose' : 'skip';
+}
+
+/**
+ * When a pending proposal can first be finalized, and the last moment it can still be rejected.
+ *
+ * The contract fixes this when the proposal is made, as the time plus the window in force then, and keeps
+ * it in `finalizableAt`. Changing the window afterwards moves no proposal already pending. Working it out
+ * as proposedAt plus the window in force now delayed every finalize by the difference when the window was
+ * lengthened, and sent finalize transactions the contract refused (ChallengeWindowActive) epoch after
+ * epoch when it was shortened.
+ *
+ * A proposal that was already pending when the field was added reads zero, and the contract judges it
+ * against the live window; so does this. A missing or unreadable value takes the same fallback.
+ */
+function finalizableAtOf(pending, challengeWindowSeconds) {
+  const stored = Number(pending.finalizableAt);
+  return stored > 0 ? stored : pending.proposedAt + challengeWindowSeconds;
 }
 
 // Node stores a timer delay in a signed 32-bit int. Anything outside that range, and
@@ -154,7 +171,7 @@ function decideCheckerAction(pending, own, challengeWindowSeconds, nowSeconds, t
 
   if (divergence.total > tolerance || divergence.maxFactor > tolerance) return 'diverged';
 
-  return nowSeconds >= pending.proposedAt + challengeWindowSeconds ? 'finalize' : 'skip';
+  return nowSeconds >= finalizableAtOf(pending, challengeWindowSeconds) ? 'finalize' : 'skip';
 }
 
 /**
@@ -226,7 +243,7 @@ function scoringIsStale({ lastEpochMs, nowMs, uptimeMs, epochMs }) {
 }
 
 module.exports = {
-  decideAction, decideCheckerAction, scoreDivergence, mapChunked, scoringIsStale,
+  decideAction, decideCheckerAction, finalizableAtOf, scoreDivergence, mapChunked, scoringIsStale,
   epochIntervalError, divergenceToleranceError, clockSkewError, MAX_TIMER_MS, MIN_EPOCH_MS,
   SCORE_FACTORS, DEFAULT_DIVERGENCE_TOLERANCE, MAX_DIVERGENCE_TOLERANCE,
 };

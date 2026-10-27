@@ -35,7 +35,7 @@ const REPUTATION_ABI = [
   // evidenceRoot is decoded now, not dropped. A divergence without it says two operators
   // disagree; with it, a stranger can see they were scoring different evidence and go and
   // diff the two evidence sets themselves.
-  'function getPendingScore(bytes32 didHash) view returns (tuple(tuple(uint8 feeScore, uint8 successScore, uint8 ageScore, uint8 externalScore, uint8 communityScore, uint8 propagationScore, uint256 lastUpdated) data, uint256 proposedAt, bool exists, bytes32 evidenceRoot))',
+  'function getPendingScore(bytes32 didHash) view returns (tuple(tuple(uint8 feeScore, uint8 successScore, uint8 ageScore, uint8 externalScore, uint8 communityScore, uint8 propagationScore, uint256 lastUpdated) data, uint256 proposedAt, bool exists, bytes32 evidenceRoot, address proposer, uint256 finalizableAt))',
   'function challengeWindow() view returns (uint256)',
 ];
 // Note: lastUpdated in the tuple above is required by the contract's function selector
@@ -813,13 +813,13 @@ async function finalizeScore(didHash) {
   return (await settle(tx)).hash;
 }
 
-// Returns { exists, proposedAt } — proposedAt is 0 when no proposal is pending.
+// Returns { exists, proposedAt, finalizableAt, data, evidenceRoot }; proposedAt is 0 when no proposal is pending.
 async function getPendingScore(didHash) {
   const pending = await readWithBackoff('getPendingScore', () => reputationContract.getPendingScore(didHash));
   // The factors come back too, for checker mode to compare against its own arithmetic.
-  // The primary path reads only exists/proposedAt and is unaffected. Decoding is
-  // positional over a fixed-size struct, so the fields land even though the ABI above
-  // does not carry the trailing evidenceRoot.
+  // The ABI carries the whole struct, in the order the contract declares it. ethers ignores
+  // returned data the ABI does not describe, which is how this adapter came to read a struct
+  // that had grown fields at the end and never see them: proposer and finalizableAt.
   //
   // A field that does not decode to a finite number throws rather than returning a
   // half-populated object. SigvaraReputation is UUPS-upgradeable and inserting a field
@@ -838,9 +838,18 @@ async function getPendingScore(didHash) {
     }
     data[f] = v;
   }
+  // The deadline the contract fixed when the proposal was made. Zero for a proposal that was already
+  // pending when the field was added, which the contract judges against the live window, and for an
+  // empty slot. A value that does not decode must not read as zero: zero brings back the arithmetic
+  // this replaces (see finalizableAtOf in epoch-policy.js).
+  const finalizableAt = Number(pending.finalizableAt ?? 0);
+  if (!Number.isFinite(finalizableAt)) {
+    throw new Error(`getPendingScore: finalizableAt did not decode to a number (got ${pending.finalizableAt}); the PendingScore ABI may no longer match the contract`);
+  }
   return {
     exists: pending.exists,
     proposedAt: Number(pending.proposedAt),
+    finalizableAt,
     data,
     evidenceRoot: pending.evidenceRoot ?? null,
   };
@@ -895,6 +904,7 @@ async function chargeEpoch(didHash) {
 }
 
 module.exports = {
+  REPUTATION_ABI,
   readWithBackoff,
   isSlotTaken,
   isProposerNotAuthorized,

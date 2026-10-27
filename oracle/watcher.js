@@ -36,6 +36,7 @@ const { ethers } = require('ethers');
 const {
   checkerStatus, triage, alertKey, webhookPayload, describeDivergence, trackPollOutcome,
 } = require('./watcher-policy');
+const { finalizableAtOf } = require('./epoch-policy');
 
 const cfg = {
   checkerUrl: (process.env.CHECKER_URL || '').replace(/\/+$/, ''),
@@ -63,7 +64,7 @@ if (!Number.isFinite(cfg.pollSeconds) || cfg.pollSeconds < 30) {
 }
 
 const ABI = [
-  'function getPendingScore(bytes32 didHash) view returns (tuple(tuple(uint8 feeScore, uint8 successScore, uint8 ageScore, uint8 externalScore, uint8 communityScore, uint8 propagationScore, uint256 lastUpdated) data, uint256 proposedAt, bool exists))',
+  'function getPendingScore(bytes32 didHash) view returns (tuple(tuple(uint8 feeScore, uint8 successScore, uint8 ageScore, uint8 externalScore, uint8 communityScore, uint8 propagationScore, uint256 lastUpdated) data, uint256 proposedAt, bool exists, bytes32 evidenceRoot, address proposer, uint256 finalizableAt))',
   'function challengeWindow() view returns (uint256)',
 ];
 
@@ -168,7 +169,7 @@ async function poll() {
   await Promise.all(dids.map(async (did) => {
     try {
       const p = await reputation.getPendingScore(did);
-      pendingByDid[did] = { exists: p.exists, proposedAt: Number(p.proposedAt) };
+      pendingByDid[did] = { exists: p.exists, proposedAt: Number(p.proposedAt), finalizableAt: Number(p.finalizableAt) };
     } catch (err) {
       // An unreadable slot must not be treated as "nothing pending", which would
       // silently downgrade a live dispute to 'closed'. Leaving it undefined does the
@@ -197,7 +198,7 @@ async function poll() {
     if (sent.get(key) !== 0) continue;
     const p = pendingByDid[d.didHash];
     if (!p.exists || Number(p.proposedAt) !== Number(d.proposedAt)) { sent.delete(key); continue; }
-    const left = Number(d.proposedAt) + challengeWindowSec - nowSec;
+    const left = finalizableAtOf(p, challengeWindowSec) - nowSec;
     if (left > 0 && left <= cfg.finalWarningSeconds) {
       sent.set(key, 1);
       await notify('alert', `LAST CALL: ${hhmm(left)} to reject a disputed score`, [

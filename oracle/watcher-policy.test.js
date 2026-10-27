@@ -50,6 +50,49 @@ test('classifyDivergence: nothing pending -> closed', () => {
   assert.equal(classifyDivergence(div(t), null, WINDOW, t + 10).state, 'closed');
 });
 
+// A window changed after the proposal. The contract fixes a proposal's deadline when it is made (finalizableAt)
+// and a later change to the window moves nothing pending. The committee's chance to reject ends at that
+// stored deadline, so that is what the watcher counts down to. Counting to proposedAt plus the window in
+// force now told the committee it had time when it had none, or called a live dispute expired.
+
+test('classifyDivergence: a window lengthened since the proposal does not give back time the committee no longer has', () => {
+  const t = 1_000_000;
+  const pending = { exists: true, proposedAt: t, finalizableAt: t + WINDOW };
+  // Past the stored deadline, inside the live (doubled) window: anyone can finalize it now.
+  const c = classifyDivergence(div(t), pending, WINDOW * 2, t + WINDOW + 60);
+  assert.equal(c.state, 'expired');
+  assert.equal(c.secondsLeft, 0);
+});
+
+test('classifyDivergence: a window shortened since the proposal does not hide a dispute that can still be rejected', () => {
+  const t = 1_000_000;
+  const pending = { exists: true, proposedAt: t, finalizableAt: t + WINDOW * 2 };
+  // Past the live (halved) window, inside the stored deadline: the committee can still reject it.
+  const c = classifyDivergence(div(t), pending, WINDOW / 2, t + WINDOW);
+  assert.equal(c.state, 'actionable');
+  assert.equal(c.secondsLeft, WINDOW);
+});
+
+test('classifyDivergence: a proposal with no stored deadline is judged against the live window, as before', () => {
+  const t = 1_000_000;
+  for (const finalizableAt of [0, undefined]) {
+    const pending = { exists: true, proposedAt: t, finalizableAt };
+    assert.equal(classifyDivergence(div(t), pending, WINDOW, t + WINDOW - 1).state, 'actionable');
+    assert.equal(classifyDivergence(div(t), pending, WINDOW, t + WINDOW).state, 'expired');
+  }
+});
+
+test('triage: counts down to the stored deadline', () => {
+  const t = 1_000_000;
+  const res = triage({
+    divergences: [div(t)],
+    pendingByDid: { [DID]: { exists: true, proposedAt: t, finalizableAt: t + WINDOW * 2 } },
+    challengeWindowSec: WINDOW / 2, nowSec: t + WINDOW, seen: new Set(),
+  });
+  assert.equal(res.alerts.length, 1);
+  assert.equal(res.alerts[0].secondsLeft, WINDOW);
+});
+
 test('classifyDivergence: reads the chain, not the checker record', () => {
   // The whole reason this takes `pending` as an argument. If it trusted the
   // divergence's own proposedAt it would call this actionable forever.

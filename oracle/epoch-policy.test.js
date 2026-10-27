@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  decideAction, decideCheckerAction, scoreDivergence, mapChunked, scoringIsStale,
+  decideAction, decideCheckerAction, finalizableAtOf, scoreDivergence, mapChunked, scoringIsStale,
   epochIntervalError, divergenceToleranceError, MAX_TIMER_MS, MIN_EPOCH_MS,
 } = require('./epoch-policy');
 
@@ -369,4 +369,60 @@ test('scoringIsStale: a process that has never finished an epoch is given two in
 
 test('scoringIsStale: a null last epoch (what /health reports before the first success) is read as never', () => {
   assert.equal(scoringIsStale({ lastEpochMs: null, nowMs: 1_800_000_000_000, uptimeMs: 3 * 24 * HOUR, epochMs: 24 * HOUR }), true);
+});
+
+// ---- a window changed after the proposal ------------------------------------------------
+//
+// SigvaraReputation fixes a proposal's deadline when it is made, as `finalizableAt`: the time plus the
+// window in force then. Changing the window later moves no proposal already pending, so readiness is
+// judged against that stored time. Judged against proposedAt plus the window in force now, a lengthened
+// window delayed every finalize by the difference, and a shortened one sent finalize transactions the
+// contract refused with ChallengeWindowActive, epoch after epoch, until the real deadline came.
+
+const SIX_HOURS = 21_600;
+const TWELVE_HOURS = 43_200;
+const T0 = 1_000_000;
+
+test('finalizableAtOf: the stored deadline when there is one', () => {
+  assert.equal(finalizableAtOf({ exists: true, proposedAt: T0, finalizableAt: T0 + SIX_HOURS }, TWELVE_HOURS), T0 + SIX_HOURS);
+});
+
+test('finalizableAtOf: a proposal from before the field existed reads zero and takes the live window, as the contract does', () => {
+  for (const finalizableAt of [0, undefined, null, NaN]) {
+    assert.equal(finalizableAtOf({ exists: true, proposedAt: T0, finalizableAt }, TWELVE_HOURS), T0 + TWELVE_HOURS, String(finalizableAt));
+  }
+});
+
+test('decideAction: a window lengthened after the proposal does not delay the finalize', () => {
+  const pending = { exists: true, proposedAt: T0, finalizableAt: T0 + SIX_HOURS };
+  assert.equal(decideAction(pending, TWELVE_HOURS, T0 + SIX_HOURS - 1), 'skip');
+  assert.equal(decideAction(pending, TWELVE_HOURS, T0 + SIX_HOURS), 'finalize-then-propose');
+});
+
+test('decideAction: a window shortened after the proposal does not hurry the finalize', () => {
+  const pending = { exists: true, proposedAt: T0, finalizableAt: T0 + TWELVE_HOURS };
+  assert.equal(decideAction(pending, SIX_HOURS, T0 + SIX_HOURS), 'skip', 'the live window has passed, the stored deadline has not');
+  assert.equal(decideAction(pending, SIX_HOURS, T0 + TWELVE_HOURS - 1), 'skip');
+  assert.equal(decideAction(pending, SIX_HOURS, T0 + TWELVE_HOURS), 'finalize-then-propose');
+});
+
+test('decideAction: a proposal with no stored deadline is still judged against the live window', () => {
+  const legacy = { exists: true, proposedAt: T0, finalizableAt: 0 };
+  assert.equal(decideAction(legacy, SIX_HOURS, T0 + SIX_HOURS - 1), 'skip');
+  assert.equal(decideAction(legacy, SIX_HOURS, T0 + SIX_HOURS), 'finalize-then-propose');
+});
+
+test('decideCheckerAction: an agreed proposal is finalized at its stored deadline, whatever the window is now', () => {
+  const stored = (finalizableAt) => ({ exists: true, proposedAt: T0, data: agreed, finalizableAt });
+  assert.equal(decideCheckerAction(stored(T0 + SIX_HOURS), agreed, TWELVE_HOURS, T0 + SIX_HOURS), 'finalize', 'window lengthened');
+  assert.equal(decideCheckerAction(stored(T0 + TWELVE_HOURS), agreed, SIX_HOURS, T0 + SIX_HOURS), 'skip', 'window shortened');
+  assert.equal(decideCheckerAction(stored(T0 + TWELVE_HOURS), agreed, SIX_HOURS, T0 + TWELVE_HOURS), 'finalize');
+});
+
+test('decideCheckerAction: a disagreement is a divergence at any time, stored deadline or not', () => {
+  const mine = { ...agreed, feeScore: 20 };
+  const stored = { exists: true, proposedAt: T0, data: agreed, finalizableAt: T0 + TWELVE_HOURS };
+  for (const now of [T0, T0 + SIX_HOURS, T0 + TWELVE_HOURS, T0 + TWELVE_HOURS * 3]) {
+    assert.equal(decideCheckerAction(stored, mine, SIX_HOURS, now), 'diverged');
+  }
 });
