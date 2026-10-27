@@ -32,7 +32,9 @@
 //     registered:      [ "<didhash>" ]  agents the registry returns (each also needs an `agents` entry)
 //     challengeWindow: seconds (default 21600)
 //     feeGating:       true to configure the epoch fee; epochFee: its size, as a decimal string
-//     pending:         { "<didhash>": { exists, proposedAt, data, evidenceRoot, proposerDead } }  (default none)
+//     pending:         { "<didhash>": { exists, proposedAt, finalizableAt, data, evidenceRoot, proposerDead } }  (default none)
+//                      finalizableAt: the deadline the contract fixed when the proposal was made; leave it out (or 0)
+//                      for a proposal judged against the live challengeWindow
 //                      proposerDead: the proposer has lost its authority, so finalize reverts with
 //                      ProposerNotAuthorized and a compare-and-swap proposal may replace it
 //     bonded, covered: { "<didhash>": bool }  (default true)

@@ -125,10 +125,11 @@ Returns 503 when:
 The first writes a few bytes to a test file and deletes them, so it answers whether the
 path looks usable. The second is what the last real write actually did, which can fail
 while the probe passes: a multi-megabyte state file needs space the probe does not.
-It matters because `/attest` answers 200 on the strength of having recorded something,
-so a failed persist means a payer was told a payment counted when a restart will lose
-it. Pulled payments are found again by the next scan; attested outcomes are on chain
-nowhere, so those do not come back.
+It matters because `/attest` answers on the strength of having recorded something, so
+a failed persist means a restart will lose what a payer was told. `/attest` says so: it
+answers 202 with `"durable": false` instead of 200 while a save is failing, and counts
+those as `accepted_not_durable`. Pulled payments are found again by the next scan;
+attested outcomes are on chain nowhere, so those do not come back.
 
 `stateSource` is `file`, `fresh` (there was no state file) or `backup`. `backup` means the
 state file could not be read and the previous save was used instead; the bad file is kept
@@ -277,7 +278,8 @@ This is fine for local testing and worthless as a trust signal in public.
 
 | Status | Meaning |
 |---|---|
-| 200 | Accepted |
+| 200 | Accepted and saved |
+| 202 | Accepted, but the state file could not be written, so a restart before the next good save loses it. The body has `"durable": false`. Do not resend: the payment is credited here and a resend gets 409. `/health` is 503 until a save works |
 | 400 | Malformed body, unknown agent, or a `success` that is not a boolean |
 | 402 | The payment did not check out; `code` says why (`self_payment`, `no_transfer`, `below_minimum`) |
 | 409 | `replayed`: this settlement was already credited. `outcome_recorded`: it already has an outcome, which is final |

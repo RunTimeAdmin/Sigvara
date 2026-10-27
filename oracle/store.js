@@ -402,11 +402,12 @@ function load() {
  * and deletes it, so it passes while a real write of a multi-megabyte state file fails
  * for want of space, and it says nothing about a serialization error.
  *
- * The actual result was discarded. That mattered because the attest path answers 200 on
- * the strength of having recorded something, and a persist that failed means it did not:
- * the payment is credited in memory, the payer is told it counted, and a restart loses
- * it. Scanned payments are found again on the next scan. Attested outcomes are not on
- * chain anywhere, so those are simply gone.
+ * The actual result was discarded. That mattered because the attest path answers on the
+ * strength of having recorded something, and a persist that failed means it did not: the
+ * payment is credited in memory, and a restart loses it. persist() now returns the result
+ * too, and /attest answers 202 with `durable: false` instead of 200 when a save failed.
+ * Scanned payments are found again on the next scan. Attested outcomes are not on chain
+ * anywhere, so those are simply gone.
  */
 let lastPersist = { ok: true, at: null, error: null };
 
@@ -477,6 +478,12 @@ function writeAll(fd, text) {
   for (let done = 0; done < bytes.length;) done += fs.writeSync(fd, bytes, done, bytes.length - done);
 }
 
+/**
+ * Write the state to disk. Returns whether the write landed, which is also what getLastPersist reports.
+ *
+ * It never throws: the oracle goes on serving from memory. A route that has just changed state and is about to
+ * tell somebody it counted should read the result, because a failure here means a restart loses the change.
+ */
 function persist() {
   try {
     fs.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
@@ -509,9 +516,11 @@ function persist() {
     keepBackup();
     fs.renameSync(tmp, STATE_PATH);
     lastPersist = { ok: true, at: Date.now(), error: null };
+    return true;
   } catch (err) {
     lastPersist = { ok: false, at: Date.now(), error: err.message };
     console.error(`[oracle] state persist FAILED: ${err.message}`);
+    return false;
   }
 }
 

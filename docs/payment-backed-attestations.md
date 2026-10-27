@@ -116,6 +116,7 @@ The codes that depend on the payment check are below. The [oracle README](../ora
 | Status | Meaning |
 |---|---|
 | 200 | Accepted. The body echoes the verified payer and amount |
+| 202 | Accepted, but the oracle could not save its state file, so a restart before its next good save loses it. The body has `durable: false`. Do not resend: the payment is credited, and a resend gets 409 |
 | 402 | The payment did not check out. `code` says why |
 | 409 | This settlement was already credited, or it already has an outcome, which is final |
 | 502 | The RPC failed. Not a verdict on the payment, retry |

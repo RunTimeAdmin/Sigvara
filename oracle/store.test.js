@@ -604,13 +604,24 @@ test('persist: a failed write is recorded rather than swallowed', () => {
       return realWrite(fd, ...rest);
     };
     s.creditPayment('did-x', '0x' + 'ee'.repeat(32), '5', '0x' + '22'.repeat(20), true, 1);
-    s.persist();
-    console.log(JSON.stringify(s.getLastPersist()));
+    const returned = s.persist();
+    console.log(JSON.stringify({ ...s.getLastPersist(), returned }));
   `);
   const r = JSON.parse(out.trim().split('\n').pop());
   assert.equal(r.ok, false, 'a failed persist is visible, so /health can turn 503');
   assert.match(r.error, /no space left on device/);
   assert.ok(r.at, 'and carries when it happened');
+  assert.equal(r.returned, false, 'and the caller is told, so a route does not acknowledge what it could not save');
+});
+
+test('persist: says that the write landed', () => {
+  const out = inChildWithState(null, `
+    const s = require('./store');
+    s.creditPayment('did-x', '0x' + 'ee'.repeat(32), '5', '0x' + '22'.repeat(20), true, 1);
+    console.log(JSON.stringify({ returned: s.persist(), ok: s.getLastPersist().ok }));
+  `);
+  const r = JSON.parse(out.trim().split('\n').pop());
+  assert.deepEqual(r, { returned: true, ok: true });
 });
 
 test('creditPayment: the stored event list is frozen, so the cache revision cannot lie', () => {

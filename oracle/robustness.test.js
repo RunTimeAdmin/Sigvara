@@ -542,6 +542,82 @@ function pendingProposal(world, { agedPastWindow = false, data = ZERO_SCORE, ...
   };
 }
 
+// ---- a window changed after the proposal ---------------------------------------------------
+//
+// The contract fixes a proposal's deadline when it is made and keeps it, so a window changed later moves
+// no proposal already pending. The oracle follows that stored deadline and not proposedAt plus the window
+// in force now.
+
+const SIX_HOURS = 21_600;
+const TWELVE_HOURS = 43_200;
+
+/** A pending proposal made `ageSeconds` ago under a window of `madeUnder` seconds. */
+function proposalUnder(world, { ageSeconds, madeUnder, ...rest }) {
+  const proposedAt = world.data.nowSec - ageSeconds;
+  return { exists: true, proposedAt, finalizableAt: proposedAt + madeUnder, data: ZERO_SCORE, evidenceRoot: null, ...rest };
+}
+
+test('a proposal made under a longer window is finalized at its own deadline, not at the one in force now', async () => {
+  // Made 7 hours ago under 6 hours, so it can be finalized now. The window has since been lengthened to 12.
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  world.set('challengeWindow', TWELVE_HOURS);
+  world.setFor('pending', agent.didHash, proposalUnder(world, { ageSeconds: 7 * 3600, madeUnder: SIX_HOURS }));
+
+  await inEpoch({ world, env: BASE_ENV }, ({ text, calls, logs }) => {
+    assert.deepEqual(names(calls), ['finalizeScore', 'proposeScore']);
+    assert.doesNotMatch(logs, /score still pending/);
+    assert.equal(counter(text, 'sigvara_oracle_finalize_total{result="success"}'), 1);
+  });
+});
+
+test('a proposal made under a shorter window is left alone until its own deadline', async () => {
+  // Made 7 hours ago under 12 hours, so the contract still refuses to finalize it. The window has since been
+  // shortened to 6, which would say it is ready: the oracle used to send a finalize the contract refused.
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  world.set('challengeWindow', SIX_HOURS);
+  world.setFor('pending', agent.didHash, proposalUnder(world, { ageSeconds: 7 * 3600, madeUnder: TWELVE_HOURS }));
+
+  await inEpoch({ world, env: BASE_ENV }, ({ text, calls, logs }) => {
+    assert.deepEqual(names(calls), [], 'nothing was sent');
+    assert.match(logs, /score still pending, waiting out challenge window/);
+    assert.equal(counter(text, 'sigvara_oracle_finalize_total{result="error"}'), 0);
+    assert.equal(counter(text, EPOCHS_OK), 1);
+  });
+});
+
+test('a proposal from before the deadline was stored is still judged against the live window', async () => {
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  world.setFor('pending', agent.didHash, pendingProposal(world, { agedPastWindow: true }));
+
+  await inEpoch({ world, env: BASE_ENV }, ({ calls }) => {
+    assert.deepEqual(names(calls), ['finalizeScore', 'proposeScore']);
+  });
+});
+
+test('a checker says whether a disagreement can still be rejected by the deadline the contract holds', async () => {
+  // Past the window in force now, before the deadline the proposal was made under: the committee can still
+  // reject it, and the log must say so.
+  const open = new World();
+  const a = open.addRegisteredAgent();
+  open.set('challengeWindow', SIX_HOURS);
+  open.setFor('pending', a.didHash, proposalUnder(open, { ageSeconds: 7 * 3600, madeUnder: TWELVE_HOURS, data: HIGH_SCORE }));
+  await inEpoch({ world: open, env: CHECKER_ENV }, ({ logs }) => {
+    assert.match(logs, /DIVERGENCE .* challenge window OPEN, committee can still reject/);
+  });
+
+  // The other way: inside the window in force now, past the deadline the proposal was made under.
+  const closed = new World();
+  const b = closed.addRegisteredAgent();
+  closed.set('challengeWindow', TWELVE_HOURS);
+  closed.setFor('pending', b.didHash, proposalUnder(closed, { ageSeconds: 7 * 3600, madeUnder: SIX_HOURS, data: HIGH_SCORE }));
+  await inEpoch({ world: closed, env: CHECKER_ENV }, ({ logs }) => {
+    assert.match(logs, /DIVERGENCE .* window closed/);
+  });
+});
+
 test('a pending proposal whose proposer has lost its authority is replaced, not counted as a failure', async () => {
   const world = new World();
   const agent = world.addRegisteredAgent();

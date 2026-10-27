@@ -19,7 +19,7 @@ const chain = require('./chain');
 const external = require('./external');
 const { computeScore } = require('./scoring');
 const {
-  decideAction, decideCheckerAction, scoreDivergence,
+  decideAction, decideCheckerAction, finalizableAtOf, scoreDivergence,
   epochIntervalError, divergenceToleranceError, DEFAULT_DIVERGENCE_TOLERANCE,
   mapChunked, clockSkewError, scoringIsStale,
 } = require('./epoch-policy');
@@ -930,7 +930,7 @@ async function runEpochInner() {
               // knowing the protocol's endpoint layout.
               compareWith: `${cfg.primaryEvidenceUrl}/evidence/${didHash}`,
             });
-            const open = chainNow < freshPending.proposedAt + challengeWindow;
+            const open = chainNow < finalizableAtOf(freshPending, challengeWindow);
             const detail = Object.entries(d.factors)
               .map(([f, v]) => `${f} pending=${v.pending} ours=${v.own}`).join(', ');
             console.error(
@@ -1318,7 +1318,7 @@ async function handleRequest(req, res) {
     // What the last write actually did, beside whether the path looks writable. The
     // probe writes a handful of bytes and deletes them, so it passes while a real state
     // file fails to land for want of space. Unhealthy on a failed persist because the
-    // attest path has already answered 200 to somebody on the strength of it.
+    // attest path has already taken somebody's word on the strength of it (202, durable: false).
     const persisted = getLastPersist();
 
     const healthy = storeWritable
@@ -1620,12 +1620,17 @@ async function handleRequest(req, res) {
       if (outcome === true) att.successful++;
       attestations.set(didHash, att);
       if (throttled) recordAttestation(attester, didHash);
-      persistState();
-      metrics.inc('attestAccepted');
-      return json(res, 200, {
+      // Said as it is. A failed save leaves the attestation in memory, to be written by the next save that works,
+      // and a restart before then loses it: an attested outcome is on no chain to be found again. Answering 200
+      // would tell the submitter it counted for good. 202 says it was taken and is not yet safe, and /health is
+      // already unhealthy for the same reason. The submitter must not resend: the payment is credited here.
+      const durable = persistState();
+      metrics.inc(durable ? 'attestAccepted' : 'attestAcceptedNotDurable');
+      return json(res, durable ? 200 : 202, {
         didHash,
         attester,
         ...att,
+        ...(durable ? {} : { durable: false }),
         ...(credited
           ? { payment: { txHash: credited.txHash, amount: credited.amount.toString() }, outcomeRecorded }
           : {}),
