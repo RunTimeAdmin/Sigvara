@@ -2,9 +2,9 @@
 
 Written on 24 October 2026 after a review found no ordered sequence for this anywhere in the repository. The oracle's signing key sits in a `.env` file on a rented server, so assume it will leak one day. This is the order to work in, who can do each step, and what to keep.
 
-Testnet and mainnet differ and the differences are marked. On the **September testnet contracts** the key is the operator and owns the bond: a thief can start the 7-day unbond. On **`main`** (ADR 0004) the owner of the bond names a separate signer, so a stolen signer is revoked in one transaction by someone who is not on the server, and it can never move the bond. Mainnet launches with the second shape.
+An operator is registered in one of two shapes. With **no signer named**, the key is the operator and owns the bond: a thief can start the 7-day unbond. Both testnet operators are registered this way, although the testnet contracts have run the code on `main` since 26 October 2026 and so support the second shape. With **a signer named** (ADR 0004), the owner of the bond names a separate signer, so a stolen signer is revoked in one transaction by someone who is not on the server, and it can never move the bond. Mainnet launches with the second shape. A testnet operator can move to it: it calls `setSigner` with its own key, and the admin grants `ORACLE_ROLE` to the new signer, because naming a signer grants no role. Who can do each step also differs between testnet and mainnet, and those differences are marked.
 
-What a thief can do with the key before you act: propose scores (they finalize after the challenge window unless the committee rejects them), finalize pending ones, charge epoch fees if a fee registry is wired, and on the September contracts start the unbond and withdraw the bond after the cooldown unless it is slashed first.
+What a thief can do with the key before you act: propose scores (they finalize after the challenge window unless the committee rejects them), finalize pending ones, charge epoch fees if a fee registry is wired, and, when no signer is named, start the unbond and withdraw the bond after the cooldown unless it is slashed first.
 
 ## When to start
 
@@ -14,11 +14,11 @@ Any of these is enough: the `.env` or a copy of it was readable by someone it sh
 
 1. **Stop the process that holds the key.** On the box: `docker compose stop` in the project directory. Do this first and do not delete anything. The other operator keeps scoring or auditing.
 2. **Take the key's authority away on chain.** Who can: the deployer on the testnet, the admin Safe on mainnet.
-   - `revokeRole(ORACLE_ROLE, <key>)` on `SigvaraReputation`. On `main`, `finalizeReputation` refuses a proposal whose proposer no longer holds the role.
-   - `removeOperator(<key>)` on `SigvaraOracleBond` (admin). On `main`, if the key is only a signer, the bond owner calls `clearSigner()` instead (any status works).
-   - If funds could move, the guardian calls `pauseInflows()` (`main` only; the admin can lift it). It closes registrations, deposits, proposals and bonds for 3 days and moves nothing.
-3. **Reject what it already proposed.** The committee calls `rejectReputation(didHash)` for every pending proposal from that key, before the window closes (6 hours on the testnet). To find them: read the `ScoreProposed` logs of the last window and check the sender of each transaction; for each agent you can also read `getPendingScore(didHash)`, whose `proposer` field is filled on `main`. The checker's `GET /divergence` lists the ones it disagrees with.
-4. **On the September contracts, watch for `initiateUnbond`.** If the thief starts it, the committee slashes the operator inside the 7 days.
+   - `revokeRole(ORACLE_ROLE, <key>)` on `SigvaraReputation`. `finalizeReputation` then refuses a proposal whose proposer no longer holds the role.
+   - `removeOperator(<key>)` on `SigvaraOracleBond` (admin). If the key is only a signer, the bond owner calls `clearSigner()` instead (any status works). Neither testnet operator has a signer named, so that case does not arise there yet.
+   - If funds could move, the guardian calls `pauseInflows()` (the admin can lift it). It closes registrations, deposits, proposals and bonds for 3 days and moves nothing.
+3. **Reject what it already proposed.** The committee calls `rejectReputation(didHash)` for every pending proposal from that key, before the window closes (6 hours on the testnet). To find them: read the `ScoreProposed` logs of the last window and check the sender of each transaction; for each agent you can also read `getPendingScore(didHash)`, whose `proposer` field names who made the proposal. The checker's `GET /divergence` lists the ones it disagrees with.
+4. **If no signer is named, watch for `initiateUnbond`.** If the thief starts it, the committee slashes the operator inside the 7 days.
 
 ## 2. Keep the evidence before anything is deleted
 

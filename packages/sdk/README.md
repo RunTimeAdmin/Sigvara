@@ -73,6 +73,7 @@ const operator = new ethers.Wallet(process.env.OPERATOR_KEY!, new ethers.JsonRpc
 
 // The agent address must prove control of itself. Pass a signer for it, or
 // { signature } if it was signed elsewhere (HSM, Safe, any ERC-1271 contract).
+const agentSigner = new ethers.Wallet(process.env.AGENT_KEY!); // a signer for agent.agentAddress
 await registerAgent(operator, agent.agentAddress, agent.publicKeyBytes32, addresses.identity, { agentSigner });
 
 // Registration leaves the agent PendingBond. This deposit is what activates it.

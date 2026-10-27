@@ -9,7 +9,7 @@ agent, see the [quickstart](quickstart.md). For how the score is built, see the
 ```solidity
 import {ISigvaraReader} from "sigvara/src/interfaces/ISigvara.sol";
 
-ISigvaraReader sigvara = ISigvaraReader(READER); // a deployed SigvaraReader
+ISigvaraReader sigvara = ISigvaraReader(READER); // a SigvaraReader you deploy; none is deployed yet
 
 require(sigvara.isTrusted(agent, 40), "agent not in good standing");
 ```
@@ -117,6 +117,8 @@ with maturity, so freshness answers when it was written, not whether it is still
 ## What can change under you
 
 A consumer of the Reader trusts the parties that govern the registries, and should know which of their powers move an answer without warning. The detail is in [ADR 0005](adr/0005-governance-and-emergency-powers.md).
+
+This is the mainnet design. On Arc testnet today one deployer key holds both the admin and the upgrader role, with no Safe and no timelock, so a parameter change or an upgrade there comes with no notice.
 
 - **Parameters, at once.** The admin Safe sets the minimum stake, the challenge and unbonding periods, the score window and the maturity rate. All but the minimum stake sit between a floor and a ceiling; the minimum stake only has to be above zero. A raised minimum stake makes `isTrusted` false for an agent that holds less, immediately.
 - **Standing, through a slash.** The committee files a slash. It executes after the challenge period unless the operator disputes it, in which case the admin Safe rules, or the admin Safe vetoes it. A slashed agent is terminal: `isTrusted` is false for good.

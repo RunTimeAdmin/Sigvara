@@ -159,6 +159,8 @@ Deducted based on unresolved community flags. The full 5 pts is the default for 
 3 flags → 0 pts
 ```
 
+Flags decay on a half-life (30 days by default, `FLAG_HALF_LIFE_DAYS`), so the table is for fresh flags. A flag one half-life old counts as half a flag and costs one point, not two.
+
 Flags are raised by credentialed services, such as watchdog scanners, through `POST /flag` (separate from slashing). Slashing is economic; flags are reputational.
 
 ### Trust Propagation (5 pts)
@@ -315,7 +317,9 @@ still working today.
 
 When an agent is slashed:
 
-1. `SigvaraStaking.executeSlash()` calls `SigvaraReputation.zeroReputation(didHash)`
+1. When a slash settles, through `SigvaraStaking.executeSlash()` after an undisputed challenge period or through
+   the admin upholding a disputed one with `resolveDispute`, the staking contract calls
+   `SigvaraReputation.zeroReputation(didHash)`
 2. All six factor scores are set to zero
 3. The agent's status is set to `Slashed` (terminal — no further transitions)
 4. The stake is distributed: 50% burned, 25% to victim, 25% to reporter
@@ -363,10 +367,10 @@ interval (`EPOCH_HOURS`, default 24). Each epoch it scans `AgentRegistered` even
 checkpointing so a rate-limited scan resumes instead of restarting), recomputes every
 factor, and proposes a score plus a Merkle root over the evidence it used.
 
-Two bonded operators run today, and only one of them writes. When
+Two bonded operators run today, and in normal running only one of them proposes. When
 `SigvaraReputation.operatorBond` is set — it is on Arc testnet — a proposer must also be
 admitted and bonded in `SigvaraOracleBond`, so a bad score costs its proposer something.
-Anyone may finalize, but not a proposal whose proposer has since been removed (on `main`; the testnet proxies predate that check).
+Anyone may finalize, but not a proposal whose proposer has since been removed.
 
 The second runs in checker mode: it recomputes each pending score independently and
 records disagreement rather than competing for the slot, because two operators writing to

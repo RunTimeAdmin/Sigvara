@@ -111,11 +111,13 @@ Mainnet should run `required`.
 
 ## Responses
 
+The codes that depend on the payment check are below. The [oracle README](../oracle/README.md) lists the rest, among them 400 for a malformed body, 413 for a body over 1 MB and 429 for the cooldown.
+
 | Status | Meaning |
 |---|---|
 | 200 | Accepted. The body echoes the verified payer and amount |
 | 402 | The payment did not check out. `code` says why |
-| 409 | This settlement was already credited |
+| 409 | This settlement was already credited, or it already has an outcome, which is final |
 | 502 | The RPC failed. Not a verdict on the payment, retry |
 
 The 502 case matters. A node having a bad minute must not read as a caller trying

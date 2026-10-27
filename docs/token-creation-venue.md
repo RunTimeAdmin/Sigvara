@@ -4,7 +4,7 @@ Short answer: it matters, and the venue is not interchangeable.
 
 ## The requirement
 
-SVR is consumed by contracts that live on Arc: `SigvaraStaking` and `SigvaraOracleBond` take the token by address at initialization and treat it as a plain `IERC20`, and so does `SigvaraEpochFees`, which is not deployed at launch ([ADR 0005](adr/0005-governance-and-emergency-powers.md)). The bond is the deterrent, the stake is the gate, the epoch fee will be the meter. All three accounting paths assume the token's transfers are cheap, final, and native to the same chain the registries run on.
+SVR will be consumed by contracts that live on Arc: `SigvaraStaking` and `SigvaraOracleBond` take the token by address at initialization and treat it as a plain `IERC20`, and so does `SigvaraEpochFees`, which is not deployed at launch ([ADR 0005](adr/0005-governance-and-emergency-powers.md)). The bond is the deterrent, the stake is the gate, the epoch fee will be the meter. All three accounting paths assume the token's transfers are cheap, final, and native to the same chain the registries run on.
 
 ## Why Arc, not elsewhere
 

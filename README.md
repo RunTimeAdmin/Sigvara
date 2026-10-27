@@ -2,11 +2,13 @@
 
 **Computed reputation and staked slashing for autonomous AI agents, on top of ERC-8004.**
 
+[Website](https://sigvara.xyz) · [Quickstart](docs/quickstart.md) · [Live demo](https://sigvara.xyz/demo) · [Check an agent](https://sigvara.xyz/check) · [SDK on npm](https://www.npmjs.com/package/@sigvara/protocol-sdk) · [Wiki](https://github.com/RunTimeAdmin/Sigvara/wiki)
+
 As AI agents become independent economic actors, they need a trust score that means something and accountability that costs something. [ERC-8004](https://eips.ethereum.org/EIPS/eip-8004) gives agents a standard on-chain identity and a raw feedback ledger, but deliberately leaves out the hard parts: computing a trustworthy score from that feedback, and putting slashable stake behind it. Sigvara is that layer. It takes ERC-8004 as the identity and feedback substrate, computes a normalized reputation score with an oracle, and enforces bonds and slashing — the accountability the standard omits. (Ed25519 PKI challenge-response for agent-to-agent auth rides alongside.)
 
 > **Token: not launched yet.** The protocol's bond and fee asset will be **SVR**, a fixed-supply, ownerless ERC-20 launched through Tolly on Arc mainnet with no team allocation, no treasury allocation and no sale. Until its contract address appears in [docs/token.md](docs/token.md) and on [sigvara.xyz](https://sigvara.xyz), there is no genuine SVR; anything trading under the Sigvara name before then, or at any other address after, did not come from this team. On-chain utility begins when the registries deploy to Arc mainnet after audit.
 >
-> **Where this stands.** Sigvara is a computed-reputation and staked-slashing layer for autonomous agents on top of ERC-8004: the standard covers identity and raw feedback; Sigvara computes a normalized score and puts slashable bond behind it. Contracts, oracle and SDK are built and tested (Foundry unit, fuzz and invariant tests, Slither in CI). The same protocol ran for about a month on Robinhood Chain testnet with a live hourly oracle under its prior name (see [docs/lineage.md](docs/lineage.md)). It is now **deployed and running on Arc testnet** (chain ID `5042002`) with a live oracle, payment-verified attestations and a bonded oracle operator — addresses under [Deployed contracts](#deployed-contracts-arc-testnet) and details in [docs/arc.md](docs/arc.md). A second bonded operator runs in checker mode alongside the primary as of 20 September 2026, though both are operated by the same party and only the primary writes scores. The divergence this produced on 20 September was left live and triaged in public rather than seeded away, because it was a delivery failure and not a disagreement; [ADR 0003](docs/adr/0003-evidence-intake.md) decides the fix, and the pull scanner that implements it has been **enabled on both operators since 3 October 2026**: each one indexes `Transfer` logs itself, so a payment enters a score by having happened rather than by being reported, and `/attest` is now a hint carrying the outcome rather than the only door. The first live slash settled the same day, taking a 1,000 SVR bond and a score of 15 to zero (see [the drill log](docs/slash-drill-log.md)). There is no external audit. This is early protocol work with real engineering and a documented testnet lineage, not a mainnet product claim. The two-way [CounterAudit](https://counteraudit.io) integration is **live**: sealed audit packets carry the agent's Arc identity and score frozen at the moment of the action, and audited outcomes are attested back to the oracle.
+> **Where this stands.** Sigvara is a computed-reputation and staked-slashing layer for autonomous agents on top of ERC-8004: the standard covers identity and raw feedback; Sigvara computes a normalized score and puts slashable bond behind it. Contracts, oracle and SDK are built and tested (Foundry unit, fuzz and invariant tests, Slither in CI). The same protocol ran for about a month on Robinhood Chain testnet with a live hourly oracle under its prior name (see [docs/lineage.md](docs/lineage.md)). It is now **deployed and running on Arc testnet** (chain ID `5042002`) with a live oracle, payment-verified attestations and a bonded oracle operator — addresses under [Deployed contracts](#deployed-contracts-arc-testnet) and details in [docs/arc.md](docs/arc.md). A second bonded operator runs in checker mode alongside the primary as of 20 September 2026, though both are operated by the same party and, in normal running, only the primary proposes scores (the checker finalizes the ones it agrees with). The divergence this produced on 20 September was left live and triaged in public rather than seeded away, because it was a delivery failure and not a disagreement; [ADR 0003](docs/adr/0003-evidence-intake.md) decides the fix, and the pull scanner that implements it has been **enabled on both operators since 3 October 2026**: each one indexes `Transfer` logs itself, so a payment enters a score by having happened rather than by being reported, and `/attest` is now a hint carrying the outcome rather than the only door. The first live slash settled the same day, taking a bond of 1,000 testnet faucet tokens and a score of 15 to zero (see [the drill log](docs/slash-drill-log.md)). There is no external audit. This is early protocol work with real engineering and a documented testnet lineage, not a mainnet product claim. The two-way [CounterAudit](https://counteraudit.io) integration is **live**: sealed audit packets carry the agent's Arc identity and score frozen at the moment of the action, and audited outcomes are attested back to the oracle.
 
 **Who builds this:** [docs/WHO.md](docs/WHO.md) — builder background, related projects, and contact.
 
@@ -24,10 +26,8 @@ The [**wiki**](https://github.com/RunTimeAdmin/Sigvara/wiki) is the browsable re
 pages covering the contracts, the oracle, the scoring model, the SDK and operations, with
 every claim linked to the line of source it was derived from. It is generated from the tree
 and edited for publication, so where it disagrees with the code or the tables below, the
-code wins. It was last republished on 23 October 2026 against `main` at `d8e44c2`, so it
-covers the mainnet-readiness changes of 22 October (timelocked role grants, the guardian
-pause, admin-ruled disputes, launch floors and ceilings, reader freshness). Anything merged
-since is in the documents below first.
+code wins. Its home page names the commit of `main` it was last checked against. Anything
+merged since is in the documents below first.
 
 The documents below are written by hand and are the authority on intent, trade-offs and
 what is not yet true.
@@ -53,6 +53,7 @@ what is not yet true.
 | [Architecture decision records](docs/adr) | Reviewers: why the ERC-8004 identity layer, accepted analyzer findings, evidence intake, operator custody and governance were decided the way they were |
 | [Oracle](oracle/README.md) | Operators: endpoints, settings, state file, monitoring and the production checklist |
 | [Second operator runbook](oracle/RUNBOOK-second-operator.md) | Operators: bond, admit and run a checking operator, step by step |
+| [If an operator's signing key may be stolen](docs/incident-operator-key.md) | Operators: what to do in the first half hour, what to keep, what to rotate, and how to back up and restore the oracle's state |
 | [TypeScript SDK](packages/sdk/README.md) | Developers: install, the gate, and what each release changed ([changelog](packages/sdk/CHANGELOG.md)) |
 | [Slash drill](docs/slash-drill.md) and [its log](docs/slash-drill-log.md) | Reviewers: the procedure for a live slash and the record of the first one |
 | [Divergence log](docs/divergence-log.md) | Reviewers: every disagreement the checking operator recorded, and what it turned out to be |
@@ -74,9 +75,10 @@ what is not yet true.
 > `node scripts/record-implementations.mjs --check` fails if the file and the chain
 > disagree.
 >
-> **The testnet runs this repository's contracts, with older role administrators.** The four
-> proxies were upgraded in place to `main` with `script/Upgrade.s.sol`, and `--check` confirms
-> the file matches the chain. The guardian pause, admin-ruled disputes with a veto and a lapse,
+> **The testnet runs this repository's contracts as of `fdce1a7`, with older role administrators.**
+> The four proxies were upgraded in place on 26 October 2026 with `script/Upgrade.s.sol`, to the
+> contracts at that commit (then the head of `main`), and `--check` confirms the file matches the
+> chain. A contract change merged after it is not on the testnet until the next upgrade. The guardian pause, admin-ruled disputes with a veto and a lapse,
 > launch floors and ceilings, operator signers, the reporter check at slash execution, a
 > withdrawal's claim time fixed when it is queued, and the refusal of evidence the admin rejected
 > are live. An upgrade does not rewrite role administrators, so the proxies keep what the
@@ -145,16 +147,16 @@ graph TB
 
 ## Contracts
 
-> **Identity layer: ERC-8004.** Sigvara has adopted the [ERC-8004](https://eips.ethereum.org/EIPS/eip-8004) Identity Registry as the canonical agent registry and no longer maintains a competing one. Sigvara is the **computed-reputation and staked-slashing layer on top of the standard** — the parts ERC-8004 deliberately leaves out. See [ADR 0001](docs/adr/0001-erc8004-as-identity-layer.md).
+> **Identity layer: ERC-8004.** Sigvara has chosen the [ERC-8004](https://eips.ethereum.org/EIPS/eip-8004) Identity Registry as its long-term agent registry. The cutover has not happened: `SigvaraIdentity`, below, is still the registry every deployed component reads and writes. Sigvara is the **computed-reputation and staked-slashing layer on top of the standard** — the parts ERC-8004 deliberately leaves out. See [ADR 0001](docs/adr/0001-erc8004-as-identity-layer.md).
 
 > **Commerce layer: ERC-8183, watched not used.** Arc pairs ERC-8004 identity with [ERC-8183](https://eips.ethereum.org/EIPS/eip-8183), where a job is escrow with a verdict written by a named evaluator. That verdict is the one input this protocol cannot check for itself today: the oracle proves a payment settled and takes "it went well" from whoever submitted the attestation. The oracle can now **read** an ERC-8183 registry (`GET /jobs/:address`) and reports `scored: false` on every response, because the ERC is still a Draft and Arc has no canonical deployment. See [docs/arc.md](docs/arc.md#erc-8183-agentic-commerce-on-arc).
 
 | Contract | Role |
 |---|---|
 | [`SigvaraReputation`](src/SigvaraReputation.sol) | **Computed-score anchor.** Stores the oracle's normalized, capped 6-factor score — the layer *above* ERC-8004's raw feedback. Exposes `getTotalScore()` and `meetsThreshold()` for on-chain consumers. |
-| [`SigvaraStaking`](src/SigvaraStaking.sol) | **Staked accountability.** Agent bond management with committee-initiated slashing (7-day challenge window, permissionless execution after timelock). No ERC-8004 equivalent — this is the differentiator. Bond token is set by address at deploy: the faucet `SVRToken` on testnet, [SVR](docs/token.md) on mainnet — the contracts treat it as a plain `IERC20` either way. |
+| [`SigvaraStaking`](src/SigvaraStaking.sol) | **Staked accountability.** Agent bond management with committee-initiated slashing (7-day challenge window; permissionless execution once it closes, as long as the reporter is still on the committee). No ERC-8004 equivalent — this is the differentiator. Bond token is set by address at deploy: the faucet `SVRToken` on testnet, [SVR](docs/token.md) on mainnet — the contracts treat it as a plain `IERC20` either way. |
 | [`SigvaraIdentity`](src/SigvaraIdentity.sol) | **The registry in use today.** `did:sigvara` registration with proof of control by the agent address, on-chain Ed25519 PKI, bond-gated status (`PendingBond` → `Active`) and two-step operator transfer. ERC-8004 is the long-term identity layer ([ADR 0001](docs/adr/0001-erc8004-as-identity-layer.md)); until that migration lands this contract is what every deployed component reads and writes. Its non-redundant part (the Ed25519 auth key, bond-gated status, transfer history) becomes an extension keyed to an ERC-8004 agent id. |
-| [`SigvaraOracleBond`](src/SigvaraOracleBond.sol) | **Oracle accountability.** Performance bonds for oracle operators. When wired into `SigvaraReputation.operatorBond`, only an admitted, bonded operator, or the signer it has named, can propose a score, so the key that signs need not be the key that holds the bond. Deployed on Arc testnet and wired (the signer registry is on `main` only). |
+| [`SigvaraOracleBond`](src/SigvaraOracleBond.sol) | **Oracle accountability.** Performance bonds for oracle operators. When wired into `SigvaraReputation.operatorBond`, only an admitted, bonded operator, or the signer it has named, can propose a score, so the key that signs need not be the key that holds the bond. Deployed on Arc testnet and wired. The signer registry is live there, but neither testnet operator has named a signer yet, so each operator key still holds its own bond. |
 | [`SigvaraEpochFees`](src/SigvaraEpochFees.sol) | **Scoring fee module, not deployed.** A prepaid fee per scoring epoch that gates an agent's inclusion in a run; an `epochFee` of 0 disables it. Built and tested, never deployed on Arc, and left out of launch and of the first audit ([ADR 0005](docs/adr/0005-governance-and-emergency-powers.md)). |
 
 The retained contracts use UUPS upgradeable proxies (OpenZeppelin v5), controlled by a governance timelock on mainnet.
@@ -581,7 +583,7 @@ Everything below runs offline, with no deployed contracts, except two fork suite
 | Oracle | 760 | `cd oracle && node --test` |
 | SDK | 168 | `cd packages/sdk && npx vitest run` |
 
-Counts are individual tests as of 23 October 2026, so each of the 19 invariants counts once. Without a fork URL, 686 of the contract tests run and 7 skip. The SDK's 168 include 8 integration tests that skip without a live deployment. Vitest strips types without checking them, so `npm run typecheck` in `packages/sdk` checks the tests against the SDK's types as well as the sources. [`scripts/mutation`](scripts/mutation/README.md) holds the harnesses that measure whether these tests would catch a deliberate break in the contracts or deploy scripts.
+Counts are individual tests as measured on 27 October 2026, so each of the 19 invariants counts once. Without a fork URL, 686 of the contract tests run and 7 skip. The SDK's 168 include 8 integration tests that skip without a live deployment. Vitest strips types without checking them, so `npm run typecheck` in `packages/sdk` checks the tests against the SDK's types as well as the sources. [`scripts/mutation`](scripts/mutation/README.md) holds the harnesses that measure whether these tests would catch a deliberate break in the contracts or deploy scripts.
 
 ### Unit Tests (default)
 
@@ -648,13 +650,15 @@ Key scenarios tested:
 
 ### Repository checks and tools
 
-The first three run in CI on every push. Run them from the repository root.
+The first four run in CI on every push. Run them from the repository root.
 
 | Script | What it does |
 |---|---|
 | `node scripts/check-docs.mjs` | Fails when the site or the docs state something the contracts do not: selectors, status labels, deployed addresses, factor caps, launch amounts |
-| `node scripts/check-headers.mjs` | Fails if the site's response headers have more than one source or lose a CSP directive. `site/.htaccess` is the only source |
+| `node scripts/check-headers.mjs` | Fails if the site's response headers have more than one source, or if `site/.htaccess` differs from the exact list in the script (every CSP directive and every other security header). `site/.htaccess` is the only source |
 | `node scripts/check-evidence-fixture.mjs` | Regenerates the Merkle evidence fixture in `test/SigvaraReputation.t.sol` from `oracle/merkle.js` and compares it, so the oracle and the contract cannot drift apart on leaf encoding. `--write` updates it after a deliberate format change |
+| `node scripts/check-secrets.mjs` | Fails when a tracked file holds a PEM private key block, 64 hex characters assigned to a key-like name, or a mnemonic phrase. A raw key matches no token format that GitHub's push protection knows, and one pushed to this public repository cannot be taken back. It prints the file and line, never the value. `--staged` scans only what is staged (for a pre-commit hook) and `--self-test` proves the scanner still catches what it should |
+| `node scripts/check-live.mjs` | Looks at the live deployment from outside, with GET requests only. `site` fails when a deployed file differs from `main`, when the security headers differ from `site/.htaccess`, or when a missing path does not get the site's own 404 page with the same policy. `services` fails when the oracle or the checker does not answer, has not finished an epoch in three hours or is not saving its state, when the checker records a divergence, or when a certificate is within 14 days of expiry. The Live checks workflow runs it |
 | `node scripts/record-implementations.mjs` | Reads each proxy's implementation slot from the chain and records it in `deployments/<chainId>.json`. `--check` fails if the file and the chain disagree |
 | `node scripts/check-role-holders.mjs` | After the mainnet handover, replays every role grant and revocation and fails unless each role is held by exactly the expected addresses. Needs `SAFE`, `TIMELOCK`, `COMMITTEE`, `ORACLE` and `GUARDIAN` in the environment |
 | `source scripts/check-mainnet.sh` | Post-deploy assertions for the Arc mainnet deployment. Export the addresses its header lists, then call the checks that match the step just finished, such as `check_core` |
@@ -664,7 +668,9 @@ The first three run in CI on every push. Run them from the repository root.
 | `node scripts/backfill-payment-blocks.mjs` | One-off repair for payment events saved before they carried a block number. Needs `--state`, `--rpc` and `--asset`, is a dry run until `--write` is given, and has to run with the oracle stopped |
 | `node scripts/fat-path.mjs` | Testnet only. Funds separate payer wallets that each pay a live agent and attest the settlements, so its fee factor rests on distinct counterparties (the attestations carry no outcome, so the success rate does not move). Needs `--agent` and `DEPLOYER_PRIVATE_KEY` |
 
-CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on every push to `main` and every pull request, with read-only repository permissions. It builds and tests the contracts (`forge build --sizes`, then `forge test` on the `ci` profile with 5,000 fuzz runs, including the testnet-forking `SlashDrillFork`), builds, typechecks and tests the SDK, runs the oracle tests and the first three scripts above, and runs Slither, which fails the build on High findings only. The Medium and Low findings that were reviewed and accepted are recorded in [ADR 0002](docs/adr/0002-analyzer-accepted-findings.md).
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on every push to `main` and every pull request, with read-only repository permissions. It builds and tests the contracts (`forge build --sizes`, then `forge test` on the `ci` profile with 5,000 fuzz runs, including the testnet-forking `SlashDrillFork`), builds, typechecks and tests the SDK, runs the oracle tests and the first four scripts above, and runs Slither, which fails the build on High findings only. The Medium and Low findings that were reviewed and accepted are recorded in [ADR 0002](docs/adr/0002-analyzer-accepted-findings.md).
+
+A second workflow, [`live-checks.yml`](.github/workflows/live-checks.yml), runs `check-live.mjs` on a schedule (hourly in the file, though GitHub often runs it later) from a place that shares no account or host with what it watches. A failed run emails the repository owner. It also fails when a merged site change has not been uploaded yet, because the site is uploaded by hand. [Dependabot](.github/dependabot.yml) proposes dependency updates monthly, and each one is merged by hand.
 
 ---
 
@@ -677,11 +683,11 @@ and administers `UPGRADER_ROLE` (see [Deployed contracts](#deployed-contracts-ar
 
 | Role | Holder (Testnet) | Mainnet target | Permissions |
 |---|---|---|---|
-| `DEFAULT_ADMIN_ROLE` | Deployer EOA `0x18CBcE50…` | Admin Safe | Grant `ORACLE_ROLE` and `GUARDIAN_ROLE`, revoke any role except `UPGRADER_ROLE`, set parameters (the periods, the score window and the maturity rate each have a floor and a ceiling; the minimum stake and the bond amount only have to be above zero), rule on a disputed slash, veto a pending or disputed slash. It cannot wire the stake view, the oracle bond or the slash beneficiary, and cannot grant the slasher, committee or staking-core roles: those need `UPGRADER_ROLE` |
+| `DEFAULT_ADMIN_ROLE` | Deployer EOA `0x18CBcE50…` | Admin Safe | Grant `ORACLE_ROLE` and `GUARDIAN_ROLE`, admit and remove oracle operators (`admit`, `removeOperator`), revoke any role except `UPGRADER_ROLE`, set parameters (the periods, the score window and the maturity rate each have a floor and a ceiling; the minimum stake and the bond amount only have to be above zero), rule on a disputed slash, veto a pending or disputed slash. It cannot wire the stake view, the oracle bond or the slash beneficiary, and cannot grant the slasher, committee or staking-core roles: those need `UPGRADER_ROLE` |
 | `UPGRADER_ROLE` | Deployer EOA `0x18CBcE50…` | Governance timelock (48 hours) | Authorize UUPS upgrades, wire the stake view, the oracle bond and the slash beneficiary (`setStakeView`, `setOperatorBond`, `setSlashBeneficiary`), and grant the slasher, slashing committee and staking core roles. On a registry initialised by the current code it is administered by itself, so the admin cannot grant it |
 | `GUARDIAN_ROLE` | A guardian key chosen at the upgrade, granted by the deployer on all four proxies | A separate, lighter key | Pause new inflows (registrations, stake deposits, score proposals, bond deposits) for three days at a time. Never exits, slash rulings or finalization, and the admin can revoke it at once |
 | `STAKING_CORE_ROLE` | `SigvaraStaking` `0xA69d62B2…` | `SigvaraStaking` | Suspend / slash agents, zero reputation, clear slash suspensions |
-| `ORACLE_ROLE` | Primary `0x6352b8FF…` + checker `0x989aabd6…`, both bonded | Multiple independently operated bonded operators, each signing with a key its cold bond owner has named | Propose reputation scores (and charge epoch fees on `SigvaraEpochFees`, which is not deployed at launch) |
+| `ORACLE_ROLE` | Primary `0x6352b8FF…` + checker `0x989aabd6…`, both bonded and each signing with its own bond key (neither has named a signer) | Multiple independently operated bonded operators, each signing with a key its cold bond owner has named | Propose reputation scores (and charge epoch fees on `SigvaraEpochFees`, which is not deployed at launch) |
 | `SLASHING_COMMITTEE_ROLE` | EOA `0x045d6c1D…` | 3-of-5 multisig | Initiate and cancel slash proposals, reject bad scores. It does not rule on disputes |
 | Operator | Agent registrant | Agent registrant | Register, suspend, reinstate, rotate key, transfer the agent |
 
@@ -724,7 +730,7 @@ await fetch('https://api.counteraudit.io/v1/audit/ingest', {
   }),
 });
 
-// The sealed packet contains:
+// The sealed packet contains (illustrative values):
 // agent_reputation_score: 47
 // agent_identity_status: "Active"
 // agent_identity_verified: true

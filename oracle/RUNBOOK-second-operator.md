@@ -343,7 +343,9 @@ Start from [`.env.checker.example`](./.env.checker.example), not from `.env.exam
 never from the primary's `.env`. It carries every value already filled in except the key,
 including the scoring inputs, which must match the primary **exactly**: a different
 half-life or fee unit guarantees divergence on every agent and tells you nothing about
-whether the primary is honest.
+whether the primary is honest. Payment scanning is one of those inputs: match the primary on
+`PAYMENT_SCAN_ENABLED` and `PAYMENT_SCAN_FROM_BLOCK`, because one operator scanning and the other
+not diverges on every agent with a payment the other missed.
 
 Four settings are not negotiable, and the process refuses to start if the first two are
 wrong:
@@ -482,7 +484,8 @@ curl -s http://127.0.0.1:3031/divergence
 `seesProposals` is `false`, `EPOCH_HOURS` is too long and this checker is not actually
 auditing anything, whatever the empty divergence list suggests.
 
-Then leave it for one challenge window (6 hours) and check that
+Then leave it for one challenge window plus one epoch (about 7 hours on Arc testnet: the checker only
+finalizes at an epoch that starts after the window has run out) and check that
 `sigvara_oracle_finalize_total{result="success"}` on `/metrics` is climbing. A checker that agrees with everything and finalizes
 nothing is not reaching the finalize branch at all.
 

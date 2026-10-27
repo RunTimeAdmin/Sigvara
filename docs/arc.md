@@ -176,7 +176,7 @@ logs of `PAYMENT_ASSET` to registered agent addresses, instead of waiting to be 
 
 **Enabled on both operators since 3 October 2026**, forward-only from block 65199000 and
 with `PAYMENT_SCAN_PACE_MS` at its default 500ms. The canary passes on both, so an empty
-scan is provable rather than merely reported. Three things that mattered when turning it
+scan is provable rather than merely reported. Four things that mattered when turning it
 on, kept because they apply to any operator doing it later:
 
 - It is an **environment** change, so `docker compose restart` will not pick it up. The
@@ -587,8 +587,10 @@ cover the half the slot-pinning tests do not: that the upgrade executes, that
 only `UPGRADER_ROLE` can execute it, and that stakes, scores and queued
 withdrawals read back unchanged afterwards.
 
-On mainnet `UPGRADER_ROLE` belongs to the governance timelock, so this script is
-used to simulate and to produce the calldata, not to broadcast.
+On mainnet `UPGRADER_ROLE` belongs to the governance timelock, so this script cannot
+broadcast the upgrade there. Use it to simulate. Deploy the implementation from any funded
+key, have the Safe schedule `upgradeToAndCall` on the timelock, and once the delay has run
+anyone executes it (the header of `script/Upgrade.s.sol` has the steps).
 
 ### Proof of control, PendingBond and evidence roots
 
@@ -656,20 +658,24 @@ when you ask for more than you hold.
 
 ### Implementation history
 
-Proxy addresses never change; these are the implementations behind them, newest first.
+Proxy addresses never change; these are the implementations behind them, newest first. On 26 October 2026 (Central time; 27 October 01:19 UTC) all four moved in place to the code on `main` (commit `fdce1a7`) with `script/Upgrade.s.sol`. [`deployments/5042002.json`](../deployments/5042002.json) holds the upgrade transaction and block of each replaced implementation, and it is the record to trust over this table.
 
 | Proxy | Implementation | Released |
 |---|---|---|
-| `identity` | `0xb2616f4a449726b195951b6a576aba6847e174ef` | 19 Sep, operator index (current) |
+| `identity` | `0xfb54a76f5347d8898e950c1fc3c28e22b0f224af` | 26 Oct, `fdce1a7` (current) |
+| | `0xb2616f4a449726b195951b6a576aba6847e174ef` | 19 Sep, operator index |
 | | `0x95d8592e7681550bee0c3e06c275ac1b94c873c6` | 19 Sep, proof of control + PendingBond |
 | | `0x486b1c2230c80a77dbec68835ff5b58eccd164ab` | 18 Sep, operator transfer |
-| `staking` | `0x169f1ada8a3568e229d24e74515b4ef889b8a6bd` | 21 Sep (current) |
+| `staking` | `0x147b687ab3299b454db8e413d62e251cf89588d5` | 26 Oct, `fdce1a7` (current) |
+| | `0x169f1ada8a3568e229d24e74515b4ef889b8a6bd` | 21 Sep |
 | | `0x3501f936f629dbc2e97ae0717c501456ca8215e0` | 19 Sep, narrowed coupling |
 | | `0x28c23b766c2dabb5f2930905a5eeb660919b71ef` | 19 Sep, PendingBond activation |
-| `reputation` | `0x87492399e34e5247740d0280c329e7553403404c` | current as recorded 21 Sep |
+| `reputation` | `0xd23fffa937cfe37bbc6ee1e14c3c844c78bfe3ca` | 26 Oct, `fdce1a7` (current) |
+| | `0x87492399e34e5247740d0280c329e7553403404c` | recorded 21 Sep |
 | | `0x0dc80134817e6fea978c06497f48391371a8413d` | 19 Sep, evidence roots |
 | | `0xea5940bc23d7bf82113316dd03a3b1bb1bc2f084` | 18 Sep, maturity |
-| `oracleBond` | `0x9ed31f024e0c3e7df853c411744babb53f5aaffa` | 21 Sep (current) |
+| `oracleBond` | `0xa33fc1b6ee82309bbf77fde4113a223742c53931` | 26 Oct, `fdce1a7` (current) |
+| | `0x9ed31f024e0c3e7df853c411744babb53f5aaffa` | 21 Sep |
 | | `0xf8464144726850d222a06b85a230c8030673b933` | 19 Sep, bond binds on read |
 | | `0x826fc09041a8a678b06336a253c55bd84f1fdc50` | 18 Sep, initial |
 

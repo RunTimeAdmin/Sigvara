@@ -1,7 +1,8 @@
 /**
  * Give a live agent a real trading history.
  *
- * The protocol has been exercised against one agent with two payments worth 23 SVR. Every
+ * When this script was written (20 September 2026) the protocol had been exercised against
+ * one agent with two payments worth 23 SVR. Every
  * claim about the score resisting manipulation is measured in a test harness, and the live
  * deployment has never carried a number large enough for `meetsThreshold` to mean
  * anything. This funds a set of independent payer wallets, has each pay the agent, and

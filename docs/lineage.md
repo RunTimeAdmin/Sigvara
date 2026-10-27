@@ -35,7 +35,7 @@ A legacy Sepolia deployment from 30 June 2026 preceded it (identity
 - **Reputation oracle, hourly epochs.** The oracle wallet `0xCBD43312…` called
   `proposeReputation` and `finalizeReputation` every hour. The reputation
   contract shows 2,470 transactions between deployment and the last epoch on
-  14 August 2026, 18:19 UTC: roughly 1,200 scoring epochs over 30 days.
+  14 August 2026, 18:19 UTC: roughly 1,200 proposal and finalization pairs over 30 days of hourly epochs.
 - **Registered agents.** Three agents registered through the identity
   registry, at blocks `90339181`, `90758493` and `90820089`. Their scores were
   written every epoch; the last finalized values on chain are 24 and 63 out
@@ -75,8 +75,9 @@ and in the RunTimeAdmin/sigvara repository.
 - Score challenge window set to 6 hours for Arc (was 30 minutes on testnet).
 - Slash exit-dodge closed via the unbonding queue (Countersig PR 19,
   22 July 2026), which is why `executeSlash` sweeps queued withdrawals.
-- Identity layer adopted ERC-8004 as the canonical registry; the on-chain
-  Ed25519 key and slash status remain Sigvara's extension.
+- ERC-8004 chosen as the long-term identity layer (ADR 0001). The cutover has not happened: every agent
+  on Arc is still registered in `SigvaraIdentity` and keyed by its `didHash`. The on-chain Ed25519 key and
+  slash status remain Sigvara's extension.
 - Bond token moved from the faucet `CSIG` to a deploy-time address so the
   same scripts serve testnet and mainnet.
 

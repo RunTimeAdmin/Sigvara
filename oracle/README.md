@@ -7,7 +7,8 @@ proposes it on chain together with a Merkle root over the evidence it used.
 
 Only **bonded** agents are scored: `proposeReputation` refuses a `PendingBond` agent.
 When `SigvaraReputation.operatorBond` is set, the oracle wallet must itself be an
-admitted, bonded operator in `SigvaraOracleBond` before it can propose anything.
+admitted, bonded operator in `SigvaraOracleBond`, or the signer such an operator has named, before it
+can propose anything.
 
 [`.env.example`](.env.example) is the authoritative, commented configuration reference;
 the tables below summarize it.
@@ -140,8 +141,9 @@ finished. `expectedChainId` is what `EXPECTED_CHAIN_ID` names, and `null` when i
 They are separate because only the first is a fact: a deployment with the second unset signs
 for whatever chain its RPC serves.
 
-`commit` is the git revision the container runs (the VPS and mainnet compose files take it from
-`SIGVARA_COMMIT`, and the VPS files refuse to start unless the checkout equals it), or `null` when the deployment did not report one. It answers "are these two operators running the same
+`commit` is the git revision the container runs (the VPS compose files take it from
+`SIGVARA_COMMIT` and refuse to start unless the checkout equals it; the mainnet file builds from
+`SIGVARA_REF` and passes it on as `SIGVARA_COMMIT`), or `null` when the deployment did not report one. It answers "are these two operators running the same
 scoring code", which is the first thing to rule out when a checker disagrees and was
 otherwise unanswerable from outside: the VPS deployments used to clone `main` at container
 start, so the only alternative was inferring it from restart times. **It is not a trust
@@ -1017,6 +1019,8 @@ The oracle persists the following to `ORACLE_STATE_PATH`:
 - **paymentEvents**: Per-agent verified payments, one record each (`txHash`, settlement time, amount, payer, outcome, and `blockNumber` for anything credited since 3 Oct 2026). Stored individually rather than as a running total, because a total cannot be decayed. Records whose weight falls below a thousandth are pruned once per epoch
 - **usedPaymentTxs**: Settlements already credited, as `txHash|didHash|payer`, so the same receipt cannot be counted twice for the same agent from the same sender. Keyed by all three because one transaction can pay several agents and can carry several senders, and collapsing either loses what the per-payer cap and the distinct counterparty count read. Shorter keys from before each change are still honoured and block everything below them, since what they omit is not recoverable: pruning drops old payment records and deliberately leaves this list alone
 - **scanState**: The `AgentRegistered` log scan cursor, checkpointed per chunk so a rate-limited scan resumes instead of restarting from `FROM_BLOCK`
+- **paymentScanState**: The payment scan checkpoint. `PAYMENT_SCAN_FROM_BLOCK` applies only while there is none
+- **divergences**: In checker mode, the disagreements with the primary that `GET /divergence` serves, capped per agent and pruned by age
 - **schemaVersion** and **chainId**: The format the file was written in, and the chain it belongs to, recorded the first time the oracle checks which chain its RPC serves
 
 Writes are atomic (temp file + rename, with an `fsync` before the rename so a crash cannot leave an atomically-renamed empty file). `/health` reports both whether the path is writable and whether the last write actually succeeded, and returns 503 on either. The two are not the same check: the first writes a few bytes to a test file, which passes while a real state file fails for want of space.
@@ -1044,9 +1048,11 @@ An unreadable file used to be logged as "starting fresh" and the next save wrote
 
 Payment records are validated as they load. An `amount` that is not an integer string, or a missing settlement time, is dropped with the agent and the field named in the log, rather than throwing from inside the decay arithmetic later. Worth knowing when seeding this file by hand: `1.5` and `1_000_000` are both rejected, and fee volume and tenure for that agent are understated until the record is corrected.
 
-This state is **per-oracle**. A second operator started against the same chain would
-share none of it, which is the first thing that has to change before multiple operators
-mean anything — see [Oracle Epochs](../docs/reputation-model.md#oracle-epochs).
+This state is **per-oracle** on purpose, and a checker must never share the primary's file:
+its own state is what makes it an independent check. What two operators share is the chain. With
+the payment scan enabled on both ([ADR 0003](../docs/adr/0003-evidence-intake.md)) each finds
+payments itself, and only the outcome of the work needs a shared channel. See
+[Oracle Epochs](../docs/reputation-model.md#oracle-epochs).
 
 ## Tests
 
@@ -1055,7 +1061,7 @@ cd oracle
 node --test
 ```
 
-751 tests (as of 22 October 2026) covering scoring formulas, payment verification and decay, per-payer caps and
+760 tests (as of 27 October 2026) covering scoring formulas, payment verification and decay, per-payer caps and
 the trust weighting, Merkle evidence trees, HTTP helpers, store persistence and recovery,
 the streamed state file, chain access with backoff, scan checkpointing, fee caps and transaction replacement,
 metrics, and cooldown logic. Several of the files run the real `index.js` and `watcher.js`

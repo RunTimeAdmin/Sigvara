@@ -2001,7 +2001,7 @@ async function handleRequest(req, res) {
  * throw outside a route's own try block was a remote shutdown for anyone who could reach
  * the port; the request-target parser was one, and a single request line was enough. The
  * restart policy brought the container back, and the compose files re-cloned `main` each
- * time. The error is logged with the request line quoted, so a hostile target cannot forge
+ * time (they now fetch a pinned commit). The error is logged with the request line quoted, so a hostile target cannot forge
  * a log line, and the caller is told nothing about it.
  */
 const server = http.createServer((req, res) => {

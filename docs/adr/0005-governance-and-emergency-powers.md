@@ -208,11 +208,14 @@ and its ceiling. That is a stated trust assumption, not an oversight:
   the end it was made under. A proposal that was pending when a proxy from before decision 9 is upgraded
   has no fixed end (`finalizableAt` reads zero) and is judged against the live window until it
   finalizes or is replaced. So clear the pending proposals before upgrading such a proxy, and do not
-  change the window while one is pending. Mainnet is a fresh deployment and has none.
+  change the window while one is pending. Mainnet is a fresh deployment and has none. The Arc testnet
+  upgrade of 26 October 2026 carried two such proposals, and both finalized on the new code at the
+  first checker epoch after their window ran out.
 - Proxies initialised by the older code, the Arc testnet ones among them, keep the admin as the
   grantor of these roles. Mainnet is a fresh deployment, and `scripts/check-mainnet.sh` reads the
-  role admins to confirm the arrangement. They also have no slasher/payee guard until their
-  implementation is upgraded, and the upgrade does not re-check the pairing they were set up with.
+  role admins to confirm the arrangement. Their implementations were upgraded on 26 October 2026, so the slasher/payee
+  guard now covers new grants and `setSlashBeneficiary`, but the upgrade does not re-check the
+  pairing they were set up with.
 - The audit pack lists the veto and the dispute ruling as admin powers, the two setters as upgrade-class,
   and the guardian.
 - A slash that is legitimate has to be executed within 14 days of its deadline, or it lapses and has to
@@ -220,8 +223,8 @@ and its ceiling. That is a stated trust assumption, not an oversight:
 - Replacing the committee address (a new Safe, say) orphans the proposals of the one it replaces. They
   can no longer be executed by anyone, and lapse 14 days after their deadline unless a member of the new
   committee cancels them first (decision 12). Execute what is ripe, and cancel the rest, before the
-  old address is revoked. On the Arc testnet proxies the rule applies once the implementation is
-  upgraded.
+  old address is revoked. The rule has applied on the Arc testnet proxies since the upgrade of 26 October
+  2026.
 - A dispute turns an automatic slash into one the admin has to uphold, and it cannot be upheld sooner
   than an undisputed slash could have been executed. Disputing buys the operator a ruling, never a
   faster loss.

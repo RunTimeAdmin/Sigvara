@@ -10,7 +10,7 @@
  * users, yet `assets/app.js` decides what a wallet is asked to sign. If a hosting account,
  * a neighbouring site or the CDN changes a file, nobody would notice until a user did.
  * This compares the bytes users receive with the bytes in git, so a change that is not a
- * reviewed commit shows up within the hour. It also fires when a merged site change has not
+ * reviewed commit shows up at the next scheduled run (every 5 to 7 hours in practice). It also fires when a merged site change has not
  * been uploaded yet, which the deploy notes say has been forgotten more than once.
  *
  * It runs from GitHub Actions on a schedule (.github/workflows/live-checks.yml), a place

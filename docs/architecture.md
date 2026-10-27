@@ -86,7 +86,7 @@ Two gates sit on that path. Only a bonded agent can be scored at all, and when
 `operatorBond` is wired only a bonded oracle operator can propose. Finalizing stays
 permissionless, so nobody can hold a score hostage by declining to write it. What
 finalizing checks is the proposer: a proposal from an operator that has since been
-removed cannot be made live, and its successor replaces it (on `main`; the testnet proxies predate that check).
+removed cannot be made live, and its successor replaces it.
 
 The evidence root is what makes the off-chain half checkable: the oracle serves the
 leaves it counted, and anyone can re-verify each payment against the chain, rebuild the

@@ -70,8 +70,8 @@ part worth understanding before you set a threshold.
    Self-payments are refused.
 
 4. **Wait for an epoch.** The oracle proposes hourly, and a proposal sits in a challenge
-   window before it is final. `meetsThreshold` reads the finalized value, so a score you
-   just earned is not immediately spendable.
+   window before it is final. `meetsThreshold` reads the matured score. After each finalization it climbs
+   toward the finalized score at 4 points a day (the testnet rate), so a rise takes days to become spendable.
 
 ## Choosing a threshold
 

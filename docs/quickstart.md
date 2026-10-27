@@ -159,15 +159,16 @@ const challenge = peerAgent.issueChallenge(myAgent.did);
 // and collect a signature it can present there.
 const signature = myAgent.signChallengeFor(challenge.payload, peerAgent.did);
 
-// Peer verifies: resolves pubkey from chain, checks signature + reputation.
+// Peer verifies: resolves pubkey from chain, checks signature, status + reputation.
 // Passing the expected audience is what makes a relayed response fail.
 const valid = await verifier.verifySignature(
   myAgent.did, challenge.payload, signature, 300, peerAgent.did,
 );
-const trusted = await verifier.meetsThreshold(myAgent.did, 40);
+// meetsThreshold reads the score only, so a suspended agent still passes it: check status too.
+const trusted = (await verifier.isActive(myAgent.did)) && (await verifier.meetsThreshold(myAgent.did, 40));
 
 console.log('Signature valid:', valid);
-console.log('Meets 40-point threshold:', trusted);
+console.log('Active, with 40 points or more:', trusted);
 ```
 
 `signChallengeFor` is in this repository but not in 1.0.0-alpha.9, the version on npm. On

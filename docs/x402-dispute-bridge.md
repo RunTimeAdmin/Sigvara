@@ -21,7 +21,7 @@ Meanwhile the bolt-on scramble is already live: x402-trust (Arc testnet, Dispute
 
 Sigvara already is a dispute layer — aimed at agent misbehavior rather than transaction-level delivery disputes:
 
-- Slashable bonds (ERC-8004)
+- Slashable bonds (`SigvaraStaking`)
 - Challenge windows
 - Attestation machinery (payment-backed outcomes)
 - Six-factor reputation score feeding gate decisions
@@ -103,7 +103,7 @@ BUYER                         x402 FACILITATOR              SELLER (resource ser
 
 - **Differentiation:** Every other reputation system scores *after the fact* from self-reported outcomes. Sigvara becomes the system that *decides* outcomes. That is a category shift from scoreboard to referee.
 - **x402 Foundation alignment:** The Foundation's four deciding questions include "whether a dispute scheme lands in the core spec" and "whether any facilitator can offer escrow and arbitration under the open standard." Sigvara is a ready-made arbitration primitive any facilitator could plug in — without waiting for the Foundation to ship one.
-- **Arc wedge:** x402-trust is already deployed on Arc testnet with a DisputeManager. Sigvara's SVR mainnet target is Q4 2026 on Arc. One integration demo — pay, attest, challenge, resolve — on Arc beats any whitepaper argument. Shared chain and identity standard (ERC-8004). The oracle scores SVR payments today, so USDC settlement needs the `PAYMENT_ASSET` work in [ecosystem.md](ecosystem.md) first.
+- **Arc wedge:** x402-trust is already deployed on Arc testnet with a DisputeManager. Sigvara's SVR mainnet target is Q4 2026 on Arc. One integration demo — pay, attest, challenge, resolve — on Arc beats any whitepaper argument. Shared chain and identity standard (ERC-8004). The oracle scores payments in the testnet faucet token today, so USDC settlement needs the `PAYMENT_ASSET` work in [ecosystem.md](ecosystem.md) first.
 
 ## Open Questions / Judgment Calls
 

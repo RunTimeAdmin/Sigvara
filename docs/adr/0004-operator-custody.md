@@ -63,3 +63,7 @@ nothing on a compromised admin.
   withdraws or is slashed to nothing.
 - The oracle names `ProposerNotAuthorized` and `AlreadyCharged` from the revert data, not from
   ethers' decoding: a send that fails at gas estimation reaches it with the data and no name.
+
+> **Update, 27 October 2026.** The Arc testnet contracts have run this code since 26 October 2026, so the
+> signer registry is live there. Neither live operator has named a signer, so on the testnet each operator
+> key still owns its bond and can start the unbond.

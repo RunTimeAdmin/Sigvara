@@ -1,8 +1,9 @@
 name: Live checks
 
-# Looks at the deployment from outside, once an hour, from a place that shares no account,
-# host or credential with what it watches. A failed run emails the repository owner, which
-# is a second alert path beside the Discord watcher and does not depend on the three servers.
+# Looks at the deployment from outside, from a place that shares no account, host or
+# credential with what it watches. The cron is hourly, but GitHub often runs scheduled
+# workflows only every 5 to 7 hours. A failed run emails the repository owner, which is a
+# second alert path beside the Discord watcher and does not depend on the three servers.
 #
 #   site      every deployed file equals what main says, the security headers match
 #             site/.htaccess, and a missing path gets the site's own page
