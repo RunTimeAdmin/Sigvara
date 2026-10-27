@@ -26,6 +26,7 @@ Sequenced against the Q4 2026 SVR mainnet milestone. Dates are targets, not comm
 ## Phase 4 — Mainnet registry deployment (gated on Phase 2)
 
 - [ ] **Deploy registries to Arc mainnet** (chain ID 5042) initialized with the SVR address, `minimumStake` = 10,000 SVR, and `bondAmount` = 2,500,000 SVR. The deploy scripts refuse less than either on this chain ([ADR 0005](adr/0005-governance-and-emergency-powers.md), decision 11). `SigvaraEpochFees` is not deployed at launch.
+- [ ] **Hand the authority over in the order `script/SplitAuthority.s.sol` documents, and check the holders before the step that cannot be undone.** The script needs all four registries in `deployments/5042.json` and stops at one that is missing, zero or without code. After the Safe has removed the deployer's admin and before `PHASE=renounce`, run `BEFORE_RENOUNCE=1 SAFE=.. TIMELOCK=.. COMMITTEE=.. ORACLE=.. GUARDIAN=.. node scripts/check-role-holders.mjs` and proceed only if it passes: AccessControl cannot list holders, so a second upgrader is visible only in the grant history this replays. Run the same command without `BEFORE_RENOUNCE` after the renounce ([ADR 0005](adr/0005-governance-and-emergency-powers.md)).
 - [ ] **Run an execution keeper.** Slash execution is permissionless on purpose, so nothing executes a slash
   unless someone does: a funded, redundant job that calls `executeSlash` as soon as a window closes, and
   watches for `expireSlash` and `expireDispute`. It skips a proposal whose reporter has left the
