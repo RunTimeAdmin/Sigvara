@@ -268,9 +268,8 @@ async function trustAgent(did: string, payload: string, signature: string): Prom
 }
 ```
 
-`signChallengeFor` is in this repository but not in 1.0.0-alpha.9, the version on npm. On
-alpha.9 call `signChallenge`, after checking yourself that the payload names the verifier
-you mean to prove yourself to.
+`signChallengeFor` is in 1.0.0-alpha.10 and later. On alpha.9 call `signChallenge`, after
+checking yourself that the payload names the verifier you mean to prove yourself to.
 
 ---
 

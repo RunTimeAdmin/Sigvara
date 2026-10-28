@@ -10,18 +10,19 @@ npm install @sigvara/protocol-sdk
 
 Runtime dependencies are `ethers` v6 and `tweetnacl`. Node 18 or newer.
 
-Use the newest release. On 1.0.0-alpha.9 and earlier an agent object carries its secret key in an
+Use 1.0.0-alpha.10 or later. On 1.0.0-alpha.9 and earlier an agent object carries its secret key in an
 ordinary property, so `JSON.stringify(agent)` or logging one includes it; never log or serialize an
 agent from those versions.
 
-> **This README describes the repository.** npm has 1.0.0-alpha.9, and the items under
-> Unreleased in [CHANGELOG.md](CHANGELOG.md) are not in it: `signChallengeFor`, the 30 second
-> read timeout and the parallel status and score read, the fix for a challenge dated in the
-> future, the checks on a gate's `threshold` and `ttlSeconds`, the gate's check of the bond held
-> now and its optional `maxScoreAgeSeconds`, and `SigvaraAgent` keeping its
-> secret key in a private field. On alpha.9, `signChallenge` signs whatever it is handed, so
-> check the payload's audience yourself before you sign, and the secret key is an ordinary
-> property, so `JSON.stringify(agent)` or logging an agent includes it.
+> **Upgrading from 1.0.0-alpha.9:** the secret key is now a private field, so code that read it by
+> reaching around the type system stops working; sign with `signChallengeFor` or `signChallenge`.
+> `signChallengeFor` signs only a challenge addressed to the audience you pass, where
+> `signChallenge` signs whatever it is handed. A gate now also checks the bond held now, so an agent
+> admitted at an old minimum stake and not topped up is refused as `not_active`. It refuses to be
+> built with a `threshold` or `ttlSeconds` that is not a usable number, refuses a challenge dated
+> more than 60 seconds ahead, and gives up on a chain read after 30 seconds (`timeoutMs`). The
+> optional `maxScoreAgeSeconds` refuses a score nobody has refreshed. Details in
+> [CHANGELOG.md](CHANGELOG.md).
 
 > **Upgrading from 1.0.0-alpha.7:** `generateChallenge` now takes an audience as its
 > second argument, and every existing call site needs it.
