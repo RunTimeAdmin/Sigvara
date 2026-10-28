@@ -658,7 +658,7 @@ when you ask for more than you hold.
 
 ### Implementation history
 
-Proxy addresses never change; these are the implementations behind them, newest first. On 26 October 2026 (Central time; 27 October 01:19 UTC) all four moved in place to the code on `main` (commit `fdce1a7`) with `script/Upgrade.s.sol`. [`deployments/5042002.json`](../deployments/5042002.json) holds the upgrade transaction and block of each replaced implementation, and it is the record to trust over this table.
+Proxy addresses never change; these are the implementations behind them, newest first. On 26 October 2026 (Central time; 27 October 01:19 UTC) all four moved in place to the code on `main` (commit `fdce1a7`) with `script/Upgrade.s.sol`. On 28 October 2026 (Central time; 14:47 UTC) the staking proxy moved again, to the code on `main` at commit `f89b3b9`, which adds the dispute bound of pull request 94; the other three already matched that commit. [`deployments/5042002.json`](../deployments/5042002.json) holds the upgrade transaction and block of each replaced implementation, and it is the record to trust over this table.
 
 | Proxy | Implementation | Released |
 |---|---|---|
@@ -666,7 +666,8 @@ Proxy addresses never change; these are the implementations behind them, newest 
 | | `0xb2616f4a449726b195951b6a576aba6847e174ef` | 19 Sep, operator index |
 | | `0x95d8592e7681550bee0c3e06c275ac1b94c873c6` | 19 Sep, proof of control + PendingBond |
 | | `0x486b1c2230c80a77dbec68835ff5b58eccd164ab` | 18 Sep, operator transfer |
-| `staking` | `0x147b687ab3299b454db8e413d62e251cf89588d5` | 26 Oct, `fdce1a7` (current) |
+| `staking` | `0x210ed3f7ef42f01ee94b9543f67b8291e27aaa6b` | 28 Oct, `f89b3b9`, dispute bound (current) |
+| | `0x147b687ab3299b454db8e413d62e251cf89588d5` | 26 Oct, `fdce1a7` |
 | | `0x169f1ada8a3568e229d24e74515b4ef889b8a6bd` | 21 Sep |
 | | `0x3501f936f629dbc2e97ae0717c501456ca8215e0` | 19 Sep, narrowed coupling |
 | | `0x28c23b766c2dabb5f2930905a5eeb660919b71ef` | 19 Sep, PendingBond activation |

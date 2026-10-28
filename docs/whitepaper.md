@@ -604,9 +604,10 @@ charged. The app disables every fee control rather than pointing at an address w
 code.
 
 **Deployed contracts versus `main`.** The Arc testnet proxies run the implementations recorded in
-`deployments/5042002.json`, which are the contracts at commit `fdce1a7`, the head of `main` on
-26 October 2026, when the four proxies were upgraded in place with `script/Upgrade.s.sol`. A contract
-change merged after that commit is not on the testnet until the next upgrade. The guardian pause, admin-ruled disputes with a veto and a lapse, launch
+`deployments/5042002.json`, which are the contracts at commit `f89b3b9`, the head of `main` on
+28 October 2026. The four proxies were upgraded in place with `script/Upgrade.s.sol` to `fdce1a7` on
+26 October, and the staking proxy again to `f89b3b9` on 28 October. A contract
+change merged after that commit is not on the testnet until the next upgrade. The guardian pause, admin-ruled disputes with a veto, a lapse and a bound on late upholds, launch
 floors and ceilings, operator signers, the reporter check at slash execution, a withdrawal's claim time
 fixed when it is queued and the refusal of evidence the admin rejected are live on the testnet. One
 thing the upgrade could not change: role administrators are written when a proxy is initialised, so

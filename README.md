@@ -75,10 +75,10 @@ what is not yet true.
 > `node scripts/record-implementations.mjs --check` fails if the file and the chain
 > disagree.
 >
-> **The testnet runs this repository's contracts as of `fdce1a7`, with older role administrators.**
+> **The testnet runs this repository's contracts as of `f89b3b9`, with older role administrators.**
 > The four proxies were upgraded in place on 26 October 2026 with `script/Upgrade.s.sol`, to the
-> contracts at that commit (then the head of `main`), and `--check` confirms the file matches the
-> chain. A contract change merged after it is not on the testnet until the next upgrade. The guardian pause, admin-ruled disputes with a veto and a lapse,
+> contracts at `fdce1a7`, and the staking proxy again on 28 October 2026, to `f89b3b9` (the head of
+> `main`). `--check` confirms the file matches the chain. A contract change merged after it is not on the testnet until the next upgrade. The guardian pause, admin-ruled disputes with a veto, a lapse and a bound on late upholds,
 > launch floors and ceilings, operator signers, the reporter check at slash execution, a
 > withdrawal's claim time fixed when it is queued, and the refusal of evidence the admin rejected
 > are live. An upgrade does not rewrite role administrators, so the proxies keep what the

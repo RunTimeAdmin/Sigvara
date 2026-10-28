@@ -240,7 +240,9 @@ The admin then rules with `resolveDispute(didHash, uphold)`; the committee that 
 slash does not. Upholding waits for `challengeDeadline`, the moment `executeSlash` opens for an
 undisputed slash (`ChallengePeriodActive` before it), so a dispute never speeds a slash up;
 dropping is open at any time. If the admin never rules, anyone may call `expireDispute` after
-`DISPUTE_RESOLUTION_PERIOD` (14 days), so an operator is never hostage to silence. A proposal
+`DISPUTE_RESOLUTION_PERIOD` (14 days), so an operator is never hostage to silence. A ruling to
+uphold ends where the dispute does: after those 14 days it reverts with `DisputeResolutionExpired`,
+so only dropping and expiry are left and the two never race. A proposal
 nobody disputes, executes or cancels lapses the same way: anyone may call `expireSlash`
 14 days after its deadline. The admin can also drop a Pending or Disputed proposal with
 `vetoSlash`, and after any drop the committee waits one challenge period before it can file
