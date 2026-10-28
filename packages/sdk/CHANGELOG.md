@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.0.0-alpha.10
 
 ### Fixed: a challenge dated in the future never expired
 

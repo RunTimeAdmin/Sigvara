@@ -513,8 +513,8 @@ const challenge = agentB.issueChallenge(agentA.did);
 
 // A signs and returns its DID + signature. signChallenge signs whatever it is handed.
 // signChallengeFor(payload, audience) first checks that the challenge is addressed to the
-// verifier A means to prove itself to. It is in this repository but not in the 1.0.0-alpha.9
-// release on npm, so on alpha.9 check the payload's audience before you sign.
+// verifier A means to prove itself to. It is in 1.0.0-alpha.10 and later; on alpha.9,
+// check the payload's audience before you sign.
 const signature = agentA.signChallenge(challenge.payload);
 
 // B verifies: resolves pubkey from chain, checks signature + reputation

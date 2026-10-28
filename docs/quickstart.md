@@ -171,9 +171,8 @@ console.log('Signature valid:', valid);
 console.log('Active, with 40 points or more:', trusted);
 ```
 
-`signChallengeFor` is in this repository but not in 1.0.0-alpha.9, the version on npm. On
-alpha.9 call `signChallenge`, after checking yourself that the payload names the verifier
-you mean to prove yourself to.
+`signChallengeFor` is in 1.0.0-alpha.10 and later. On alpha.9 call `signChallenge`, after
+checking yourself that the payload names the verifier you mean to prove yourself to.
 
 ## 8. Wire up CounterAudit (optional but recommended)
 
