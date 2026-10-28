@@ -7,15 +7,16 @@
  *   - DID and didHash derivation (SigvaraIdentity)
  *   - minimum stake, unbonding, slash lifecycle and split (SigvaraStaking, as on
  *     main): a dispute freezes the bond and hands the proposal to the admin, whose
- *     ruling either slashes (never before the 7-day deadline) or reinstates at once;
- *     an unruled dispute can be expired by anyone after 14 days. Undisputed
+ *     ruling either slashes (never before the 7-day deadline, and not once the
+ *     dispute is 14 days old) or reinstates at once; an unruled dispute can be
+ *     expired by anyone after those 14 days. Undisputed
  *     execution is permissionless strictly after the 7-day window and stays open
  *     until someone expires the proposal, which anyone can do from 14 days after its
  *     deadline. The admin can veto a pending or disputed proposal, a committee member
  *     can cancel a pending one, and after any dropped proposal the committee waits one
  *     challenge period before filing again. Reporter = the committee member who filed,
  *     and victim/reporter shares are credited for them to claim, not pushed. The Arc
- *     testnet proxies run these rules since their upgrade on 26 October 2026. Two newer
+ *     testnet proxies run these rules since their upgrades on 26 and 28 October 2026. Two newer
  *     rules are not modelled,
  *     because the simulator has no committee that changes and no choice of evidence: the
  *     reporter must still sit on the committee when a slash executes, and evidence the
@@ -311,13 +312,16 @@
   };
 
   /// The admin rules on a disputed proposal. Upholding waits for the challenge deadline, the
-  /// moment an undisputed slash could be executed, so a dispute never speeds a slash up.
-  /// Dropping is open at any time.
+  /// moment an undisputed slash could be executed, so a dispute never speeds a slash up, and it
+  /// ends where the dispute does: once anyone could expire it (14 days after it was filed) an
+  /// uphold is refused, so the two never race. Dropping is open at any time.
   Simulator.prototype.resolveDispute = function (uphold) {
     var p = this.disputedSlash();
     if (!p) throw new Error('SlashNotDisputed');
     if (uphold) {
       if (this.now <= p.deadline) throw new Error('ChallengePeriodActive: ' + Math.ceil((p.deadline - this.now) / 86400) + ' day(s) left; an upheld ruling cannot land before the deadline');
+      var expiresAt = p.disputedAt + PARAMS.disputeResolutionPeriod;
+      if (this.now > expiresAt) throw new Error('DisputeResolutionExpired: the dispute is more than 14 days old, so an upheld ruling is refused; reject it, or let anyone expire it');
       return this._settle(p);
     }
     this._drop(p, this.admin, 'admin: SigvaraStaking.resolveDispute(false). Proposal dropped, agent reinstated');
