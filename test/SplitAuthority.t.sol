@@ -257,6 +257,9 @@ contract SplitAuthorityTest is Test {
 
         // And that it will not run at all on an artifact that is missing one of the four launch registries.
         _theHandoverNeedsAllFourRegistries();
+
+        // And that it will not leave the upgrade path to a timelock or a Safe weaker than the ADR describes.
+        _renounceNeedsTheTimelockAndSafeTheAdrDescribes();
     }
 
     MockSafe internal mSafe;
@@ -387,6 +390,142 @@ contract SplitAuthorityTest is Test {
             assertTrue(IAccessControl(targets[i]).hasRole(ADMIN_ROLE, address(safe)), names[i]);
         }
         assertFalse(IAccessControl(targets[4]).hasRole(ADMIN_ROLE, address(safe)), "epochFees was not in the artifact");
+
+        _clearEnv();
+        vm.removeFile(_artifactPath());
+    }
+
+    /// A timelock as phase 2 builds one: `proposer` proposes and cancels, anyone executes when `open`, and it
+    /// administers itself unless `admin` is named. Those three are what a test gets to spoil.
+    function _timelock(address proposer, uint256 delay, address admin, bool open)
+        internal
+        returns (TimelockController)
+    {
+        address[] memory proposers = new address[](1);
+        proposers[0] = proposer;
+        address[] memory executors = new address[](open ? 1 : 0); // [address(0)] is open execution
+        return new TimelockController(delay, proposers, executors, admin);
+    }
+
+    /// Every registry's upgrader role also goes to `timelock`, as phase 3 would have, so that the one thing phase 5
+    /// can object to is the timelock and not a grant that was never made.
+    function _grantUpgrader(address timelock) internal {
+        vm.startPrank(deployer);
+        for (uint256 i = 0; i < targets.length; i++) {
+            IAccessControl(targets[i]).grantRole(UPGRADER_ROLE, timelock);
+        }
+        vm.stopPrank();
+    }
+
+    function _renounceIsRefused(SplitAuthority s, address safe, address timelock, bytes memory err) internal {
+        _env("renounce", safe, timelock, "yes-drop-the-deployer");
+        vm.expectRevert(err);
+        s.run();
+    }
+
+    /// Phase 5 cannot be undone, and the timelock it leaves in charge of every upgrade is only worth what it was
+    /// built with. The delay, who may propose, cancel and execute, and who administers the timelock are all set in
+    /// its constructor, and afterwards only the timelock can change them. Each refusal here is a way of ending up with
+    /// proxies that nobody can upgrade, or that one key can upgrade with less notice than anyone was promised.
+    /// Run from the migration test, because the environment is process-wide.
+    function _renounceNeedsTheTimelockAndSafeTheAdrDescribes() internal {
+        vm.chainId(7777006);
+        _deployRegistries();
+        _writeArtifact();
+        address[] memory owners = new address[](2);
+        owners[0] = makeAddr("owner1");
+        owners[1] = makeAddr("owner2");
+        MockSafe safe = new MockSafe(owners, 2);
+        TimelockController good = _timelock(address(safe), 48 hours, address(0), true);
+        SplitAuthority s = new SplitAuthority();
+
+        // Everything phase 5 reads is in place: the Safe is admin and has removed the deployer's admin.
+        _env("grant", address(safe), address(good), "");
+        s.run();
+        for (uint256 i = 0; i < targets.length; i++) {
+            safe.exec(targets[i], abi.encodeCall(IAccessControl.revokeRole, (ADMIN_ROLE, deployer)));
+        }
+
+        // 1. Under 48 hours, down to one second and to none. A delay typed as 48 where seconds were meant is a
+        //    one-line mistake that no earlier phase would notice.
+        uint256[3] memory delays = [uint256(0), 1, 48 hours - 1];
+        for (uint256 i = 0; i < delays.length; i++) {
+            TimelockController t = _timelock(address(safe), delays[i], address(0), true);
+            _grantUpgrader(address(t));
+            _renounceIsRefused(s, address(safe), address(t), abi.encodeWithSelector(
+                SplitAuthority.TimelockDelayTooShort.selector, address(t), delays[i], 48 hours
+            ));
+        }
+
+        // 2. The Safe cannot propose to it.
+        TimelockController other = _timelock(makeAddr("not the safe"), 48 hours, address(0), true);
+        _grantUpgrader(address(other));
+        _renounceIsRefused(s, address(safe), address(other), abi.encodeWithSelector(
+            SplitAuthority.TimelockCannotBeProposedTo.selector, address(other), address(safe)
+        ));
+
+        // 3. The Safe proposes but cannot cancel a scheduled call it has changed its mind about.
+        TimelockController noCancel = _timelock(address(safe), 48 hours, address(this), true);
+        noCancel.revokeRole(noCancel.CANCELLER_ROLE(), address(safe));
+        noCancel.renounceRole(ADMIN_ROLE, address(this));
+        _grantUpgrader(address(noCancel));
+        _renounceIsRefused(s, address(safe), address(noCancel), abi.encodeWithSelector(
+            SplitAuthority.TimelockCannotBeCancelledBy.selector, address(noCancel), address(safe)
+        ));
+
+        // 4. Nobody can execute. A scheduled call would never run, and so neither would the call that gives
+        //    anyone the executor role.
+        TimelockController noExecutor = _timelock(address(safe), 48 hours, address(0), false);
+        _grantUpgrader(address(noExecutor));
+        _renounceIsRefused(s, address(safe), address(noExecutor), abi.encodeWithSelector(
+            SplitAuthority.TimelockExecutionNotOpen.selector, address(noExecutor)
+        ));
+
+        // 5. The Safe, or the deployer, can still rewrite the timelock's roles at once.
+        address[2] memory admins = [address(safe), deployer];
+        for (uint256 i = 0; i < admins.length; i++) {
+            TimelockController t = _timelock(address(safe), 48 hours, admins[i], true);
+            _grantUpgrader(address(t));
+            _renounceIsRefused(s, address(safe), address(t), abi.encodeWithSelector(
+                SplitAuthority.TimelockHasOutsideAdmin.selector, address(t), admins[i]
+            ));
+        }
+
+        // 6. An address with no code is no timelock: a typo, or an address that only exists on another chain. It
+        //    is refused before the deployer grants it anything, as well as before it renounces.
+        address nothing = makeAddr("no timelock here");
+        _renounceIsRefused(s, address(safe), nothing, abi.encodeWithSelector(
+            SplitAuthority.TimelockHasNoCode.selector, nothing
+        ));
+        _env("grant", address(safe), nothing, "");
+        vm.expectRevert(abi.encodeWithSelector(SplitAuthority.TimelockHasNoCode.selector, nothing));
+        s.run();
+
+        // 7. A Safe of one owner. The deployer's own is refused for what it is; another key's is still one key.
+        address[] memory alone = new address[](2);
+        alone[0] = deployer;
+        alone[1] = makeAddr("owner1");
+        MockSafe deployerSafe = new MockSafe(alone, 1);
+        _renounceIsRefused(s, address(deployerSafe), address(good), abi.encodeWithSelector(
+            SplitAuthority.DeployerCanActAlone.selector, address(deployerSafe)
+        ));
+        address[] memory one = new address[](1);
+        one[0] = makeAddr("owner1");
+        MockSafe oneOwner = new MockSafe(one, 1);
+        _renounceIsRefused(s, address(oneOwner), address(good), abi.encodeWithSelector(
+            SplitAuthority.SafeThresholdTooLow.selector, address(oneOwner), 1, 2
+        ));
+
+        // None of that dropped anything, and the same sequence with the timelock phase 2 builds goes through, so
+        // the refusals above are about the timelock and the Safe and not about the setup.
+        for (uint256 i = 0; i < targets.length; i++) {
+            assertTrue(IAccessControl(targets[i]).hasRole(UPGRADER_ROLE, deployer), "nothing was dropped");
+        }
+        _env("renounce", address(safe), address(good), "yes-drop-the-deployer");
+        s.run();
+        for (uint256 i = 0; i < targets.length; i++) {
+            assertFalse(IAccessControl(targets[i]).hasRole(UPGRADER_ROLE, deployer), names[i]);
+        }
 
         _clearEnv();
         vm.removeFile(_artifactPath());

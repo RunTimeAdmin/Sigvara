@@ -36,6 +36,7 @@ contract Deploy_Harness is Deploy {
         return (MIN_CHALLENGE_PERIOD, MIN_UNBONDING_PERIOD, MIN_CHALLENGE_WINDOW);
     }
     function checkMaturityRate(uint256 r) external view { _checkMainnetMaturityRate(r); }
+    function firstBlock(string memory path) external view returns (uint256) { return _firstBlock(path); }
     function minimumStakeTarget() external pure returns (uint256) { return MAINNET_MINIMUM_STAKE; }
     function ceilings() external pure returns (uint256, uint256, uint256, uint256) {
         return (MAX_CHALLENGE_PERIOD, MAX_UNBONDING_PERIOD, MAX_CHALLENGE_WINDOW, MAX_MATURITY_RATE_PER_DAY);
@@ -404,6 +405,28 @@ contract DeployScriptGuardsTest is Test {
     function test_oracleBond_testnet_stillAcceptsNoGuardian() public {
         vm.chainId(5042002);
         b.checkGuardian(deployer, makeAddr("slasher"), address(0));
+    }
+
+    // ---- the block the role replay starts from
+
+    /// scripts/check-role-holders.mjs replays the role events from the artifact's deployBlock, and a grant made
+    /// before that block is never seen. The script now records the block it started at instead of leaving a person
+    /// to type one in, and a later run over the same artifact cannot move it forward.
+    function test_deployBlock_isTheBlockTheScriptStartsAt_andNeverMovesForward() public {
+        string memory file = "deployments/deploy-block-test.json";
+        vm.roll(1_000);
+        assertEq(h.firstBlock(file), 1_000, "no artifact yet");
+
+        vm.writeFile(file, '{"chainId":1,"deployBlock":600}');
+        assertEq(h.firstBlock(file), 600, "an earlier block stays");
+
+        vm.writeFile(file, '{"chainId":1,"deployBlock":1500}');
+        assertEq(h.firstBlock(file), 1_000, "a later one gives way to the earlier head");
+
+        vm.writeFile(file, '{"chainId":1}');
+        assertEq(h.firstBlock(file), 1_000, "an artifact without one gets the head");
+
+        vm.removeFile(file);
     }
 
     // ---- the bond's slasher and payee

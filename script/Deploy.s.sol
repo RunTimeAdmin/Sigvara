@@ -13,7 +13,8 @@ import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 /**
  * @title Deploy
  * @notice Deploys all Sigvara contracts behind UUPS proxies, wires roles,
- *         and writes the deployed addresses to deployments/{chainId}.json.
+ *         and writes the deployed addresses, and the block it started at (deployBlock, where
+ *         scripts/check-role-holders.mjs starts its replay), to deployments/{chainId}.json.
  *
  * Usage — Arc testnet (chain ID 5042002; gas is USDC, fund via https://faucet.circle.com):
  *   forge script script/Deploy.s.sol --rpc-url arc_testnet -vvvv              # simulate
@@ -349,8 +350,10 @@ contract Deploy is Script {
         address reputation,
         address staking
     ) internal {
+        string memory path = string.concat("deployments/", vm.toString(block.chainid), ".json");
         string memory key = "out";
         vm.serializeUint(key,    "chainId",    block.chainid);
+        vm.serializeUint(key,    "deployBlock", _firstBlock(path));
         vm.serializeAddress(key, "deployer",   deployer);
         vm.serializeAddress(key, "svrToken",  svr);
         vm.serializeAddress(key, "identity",   identity);
@@ -371,9 +374,20 @@ contract Deploy is Script {
         }
 
         vm.createDir("deployments", true);
-        vm.writeFile(
-            string.concat("deployments/", vm.toString(block.chainid), ".json"),
-            json
-        );
+        vm.writeFile(path, json);
+    }
+
+    /// @dev Where scripts/check-role-holders.mjs starts its replay of the role events. It has to be at or before
+    ///      the first block that holds a transaction of this deployment, because a grant made before it is never
+    ///      seen, and it used to be typed in by hand. The head when the script starts is such a block. A resumed
+    ///      run starts later than the run it continues, so an artifact that already names an earlier block keeps
+    ///      it: a replay that starts early is slower and never wrong, and one that starts late can miss a grant.
+    function _firstBlock(string memory path) internal view returns (uint256 first) {
+        first = block.number;
+        if (!vm.exists(path)) return first;
+        string memory written = vm.readFile(path);
+        if (!vm.keyExistsJson(written, ".deployBlock")) return first;
+        uint256 earlier = vm.parseJsonUint(written, ".deployBlock");
+        if (earlier < first) first = earlier;
     }
 }

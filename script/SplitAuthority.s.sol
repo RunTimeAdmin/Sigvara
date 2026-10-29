@@ -60,6 +60,12 @@ import {TimelockController} from "@openzeppelin/contracts/governance/TimelockCon
  * succeed if the Safe can really execute against these contracts on this chain. If phase 4
  * does not land, phase 5 refuses, and the EOA still holds everything it had.
  *
+ * Phase 5 holds the timelock and the Safe to what docs/adr/0005 promises as well, because the timelock it
+ * leaves in charge of every upgrade is only worth what it was built with. It refuses a delay under 48 hours,
+ * a timelock the Safe cannot propose to or cancel on, one that not everyone can execute on, one whose roles
+ * the Safe or the deployer can rewrite at once, and a Safe with a threshold under two. A bad value for any
+ * of these is cheap to fix before the renounce and expensive after it.
+ *
  * ## Usage
  *
  *   # 1. Look before touching anything. Read-only, safe to run at any point.
@@ -94,7 +100,7 @@ import {TimelockController} from "@openzeppelin/contracts/governance/TimelockCon
  *   SAFE                 Safe address. Required for every phase except a bare `plan`.
  *   TIMELOCK             TimelockController address, from phase 2. Needed for phases 3 and 5.
  *   TIMELOCK_MIN_DELAY   Seconds of notice before a scheduled upgrade can execute.
- *                        Default 48 hours.
+ *                        Default 48 hours, which is also the least phase 5 accepts.
  *   DEPLOYER_PRIVATE_KEY Broadcasting key for phases 2, 3 and 5. Must be the current
  *                        admin and upgrader. Phases 1 and 4 never broadcast and never read it.
  *   CONFIRM              Must be `yes-drop-the-deployer` for phase 5.
@@ -111,7 +117,12 @@ contract SplitAuthority is Script {
     bytes32 internal constant SLASHING_COMMITTEE_ROLE = keccak256("SLASHING_COMMITTEE_ROLE");
     bytes32 internal constant SLASHER_ROLE = keccak256("SLASHER_ROLE");
 
+    /// The delay phase 2 deploys with unless told otherwise, and the least phase 5 accepts: docs/adr/0005
+    /// promises 48 hours of notice, and scripts/check-mainnet.sh compares the live timelock with it.
     uint256 internal constant DEFAULT_MIN_DELAY = 48 hours;
+    /// The Safe threshold below which one owner key acts alone. A Safe can change its own threshold later, so
+    /// this is the launch policy (docs/launch-checklist.md) and not a point of no return.
+    uint256 internal constant MIN_SAFE_THRESHOLD = 2;
 
     /// Every contract in the artifact that gates anything on these two roles. The first four are the
     /// launch registries and are required in every phase: one that is missing from the artifact, holds
@@ -136,9 +147,14 @@ contract SplitAuthority is Script {
     error NotConfirmed();
     error SafeMissingAdmin(string target, address safe);
     error TimelockMissingUpgrader(string target, address timelock);
+    error TimelockHasNoCode(address timelock);
     error TimelockCannotBeProposedTo(address timelock, address safe);
-    error TimelockHasNoDelay(address timelock);
+    error TimelockCannotBeCancelledBy(address timelock, address safe);
+    error TimelockDelayTooShort(address timelock, uint256 delay, uint256 minimum);
+    error TimelockExecutionNotOpen(address timelock);
+    error TimelockHasOutsideAdmin(address timelock, address admin);
     error DeployerCanActAlone(address safe);
+    error SafeThresholdTooLow(address safe, uint256 threshold, uint256 minimum);
     error DeployerStillAdmin(string target, address deployer);
     error UpgraderRoleNotSelfAdministered(string target);
     error RoleNotTimelocked(string target, bytes32 role);
@@ -263,6 +279,10 @@ contract SplitAuthority is Script {
         console2.log("min delay (s)", minDelay);
         console2.log("proposer     ", safe);
         console2.log("executors     open");
+        if (minDelay < DEFAULT_MIN_DELAY) {
+            console2.log("WARNING: under 48 hours. PHASE=renounce refuses this timelock. A delay meant as hours or");
+            console2.log("         days and typed as seconds is the usual way to land here.");
+        }
         console2.log("");
         // One string, so the line pastes into a shell. Two arguments print a space after the =.
         console2.log(string.concat("export TIMELOCK=", vm.toString(address(timelock))));
@@ -375,7 +395,16 @@ contract SplitAuthority is Script {
      *        - a timelock that never received upgrader
      *        - a deployer that still holds DEFAULT_ADMIN_ROLE, which is the evidence that
      *          the Safe has not in fact executed phase 4
-     *        - a timelock with no proposer or no delay, which can never be used
+     *        - a timelock the Safe cannot propose to or cancel on, which can never be used
+     *        - a timelock that not everyone can execute on. With nobody able to execute, a scheduled
+     *          call never runs, and repairing the roles is itself a scheduled call
+     *        - a delay under 48 hours, which gives less notice than anyone was told to expect (a
+     *          delay typed as 48 where seconds were meant is the likely way to get one)
+     *        - a timelock whose roles the Safe or the deployer can still rewrite at once, which is
+     *          not the timelock administering itself. They cannot shorten the delay (only the
+     *          timelock can), but they can change who proposes, cancels and executes
+     *        - a Safe with a threshold under two, which leaves one owner key acting alone on
+     *          everything DEFAULT_ADMIN_ROLE administers, with no delay
      *
      *      All of them are checked against the chain, not against what the earlier
      *      phases in this file intended to do.
@@ -396,10 +425,13 @@ contract SplitAuthority is Script {
         // would cost a transaction and buy nothing, and the on-chain result would look
         // like a completed migration.
         if (_isOwner(safe, deployer) && _thresholdOf(safe) <= 1) revert DeployerCanActAlone(safe);
+        // One owner who is not the deployer is a different key, but still one key. The Safe can raise its own
+        // threshold later; until it does, that owner can use everything DEFAULT_ADMIN_ROLE administers with no
+        // delay, and propose any upgrade. A Safe that cannot answer is not held to this (see _thresholdOf).
+        uint256 threshold = _thresholdOf(safe);
+        if (threshold < MIN_SAFE_THRESHOLD) revert SafeThresholdTooLow(safe, threshold, MIN_SAFE_THRESHOLD);
 
-        TimelockController tl = TimelockController(payable(timelock));
-        if (tl.getMinDelay() == 0) revert TimelockHasNoDelay(timelock);
-        if (!tl.hasRole(tl.PROPOSER_ROLE(), safe)) revert TimelockCannotBeProposedTo(timelock, safe);
+        _requireTimelockPolicy(TimelockController(payable(timelock)), safe, deployer);
 
         Target[] memory targets = _targets();
         for (uint256 i = 0; i < targets.length; i++) {
@@ -471,6 +503,28 @@ contract SplitAuthority is Script {
     function _requireTimelock() internal view returns (address timelock) {
         timelock = vm.envOr("TIMELOCK", address(0));
         if (timelock == address(0)) revert TimelockNotSet();
+        // A typo, or an address that only exists on another chain: phase 3 would grant UPGRADER_ROLE to it and
+        // phase 5 would ask it for its delay.
+        if (timelock.code.length == 0) revert TimelockHasNoCode(timelock);
+    }
+
+    /// @dev What the notice on an upgrade rests on, read from the timelock itself. These are the checks that
+    ///      scripts/check-mainnet.sh makes by hand in check_timelock, put in front of the one step that cannot be
+    ///      undone. A timelock that phase 2 deployed passes them. One built another way may not, and afterwards
+    ///      only the timelock can change its own roles or its delay.
+    function _requireTimelockPolicy(TimelockController tl, address safe, address deployer) internal view {
+        address timelock = address(tl);
+        uint256 delay = tl.getMinDelay();
+        if (delay < DEFAULT_MIN_DELAY) revert TimelockDelayTooShort(timelock, delay, DEFAULT_MIN_DELAY);
+        if (!tl.hasRole(tl.PROPOSER_ROLE(), safe)) revert TimelockCannotBeProposedTo(timelock, safe);
+        if (!tl.hasRole(tl.CANCELLER_ROLE(), safe)) revert TimelockCannotBeCancelledBy(timelock, safe);
+        // A role granted to address(0) is open to everyone, which is how this timelock spells "anyone may execute".
+        if (!tl.hasRole(tl.EXECUTOR_ROLE(), address(0))) revert TimelockExecutionNotOpen(timelock);
+        // The constructor makes the timelock its own admin whatever else it does, so what is left to check is that
+        // nobody outside it was given the role too. The role-holder replay (scripts/check-role-holders.mjs) is what
+        // finds an admin nobody named here.
+        if (tl.hasRole(ADMIN_ROLE, safe)) revert TimelockHasOutsideAdmin(timelock, safe);
+        if (tl.hasRole(ADMIN_ROLE, deployer)) revert TimelockHasOutsideAdmin(timelock, deployer);
     }
 
     /// @dev The call the Safe pastes into the transaction builder for each contract. A function
