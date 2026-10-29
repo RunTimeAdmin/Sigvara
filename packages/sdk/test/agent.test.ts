@@ -114,6 +114,25 @@ describe('SigvaraAgent — signChallengeFor', () => {
   });
 });
 
+describe('SigvaraAgent: no blind signing', () => {
+  // signChallenge signed whatever it was handed, so a verifier could pass an agent a payload naming a different
+  // verifier, collect the signature and present it there as the agent. It is removed. The compiler refuses a
+  // call, because the parameter is `never`, and what a JavaScript caller meets is an error that names the method
+  // to use. The @ts-expect-error below fails the typecheck if a call ever compiles again.
+  it('signChallenge refuses to sign, and says to use signChallengeFor', () => {
+    const agent = makeAgent();
+    const challenge = generateChallenge(agent.did, 'https://elsewhere.example');
+    // @ts-expect-error a call does not compile: the parameter is `never`
+    expect(() => agent.signChallenge(challenge.payload)).toThrow(/signChallengeFor/);
+  });
+
+  it('what it refused is what signChallengeFor signs, once it is told the audience', () => {
+    const agent = makeAgent();
+    const challenge = generateChallenge(agent.did, 'https://elsewhere.example');
+    expect(() => agent.signChallengeFor(challenge.payload, 'https://elsewhere.example')).not.toThrow();
+  });
+});
+
 describe('SigvaraAgent — A2A sign/verify flow', () => {
   it('Agent A signs a challenge issued by Agent B and signature verifies', () => {
     const agentA = makeAgent(AGENT_ADDR);
@@ -123,7 +142,7 @@ describe('SigvaraAgent — A2A sign/verify flow', () => {
     const challenge = agentB.issueChallenge(agentA.did);
 
     // A signs the challenge payload
-    const signature = agentA.signChallenge(challenge.payload);
+    const signature = agentA.signChallengeFor(challenge.payload, agentB.did);
 
     // Signature is base58 encoded, 64 bytes
     expect(base58Decode(signature).length).toBe(64);
@@ -144,7 +163,7 @@ describe('SigvaraAgent — A2A sign/verify flow', () => {
     const agentC = makeAgent('0x0000000000000000000000000000000000009999');
 
     const challenge = agentB.issueChallenge(agentA.did);
-    const signature = agentA.signChallenge(challenge.payload);
+    const signature = agentA.signChallengeFor(challenge.payload, agentB.did);
 
     const wrongPubKey = bytes32ToPubKey(agentC.publicKeyBytes32);
     expect(verifyChallenge(challenge.payload, signature, wrongPubKey)).toBe(false);
@@ -205,7 +224,7 @@ describe('SigvaraAgent.generate() — static factory', () => {
     // Simulate: peer issues challenge to this agent, agent signs it.
     const challenge = agent.issueChallenge(peerDid);
     const selfPayload = challenge.payload.replace(peerDid, agent.did);
-    const signature = agent.signChallenge(selfPayload);
+    const signature = agent.signChallengeFor(selfPayload, agent.did);
     const pubKey = bytes32ToPubKey(agent.publicKeyBytes32);
     expect(verifyChallenge(selfPayload, signature, pubKey)).toBe(true);
   });
@@ -246,12 +265,11 @@ describe('SigvaraAgent keeps its secret key out of sight', () => {
     expect(json).not.toContain(seedHex);
   });
 
-  it('still signs: the private field is what signChallengeFor and signChallenge use', () => {
+  it('still signs: the private field is what signChallengeFor uses', () => {
     const a = SigvaraAgent.generate({ agentAddress: AGENT_ADDR, chainId: CHAIN_ID }).agent;
     const b = SigvaraAgent.generate({ agentAddress: PEER_ADDR, chainId: CHAIN_ID }).agent;
     const c = a.issueChallenge(b.did);
     const pub = bytes32ToPubKey(b.publicKeyBytes32);
     expect(verifyChallenge(c.payload, b.signChallengeFor(c.payload, a.did), pub)).toBe(true);
-    expect(verifyChallenge(c.payload, b.signChallenge(c.payload), pub)).toBe(true);
   });
 });

@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased
+
+### Removed: `SigvaraAgent.signChallenge`
+
+`agent.signChallenge(payload)` signed whatever it was handed, with no check on who the challenge was
+addressed to. The audience in a challenge protects an agent from relay only if the agent checks it
+before signing, so a verifier could hand an agent a payload naming a different verifier, collect the
+signature and present it there as the agent. `verifySignature` refuses a relayed response after the
+fact, but it cannot refuse a signature the agent was talked into giving. `signChallengeFor(payload,
+audience)` has made the check since 1.0.0-alpha.10, and the blind method stayed beside it so that
+existing callers kept working.
+
+It is gone. A call does not compile in TypeScript, and in JavaScript it throws an error that names
+`signChallengeFor`, so the caller learns of the change at the call.
+
+```diff
+- const signature = agent.signChallenge(challenge.payload);
++ const signature = agent.signChallengeFor(challenge.payload, verifierAudience);
+```
+
+`verifierAudience` is what the agent knows about who it is talking to: the origin it connected to, or
+the other agent's DID. It is the string the verifier passes as `expectedAudience`. Code that signs a
+payload it built itself passes the audience it built it for. `signChallengeFor` works from
+1.0.0-alpha.10, so the change can be made before upgrading.
+
+Not changed: the exported function `signChallenge(payload, secretKey)` takes a key the caller holds
+and signs the bytes it is given, and stays.
+
 ## 1.0.0-alpha.11
 
 ### Changed: `verifySignature` requires the audience

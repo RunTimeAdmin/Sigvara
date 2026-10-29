@@ -108,12 +108,18 @@ export class SigvaraAgent {
     return signChallenge(payload, this.#keyPair.secretKey);
   }
 
-  // Sign a challenge payload received from a peer. Returns a base58-encoded signature.
+  // Removed. This signed whatever it was handed, with no check on who the challenge was addressed to,
+  // so a verifier could pass an agent a payload naming a different verifier, collect the signature and
+  // present it there as the agent. signChallengeFor is the same signature with that check.
   //
-  // Signs whatever it is handed, with no check on who the challenge is addressed to. Use
-  // signChallengeFor, which refuses a payload that is not addressed to the verifier you mean. This
-  // is for code that built the payload itself.
-  signChallenge(payload: string): string {
-    return signChallenge(payload, this.#keyPair.secretKey);
+  // What is left is a stub, so that a caller is told at the call and not by a missing method. The
+  // parameter is `never`, so a call does not compile, and the body throws, so a call from JavaScript
+  // says what to use instead.
+  /** @deprecated Removed. Use signChallengeFor(payload, audience). */
+  signChallenge(_removed: never): never {
+    throw new Error(
+      'signChallenge was removed: it signed whatever it was handed, which let a verifier collect a signature meant ' +
+      'for another. Use signChallengeFor(payload, audience), which signs only a challenge addressed to the audience you name.',
+    );
   }
 }

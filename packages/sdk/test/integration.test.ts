@@ -93,7 +93,7 @@ maybeDescribe('Integration: A2A challenge-response', () => {
   it('verifySignature returns true for valid signature', async () => {
     const agent = new SigvaraAgent({ privateKey: agentPrivateKey, agentAddress, chainId: CHAIN_ID });
     const challenge = agent.issueChallenge(agentDid);
-    const signature = agent.signChallenge(challenge.payload);
+    const signature = agent.signChallengeFor(challenge.payload, agent.did);
     // issueChallenge names the issuing agent as the audience, and here the agent issues to itself.
     expect(await verifier.verifySignature(agentDid, challenge.payload, signature, 300, agent.did)).toBe(true);
   }, 30_000);
@@ -101,7 +101,7 @@ maybeDescribe('Integration: A2A challenge-response', () => {
   it('verifySignature returns false for tampered payload', async () => {
     const agent = new SigvaraAgent({ privateKey: agentPrivateKey, agentAddress, chainId: CHAIN_ID });
     const challenge = agent.issueChallenge(agentDid);
-    const signature = agent.signChallenge(challenge.payload);
+    const signature = agent.signChallengeFor(challenge.payload, agent.did);
     expect(await verifier.verifySignature(agentDid, challenge.payload + 'x', signature, 300, agent.did)).toBe(false);
   }, 30_000);
 });
