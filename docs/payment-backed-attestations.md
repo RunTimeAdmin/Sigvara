@@ -109,6 +109,19 @@ stops the process at startup rather than silently disabling the check.
 `off` is the default so existing testnet deployments keep working unchanged.
 Mainnet should run `required`.
 
+Confirmations are a statement about the chain. `PAYMENT_MIN_CONFIRMATIONS` defaults to 1 and the
+mainnet example leaves it there, which is right only where a block cannot be reorganized. Arc's
+documentation says that once its consensus layer commits a block the block is final and
+irreversible, with no reorganization risk, and that integrators need not poll for confirmations or
+handle reorgs ([system overview](https://docs.arc.io/arc/concepts/system-overview)). That is the
+chain operator's statement and this repository does not test it, so the launch checklist repeats
+the question on mainnet. Where it does not hold, raise `PAYMENT_MIN_CONFIRMATIONS`.
+
+A credit is not taken back: the settlement hash is recorded as used, so a block that was
+reorganized away would leave a credit for a transaction that no longer exists. That is why the
+unattended scan, which credits with nobody watching, stays at least 6 blocks behind the head
+(`PAYMENT_SCAN_CONFIRMATIONS`) whatever the chain.
+
 ## Responses
 
 The codes that depend on the payment check are below. The [oracle README](../oracle/README.md) lists the rest, among them 400 for a malformed body, 413 for a body over 1 MB and 429 for the cooldown.

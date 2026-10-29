@@ -98,6 +98,12 @@ The key was a TypeScript `private` property, which is erased at compile time, so
 true private field and none of them do. Code that read the key by reaching around the type system
 stops working; sign with `signChallengeFor` or `signChallenge`.
 
+Moving to this release stops the leak. It does not undo a copy that already exists. If an agent from
+1.0.0-alpha.9 or earlier was ever logged, serialized, sent to an error reporter or attached to a bug
+report, treat that agent's key as exposed: anyone who can read that copy can sign as the agent until the
+key is rotated. Suspend the agent, rotate its public key on chain and reinstate it, as
+[Key Rotation](https://github.com/RunTimeAdmin/Sigvara#key-rotation) describes.
+
 ### Changed: `SigvaraGate` also checks the bond held now
 
 `admit` read the stored status and the matured score. The status is written when an agent is admitted,
@@ -158,8 +164,8 @@ Refusals say which of four things happened, because they need different response
 `bad_proof`, `replayed`, `not_active`, `below_threshold`. Only the last is about
 reputation.
 
-This was written for the previous release and did not make it into the published
-package, so `SigvaraGate` has been importable from the repo and missing from npm.
+This was written for the previous release, 1.0.0-alpha.8, and did not make it into that release's
+published package, so until this one `SigvaraGate` was importable from the repo and missing from npm.
 
 ### New: `verifier.getTotalScore(did)`
 
