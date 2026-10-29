@@ -65,7 +65,9 @@ const GUARDIAN = need('GUARDIAN');
 for (const k of ['identity', 'reputation', 'staking', 'oracleBond']) {
   if (!artifact[k]) fail(`deployments/${CHAIN_ID}.json has no ${k}`);
 }
-if (!Number.isInteger(artifact.deployBlock)) fail(`deployments/${CHAIN_ID}.json has no deployBlock`);
+if (!Number.isInteger(artifact.deployBlock)) {
+  fail(`deployments/${CHAIN_ID}.json has no deployBlock (script/Deploy.s.sol writes it; an older artifact needs the block of the first deployment transaction, or an earlier one)`);
+}
 if (BEFORE_RENOUNCE && !ethers.isAddress(artifact.deployer)) fail(`deployments/${CHAIN_ID}.json has no deployer`);
 if (failed) process.exit(1);
 console.log(BEFORE_RENOUNCE
