@@ -160,7 +160,7 @@ const challenge = peerAgent.issueChallenge(myAgent.did);
 const signature = myAgent.signChallengeFor(challenge.payload, peerAgent.did);
 
 // Peer verifies: resolves pubkey from chain, checks signature, status + reputation.
-// Passing the expected audience is what makes a relayed response fail.
+// The expected audience is required: it is what makes a relayed response fail.
 const valid = await verifier.verifySignature(
   myAgent.did, challenge.payload, signature, 300, peerAgent.did,
 );

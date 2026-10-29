@@ -135,13 +135,7 @@ describe('SigvaraVerifier reads', () => {
 describe('SigvaraVerifier.verifySignature against the registered key', () => {
   const fresh = () => generateChallenge(DID, AUDIENCE).payload;
 
-  it('accepts a signature by the registered key', async () => {
-    const { v } = verifierWith();
-    const p = fresh();
-    expect(await v.verifySignature(DID, p, signChallenge(p, kp.secretKey))).toBe(true);
-  });
-
-  it('accepts when the expected audience matches', async () => {
+  it('accepts a signature by the registered key, for the audience it was made for', async () => {
     const { v } = verifierWith();
     const p = fresh();
     expect(await v.verifySignature(DID, p, signChallenge(p, kp.secretKey), 300, AUDIENCE)).toBe(true);
@@ -154,43 +148,42 @@ describe('SigvaraVerifier.verifySignature against the registered key', () => {
     expect(idc.getIdentity).not.toHaveBeenCalled();
   });
 
-  it('refuses a v1 payload once an audience is expected, but accepts it otherwise', async () => {
-    const { v } = verifierWith();
+  it('refuses a v1 payload, which names no audience to check, without reading the chain', async () => {
+    const { v, idc } = verifierWith();
     const p = `SIGVARA-VERIFY:${DID}:deadbeef:${Math.floor(Date.now() / 1000)}`;
-    const sig = signChallenge(p, kp.secretKey);
-    expect(await v.verifySignature(DID, p, sig, 300, AUDIENCE)).toBe(false);
-    expect(await v.verifySignature(DID, p, sig)).toBe(true);
+    expect(await v.verifySignature(DID, p, signChallenge(p, kp.secretKey), 300, AUDIENCE)).toBe(false);
+    expect(idc.getIdentity).not.toHaveBeenCalled();
   });
 
   it('refuses a signature by any other key', async () => {
     const { v } = verifierWith();
     const p = fresh();
-    expect(await v.verifySignature(DID, p, signChallenge(p, other.secretKey))).toBe(false);
+    expect(await v.verifySignature(DID, p, signChallenge(p, other.secretKey), 300, AUDIENCE)).toBe(false);
   });
 
   it('refuses a signature over a different payload', async () => {
     const { v } = verifierWith();
     const p = fresh();
     const q = fresh();
-    expect(await v.verifySignature(DID, p, signChallenge(q, kp.secretKey))).toBe(false);
+    expect(await v.verifySignature(DID, p, signChallenge(q, kp.secretKey), 300, AUDIENCE)).toBe(false);
   });
 
   it('refuses an unregistered agent', async () => {
     const { v } = verifierWith({ registeredAt: 0n });
     const p = fresh();
-    expect(await v.verifySignature(DID, p, signChallenge(p, kp.secretKey))).toBe(false);
+    expect(await v.verifySignature(DID, p, signChallenge(p, kp.secretKey), 300, AUDIENCE)).toBe(false);
   });
 
   it('refuses an agent whose key is zero', async () => {
     const { v } = verifierWith({ ed25519PubKey: ethers.ZeroHash });
     const p = fresh();
-    expect(await v.verifySignature(DID, p, signChallenge(p, kp.secretKey))).toBe(false);
+    expect(await v.verifySignature(DID, p, signChallenge(p, kp.secretKey), 300, AUDIENCE)).toBe(false);
   });
 
   it('returns false, not an exception, for a non-base58 signature of legal width', async () => {
     const { v } = verifierWith();
     const p = fresh();
-    expect(await v.verifySignature(DID, p, '0'.repeat(88))).toBe(false);
+    expect(await v.verifySignature(DID, p, '0'.repeat(88), 300, AUDIENCE)).toBe(false);
   });
 
   it('refuses a payload dated in the future, however well it is signed', async () => {
@@ -213,10 +206,10 @@ describe('SigvaraVerifier.verifySignature against the registered key', () => {
   it('honours a custom maxAge', async () => {
     const { v } = verifierWith();
     const ts = Math.floor(Date.now() / 1000) - 120;
-    const p = `SIGVARA-VERIFY:${DID}:deadbeef:${ts}`;
+    const p = ['SIGVARA-VERIFY-V2', `did: ${DID}`, `aud: ${AUDIENCE}`, 'nonce: deadbeef', `ts: ${ts}`].join('\n');
     const sig = signChallenge(p, kp.secretKey);
-    expect(await v.verifySignature(DID, p, sig, 60)).toBe(false);
-    expect(await v.verifySignature(DID, p, sig, 600)).toBe(true);
+    expect(await v.verifySignature(DID, p, sig, 60, AUDIENCE)).toBe(false);
+    expect(await v.verifySignature(DID, p, sig, 600, AUDIENCE)).toBe(true);
   });
 });
 

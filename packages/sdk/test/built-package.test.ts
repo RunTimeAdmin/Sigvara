@@ -97,6 +97,41 @@ describe.skipIf(!built)('the built package keeps the agent secret out of every r
   });
 });
 
+describe.skipIf(!built)('the built package will not verify a response without an audience', () => {
+  const sdk = built ? createRequire(__filename)(dist) : null;
+
+  const DID = 'did:sigvara:5042002:0x00000000000000000000000000000000000000aa';
+  const AUDIENCE = 'https://verifier.example';
+  const SIG = '1'.repeat(64);
+  const verifier = () => new sdk.SigvaraVerifier({
+    // Never dialed: every case here is settled before the chain is read.
+    rpcUrl: 'http://127.0.0.1:0',
+    addresses: {
+      identity: '0x0000000000000000000000000000000000000001',
+      reputation: '0x0000000000000000000000000000000000000002',
+      staking: '0x0000000000000000000000000000000000000003',
+    },
+    chainId: 5042002,
+  });
+
+  // The compiler refuses a call without the audience, and compiling erases that, so what a JavaScript
+  // caller meets is this check at run time. Leaving the audience out used to skip the check of who the
+  // agent signed for, and a response given to one verifier was accepted at another.
+  it('throws when the audience is left out, however the call is shaped', async () => {
+    const payload = sdk.generateChallenge(DID, AUDIENCE).payload;
+    for (const args of [[DID, payload, SIG], [DID, payload, SIG, 300], [DID, payload, SIG, 300, ''], [DID, payload, SIG, AUDIENCE]]) {
+      await expect(verifier().verifySignature(...args)).rejects.toThrow(/expectedAudience is required/);
+    }
+  });
+
+  it('refuses a response made for another verifier, and a v1 payload that names none', async () => {
+    const forElsewhere = sdk.generateChallenge(DID, 'https://elsewhere.example').payload;
+    expect(await verifier().verifySignature(DID, forElsewhere, SIG, 300, AUDIENCE)).toBe(false);
+    const v1 = `SIGVARA-VERIFY:${DID}:deadbeef:${Math.floor(Date.now() / 1000)}`;
+    expect(await verifier().verifySignature(DID, v1, SIG, 300, AUDIENCE)).toBe(false);
+  });
+});
+
 describe('the build the key check depends on', () => {
   // Without dist/ the block above is skipped, so CI states plainly that it expects one.
   it.runIf(Boolean(process.env.CI))('exists in CI', () => {
