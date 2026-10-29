@@ -10,10 +10,17 @@ npm install @sigvara/protocol-sdk
 
 Runtime dependencies are `ethers` v6 and `tweetnacl`. Node 18 or newer.
 
-Use 1.0.0-alpha.11 or later. On 1.0.0-alpha.9 and earlier an agent object carries its secret key in an
+Use 1.0.0-alpha.12 or later. On 1.0.0-alpha.9 and earlier an agent object carries its secret key in an
 ordinary property, so `JSON.stringify(agent)` or logging one includes it; never log or serialize an
 agent from those versions. If one was logged, serialized or sent to an error reporter, treat its key as
 exposed and rotate it ([Key Rotation](https://github.com/RunTimeAdmin/Sigvara#key-rotation)).
+
+> **Upgrading from 1.0.0-alpha.11:** `agent.signChallenge` is removed. It signed whatever it was
+> handed, so a verifier could get an agent to sign a challenge naming a different verifier and
+> present the signature there as the agent. A call does not compile in TypeScript, and in JavaScript
+> it throws an error that names `signChallengeFor(payload, audience)`, which signs only a challenge
+> addressed to the audience you pass and works from 1.0.0-alpha.10. The exported function
+> `signChallenge(payload, secretKey)` is unchanged. Details in [CHANGELOG.md](CHANGELOG.md).
 
 > **Upgrading from 1.0.0-alpha.10:** `verifySignature` now requires the audience, as its fifth
 > argument. Leaving it out used to compile and skip the check of who the agent had signed for, so a
@@ -23,9 +30,9 @@ exposed and rotate it ([Key Rotation](https://github.com/RunTimeAdmin/Sigvara#ke
 > [CHANGELOG.md](CHANGELOG.md).
 
 > **Upgrading from 1.0.0-alpha.9:** the secret key is now a private field, so code that read it by
-> reaching around the type system stops working; sign with `signChallengeFor` or `signChallenge`.
-> `signChallengeFor` signs only a challenge addressed to the audience you pass, where
-> `signChallenge` signs whatever it is handed. A gate now also checks the bond held now, so an agent
+> reaching around the type system stops working; sign with `signChallengeFor`. It signs only a
+> challenge addressed to the audience you pass, where `signChallenge` signed whatever it was handed
+> and is removed in 1.0.0-alpha.12. A gate now also checks the bond held now, so an agent
 > admitted at an old minimum stake and not topped up is refused as `not_active`. It refuses to be
 > built with a `threshold` or `ttlSeconds` that is not a usable number, refuses a challenge dated
 > more than 60 seconds ahead, and gives up on a chain read after 30 seconds (`timeoutMs`). The

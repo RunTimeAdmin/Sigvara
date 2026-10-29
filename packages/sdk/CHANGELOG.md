@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.0.0-alpha.12
 
 ### Removed: `SigvaraAgent.signChallenge`
 
