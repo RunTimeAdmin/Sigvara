@@ -395,7 +395,8 @@ contract SplitAuthority is Script {
      *        - a timelock that never received upgrader
      *        - a deployer that still holds DEFAULT_ADMIN_ROLE, which is the evidence that
      *          the Safe has not in fact executed phase 4
-     *        - a timelock the Safe cannot propose to or cancel on, which can never be used
+     *        - a timelock the Safe cannot propose to, which can never be used, or cannot cancel on,
+     *          which leaves a call it has changed its mind about to run
      *        - a timelock that not everyone can execute on. With nobody able to execute, a scheduled
      *          call never runs, and repairing the roles is itself a scheduled call
      *        - a delay under 48 hours, which gives less notice than anyone was told to expect (a

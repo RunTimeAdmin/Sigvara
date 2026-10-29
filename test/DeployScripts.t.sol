@@ -414,6 +414,8 @@ contract DeployScriptGuardsTest is Test {
     /// to type one in, and a later run over the same artifact cannot move it forward.
     function test_deployBlock_isTheBlockTheScriptStartsAt_andNeverMovesForward() public {
         string memory file = "deployments/deploy-block-test.json";
+        // A run that failed part way leaves the file behind, and the first check below is about there being none.
+        if (vm.exists(file)) vm.removeFile(file);
         vm.roll(1_000);
         assertEq(h.firstBlock(file), 1_000, "no artifact yet");
 
