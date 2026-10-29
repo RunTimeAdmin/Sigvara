@@ -131,6 +131,13 @@ answers 202 with `"durable": false` instead of 200 while a save is failing, and 
 those as `accepted_not_durable`. Pulled payments are found again by the next scan;
 attested outcomes are on chain nowhere, so those do not come back.
 
+`/flag`, `/flag/resolve` and `/link` say the same thing for the same reason: 202 with
+`"durable": false` while a save is failing, counted in
+`sigvara_oracle_writes_not_durable_total`. The change is held in memory and written by the
+next save that works, so check that `/health` is 200 again before treating it as kept. Do not
+resend a flag or a resolve: a flag sent twice is two flags, and a resolve sent twice clears
+another one. A link sets the same value again, so it can be sent once `/health` is 200.
+
 `stateSource` is `file`, `fresh` (there was no state file) or `backup`. `backup` means the
 state file could not be read and the previous save was used instead; the bad file is kept
 beside it as `<state>.corrupt-<time>`, and anything recorded since that save is gone. A
@@ -309,6 +316,10 @@ agent permanently. Set `FLAG_HALF_LIFE_DAYS=0` to disable decay.
 { "didHash": "0x..." }
 ```
 
+Answers 200 with the count of flags once the flag is saved, or 202 with `"durable": false` if
+the state file could not be written (see `/health`). Do not resend a 202: it would be a second
+flag.
+
 ### `POST /flag/resolve` (auth required)
 
 Clear flags previously raised. Without this, flagging was one-way and a flag raised in
@@ -338,6 +349,9 @@ than waiting it out.
 a mistake is asking about the flags they raised, not what the score currently charges for
 them.
 
+A 202 with `"durable": false` means the state file could not be written, as for `/flag`. Do
+not resend it: the flags are already cleared in memory, and a second call would clear another.
+
 ### `POST /link` (auth required)
 
 Link a Sigvara agent to its ERC-8004 identity for cross-protocol scoring.
@@ -349,6 +363,9 @@ Link a Sigvara agent to its ERC-8004 identity for cross-protocol scoring.
   "agentId": "123"
 }
 ```
+
+Answers 200 once the link is saved, or 202 with `"durable": false` if the state file could
+not be written. The same link can be sent again after `/health` is 200.
 
 ### `GET /score/:didHash`
 
