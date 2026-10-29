@@ -40,6 +40,9 @@ const counters = {
   flagsReceived: 0,
   flagsResolved: 0,
   linksCreated: 0,
+  // A flag, a resolve or a link that was taken and held in memory, but the state file could not be written. The
+  // reply says so (202, durable: false). Worth alerting on beside /health, like attestAcceptedNotDurable.
+  writesNotDurable: 0,
   scoreRpcErrors: 0,
   scoreErrors: 0,
   // Badges are embedded on pages this oracle does not control, so request volume is
@@ -234,6 +237,11 @@ function toPrometheusText(extra = {}) {
   lines.push('# HELP sigvara_oracle_links_total Links created');
   lines.push('# TYPE sigvara_oracle_links_total counter');
   lines.push(`sigvara_oracle_links_total ${counters.linksCreated}`);
+
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_writes_not_durable_total Flags, resolves and links accepted while the state file could not be written, answered 202');
+  lines.push('# TYPE sigvara_oracle_writes_not_durable_total counter');
+  lines.push(`sigvara_oracle_writes_not_durable_total ${counters.writesNotDurable}`);
 
   lines.push('');
   lines.push('# HELP sigvara_oracle_score_rpc_errors_total /score reads that failed upstream, answered 502');

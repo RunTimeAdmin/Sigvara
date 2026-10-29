@@ -15,6 +15,8 @@
 //     standing:  { "<address>": hard score of a counterparty }
 //     standingFails: { "<address>": true } counterparties the node cannot answer for: the read is throttled
 //     explodeHealth: when true, the /health route throws
+//     externalOwns: when set, the ERC-8004 registry reads as configured and /link finds the agent owned by
+//                its Sigvara operator (true) or not (false); left out, the registry is not configured
 //     chainId:   the chain id the fake node reports (default 5042)
 //     nonceGap:  how many of the wallet's transactions the node holds pending (default 0)
 //     operatorStanding: { enforced, allowed, operatorBond } what the boot check finds (default not enforced)
@@ -174,7 +176,7 @@ const chain = {
 const external = {
   init() {},
   refreshChainId: async () => null,
-  configured: () => false,
+  configured: () => world().externalOwns !== undefined,
   // world.explodeHealth makes the /health route throw, which is how a test proves that a
   // handler error costs one request and not the process.
   chainState: () => {
@@ -182,7 +184,7 @@ const external = {
     return { status: 'disabled', chainId: null };
   },
   externalScoreFor: async () => 0,
-  verifyOwnership: async () => false,
+  verifyOwnership: async () => world().externalOwns === true,
 };
 
 for (const [file, fake] of [['chain.js', chain], ['external.js', external]]) {

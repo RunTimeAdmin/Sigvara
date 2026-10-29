@@ -1282,6 +1282,18 @@ const overLimit = (req, res, bucket) => {
   return true;
 };
 
+/**
+ * The reply to a flag, a resolve or a link: a change that is answered on the strength of having been recorded.
+ * 200 when the state file has it. 202 with `durable: false` when the save failed, because a restart before the
+ * next good save loses what the caller was told, which is what /attest says too. A flag or a resolve must not be
+ * resent: a flag sent twice is two flags, and a resolve sent twice clears another one. A link sets the same
+ * value again, so it can be.
+ */
+const savedReply = (res, durable, body) => {
+  if (!durable) metrics.inc('writesNotDurable');
+  return json(res, durable ? 200 : 202, durable ? body : { ...body, durable: false });
+};
+
 async function handleRequest(req, res) {
   metrics.inc('httpRequests');
   // Only a path-form target whose path is already canonical is answered. See
@@ -1739,12 +1751,12 @@ async function handleRequest(req, res) {
       const didHash = parseDidHash((await readBody(req)).didHash);
       if (!didHash) return json(res, 400, { error: 'didHash must be a 32-byte hex string' });
       const raised = addFlag(didHash);
-      persistState();
+      const durable = persistState();
       metrics.inc('flagsReceived');
       // Attributed. "Someone with the token flagged this agent" stops being an answer
       // once several services hold tokens, and a flag costs an agent real points.
       console.log(`[oracle] flag raised on ${didHash} by ${caller} (now ${raised})`);
-      return json(res, 200, { didHash, flags: raised });
+      return savedReply(res, durable, { didHash, flags: raised });
     } catch (err) {
       return json(res, bodyErrorStatus(err), { error: err.message });
     }
@@ -1772,12 +1784,13 @@ async function handleRequest(req, res) {
 
       const result = resolveFlags(didHash, count ?? 1);
       // Persist only on a real change, so a no-op call does not rewrite the state file.
+      let durable = true;
       if (result.resolved > 0) {
-        persistState();
+        durable = persistState();
         metrics.inc('flagsResolved', result.resolved);
         console.log(`[oracle] ${result.resolved} flag(s) cleared on ${didHash} by ${caller}`);
       }
-      return json(res, 200, { didHash, ...result });
+      return savedReply(res, durable, { didHash, ...result });
     } catch (err) {
       return json(res, bodyErrorStatus(err), { error: err.message });
     }
@@ -1812,9 +1825,9 @@ async function handleRequest(req, res) {
         return json(res, 403, { error: 'ERC-8004 agent is not owned by this agent\'s Sigvara operator; refusing to link' });
       }
       links.set(didHash, String(agentId));
-      persistState();
+      const durable = persistState();
       metrics.inc('linksCreated');
-      return json(res, 200, { didHash, agentId: String(agentId), operator, linked: true });
+      return savedReply(res, durable, { didHash, agentId: String(agentId), operator, linked: true });
     } catch (err) {
       return json(res, bodyErrorStatus(err), { error: err.message });
     }
