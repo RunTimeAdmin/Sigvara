@@ -132,6 +132,35 @@ describe.skipIf(!built)('the built package will not verify a response without an
   });
 });
 
+describe.skipIf(!built)('the built agent will not sign blind', () => {
+  const sdk = built ? createRequire(__filename)(dist) : null;
+
+  const A = 'https://a.example';
+  const B = 'https://b.example';
+  const agent = () => sdk.SigvaraAgent.generate({
+    agentAddress: '0x00000000000000000000000000000000000000aa', chainId: 5042002,
+  }).agent;
+
+  // signChallenge signed whatever it was handed, so a verifier could pass an agent a payload naming a different
+  // verifier, collect the signature and present it there as the agent. It is removed. The compiler refuses a
+  // call, and compiling erases that, so what a JavaScript caller meets is an error that names the method to use.
+  it('has no signChallenge that signs, and says to use signChallengeFor', () => {
+    const a = agent();
+    const payload = sdk.generateChallenge(a.did, B).payload;
+    expect(() => a.signChallenge(payload)).toThrow(/signChallengeFor/);
+  });
+
+  it('signs for the verifier it means and refuses to sign for another', () => {
+    const a = agent();
+    const forB = sdk.generateChallenge(a.did, B).payload;
+    // Talking to A, handed a payload that names B: the relay. Nothing is signed.
+    expect(() => a.signChallengeFor(forB, A)).toThrow(/different audience/);
+    // Talking to B, the same payload is signed, and the signature verifies.
+    const signature = a.signChallengeFor(forB, B);
+    expect(sdk.verifyChallenge(forB, signature, sdk.bytes32ToPubKey(a.publicKeyBytes32))).toBe(true);
+  });
+});
+
 describe('the build the key check depends on', () => {
   // Without dist/ the block above is skipped, so CI states plainly that it expects one.
   it.runIf(Boolean(process.env.CI))('exists in CI', () => {

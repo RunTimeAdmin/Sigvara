@@ -101,7 +101,7 @@ const verifier = new SigvaraVerifier({ rpcUrl: RPC, addresses, chainId: CHAIN_ID
 const challenge = generateChallenge(agent.did, 'https://your-service.example');
 // Done by the agent, returned to the counterparty. signChallengeFor refuses a challenge that is not
 // addressed to the verifier the agent means to prove itself to, which is what stops a verifier from
-// collecting a signature meant for someone else. (signChallenge signs whatever it is handed.)
+// collecting a signature meant for someone else.
 const signature = agent.signChallengeFor(challenge.payload, 'https://your-service.example');
 
 // Pass the same audience back when verifying. It is required: verifySignature throws without

@@ -511,11 +511,11 @@ const verifier = new SigvaraVerifier({
 // B issues a challenge to A
 const challenge = agentB.issueChallenge(agentA.did);
 
-// A signs and returns its DID + signature. signChallenge signs whatever it is handed.
-// signChallengeFor(payload, audience) first checks that the challenge is addressed to the
-// verifier A means to prove itself to. It is in 1.0.0-alpha.10 and later; on alpha.9,
-// check the payload's audience before you sign.
-const signature = agentA.signChallenge(challenge.payload);
+// A signs and returns its DID + signature, saying who it means to prove itself to. signChallengeFor
+// refuses a challenge that is not addressed to that verifier, so B cannot hand A a payload meant for
+// a third party and collect a signature it can present there. It is in 1.0.0-alpha.10 and later; on
+// alpha.9, check the payload's audience before you sign.
+const signature = agentA.signChallengeFor(challenge.payload, agentB.did);
 
 // B verifies: resolves pubkey from chain, checks signature + reputation. The last argument is the
 // audience B expects, here B's own DID, which issueChallenge signed into the payload. It is required

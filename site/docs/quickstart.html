@@ -185,9 +185,10 @@ console.log(total);             <span class="cm">// → 0 until the first epoch 
   chainId:      <span class="num">5042002</span>,
 });
 
-<span class="cm">// Peer issues a challenge naming itself as the audience, then your agent signs it</span>
+<span class="cm">// Peer issues a challenge naming itself as the audience, then your agent signs it,</span>
+<span class="cm">// saying who it means to prove itself to. A challenge for anyone else is refused.</span>
 <span class="kw">const</span> challenge = peerAgent.<span class="fn">issueChallenge</span>(myAgent.did);
-<span class="kw">const</span> signature = myAgent.<span class="fn">signChallenge</span>(challenge.payload);
+<span class="kw">const</span> signature = myAgent.<span class="fn">signChallengeFor</span>(challenge.payload, peerAgent.did);
 
 <span class="cm">// Peer verifies: signature + on-chain pubkey + status + reputation threshold.</span>
 <span class="cm">// The last argument is the expected audience, and it is required: it is what makes</span>
@@ -197,7 +198,7 @@ console.log(total);             <span class="cm">// → 0 until the first epoch 
 );
 <span class="cm">// meetsThreshold reads the score only, so a suspended agent still passes it: check status too.</span>
 <span class="kw">const</span> trusted = (<span class="kw">await</span> verifier.<span class="fn">isActive</span>(myAgent.did)) &amp;&amp; (<span class="kw">await</span> verifier.<span class="fn">meetsThreshold</span>(myAgent.did, <span class="num">40</span>));</code></pre>
-            <p class="u-muted-13">Requires <code>@sigvara/protocol-sdk</code> 1.0.0-alpha.8 or newer. Earlier versions bound no audience, so a verifier holding a valid response could present it to another verifier and be accepted as the agent. <code>signChallenge</code> signs whatever it is handed, so check that the challenge names the verifier you mean to prove yourself to before you call it. <code>signChallengeFor(payload, audience)</code> is in 1.0.0-alpha.10 and later, and it makes that check for you. <code>verifySignature</code> requires the audience from 1.0.0-alpha.11; on alpha.10 and earlier, leaving it out compiled and skipped the check of who the agent had signed for.</p>
+            <p class="u-muted-13">Requires <code>@sigvara/protocol-sdk</code> 1.0.0-alpha.11 or newer. Earlier versions let a verifier that held a valid response present it to another verifier and be accepted as the agent: alpha.7 bound no audience, and from alpha.8 to alpha.10 a verifier could leave the audience out of <code>verifySignature</code>, which skipped the check. <code>signChallengeFor(payload, audience)</code> signs only a challenge addressed to the audience you name and refuses any other, so a verifier cannot hand your agent a payload meant for a third party and collect a signature it can present there.</p>
           </div>
         </div>
 
