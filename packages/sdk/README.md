@@ -10,14 +10,16 @@ npm install @sigvara/protocol-sdk
 
 Runtime dependencies are `ethers` v6 and `tweetnacl`. Node 18 or newer.
 
-Use 1.0.0-alpha.10 or later. On 1.0.0-alpha.9 and earlier an agent object carries its secret key in an
+Use 1.0.0-alpha.11 or later. On 1.0.0-alpha.9 and earlier an agent object carries its secret key in an
 ordinary property, so `JSON.stringify(agent)` or logging one includes it; never log or serialize an
 agent from those versions.
 
-> **This README describes the repository.** npm has 1.0.0-alpha.10, and the item under Unreleased in
-> [CHANGELOG.md](CHANGELOG.md) is not in it: `verifySignature` requires the audience. On alpha.10 and
-> earlier, leaving it out compiles and skips the check of who the agent signed for, so a response given
-> to one verifier is accepted at another. Pass it, as the example below does.
+> **Upgrading from 1.0.0-alpha.10:** `verifySignature` now requires the audience, as its fifth
+> argument. Leaving it out used to compile and skip the check of who the agent had signed for, so a
+> response given to one verifier was accepted at another, and a v1 payload was accepted too. It now
+> does not compile in TypeScript, throws `expectedAudience is required` in JavaScript, and a v1 payload
+> is always refused. A caller that already passes the audience needs no change. Details in
+> [CHANGELOG.md](CHANGELOG.md).
 
 > **Upgrading from 1.0.0-alpha.9:** the secret key is now a private field, so code that read it by
 > reaching around the type system stops working; sign with `signChallengeFor` or `signChallenge`.

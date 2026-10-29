@@ -190,14 +190,14 @@ console.log(total);             <span class="cm">// → 0 until the first epoch 
 <span class="kw">const</span> signature = myAgent.<span class="fn">signChallenge</span>(challenge.payload);
 
 <span class="cm">// Peer verifies: signature + on-chain pubkey + status + reputation threshold.</span>
-<span class="cm">// The last argument is the expected audience. Leaving it off still compiles,</span>
-<span class="cm">// and still accepts a proof that could have been relayed from elsewhere.</span>
+<span class="cm">// The last argument is the expected audience, and it is required: it is what makes</span>
+<span class="cm">// a proof relayed from elsewhere fail.</span>
 <span class="kw">const</span> valid   = <span class="kw">await</span> verifier.<span class="fn">verifySignature</span>(
   myAgent.did, challenge.payload, signature, <span class="num">300</span>, peerAgent.did,
 );
 <span class="cm">// meetsThreshold reads the score only, so a suspended agent still passes it: check status too.</span>
 <span class="kw">const</span> trusted = (<span class="kw">await</span> verifier.<span class="fn">isActive</span>(myAgent.did)) &amp;&amp; (<span class="kw">await</span> verifier.<span class="fn">meetsThreshold</span>(myAgent.did, <span class="num">40</span>));</code></pre>
-            <p class="u-muted-13">Requires <code>@sigvara/protocol-sdk</code> 1.0.0-alpha.8 or newer. Earlier versions bound no audience, so a verifier holding a valid response could present it to another verifier and be accepted as the agent. <code>signChallenge</code> signs whatever it is handed, so check that the challenge names the verifier you mean to prove yourself to before you call it. <code>signChallengeFor(payload, audience)</code> is in 1.0.0-alpha.10 and later, and it makes that check for you.</p>
+            <p class="u-muted-13">Requires <code>@sigvara/protocol-sdk</code> 1.0.0-alpha.8 or newer. Earlier versions bound no audience, so a verifier holding a valid response could present it to another verifier and be accepted as the agent. <code>signChallenge</code> signs whatever it is handed, so check that the challenge names the verifier you mean to prove yourself to before you call it. <code>signChallengeFor(payload, audience)</code> is in 1.0.0-alpha.10 and later, and it makes that check for you. <code>verifySignature</code> requires the audience from 1.0.0-alpha.11; on alpha.10 and earlier, leaving it out compiled and skipped the check of who the agent had signed for.</p>
           </div>
         </div>
 
