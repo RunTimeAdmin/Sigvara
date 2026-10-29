@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.0.0-alpha.11
 
 ### Changed: `verifySignature` requires the audience
 

@@ -174,6 +174,9 @@ console.log('Active, with 40 points or more:', trusted);
 `signChallengeFor` is in 1.0.0-alpha.10 and later. On alpha.9 call `signChallenge`, after
 checking yourself that the payload names the verifier you mean to prove yourself to.
 
+`verifySignature` requires the audience from 1.0.0-alpha.11. On alpha.10 and earlier, leaving it
+out compiled and skipped the check of who the agent had signed for.
+
 ## 8. Wire up CounterAudit (optional but recommended)
 
 If you're using [CounterAudit](https://counteraudit.io) to audit your agent's actions, pass `agent_did` in every ingest call. CounterAudit will enrich each sealed packet with the agent's live on-chain identity and reputation score.

@@ -518,7 +518,8 @@ const challenge = agentB.issueChallenge(agentA.did);
 const signature = agentA.signChallenge(challenge.payload);
 
 // B verifies: resolves pubkey from chain, checks signature + reputation. The last argument is the
-// audience B expects, here B's own DID, which issueChallenge signed into the payload. It is required.
+// audience B expects, here B's own DID, which issueChallenge signed into the payload. It is required
+// from 1.0.0-alpha.11; on alpha.10 and earlier, leaving it out skips the check of who A signed for.
 const valid = await verifier.verifySignature(agentA.did, challenge.payload, signature, 300, agentB.did);
 const trusted = await verifier.meetsThreshold(agentA.did, 40);
 ```
