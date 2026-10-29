@@ -143,17 +143,35 @@ export class SigvaraVerifier {
 
   // Resolve the agent's Ed25519 public key from chain and verify the signature.
   //
-  // Besides the cryptographic check, this binds the challenge to `did` and rejects
-  // stale challenges so a captured (payload, signature) pair can't be replayed after
-  // it expires. Nonce uniqueness within the freshness window is still the caller's
-  // responsibility — track consumed nonces if you need strict single-use semantics.
+  // Besides the cryptographic check, this binds the challenge to `did` and to
+  // `expectedAudience`, and rejects stale challenges so a captured (payload, signature)
+  // pair can't be replayed after it expires. Nonce uniqueness within the freshness
+  // window is still the caller's responsibility: track consumed nonces if you need
+  // strict single-use semantics.
+  //
+  // `expectedAudience` is who THIS verifier is: the same string passed to generateChallenge.
+  // It is required.
   async verifySignature(
     did: string,
     challengePayload: string,
     signatureBase58: string,
     maxAgeSeconds = 300,
-    expectedAudience?: string
+    expectedAudience: string
   ): Promise<boolean> {
+    // Left out, this used to skip the audience check below, and a call that did so compiled
+    // and accepted a response the agent had given to some other verifier. It throws rather
+    // than returning false: a missing audience is a bug in the caller, and a false reads as
+    // an ordinary refusal and hides it. TypeScript callers cannot get here without the
+    // argument; JavaScript callers, and anything that went through `any`, get this error.
+    if (typeof expectedAudience !== 'string' || expectedAudience === '') {
+      throw new Error(
+        'verifySignature: expectedAudience is required, as the fifth argument. It names this ' +
+        'verifier, so a signature the agent gave to another verifier cannot be replayed here. ' +
+        'Pass the same value you gave generateChallenge: your origin, or your own DID when ' +
+        'one agent verifies another.',
+      );
+    }
+
     // The payload must name this DID as the prover, otherwise a signature made for a
     // different challenge/DID could be presented against this one.
     let parsed;
@@ -170,12 +188,9 @@ export class SigvaraVerifier {
     // same pair to another verifier and be accepted as the agent, because nothing in the
     // signed bytes says who the agent was talking to. Every verifier an agent
     // authenticates to could impersonate it everywhere else, for the life of the
-    // challenge. v1 payloads carry no audience and cannot be checked, which is why they
-    // are refused as soon as a caller states what it expects.
-    if (expectedAudience !== undefined) {
-      if (parsed.version !== 2) return false;
-      if (parsed.audience !== expectedAudience) return false;
-    }
+    // challenge. v1 payloads carry no audience and cannot be checked, so they are refused.
+    if (parsed.version !== 2) return false;
+    if (parsed.audience !== expectedAudience) return false;
 
     if (isChallengeExpired(challengePayload, maxAgeSeconds)) return false;
 

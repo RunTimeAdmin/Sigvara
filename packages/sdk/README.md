@@ -14,6 +14,11 @@ Use 1.0.0-alpha.10 or later. On 1.0.0-alpha.9 and earlier an agent object carrie
 ordinary property, so `JSON.stringify(agent)` or logging one includes it; never log or serialize an
 agent from those versions.
 
+> **This README describes the repository.** npm has 1.0.0-alpha.10, and the item under Unreleased in
+> [CHANGELOG.md](CHANGELOG.md) is not in it: `verifySignature` requires the audience. On alpha.10 and
+> earlier, leaving it out compiles and skips the check of who the agent signed for, so a response given
+> to one verifier is accepted at another. Pass it, as the example below does.
+
 > **Upgrading from 1.0.0-alpha.9:** the secret key is now a private field, so code that read it by
 > reaching around the type system stops working; sign with `signChallengeFor` or `signChallenge`.
 > `signChallengeFor` signs only a challenge addressed to the audience you pass, where
@@ -34,8 +39,8 @@ agent from those versions.
 >
 > Without it, a verifier holding a valid response could present that same response to a
 > different verifier and be accepted as the agent. Pass the same audience to
-> `verifySignature` as its fifth argument; omitting it still compiles and still accepts
-> the relayable older proofs. Full detail in [CHANGELOG.md](CHANGELOG.md).
+> `verifySignature` as its fifth argument; on 1.0.0-alpha.10 and earlier, omitting it still
+> compiles and still accepts the relayable older proofs. Full detail in [CHANGELOG.md](CHANGELOG.md).
 >
 > **This does not make you replay-proof.** The audience stops a response being reused at
 > a *different* verifier. Reuse at *yours* is stopped by remembering the nonce, and the
@@ -96,8 +101,8 @@ const challenge = generateChallenge(agent.did, 'https://your-service.example');
 // collecting a signature meant for someone else. (signChallenge signs whatever it is handed.)
 const signature = agent.signChallengeFor(challenge.payload, 'https://your-service.example');
 
-// Pass the same audience back when verifying. Without it the check still runs, but an
-// unbound v1 payload would be accepted, which is the relayable case.
+// Pass the same audience back when verifying. It is required: verifySignature throws without
+// it, and it refuses a v1 payload, which names no audience to check.
 const ok = await verifier.verifySignature(
   agent.did, challenge.payload, signature, 300, 'https://your-service.example',
 );
@@ -175,7 +180,8 @@ repository.
 ### What the SDK still needs from you
 
 **An audience you control.** `SigvaraGate` requires one at construction and refuses to
-be built without it. It is signed into every challenge and is what stops a response you
+be built without it, and `verifySignature` requires the same string as its fifth argument.
+It is signed into every challenge and is what stops a response you
 received being presented to somebody else as proof the agent was talking to them. Use one
 stable value per service, normally your origin, not one per request.
 

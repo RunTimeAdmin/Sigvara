@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased
+
+### Changed: `verifySignature` requires the audience
+
+`SigvaraVerifier.verifySignature(did, payload, signature, maxAgeSeconds, expectedAudience)` took the
+audience as an optional last argument. Left out, the check of who the agent had signed for did not run,
+so a verifier that held a valid response could present it to another verifier and be accepted as the
+agent, and a v1 payload, which names no audience at all, was accepted too. `SigvaraGate` always passed
+its audience and was not affected. The low-level call was one omitted argument away from the relayable
+case, and the compiler said nothing.
+
+The audience is now required. A call without it does not compile in TypeScript, and in JavaScript it
+throws `expectedAudience is required` before the payload is read or the chain is touched. It throws
+instead of returning `false` because a missing audience is a bug in the caller, and a `false` reads as an
+ordinary refusal and hides it. A v1 payload is now always refused, since there is nothing in it to
+check. Ask the agent for a v2 challenge: `generateChallenge(did, audience)` has made one since
+1.0.0-alpha.8.
+
+A caller that already passes the audience needs no change, and the arguments stay where they were:
+
+```diff
+- const ok = await verifier.verifySignature(did, payload, signature);
++ const ok = await verifier.verifySignature(did, payload, signature, 300, 'https://your-service.example');
+```
+
+Pass `undefined` in place of `300` to keep the default lifetime. The audience is the string you gave to
+`generateChallenge`: your origin, or your own DID when one agent verifies another.
+
+Not changed: `signChallenge` still signs whatever it is handed. Use `signChallengeFor`, which refuses a
+challenge that is not addressed to the audience you name.
+
 ## 1.0.0-alpha.10
 
 ### Fixed: a challenge dated in the future never expired
