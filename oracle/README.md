@@ -254,7 +254,10 @@ field of an x402 `X-PAYMENT-RESPONSE`, or any transfer that settled on chain:
 
 `packetId` is optional cross-evidence: the identifier of a sealed, timestamped record
 of the same work. Stored beside the payment and served from `/evidence`, never part of
-the Merkle leaf. Validated for shape only.
+the Merkle leaf. Validated for shape only. Only a token holder's `packetId` is kept: a
+stranger's is ignored, as their `success` is. When a token holder gives an outcome to a
+payment credited without one, their `packetId` goes on with it unless the payment
+already has one.
 
 The oracle reads the agent's own address from the identity registry, finds transfers of
 `PAYMENT_ASSET` to it in that receipt, checks the amount and confirmations, and takes

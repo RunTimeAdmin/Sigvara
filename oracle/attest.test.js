@@ -38,10 +38,15 @@ after(async () => {
   await oracle.stop();
 });
 
-const attest = (didHash, txHash, { success, token } = {}) => oracle.call(
+const attest = (didHash, txHash, { success, token, packetId } = {}) => oracle.call(
   'POST',
   '/attest',
-  { didHash, ...(success === undefined ? {} : { success }), payment: { txHash } },
+  {
+    didHash,
+    ...(success === undefined ? {} : { success }),
+    payment: { txHash },
+    ...(packetId === undefined ? {} : { packetId }),
+  },
   token,
 );
 const evidence = async (didHash) => (await oracle.call('GET', `/evidence/${didHash}`)).body.evidence;
@@ -133,6 +138,51 @@ test('a credential holder can give a stranger-credited payment its outcome', asy
   const ev = await evidence(agent.didHash);
   assert.equal(ev.length, 1, 'the same payment, not a second one');
   assert.equal(ev[0].success, false);
+});
+
+// ---- packetId --------------------------------------------------------------------------
+
+const PACKET_A = '56ccbfd3-3868-4b98-8e56-97faa0aec031';
+const PACKET_B = '6a311b56-bf03-43cd-86b2-9357f5685080';
+
+test('a credential holder\'s packetId is served beside the payment it credits', async () => {
+  const agent = world.addAgent();
+  const tx = world.addTx([{ from: wallet(), to: agent.agentAddress, value: 5n * USDC }]);
+
+  const r = await attest(agent.didHash, tx, { success: true, token: AUDITOR, packetId: PACKET_A });
+
+  assert.equal(r.status, 200, r.text);
+  assert.equal((await evidence(agent.didHash))[0].counterauditPacketId, PACKET_A);
+});
+
+test('a stranger\'s packetId is ignored, as their outcome is', async () => {
+  const agent = world.addAgent();
+  const tx = world.addTx([{ from: wallet(), to: agent.agentAddress, value: 5n * USDC }]);
+
+  const r = await attest(agent.didHash, tx, { success: true, packetId: PACKET_A });
+
+  assert.equal(r.status, 200, r.text);
+  const ev = await evidence(agent.didHash);
+  assert.equal(ev.length, 1, 'the payment is still credited');
+  assert.equal(ev[0].counterauditPacketId, undefined);
+});
+
+test('the auditor\'s packetId goes on with the outcome it gives a payment credited without one', async () => {
+  const agent = world.addAgent();
+  const tx = world.addTx([{ from: wallet(), to: agent.agentAddress, value: 5n * USDC }]);
+  // Filed first by a stranger naming a packet of their choosing, which left the payment
+  // with no outcome and, before this, with the stranger's packet for good. A payment the
+  // scan found is credited the same way, with neither.
+  assert.equal((await attest(agent.didHash, tx, { success: true, packetId: PACKET_A })).status, 200);
+
+  const r = await attest(agent.didHash, tx, { success: true, token: AUDITOR, packetId: PACKET_B });
+
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.body.outcomeRecorded, true);
+  const ev = await evidence(agent.didHash);
+  assert.equal(ev.length, 1);
+  assert.equal(ev[0].success, true);
+  assert.equal(ev[0].counterauditPacketId, PACKET_B);
 });
 
 test('an outcome, once recorded, cannot be changed', async () => {
