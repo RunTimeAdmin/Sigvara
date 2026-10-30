@@ -661,10 +661,14 @@ function creditPayment(
  * Once an outcome is recorded it is final. Changing it would let a later caller overwrite an
  * audited result, so a second report gets 'already_set'.
  *
+ * The reporter's packetId goes on with the outcome when the payment has none. Without it, a
+ * payment the scan found first could never carry the auditor's record, since the scan has
+ * none to give. One the payment already has is kept.
+ *
  * @returns {'set'|'already_set'|'not_found'} not_found when no event matches: it was pruned,
  *          or the credit predates keys that name the sender.
  */
-function setPaymentOutcome(didHash, txHash, payer, success) {
+function setPaymentOutcome(didHash, txHash, payer, success, packetId = null) {
   if (typeof success !== 'boolean') throw new TypeError('setPaymentOutcome: success must be a boolean');
   const did = String(didHash).toLowerCase();
   const tx = String(txHash).toLowerCase();
@@ -676,7 +680,11 @@ function setPaymentOutcome(didHash, txHash, payer, success) {
   // A new array, not an edit in place: the evidence cache treats the array's identity as
   // the revision token, so a changed outcome has to be a new identity.
   const next = [...list];
-  next[i] = Object.freeze({ ...list[i], success });
+  next[i] = Object.freeze({
+    ...list[i],
+    success,
+    ...(packetId && !list[i].packetId ? { packetId: String(packetId) } : {}),
+  });
   paymentEvents.set(did, Object.freeze(next));
   return 'set';
 }

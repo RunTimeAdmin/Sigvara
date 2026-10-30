@@ -736,6 +736,30 @@ test('setPaymentOutcome: matches the hash and payer without regard to case, and 
   assert.equal(events.find((e) => e.payer === other).success, null, 'the other sender is untouched');
 });
 
+test('setPaymentOutcome: the reporter\'s packetId goes on a payment that has none, and one already there stays', () => {
+  const did = '0x' + 'd6'.repeat(32);
+  const scanned = '0x' + 'e6'.repeat(32);
+  const tagged = '0x' + 'e7'.repeat(32);
+  // As the scan credits: no outcome, no packet.
+  assert.equal(creditPayment(did, scanned, 500n, OUTCOME_PAYER, null), true);
+  assert.equal(creditPayment(did, tagged, 500n, OUTCOME_PAYER, null, Date.now(), 'pkt-first'), true);
+
+  assert.equal(setPaymentOutcome(did, scanned, OUTCOME_PAYER, true, 'pkt-auditor'), 'set');
+  assert.equal(setPaymentOutcome(did, tagged, OUTCOME_PAYER, true, 'pkt-auditor'), 'set');
+
+  const events = getPaymentEvents(did);
+  assert.equal(events.find((e) => e.txHash === scanned).packetId, 'pkt-auditor');
+  assert.equal(events.find((e) => e.txHash === tagged).packetId, 'pkt-first');
+});
+
+test('setPaymentOutcome: no packetId given leaves the event without one', () => {
+  const did = '0x' + 'd7'.repeat(32);
+  const tx = '0x' + 'e8'.repeat(32);
+  creditPayment(did, tx, 500n, OUTCOME_PAYER, null);
+  assert.equal(setPaymentOutcome(did, tx, OUTCOME_PAYER, false), 'set');
+  assert.equal('packetId' in getPaymentEvents(did)[0], false, 'not stored as null either');
+});
+
 test('setPaymentOutcome: a settlement that was never credited is not_found', () => {
   const did = '0x' + 'd4'.repeat(32);
   assert.equal(setPaymentOutcome(did, '0x' + 'e4'.repeat(32), OUTCOME_PAYER, true), 'not_found');

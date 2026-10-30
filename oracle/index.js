@@ -1572,7 +1572,12 @@ async function handleRequest(req, res) {
         // the payment on chain AND that such a record existed. Validated for shape
         // only — this oracle does not call CounterAudit to confirm it, because an
         // evidence path that depends on someone's SaaS is not evidence.
-        const packet = /^[0-9a-fA-F-]{36}$/.test(String(packetId || '')) ? String(packetId) : null;
+        //
+        // Taken from a credential holder only, for the same reason a stranger's outcome is
+        // not: anyone can submit a public settlement hash, and the first credit for it is
+        // final. A stranger's packetId let whoever filed first pin any identifier to the
+        // payment, and the auditor's own record could never replace it.
+        const packet = caller && /^[0-9a-fA-F-]{36}$/.test(String(packetId || '')) ? String(packetId) : null;
 
         // One event per sender. Two payers can credit one agent in a single transaction,
         // and recording that as a single payment from one of them lost who actually paid,
@@ -1610,7 +1615,7 @@ async function handleRequest(req, res) {
           // credit carried none (the scan, or a stranger's attestation): it is the first
           // outcome this payment has had. An outcome that is already recorded stays.
           if (legOutcome === null) continue;
-          const filed = setPaymentOutcome(didHash, credited.txHash, leg.payer, legOutcome);
+          const filed = setPaymentOutcome(didHash, credited.txHash, leg.payer, legOutcome, packet);
           if (filed === 'set') { anyCredited = true; outcomeRecorded = true; }
           else if (filed === 'already_set') outcomeConflict = true;
         }
