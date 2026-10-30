@@ -375,6 +375,101 @@ describe('SigvaraGate — concurrency', () => {
   });
 });
 
+describe('SigvaraGate: two gates behind one load balancer', () => {
+  // A gate keeps no record of the challenges it issued, only of the nonces it has spent. A response signed for a
+  // challenge from one instance is therefore good at the other, and what stops it being used at both is the
+  // nonce store they share. The gates here are built the same way and share nothing but that store.
+  const trip = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+  /** What Redis `SET NX` gives: the check and the write are one step, however long the trip to it takes. */
+  function atomicStore() {
+    const rows = new Map<string, number>();
+    return {
+      rows,
+      seen: async (n: string) => { await trip(); return rows.has(n); },
+      add: async (n: string, e: number) => { await trip(); rows.set(n, e); },
+      prune: async () => { await trip(); },
+      consume: async (n: string, e: number) => {
+        await trip();
+        if (rows.has(n)) return false;
+        rows.set(n, e);
+        return true;
+      },
+    };
+  }
+
+  /** The three methods and no `consume`: a read, then a write, with a trip to the store for each. */
+  function seenAndAddStore() {
+    const { consume: _atomic, ...rest } = atomicStore();
+    return rest;
+  }
+
+  const issue = (gate: SigvaraGate) => {
+    const c = gate.challenge(DID);
+    return { c, sig: signChallenge(c.payload, kp.secretKey) };
+  };
+
+  it('admits the same response at both gates when each has the default store', async () => {
+    // The documented limit of the default, pinned so that the README stays true: it is per process.
+    const [a, b] = [gateWith({ score: 50 }), gateWith({ score: 50 })];
+    const { c, sig } = issue(a);
+
+    expect((await a.admit(DID, c, sig)).ok).toBe(true);
+    expect((await b.admit(DID, c, sig)).ok).toBe(true);
+  });
+
+  it('admits a response once between two gates that share a store with consume()', async () => {
+    const store = atomicStore();
+    const [a, b] = [gateWith({ score: 50, store }), gateWith({ score: 50, store })];
+    const { c, sig } = issue(a);
+
+    expect((await a.admit(DID, c, sig)).ok).toBe(true);
+    const replay = await b.admit(DID, c, sig);
+    expect(replay.ok).toBe(false);
+    expect(replay.reason).toBe('replayed');
+  });
+
+  it('admits it once even when both gates receive it at the same moment', async () => {
+    // The race a local lock cannot close, because the other gate is in another process. Only the call that
+    // creates the record gets true from consume().
+    const store = atomicStore();
+    const [a, b] = [gateWith({ score: 50, store }), gateWith({ score: 50, store })];
+    const { c, sig } = issue(a);
+
+    const results = await Promise.all([a.admit(DID, c, sig), b.admit(DID, c, sig)]);
+    expect(results.filter((r) => r.ok)).toHaveLength(1);
+    expect(results.map((r) => r.reason)).toContain('replayed');
+    expect(store.rows.size).toBe(1);
+  });
+
+  it('with only seen() and add(), refuses a later replay at the other gate but not a simultaneous one', async () => {
+    // The README says a distributed store has to implement consume(). This is why. seen() then add() is two
+    // trips, and the lock that covers it lives in one process.
+    const store = seenAndAddStore();
+    const [a, b] = [gateWith({ score: 50, store }), gateWith({ score: 50, store })];
+
+    const first = issue(a);
+    expect((await a.admit(DID, first.c, first.sig)).ok).toBe(true);
+    expect((await b.admit(DID, first.c, first.sig)).reason).toBe('replayed');
+
+    const second = issue(a);
+    const both = await Promise.all([a.admit(DID, second.c, second.sig), b.admit(DID, second.c, second.sig)]);
+    expect(both.map((r) => r.ok)).toEqual([true, true]);
+  });
+
+  it('does not admit, or read the agent, when the shared store cannot be reached', async () => {
+    // A network store fails. The gate must fail with it and not let the response through unchecked.
+    const store = { ...atomicStore(), consume: async () => { throw new Error('store unreachable'); } };
+    const gate = gateWith({ score: 50, store });
+    const { c, sig } = issue(gate);
+
+    await expect(gate.admit(DID, c, sig)).rejects.toThrow('store unreachable');
+    const v = (gate as any).verifier;
+    expect(v.isActive).not.toHaveBeenCalled();
+    expect(v.getTotalScore).not.toHaveBeenCalled();
+  });
+});
+
 describe('MemoryNonceStore pruning', () => {
   // prune() runs on every accepted admission. It used to scan the whole map, so the cost
   // of admitting one agent grew with how many nonces were live, which is to say with how

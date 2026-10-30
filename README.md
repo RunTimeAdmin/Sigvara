@@ -477,8 +477,9 @@ if (!result.ok) {
 Only `below_threshold` is about reputation. `not_active` is a real, proven agent that
 is unbonded, suspended or slashed, and sending that caller off to earn points would be
 the wrong instruction. The default nonce store is per process; behind a load balancer
-pass a `NonceStore` with an atomic `consume()`. Requires 1.0.0-alpha.9 or later. A
-worked example lives in [examples/mcp-gated-tool](examples/mcp-gated-tool).
+pass a `NonceStore` with an atomic `consume()`, of which the [SDK README](packages/sdk/README.md)
+shows a Redis one. Requires 1.0.0-alpha.9 or later. A worked example of the gate lives in
+[examples/mcp-gated-tool](examples/mcp-gated-tool).
 
 ### Agent-to-Agent authentication
 
@@ -583,9 +584,9 @@ Everything below runs offline, with no deployed contracts, except two fork suite
 |---|---|---|
 | Contracts: unit, fuzz, E2E, upgrade, deploy-script, handover and 19 invariants | 699 | `forge test` |
 | Oracle | 784 | `cd oracle && node --test` |
-| SDK | 201 | `cd packages/sdk && npx vitest run` |
+| SDK | 206 | `cd packages/sdk && npx vitest run` |
 
-Counts are individual tests as measured on 29 October 2026, so each of the 19 invariants counts once. Without a fork URL, 692 of the contract tests run and 7 skip. The SDK's 201 include 8 integration tests that skip without a live deployment. Vitest strips types without checking them, so `npm run typecheck` in `packages/sdk` checks the tests against the SDK's types as well as the sources. [`scripts/mutation`](scripts/mutation/README.md) holds the harnesses that measure whether these tests would catch a deliberate break in the contracts or deploy scripts.
+Counts are individual tests as measured on 29 October 2026, so each of the 19 invariants counts once. Without a fork URL, 692 of the contract tests run and 7 skip. The SDK's 206 include 8 integration tests that skip without a live deployment. Vitest strips types without checking them, so `npm run typecheck` in `packages/sdk` checks the tests against the SDK's types as well as the sources. [`scripts/mutation`](scripts/mutation/README.md) holds the harnesses that measure whether these tests would catch a deliberate break in the contracts or deploy scripts.
 
 ### Unit Tests (default)
 

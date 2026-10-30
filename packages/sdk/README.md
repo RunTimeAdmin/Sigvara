@@ -184,6 +184,41 @@ optional `consume(nonce, expiresAt)` as an atomic insert-if-absent (`SET NX`, a 
 index, a conditional put). `seen` then `add` is two round trips, and two concurrent
 requests carrying the same nonce can both observe it unspent before either writes.
 
+A store for Redis with `ioredis` looks like this. Each nonce is one key that expires with its
+challenge, and `SET ... NX` succeeds only for the call that creates it:
+
+```typescript
+import Redis from 'ioredis';
+import { SigvaraGate, type NonceStore } from '@sigvara/protocol-sdk';
+
+const redis = new Redis(process.env.REDIS_URL!);
+const key = (nonce: string) => `sigvara:nonce:${nonce}`;
+// Never shorter than the challenge: a nonce forgotten early can be replayed. The extra minute is
+// for hosts whose clocks disagree.
+const seconds = (expiresAt: number) => Math.max(1, expiresAt - Math.floor(Date.now() / 1000) + 60);
+
+const nonceStore: NonceStore = {
+  consume: async (nonce, expiresAt) =>
+    (await redis.set(key(nonce), '1', 'EX', seconds(expiresAt), 'NX')) === 'OK',
+  seen: async (nonce) => (await redis.exists(key(nonce))) === 1,
+  add: async (nonce, expiresAt) => { await redis.set(key(nonce), '1', 'EX', seconds(expiresAt)); },
+  prune: () => {}, // Redis drops the keys itself
+};
+
+const gate = new SigvaraGate({
+  rpcUrl: RPC, addresses, chainId: CHAIN_ID,
+  threshold: 40,
+  audience: 'https://your-service.example',
+  nonceStore,
+});
+```
+
+While `consume` exists the gate calls it and nothing else; `seen` and `add` are there because the
+type asks for them. In SQL, make the nonce the primary key, have `consume` return whether
+`insert ... on conflict do nothing` added a row, and have `prune` delete the rows past
+`expiresAt`. Give every instance the same store. If the store throws, `admit` throws and has
+admitted nothing: answer that as a refusal.
+
 Full protocol documentation, the reputation model and the contract addresses live in the
 repository.
 
