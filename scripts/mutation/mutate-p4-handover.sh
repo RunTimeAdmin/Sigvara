@@ -1,6 +1,7 @@
 #!/bin/bash
-# Deliberate breaks of the fail-closed renounce, the timelock and Safe policy it enforces, the recorded deploy
-# block, and the upgrade shape check. Each must fail a test. Run only against a committed tree.
+# Deliberate breaks of the fail-closed renounce, the timelock and Safe policy it enforces, what it will not take on
+# trust (a Safe it cannot read, a timelock whose code it does not know), the recorded deploy block, and the upgrade
+# shape check. Each must fail a test. Run only against a committed tree.
 REPO_DEFAULT="$(cd "$(dirname "$0")/../.." && pwd)"
 REPO=${REPO:-$REPO_DEFAULT}
 cd "$REPO" || exit 1
@@ -52,4 +53,14 @@ runl F23 $S 'function _renounce()' 'DeployerCanActAlone(safe)' '<= 1' '<= 0' 'a 
 runl F24 $D 'function _firstBlock(' 'if (earlier < first)' 'earlier < first' 'earlier > first' 'a later run can move the recorded block forward'
 runl F25 $D 'function _firstBlock(' 'if (!vm.exists(path))' 'return first;' 'return 0;' 'with no artifact the recorded block is zero'
 runl F26 $D 'function _firstBlock(' 'if (!vm.keyExistsJson' 'return first;' 'return 0;' 'an artifact without a block records zero'
+runl F27 $S 'function _requireTimelockPolicy(' '_withoutMetadata(timelock.code)' '_withoutMetadata(timelock.code) != _withoutMetadata(expected)' 'false' 'a timelock of any code is accepted'
+runl F28 $S 'function _requireTimelockPolicy(' '_withoutMetadata(timelock.code)' '_withoutMetadata(timelock.code) != _withoutMetadata(expected)' 'keccak256(timelock.code) != keccak256(expected)' 'the metadata is compared as well as the code'
+runl F29 $S 'function _withoutMetadata(' 'if (n < 2)' 'n < 2' 'false' 'code too short to end in a length is not hashed whole'
+runl F30 $S 'function _withoutMetadata(' 'if (cut > n)' 'cut > n' 'false' 'a length longer than the code is not hashed whole'
+runl F31 $S 'function _withoutMetadata(' 'uint256 cut' '<< 8' '<< 7' 'the high byte of the metadata length is shifted wrong'
+runl F32 $S 'function _thresholdOf(' 'revert SafeNotInspectable(safe)' '!= keccak256("yes-i-checked-the-threshold")' '!= keccak256("yes-i-checked-the-threshold") \&\& false' 'a Safe that cannot be read is accepted without the confirmation'
+runl F33 $S 'function _thresholdOf(' 'revert SafeNotInspectable(safe)' '!= keccak256("yes-i-checked-the-threshold")' '== keccak256("")' 'any confirmation is accepted, not only the exact sentence'
+runl F34 $S 'function _thresholdOf(' 'return type(uint256).max;' 'type(uint256).max' '0' 'a Safe the operator vouched for is held to a threshold of zero'
+runl F35 $S 'function _thresholdOf(' 'ret.length == 32' 'ret.length == 32' 'ret.length >= 0' 'an empty answer is read as a threshold'
+runl F36 $S 'function _isOwner(' 'ret.length < 64' 'ret.length < 64' 'ret.length < 0' 'an empty answer is read as a list of owners'
 echo "DONE" >> "$OUT"

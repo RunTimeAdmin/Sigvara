@@ -39,6 +39,41 @@ contract MockSafe {
     }
 }
 
+/// A multisig that is not a Safe. It runs what it is told, but it has no getOwners or getThreshold: asking for
+/// either reverts, or, when `silent`, succeeds and answers with nothing.
+contract OtherMultisig {
+    bool internal immutable silent;
+
+    constructor(bool silent_) { silent = silent_; }
+
+    fallback() external {
+        if (!silent) revert();
+    }
+
+    function exec(address to, bytes calldata data) external {
+        (bool ok, bytes memory ret) = to.call(data);
+        if (!ok) {
+            assembly { revert(add(ret, 32), mload(ret)) }
+        }
+    }
+}
+
+/// Answers every question phase 5 puts to a timelock the way the one phase 2 deploys would, and is not that
+/// contract. What no getter shows is the way round the delay: anyone may run any call from here at once.
+contract LookalikeTimelock {
+    bytes32 public constant PROPOSER_ROLE = keccak256("PROPOSER_ROLE");
+    bytes32 public constant CANCELLER_ROLE = keccak256("CANCELLER_ROLE");
+    bytes32 public constant EXECUTOR_ROLE = keccak256("EXECUTOR_ROLE");
+
+    function getMinDelay() external pure returns (uint256) { return 48 hours; }
+    function hasRole(bytes32 role, address) external pure returns (bool) { return role != 0; }
+
+    function execute(address to, bytes calldata data) external {
+        (bool ok,) = to.call(data);
+        require(ok);
+    }
+}
+
 /// A registry set up the way the older code did it: UPGRADER_ROLE and every other role are administered by
 /// DEFAULT_ADMIN_ROLE, so the Safe that holds admin can grant itself upgrade rights and the slasher role.
 contract LegacyRegistry is AccessControl {
@@ -71,6 +106,7 @@ contract SplitAuthority_Harness is SplitAuthority {
         return _firstRoleTheAdminCanGrant(name, target);
     }
     function revokeDeployerAdminCall(address d) external pure returns (bytes memory) { return _revokeDeployerAdminCall(d); }
+    function withoutMetadata(bytes memory code) external pure returns (bytes32) { return _withoutMetadata(code); }
 }
 
 /**
@@ -149,12 +185,13 @@ contract SplitAuthorityTest is Test {
     /// DEPLOYER_PRIVATE_KEY is not cleared. test/DeployScripts.t.sol sets the same public key,
     /// and forge runs test contracts in parallel threads of one process, so clearing it here could
     /// land in the middle of that test and make its script fail to parse an empty key. The other
-    /// four names are used by this file alone.
+    /// five names are used by this file alone.
     function _clearEnv() internal {
         vm.setEnv("PHASE", "");
         vm.setEnv("SAFE", "");
         vm.setEnv("TIMELOCK", "");
         vm.setEnv("CONFIRM", "");
+        vm.setEnv("CONFIRM_UNINSPECTABLE_SAFE", "");
     }
 
     function test_theMigration_runsPhaseByPhase_andTheSafeCannotGiveItselfUpgrade() public {
@@ -260,6 +297,10 @@ contract SplitAuthorityTest is Test {
 
         // And that it will not leave the upgrade path to a timelock or a Safe weaker than the ADR describes.
         _renounceNeedsTheTimelockAndSafeTheAdrDescribes();
+
+        // And that it takes no answer on trust that it cannot check: a multisig that cannot say what its threshold
+        // is, and a contract that only answers like the timelock phase 2 deploys.
+        _renounceRefusesASafeItCannotReadAndATimelockItDoesNotKnow();
     }
 
     MockSafe internal mSafe;
@@ -531,6 +572,114 @@ contract SplitAuthorityTest is Test {
         vm.removeFile(_artifactPath());
     }
 
+    /// Two answers the renounce phase used to take on trust. A multisig that cannot say what its threshold is got
+    /// none of the owner checks, and the threshold guard passed it as if it had cleared them. A timelock was judged
+    /// by what it said about itself, so a contract that says the right things and lets anyone upgrade at once passed
+    /// every check. Both are set up so that the old code goes all the way through, and the deployer's upgrader role
+    /// is what shows it. The timelock is recognized by its code, not by its metadata, which depends on where the
+    /// sources were read. Run from the migration test, because the environment is process-wide.
+    function _renounceRefusesASafeItCannotReadAndATimelockItDoesNotKnow() internal {
+        vm.chainId(7777007);
+        _deployRegistries();
+        _writeArtifact();
+        SplitAuthority s = new SplitAuthority();
+
+        // One multisig whose getters revert and one whose fallback answers with nothing, each with a real timelock.
+        OtherMultisig[2] memory others = [new OtherMultisig(false), new OtherMultisig(true)];
+        TimelockController[2] memory real;
+        for (uint256 i = 0; i < others.length; i++) {
+            real[i] = _timelock(address(others[i]), 48 hours, address(0), true);
+        }
+        // A Safe that reads fine, and three things in the timelock's place: a lookalike, a real one rebuilt with other
+        // metadata, and a real one with a byte of its code changed.
+        address[] memory owners = new address[](2);
+        owners[0] = makeAddr("owner1");
+        owners[1] = makeAddr("owner2");
+        MockSafe safe = new MockSafe(owners, 2);
+        LookalikeTimelock fake = new LookalikeTimelock();
+        TimelockController rebuilt = _timelock(address(safe), 48 hours, address(0), true);
+        TimelockController tampered = _timelock(address(safe), 48 hours, address(0), true);
+
+        // Everything phase 5 reads from the registries is in place for all of them, and the deployer's admin is gone.
+        for (uint256 i = 0; i < others.length; i++) {
+            _env("grant", address(others[i]), address(real[i]), "");
+            s.run();
+        }
+        _env("grant", address(safe), address(fake), "");
+        s.run();
+        for (uint256 i = 0; i < targets.length; i++) {
+            safe.exec(targets[i], abi.encodeCall(IAccessControl.revokeRole, (ADMIN_ROLE, deployer)));
+        }
+        _grantUpgrader(address(rebuilt));
+        _grantUpgrader(address(tampered));
+
+        // solc ends the code with metadata that includes a hash of the sources as read, so the same contract built
+        // on another machine (CRLF in a Windows checkout, another directory) has other metadata and the same code to
+        // run. The last two bytes are the metadata's length; the one before them is inside it. The tampered copy
+        // changes a byte that runs.
+        bytes memory code = address(rebuilt).code;
+        code[code.length - 3] = bytes1(uint8(code[code.length - 3]) ^ 0x01);
+        vm.etch(address(rebuilt), code);
+        code = address(tampered).code;
+        code[code.length / 2] = bytes1(uint8(code[code.length / 2]) ^ 0x01);
+        vm.etch(address(tampered), code);
+        assertTrue(address(rebuilt).codehash != address(real[0]).codehash, "the metadata differs");
+
+        // 1. No threshold to read. Refused, and a nearly right confirmation is not the operator saying they checked.
+        for (uint256 i = 0; i < others.length; i++) {
+            bytes memory err = abi.encodeWithSelector(SplitAuthority.SafeNotInspectable.selector, address(others[i]));
+            _renounceIsRefused(s, address(others[i]), address(real[i]), err);
+            vm.setEnv("CONFIRM_UNINSPECTABLE_SAFE", "yes");
+            _renounceIsRefused(s, address(others[i]), address(real[i]), err);
+            vm.setEnv("CONFIRM_UNINSPECTABLE_SAFE", "");
+        }
+
+        // 2. A timelock that answers like the real one and is not, and a real one with its code changed. Neither is
+        //    what phase 2 deploys. The error names the hash it found and the one it expected, which are what
+        //    `cast codehash` and `forge inspect TimelockController deployedBytecode | cast keccak` print.
+        address[2] memory notIt = [address(fake), address(tampered)];
+        for (uint256 i = 0; i < notIt.length; i++) {
+            _renounceIsRefused(s, address(safe), notIt[i], abi.encodeWithSelector(
+                SplitAuthority.TimelockCodeNotRecognized.selector, notIt[i], notIt[i].codehash, address(real[0]).codehash
+            ));
+        }
+
+        // None of that dropped anything.
+        _assertDeployerHolds();
+
+        // 3. Everything above had the same registries and the same Safes, so what separates a refusal from a pass is
+        //    the one thing each case changes. Each pass runs from the same starting point, and the deployer losing
+        //    its upgrader role is what shows that the renounce ran. With the exact sentence a multisig that cannot be
+        //    read goes through; so does a timelock whose code runs the same and whose metadata does not.
+        uint256 start = vm.snapshotState();
+        vm.setEnv("CONFIRM_UNINSPECTABLE_SAFE", "yes-i-checked-the-threshold");
+        for (uint256 i = 0; i < others.length; i++) {
+            _env("renounce", address(others[i]), address(real[i]), "yes-drop-the-deployer");
+            s.run();
+            _assertDeployerDropped();
+            vm.revertToState(start);
+        }
+        vm.setEnv("CONFIRM_UNINSPECTABLE_SAFE", "");
+        _env("renounce", address(safe), address(rebuilt), "yes-drop-the-deployer");
+        s.run();
+        _assertDeployerDropped();
+
+        _clearEnv();
+        vm.removeFile(_artifactPath());
+    }
+
+    function _assertDeployerHolds() internal view {
+        for (uint256 i = 0; i < targets.length; i++) {
+            assertTrue(IAccessControl(targets[i]).hasRole(UPGRADER_ROLE, deployer), "nothing was dropped");
+        }
+    }
+
+    function _assertDeployerDropped() internal view {
+        for (uint256 i = 0; i < targets.length; i++) {
+            assertFalse(IAccessControl(targets[i]).hasRole(UPGRADER_ROLE, deployer), names[i]);
+        }
+    }
+
     function _writeArtifactWithoutEpochFees() internal {
         string memory json = string.concat(
             '{"chainId":', vm.toString(block.chainid),
@@ -750,6 +899,35 @@ contract SplitAuthorityTest is Test {
 
         assertFalse(h.adminIsSelf(address(new LegacyRoles())), "a registry from before the change");
         assertFalse(h.adminIsSelf(address(0xABCD)), "an address with no such function is not assumed safe");
+    }
+
+    // -------------------------------------------------------------------------
+    // How the timelock's code is recognized
+    // -------------------------------------------------------------------------
+
+    /// solc ends the code with a metadata blob and, in two bytes, the blob's length. Phase 5 compares the code
+    /// without it, because the blob depends on where the sources were read and the code to run does not. The
+    /// migration test shows that on a real timelock; this pins the arithmetic, including a blob of 256 bytes or
+    /// more, whose length needs both bytes, and input that does not end in a readable length.
+    function test_withoutMetadata_dropsTheTailSolcAppendsAndNothingElse() public {
+        SplitAuthority_Harness h = new SplitAuthority_Harness();
+        bytes memory code = hex"6080604052600080fd";
+        bytes memory blob = new bytes(300);
+        bytes memory otherBlob = new bytes(300);
+        otherBlob[7] = 0x01;
+
+        assertEq(h.withoutMetadata(bytes.concat(code, blob, hex"012c")), keccak256(code), "the blob and its length go");
+        assertEq(h.withoutMetadata(bytes.concat(code, otherBlob, hex"012c")), keccak256(code), "whatever the blob says");
+        assertTrue(
+            h.withoutMetadata(bytes.concat(hex"6080604052600180fd", blob, hex"012c")) != keccak256(code),
+            "code that differs before the blob is other code"
+        );
+
+        // No length to read, or one that claims more than there is: the whole input is hashed.
+        assertEq(h.withoutMetadata(hex""), keccak256(hex""));
+        assertEq(h.withoutMetadata(hex"60"), keccak256(hex"60"));
+        bytes memory claimsTooMuch = bytes.concat(code, hex"ffff");
+        assertEq(h.withoutMetadata(claimsTooMuch), keccak256(claimsTooMuch));
     }
 
     // -------------------------------------------------------------------------
