@@ -65,8 +65,10 @@ import {TimelockController} from "@openzeppelin/contracts/governance/TimelockCon
  * a timelock the Safe cannot propose to or cancel on, one that not everyone can execute on, one whose roles
  * the Safe or the deployer can rewrite at once, and a Safe with a threshold under two. A bad value for any
  * of these is cheap to fix before the renounce and expensive after it. Those are answers the contracts give
- * about themselves, so it also refuses a timelock whose code is not the TimelockController phase 2 deploys,
- * and a Safe that cannot be asked for its threshold unless the operator says they read it some other way.
+ * about themselves, so phases 3 and 5 also refuse a timelock whose code is not the TimelockController phase 2
+ * deploys, or that the deployer did not create, and a Safe that is an account which has delegated to a
+ * contract (EIP-7702). Phase 5 refuses a Safe that cannot be asked for its threshold unless the operator
+ * says they read it some other way.
  *
  * ## Usage
  *
@@ -100,7 +102,8 @@ import {TimelockController} from "@openzeppelin/contracts/governance/TimelockCon
  *
  * Env:
  *   SAFE                 Safe address. Required for every phase except a bare `plan`.
- *   TIMELOCK             TimelockController address, from phase 2. Needed for phases 3 and 5.
+ *   TIMELOCK             TimelockController address, from phase 2. Needed for phases 3 and 5, which both refuse
+ *                        an address that phase 2 did not create from the deployer account.
  *   TIMELOCK_MIN_DELAY   Seconds of notice before a scheduled upgrade can execute.
  *                        Default 48 hours, which is also the least phase 5 accepts.
  *   DEPLOYER_PRIVATE_KEY Broadcasting key for phases 2, 3 and 5. Must be the current
@@ -155,6 +158,7 @@ contract SplitAuthority is Script {
     error TimelockMissingUpgrader(string target, address timelock);
     error TimelockHasNoCode(address timelock);
     error TimelockCodeNotRecognized(address timelock, bytes32 found, bytes32 expected);
+    error TimelockNotCreatedByDeployer(address timelock, address deployer);
     error TimelockCannotBeProposedTo(address timelock, address safe);
     error TimelockCannotBeCancelledBy(address timelock, address safe);
     error TimelockDelayTooShort(address timelock, uint256 delay, uint256 minimum);
@@ -163,6 +167,7 @@ contract SplitAuthority is Script {
     error DeployerCanActAlone(address safe);
     error SafeThresholdTooLow(address safe, uint256 threshold, uint256 minimum);
     error SafeNotInspectable(address safe);
+    error SafeIsADelegatedAccount(address safe);
     error DeployerStillAdmin(string target, address deployer);
     error UpgraderRoleNotSelfAdministered(string target);
     error RoleNotTimelocked(string target, bytes32 role);
@@ -302,7 +307,9 @@ contract SplitAuthority is Script {
     // -------------------------------------------------------------------------
 
     /// @dev Additive only. The EOA keeps everything it had, so a wrong Safe or timelock
-    ///      address at this point costs a transaction and nothing else.
+    ///      address at this point costs a transaction and nothing else. The timelock is still looked at
+    ///      first (see `_requireTimelockPhase2Made`), because this is the phase that gives it the right
+    ///      to upgrade every registry.
     ///
     ///      The EOA grants upgrader because it is the only party that can. Once UPGRADER_ROLE
     ///      administers itself, the Safe holding DEFAULT_ADMIN_ROLE cannot hand it out, and
@@ -421,6 +428,10 @@ contract SplitAuthority is Script {
      *        - a timelock whose code is not the TimelockController phase 2 deploys. Its delay and its roles are
      *          only what it says they are, and a contract can say the right things while letting its owner
      *          upgrade at once
+     *        - a timelock the deployer did not create, whatever its code. A constructor can write storage and
+     *          still return the genuine code, so the state is only as trustworthy as whoever ran the constructor
+     *        - a Safe that is an account which has delegated to a contract (EIP-7702): its own key can still act
+     *          as itself, whatever threshold the contract it delegates to reports
      *
      *      All of them are checked against the chain, not against what the earlier
      *      phases in this file intended to do.
@@ -515,6 +526,11 @@ contract SplitAuthority is Script {
         safe = vm.envOr("SAFE", address(0));
         if (safe == address(0)) revert SafeNotSet();
         if (safe.code.length == 0) revert SafeHasNoCode(safe);
+        // An account that has delegated to a contract (EIP-7702) has 23 bytes of code: 0xef0100 and that contract's
+        // address. A call to it runs the contract, which can report any threshold and any owners, but its own key
+        // can still send transactions as itself, so no threshold it reports limits anyone.
+        bytes memory c = safe.code;
+        if (c.length == 23 && c[0] == 0xef && c[1] == 0x01 && c[2] == 0x00) revert SafeIsADelegatedAccount(safe);
     }
 
     function _requireTimelock() internal view returns (address timelock) {
@@ -523,25 +539,44 @@ contract SplitAuthority is Script {
         // A typo, or an address that only exists on another chain: phase 3 would grant UPGRADER_ROLE to it and
         // phase 5 would ask it for its delay.
         if (timelock.code.length == 0) revert TimelockHasNoCode(timelock);
+        _requireTimelockPhase2Made(timelock);
+    }
+
+    /// @dev Phase 3 gives this address the right to upgrade every registry, so what it is has to be known before that
+    ///      and not at the last step. Two things, because neither is enough alone.
+    ///
+    ///      Its code is compared with the TimelockController this file compiles, which is what phase 2 deploys and has
+    ///      no immutables, so equal builds have equal code. Every check in `_requireTimelockPolicy` is the timelock's
+    ///      own account of itself, and a contract that is not a TimelockController can give whatever account it likes
+    ///      while letting its owner upgrade at once. The metadata solc appends is left out of the comparison (see
+    ///      `_withoutMetadata`). A mismatch is a different contract or a different build, and the cure for the second
+    ///      is to run the phase from the commit that deployed the timelock.
+    ///
+    ///      Equal code is still not equal state. A constructor can write storage and then return the genuine code, for
+    ///      instance an operation already scheduled that upgrades every registry, or a role holder that no event
+    ///      records, and neither the policy checks nor the role-holder replay would see it. So the address must also
+    ///      be one the deployer created, which is how phase 2 makes it: the deployer is the account this script
+    ///      already trusts with everything.
+    function _requireTimelockPhase2Made(address timelock) internal view {
+        bytes memory expected = type(TimelockController).runtimeCode;
+        if (_withoutMetadata(timelock.code) != _withoutMetadata(expected)) {
+            revert TimelockCodeNotRecognized(timelock, timelock.codehash, keccak256(expected));
+        }
+        address deployer = _deployerAddress();
+        uint256 nonce = vm.getNonce(deployer);
+        for (uint256 n = 0; n < nonce; n++) {
+            if (vm.computeCreateAddress(deployer, n) == timelock) return;
+        }
+        revert TimelockNotCreatedByDeployer(timelock, deployer);
     }
 
     /// @dev What the notice on an upgrade rests on, read from the timelock itself. These are the checks that
     ///      scripts/check-mainnet.sh makes by hand in check_timelock, put in front of the one step that cannot be
     ///      undone. A timelock that phase 2 deployed passes them. One built another way may not, and afterwards
-    ///      only the timelock can change its own roles or its delay.
-    ///
-    ///      Every check below is the timelock's own account of itself, and a contract that is not a
-    ///      TimelockController can give whatever account it likes while letting its owner upgrade at once. So the
-    ///      code is compared first with the TimelockController this file compiles, which is what phase 2 deploys
-    ///      and has no immutables, so equal builds have equal code. The metadata solc appends is left out of the
-    ///      comparison (see `_withoutMetadata`). A mismatch is a different contract or a different build, and the
-    ///      cure for the second is to run this phase from the commit that deployed the timelock.
+    ///      only the timelock can change its own roles or its delay. They are the timelock's own answers, which
+    ///      `_requireTimelock` has already made worth reading: it is the contract phase 2 creates.
     function _requireTimelockPolicy(TimelockController tl, address safe, address deployer) internal view {
         address timelock = address(tl);
-        bytes memory expected = type(TimelockController).runtimeCode;
-        if (_withoutMetadata(timelock.code) != _withoutMetadata(expected)) {
-            revert TimelockCodeNotRecognized(timelock, timelock.codehash, keccak256(expected));
-        }
         uint256 delay = tl.getMinDelay();
         if (delay < DEFAULT_MIN_DELAY) revert TimelockDelayTooShort(timelock, delay, DEFAULT_MIN_DELAY);
         if (!tl.hasRole(tl.PROPOSER_ROLE(), safe)) revert TimelockCannotBeProposedTo(timelock, safe);

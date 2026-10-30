@@ -206,7 +206,7 @@ contract SplitAuthorityTest is Test {
         address[] memory proposers = new address[](1);
         proposers[0] = address(safe);
         address[] memory executors = new address[](1); // open execution, as the script deploys it
-        TimelockController timelock = new TimelockController(48 hours, proposers, executors, address(0));
+        TimelockController timelock = _newTimelock(48 hours, proposers, executors, address(0));
 
         SplitAuthority s = new SplitAuthority();
 
@@ -301,6 +301,7 @@ contract SplitAuthorityTest is Test {
         // And that it takes no answer on trust that it cannot check: a multisig that cannot say what its threshold
         // is, and a contract that only answers like the timelock phase 2 deploys.
         _renounceRefusesASafeItCannotReadAndATimelockItDoesNotKnow();
+        _anAccountThatHasDelegatedIsNotASafe();
     }
 
     MockSafe internal mSafe;
@@ -318,7 +319,7 @@ contract SplitAuthorityTest is Test {
         address[] memory proposers = new address[](1);
         proposers[0] = address(mSafe);
         address[] memory executors = new address[](1);
-        mTimelock = new TimelockController(48 hours, proposers, executors, address(0));
+        mTimelock = _newTimelock(48 hours, proposers, executors, address(0));
         mScript = new SplitAuthority();
 
         _env("grant", address(mSafe), address(mTimelock), "");
@@ -405,7 +406,7 @@ contract SplitAuthorityTest is Test {
         address[] memory proposers = new address[](1);
         proposers[0] = address(safe);
         address[] memory executors = new address[](1);
-        TimelockController timelock = new TimelockController(48 hours, proposers, executors, address(0));
+        TimelockController timelock = _newTimelock(48 hours, proposers, executors, address(0));
         SplitAuthority s = new SplitAuthority();
 
         string[4] memory phases = ["plan", "grant", "safe-calldata", "renounce"];
@@ -436,6 +437,16 @@ contract SplitAuthorityTest is Test {
         vm.removeFile(_artifactPath());
     }
 
+    /// A timelock created the way phase 2 creates one, from the deployer account. Phases 3 and 5 check where the
+    /// timelock came from, because a constructor can leave state that its code does not show.
+    function _newTimelock(uint256 delay, address[] memory proposers, address[] memory executors, address admin)
+        internal
+        returns (TimelockController)
+    {
+        vm.prank(deployer);
+        return new TimelockController(delay, proposers, executors, admin);
+    }
+
     /// A timelock as phase 2 builds one: `proposer` proposes and cancels, anyone executes when `open`, and it
     /// administers itself unless `admin` is named. Those three are what a test gets to spoil.
     function _timelock(address proposer, uint256 delay, address admin, bool open)
@@ -445,7 +456,7 @@ contract SplitAuthorityTest is Test {
         address[] memory proposers = new address[](1);
         proposers[0] = proposer;
         address[] memory executors = new address[](open ? 1 : 0); // [address(0)] is open execution
-        return new TimelockController(delay, proposers, executors, admin);
+        return _newTimelock(delay, proposers, executors, admin);
     }
 
     /// Every registry's upgrader role also goes to `timelock`, as phase 3 would have, so that the one thing phase 5
@@ -572,12 +583,14 @@ contract SplitAuthorityTest is Test {
         vm.removeFile(_artifactPath());
     }
 
-    /// Two answers the renounce phase used to take on trust. A multisig that cannot say what its threshold is got
-    /// none of the owner checks, and the threshold guard passed it as if it had cleared them. A timelock was judged
-    /// by what it said about itself, so a contract that says the right things and lets anyone upgrade at once passed
-    /// every check. Both are set up so that the old code goes all the way through, and the deployer's upgrader role
-    /// is what shows it. The timelock is recognized by its code, not by its metadata, which depends on where the
-    /// sources were read. Run from the migration test, because the environment is process-wide.
+    /// Answers the renounce phase used to take on trust. A multisig that cannot say what its threshold is got none of
+    /// the owner checks, and the threshold guard passed it as if it had cleared them. A timelock was judged by what it
+    /// said about itself, so a contract that says the right things and lets anyone upgrade at once passed every
+    /// check; so did a contract with the right code, though a constructor can leave state that the code does not
+    /// show. An account that has delegated to a contract (EIP-7702) was taken for a Safe. Each is set up so that the
+    /// old code goes all the way through, and the deployer's upgrader role is what shows it. The timelock is
+    /// recognized by its code, not by its metadata, which depends on where the sources were read. Run from the
+    /// migration test, because the environment is process-wide.
     function _renounceRefusesASafeItCannotReadAndATimelockItDoesNotKnow() internal {
         vm.chainId(7777007);
         _deployRegistries();
@@ -590,8 +603,8 @@ contract SplitAuthorityTest is Test {
         for (uint256 i = 0; i < others.length; i++) {
             real[i] = _timelock(address(others[i]), 48 hours, address(0), true);
         }
-        // A Safe that reads fine, and three things in the timelock's place: a lookalike, a real one rebuilt with other
-        // metadata, and a real one with a byte of its code changed.
+        // A Safe that reads fine, and four things in the timelock's place: a lookalike, a real one rebuilt with other
+        // metadata, a real one with a byte of its code changed, and a real one that the deployer did not create.
         address[] memory owners = new address[](2);
         owners[0] = makeAddr("owner1");
         owners[1] = makeAddr("owner2");
@@ -599,19 +612,25 @@ contract SplitAuthorityTest is Test {
         LookalikeTimelock fake = new LookalikeTimelock();
         TimelockController rebuilt = _timelock(address(safe), 48 hours, address(0), true);
         TimelockController tampered = _timelock(address(safe), 48 hours, address(0), true);
+        address[] memory proposers = new address[](1);
+        proposers[0] = address(safe);
+        TimelockController foreign = new TimelockController(48 hours, proposers, new address[](1), address(0));
 
-        // Everything phase 5 reads from the registries is in place for all of them, and the deployer's admin is gone.
+        // The script's own grant phase makes each multisig admin and gives the real timelocks their upgrader role. It
+        // would refuse the other three, so those get the role by hand, which leaves the old code nothing to object
+        // to. Then the deployer's admin is gone.
         for (uint256 i = 0; i < others.length; i++) {
             _env("grant", address(others[i]), address(real[i]), "");
             s.run();
         }
-        _env("grant", address(safe), address(fake), "");
+        _env("grant", address(safe), address(rebuilt), "");
         s.run();
         for (uint256 i = 0; i < targets.length; i++) {
             safe.exec(targets[i], abi.encodeCall(IAccessControl.revokeRole, (ADMIN_ROLE, deployer)));
         }
-        _grantUpgrader(address(rebuilt));
+        _grantUpgrader(address(fake));
         _grantUpgrader(address(tampered));
+        _grantUpgrader(address(foreign));
 
         // solc ends the code with metadata that includes a hash of the sources as read, so the same contract built
         // on another machine (CRLF in a Windows checkout) has other metadata and the same code to run. The last two
@@ -634,14 +653,27 @@ contract SplitAuthorityTest is Test {
             vm.setEnv("CONFIRM_UNINSPECTABLE_SAFE", "");
         }
 
-        // 2. A timelock that answers like the real one and is not, and a real one with its code changed. Neither is
-        //    what phase 2 deploys. The error names the hash it found and the one it expected, which are what
-        //    `cast codehash` and `forge inspect TimelockController deployedBytecode | cast keccak` print.
-        address[2] memory notIt = [address(fake), address(tampered)];
+        // 2. Not the timelock phase 2 makes. The lookalike and the changed byte are told by their code, which differs
+        //    from what phase 2 deploys; the error names the hash it found and the one it expected, which are what
+        //    `cast codehash` and `forge inspect TimelockController deployedBytecode | cast keccak` print. The genuine
+        //    copy that someone else created has the right code and is told by where it came from: equal code is not
+        //    equal state, since a constructor can leave an operation already scheduled or a role holder with no event.
+        address[3] memory notIt = [address(fake), address(tampered), address(foreign)];
+        bytes[3] memory notItError = [
+            abi.encodeWithSelector(
+                SplitAuthority.TimelockCodeNotRecognized.selector, address(fake), address(fake).codehash, address(real[0]).codehash
+            ),
+            abi.encodeWithSelector(
+                SplitAuthority.TimelockCodeNotRecognized.selector, address(tampered), address(tampered).codehash, address(real[0]).codehash
+            ),
+            abi.encodeWithSelector(SplitAuthority.TimelockNotCreatedByDeployer.selector, address(foreign), deployer)
+        ];
         for (uint256 i = 0; i < notIt.length; i++) {
-            _renounceIsRefused(s, address(safe), notIt[i], abi.encodeWithSelector(
-                SplitAuthority.TimelockCodeNotRecognized.selector, notIt[i], notIt[i].codehash, address(real[0]).codehash
-            ));
+            // Phase 3 is the one that gives the timelock the right to upgrade every registry, so it refuses first.
+            _env("grant", address(safe), notIt[i], "");
+            vm.expectRevert(notItError[i]);
+            s.run();
+            _renounceIsRefused(s, address(safe), notIt[i], notItError[i]);
         }
 
         // None of that dropped anything.
@@ -666,6 +698,36 @@ contract SplitAuthorityTest is Test {
 
         _clearEnv();
         vm.removeFile(_artifactPath());
+    }
+
+    /// An account that has delegated to a contract (EIP-7702) has 23 bytes of code: 0xef0100 and an address. On Arc a
+    /// call to it runs that contract's code, so it can report any threshold and any owners, and its own key can still
+    /// act as itself whatever they say. This test chain is cancun, where a call to it just fails, so the refusal has
+    /// to come from the code and not from the getters. Other 23-byte code is not that. The Safe is the first thing
+    /// every phase looks at, so none of this needs the registries or a timelock. Run from the migration test,
+    /// because the environment is process-wide.
+    function _anAccountThatHasDelegatedIsNotASafe() internal {
+        SplitAuthority s = new SplitAuthority();
+        address elsewhere = makeAddr("a contract the account delegates to");
+        address timelock = makeAddr("a timelock the Safe check never reaches");
+
+        address delegated = makeAddr("a delegated account");
+        vm.etch(delegated, bytes.concat(hex"ef0100", bytes20(elsewhere)));
+        bytes memory refused = abi.encodeWithSelector(SplitAuthority.SafeIsADelegatedAccount.selector, delegated);
+        _renounceIsRefused(s, delegated, timelock, refused);
+        _env("grant", delegated, timelock, "");
+        vm.expectRevert(refused);
+        s.run();
+
+        // Not a delegation: the version byte is wrong. It gets past the Safe check, and the run stops at the next
+        // one, because the timelock has no code.
+        address otherCode = makeAddr("23 bytes of something else");
+        vm.etch(otherCode, bytes.concat(hex"ef0200", bytes20(elsewhere)));
+        _env("renounce", otherCode, timelock, "yes-drop-the-deployer");
+        vm.expectRevert(abi.encodeWithSelector(SplitAuthority.TimelockHasNoCode.selector, timelock));
+        s.run();
+
+        _clearEnv();
     }
 
     function _assertDeployerHolds() internal view {
