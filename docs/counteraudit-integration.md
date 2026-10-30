@@ -1,6 +1,7 @@
 # CounterAudit Integration Guide
 
-> **Status: live as of 19 September 2026.**
+> **Status: enrichment live since 19 September 2026; outcome reporting built, and off in
+> production since 30 October 2026.**
 >
 > Enrichment works and is running on `api.counteraudit.io`, verified against a real
 > sealed packet carrying `agent_chain_id: 5042002` with the correct DID hash and the
@@ -8,9 +9,12 @@
 > `did:countersig:`, hashed that prefix, and was pointed at the predecessor deployment
 > on Robinhood Chain.
 >
-> **Outcome reporting is live too.** Add `outcome` (`success`/`failure`) and
-> `payment_tx_hash` to an ingest and the result is attested to the oracle, feeding the
-> agent's Success Rate and Fee Activity. The settlement hash is required: the oracle
+> **Outcome reporting is built, and off in production.** Add `outcome`
+> (`success`/`failure`) and `payment_tx_hash` to an ingest and the result is attested to
+> the oracle, feeding the agent's Success Rate and Fee Activity, but only for an org
+> listed in CounterAudit's `CA_OUTCOME_PUBLISH_ORG_IDS`. The outcome is the ingesting
+> org's word, not something CounterAudit checked, so since 30 October 2026 the production
+> deployment lists no org. The oracle's last recorded outcome is from 20 September. The settlement hash is required: the oracle
 > re-reads that transaction from the chain and takes the payer from the transfer log
 > rather than trusting the caller, so a forged hash fails at the oracle. The outcome is
 > recorded because CounterAudit presents an oracle token (`SIGVARA_ORACLE_URL` and
@@ -60,8 +64,9 @@ SIGVARA_CHAIN_ID=5042002
 # Optional — default is 5000ms
 SIGVARA_ENRICH_TIMEOUT_MS=5000
 
-# Outcome reporting back to the oracle. Both are needed; without them CounterAudit still
-# enriches packets and reports nothing.
+# Outcome reporting back to the oracle. Both are needed, and the ingesting org must be
+# listed in CA_OUTCOME_PUBLISH_ORG_IDS; without them CounterAudit still enriches packets
+# and reports nothing.
 SIGVARA_ORACLE_URL=https://oracle.sigvara.xyz
 SIGVARA_ORACLE_TOKEN=...   # a write credential the oracle operator issued for CounterAudit
 
