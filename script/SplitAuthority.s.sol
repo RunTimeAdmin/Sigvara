@@ -557,9 +557,8 @@ contract SplitAuthority is Script {
 
     /// @dev The hash of `code` without the metadata solc appends to it: a CBOR blob and, in the last two bytes, its
     ///      length. The blob carries a hash of the source files as they were read, so the same contract built from
-    ///      sources with other line endings (a Windows checkout of OpenZeppelin has CRLF) or from another directory
-    ///      has other metadata, a different `codehash`, and the same code to run. Code with no readable length is
-    ///      hashed whole.
+    ///      sources with other line endings (a Windows checkout of OpenZeppelin can have CRLF) has other metadata,
+    ///      a different `codehash`, and the same code to run. Code with no readable length is hashed whole.
     function _withoutMetadata(bytes memory code) internal pure returns (bytes32 h) {
         uint256 n = code.length;
         if (n < 2) return keccak256(code);

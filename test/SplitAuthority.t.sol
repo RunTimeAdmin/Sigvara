@@ -614,9 +614,9 @@ contract SplitAuthorityTest is Test {
         _grantUpgrader(address(tampered));
 
         // solc ends the code with metadata that includes a hash of the sources as read, so the same contract built
-        // on another machine (CRLF in a Windows checkout, another directory) has other metadata and the same code to
-        // run. The last two bytes are the metadata's length; the one before them is inside it. The tampered copy
-        // changes a byte that runs.
+        // on another machine (CRLF in a Windows checkout) has other metadata and the same code to run. The last two
+        // bytes are the metadata's length; the one before them is inside it. The tampered copy changes a byte that
+        // runs.
         bytes memory code = address(rebuilt).code;
         code[code.length - 3] = bytes1(uint8(code[code.length - 3]) ^ 0x01);
         vm.etch(address(rebuilt), code);
