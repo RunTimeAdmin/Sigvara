@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Documentation: a nonce store for a fleet
+
+The README now shows a Redis `NonceStore` with an atomic `consume()`, and what a SQL one has to do. No
+code changed. The default store is still per process, which is right for one instance and wrong for
+several: a response one instance accepted is accepted again by another. The tests now run two gates on
+one store and show both sides of that: a store with `consume()` admits a response once between them, even
+when both receive it at the same moment, and a store with only `seen()` and `add()` does not.
+
 ## 1.0.0-alpha.12
 
 ### Removed: `SigvaraAgent.signChallenge`
