@@ -589,8 +589,9 @@ All are UUPS proxies except the token.
 **Running:** hourly oracle epochs proposing and finalizing scores; payment-verified
 attestations with evidence roots; public unauthenticated reads at `/health`, `/score`,
 `/evidence`; `POST /attest`, which credits a verified payment without a token and takes an outcome only from a credentialed service; flag
-raising and resolution with half-life decay; a two-way integration with CounterAudit that
-both enriches audit packets with Sigvara identity and reports settlement outcomes back.
+raising and resolution with half-life decay; an integration with CounterAudit that
+enriches audit packets with Sigvara identity and can report settlement outcomes back (off in
+production since 30 October 2026, when CounterAudit limited relaying to allowlisted orgs).
 
 **Deployed 20 September 2026:** a second bonded operator in checker mode, on separate
 hardware from the primary and a separate RPC provider, with its own 25,000 SVR bond and

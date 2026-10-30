@@ -46,7 +46,7 @@ oracle does not take your word for who you are: it reads the payer off the trans
 What a request with no token records is the payment, as fee volume and tenure. It records
 no outcome. A settlement hash is public, so whoever submits one has not shown that they
 paid or that they saw the work, and the first credit for a settlement is final. Outcomes
-come from CounterAudit, which holds a token, and can be added to a payment that was
+come from a token holder such as CounterAudit, and can be added to a payment that was
 credited without one (once; a recorded outcome is final). The response says which
 happened with `outcomeRecorded`.
 
@@ -55,8 +55,9 @@ happened with `outcomeRecorded`.
 directly, and a verified payment proves money moved but never that the work failed.
 Leaving that open would mean anyone could downgrade any agent for the price of one
 `PAYMENT_MIN_AMOUNT` transfer — which, on a testnet whose bond token has an open
-faucet, is free. Negative outcomes therefore come from CounterAudit, which reports
-work it actually audited. Positive claims carry their own cost and can be left open as
+faucet, is free. Negative outcomes therefore need a token holder such as
+CounterAudit, which relays the outcome the ingesting org reported beside its sealed record
+of the work; it does not judge the work itself. Positive claims carry their own cost and can be left open as
 payment evidence; negative ones cannot.
 
 The oracle then:
