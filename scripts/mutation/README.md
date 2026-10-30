@@ -75,7 +75,7 @@ shows a pattern that has drifted (`NO CHANGE APPLIED`) and a test that has since
 | `mutate-p4-ceilings.sh` | ceilings on periods, window and rate | 27 | 27 |
 | `mutate-p4-floors.sh` | mainnet launch floors | 8 | 8 |
 | `mutate-p4-reader.sh` | score age on the Reader | 9 | 9 |
-| `mutate-p4-handover.sh` | fail-closed renounce, timelock and Safe policy it enforces, recorded deploy block, upgrade shape check | 26 | 26 |
+| `mutate-p4-handover.sh` | fail-closed renounce, timelock and Safe policy it enforces, what it will not take on trust (a Safe it cannot read or that is a delegated account, a timelock whose code it does not know or that the deployer did not create), recorded deploy block, upgrade shape check | 41 | 41 |
 | `mutate-invariants.sh` | the Reputation, EpochFees and Identity invariant suites, without the unit tests (PRs 66 and 69) | 113 | 109 |
 
 Survivors found and closed on the way: two exits that no test exercised while a pause was running

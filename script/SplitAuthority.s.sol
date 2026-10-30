@@ -64,7 +64,11 @@ import {TimelockController} from "@openzeppelin/contracts/governance/TimelockCon
  * leaves in charge of every upgrade is only worth what it was built with. It refuses a delay under 48 hours,
  * a timelock the Safe cannot propose to or cancel on, one that not everyone can execute on, one whose roles
  * the Safe or the deployer can rewrite at once, and a Safe with a threshold under two. A bad value for any
- * of these is cheap to fix before the renounce and expensive after it.
+ * of these is cheap to fix before the renounce and expensive after it. Those are answers the contracts give
+ * about themselves, so phases 3 and 5 also refuse a timelock whose code is not the TimelockController phase 2
+ * deploys, or that the deployer did not create, and a Safe that is an account which has delegated to a
+ * contract (EIP-7702). Phase 5 refuses a Safe that cannot be asked for its threshold unless the operator
+ * says they read it some other way.
  *
  * ## Usage
  *
@@ -98,12 +102,17 @@ import {TimelockController} from "@openzeppelin/contracts/governance/TimelockCon
  *
  * Env:
  *   SAFE                 Safe address. Required for every phase except a bare `plan`.
- *   TIMELOCK             TimelockController address, from phase 2. Needed for phases 3 and 5.
+ *   TIMELOCK             TimelockController address, from phase 2. Needed for phases 3 and 5, which both refuse
+ *                        an address that phase 2 did not create from the deployer account.
  *   TIMELOCK_MIN_DELAY   Seconds of notice before a scheduled upgrade can execute.
  *                        Default 48 hours, which is also the least phase 5 accepts.
  *   DEPLOYER_PRIVATE_KEY Broadcasting key for phases 2, 3 and 5. Must be the current
  *                        admin and upgrader. Phases 1 and 4 never broadcast and never read it.
  *   CONFIRM              Must be `yes-drop-the-deployer` for phase 5.
+ *   CONFIRM_UNINSPECTABLE_SAFE
+ *                        `yes-i-checked-the-threshold` lets phase 5 go ahead when SAFE cannot be asked for its
+ *                        threshold (a multisig that is not a Safe). Say it only once you have read the threshold
+ *                        and the owners some other way. Unset, such a SAFE is refused.
  *
  * Rehearse first: test/SplitAuthority.t.sol runs every phase offline against fresh registries
  * and a stand-in Safe. test/SplitAuthorityFork.t.sol runs the same steps against a fork of
@@ -148,6 +157,8 @@ contract SplitAuthority is Script {
     error SafeMissingAdmin(string target, address safe);
     error TimelockMissingUpgrader(string target, address timelock);
     error TimelockHasNoCode(address timelock);
+    error TimelockCodeNotRecognized(address timelock, bytes32 found, bytes32 expected);
+    error TimelockNotCreatedByDeployer(address timelock, address deployer);
     error TimelockCannotBeProposedTo(address timelock, address safe);
     error TimelockCannotBeCancelledBy(address timelock, address safe);
     error TimelockDelayTooShort(address timelock, uint256 delay, uint256 minimum);
@@ -155,6 +166,8 @@ contract SplitAuthority is Script {
     error TimelockHasOutsideAdmin(address timelock, address admin);
     error DeployerCanActAlone(address safe);
     error SafeThresholdTooLow(address safe, uint256 threshold, uint256 minimum);
+    error SafeNotInspectable(address safe);
+    error SafeIsADelegatedAccount(address safe);
     error DeployerStillAdmin(string target, address deployer);
     error UpgraderRoleNotSelfAdministered(string target);
     error RoleNotTimelocked(string target, bytes32 role);
@@ -240,6 +253,7 @@ contract SplitAuthority is Script {
             }
         } catch {
             console2.log("NOTE: SAFE has code but is not a Safe (no getThreshold). Check the address.");
+            console2.log("      PHASE=renounce refuses it unless CONFIRM_UNINSPECTABLE_SAFE=yes-i-checked-the-threshold.");
         }
     }
 
@@ -293,7 +307,9 @@ contract SplitAuthority is Script {
     // -------------------------------------------------------------------------
 
     /// @dev Additive only. The EOA keeps everything it had, so a wrong Safe or timelock
-    ///      address at this point costs a transaction and nothing else.
+    ///      address at this point costs a transaction and nothing else. The timelock is still looked at
+    ///      first (see `_requireTimelockPhase2Made`), because this is the phase that gives it the right
+    ///      to upgrade every registry.
     ///
     ///      The EOA grants upgrader because it is the only party that can. Once UPGRADER_ROLE
     ///      administers itself, the Safe holding DEFAULT_ADMIN_ROLE cannot hand it out, and
@@ -406,6 +422,16 @@ contract SplitAuthority is Script {
      *          timelock can), but they can change who proposes, cancels and executes
      *        - a Safe with a threshold under two, which leaves one owner key acting alone on
      *          everything DEFAULT_ADMIN_ROLE administers, with no delay
+     *        - a Safe that cannot be asked for its threshold, which would pass the two owner checks without
+     *          either having looked at it. Another multisig can be a legitimate target, so the operator may say
+     *          they read the threshold some other way (CONFIRM_UNINSPECTABLE_SAFE); nothing here has
+     *        - a timelock whose code is not the TimelockController phase 2 deploys. Its delay and its roles are
+     *          only what it says they are, and a contract can say the right things while letting its owner
+     *          upgrade at once
+     *        - a timelock the deployer did not create, whatever its code. A constructor can write storage and
+     *          still return the genuine code, so the state is only as trustworthy as whoever ran the constructor
+     *        - a Safe that is an account which has delegated to a contract (EIP-7702): its own key can still act
+     *          as itself, whatever threshold the contract it delegates to reports
      *
      *      All of them are checked against the chain, not against what the earlier
      *      phases in this file intended to do.
@@ -428,7 +454,8 @@ contract SplitAuthority is Script {
         if (_isOwner(safe, deployer) && _thresholdOf(safe) <= 1) revert DeployerCanActAlone(safe);
         // One owner who is not the deployer is a different key, but still one key. The Safe can raise its own
         // threshold later; until it does, that owner can use everything DEFAULT_ADMIN_ROLE administers with no
-        // delay, and propose any upgrade. A Safe that cannot answer is not held to this (see _thresholdOf).
+        // delay, and propose any upgrade. A Safe that cannot answer is refused unless the operator vouches for it
+        // (see _thresholdOf).
         uint256 threshold = _thresholdOf(safe);
         if (threshold < MIN_SAFE_THRESHOLD) revert SafeThresholdTooLow(safe, threshold, MIN_SAFE_THRESHOLD);
 
@@ -499,6 +526,11 @@ contract SplitAuthority is Script {
         safe = vm.envOr("SAFE", address(0));
         if (safe == address(0)) revert SafeNotSet();
         if (safe.code.length == 0) revert SafeHasNoCode(safe);
+        // An account that has delegated to a contract (EIP-7702) has 23 bytes of code: 0xef0100 and that contract's
+        // address. A call to it runs the contract, which can report any threshold and any owners, but its own key
+        // can still send transactions as itself, so no threshold it reports limits anyone.
+        bytes memory c = safe.code;
+        if (c.length == 23 && c[0] == 0xef && c[1] == 0x01 && c[2] == 0x00) revert SafeIsADelegatedAccount(safe);
     }
 
     function _requireTimelock() internal view returns (address timelock) {
@@ -507,12 +539,42 @@ contract SplitAuthority is Script {
         // A typo, or an address that only exists on another chain: phase 3 would grant UPGRADER_ROLE to it and
         // phase 5 would ask it for its delay.
         if (timelock.code.length == 0) revert TimelockHasNoCode(timelock);
+        _requireTimelockPhase2Made(timelock);
+    }
+
+    /// @dev Phase 3 gives this address the right to upgrade every registry, so what it is has to be known before that
+    ///      and not at the last step. Two things, because neither is enough alone.
+    ///
+    ///      Its code is compared with the TimelockController this file compiles, which is what phase 2 deploys and has
+    ///      no immutables, so equal builds have equal code. Every check in `_requireTimelockPolicy` is the timelock's
+    ///      own account of itself, and a contract that is not a TimelockController can give whatever account it likes
+    ///      while letting its owner upgrade at once. The metadata solc appends is left out of the comparison (see
+    ///      `_withoutMetadata`). A mismatch is a different contract or a different build, and the cure for the second
+    ///      is to run the phase from the commit that deployed the timelock.
+    ///
+    ///      Equal code is still not equal state. A constructor can write storage and then return the genuine code, for
+    ///      instance an operation already scheduled that upgrades every registry, or a role holder that no event
+    ///      records, and neither the policy checks nor the role-holder replay would see it. So the address must also
+    ///      be one the deployer created, which is how phase 2 makes it: the deployer is the account this script
+    ///      already trusts with everything.
+    function _requireTimelockPhase2Made(address timelock) internal view {
+        bytes memory expected = type(TimelockController).runtimeCode;
+        if (_withoutMetadata(timelock.code) != _withoutMetadata(expected)) {
+            revert TimelockCodeNotRecognized(timelock, timelock.codehash, keccak256(expected));
+        }
+        address deployer = _deployerAddress();
+        uint256 nonce = vm.getNonce(deployer);
+        for (uint256 n = 0; n < nonce; n++) {
+            if (vm.computeCreateAddress(deployer, n) == timelock) return;
+        }
+        revert TimelockNotCreatedByDeployer(timelock, deployer);
     }
 
     /// @dev What the notice on an upgrade rests on, read from the timelock itself. These are the checks that
     ///      scripts/check-mainnet.sh makes by hand in check_timelock, put in front of the one step that cannot be
     ///      undone. A timelock that phase 2 deployed passes them. One built another way may not, and afterwards
-    ///      only the timelock can change its own roles or its delay.
+    ///      only the timelock can change its own roles or its delay. They are the timelock's own answers, which
+    ///      `_requireTimelock` has already made worth reading: it is the contract phase 2 creates.
     function _requireTimelockPolicy(TimelockController tl, address safe, address deployer) internal view {
         address timelock = address(tl);
         uint256 delay = tl.getMinDelay();
@@ -528,6 +590,20 @@ contract SplitAuthority is Script {
         if (tl.hasRole(ADMIN_ROLE, deployer)) revert TimelockHasOutsideAdmin(timelock, deployer);
     }
 
+    /// @dev The hash of `code` without the metadata solc appends to it: a CBOR blob and, in the last two bytes, its
+    ///      length. The blob carries a hash of the source files as they were read, so the same contract built from
+    ///      sources with other line endings (a Windows checkout of OpenZeppelin can have CRLF) has other metadata,
+    ///      a different `codehash`, and the same code to run. Code with no readable length is hashed whole.
+    function _withoutMetadata(bytes memory code) internal pure returns (bytes32 h) {
+        uint256 n = code.length;
+        if (n < 2) return keccak256(code);
+        uint256 cut = 2 + ((uint256(uint8(code[n - 2])) << 8) | uint8(code[n - 1]));
+        if (cut > n) return keccak256(code);
+        assembly {
+            h := keccak256(add(code, 32), sub(n, cut))
+        }
+    }
+
     /// @dev The call the Safe pastes into the transaction builder for each contract. A function
     ///      of its own so that a test can read what the Safe will execute, instead of trusting a
     ///      log line: the wrong role here would have the Safe sign something that proves nothing.
@@ -535,26 +611,33 @@ contract SplitAuthority is Script {
         return abi.encodeWithSelector(IAccessControl.revokeRole.selector, ADMIN_ROLE, deployer);
     }
 
-    /// @dev Both of these tolerate a SAFE that is some other kind of contract: another
-    ///      multisig is a legitimate target, and a check that cannot be performed must
-    ///      not be reported as a check that passed.
+    /// @dev False for a SAFE that is some other kind of contract: another multisig is a legitimate target, and a
+    ///      check that cannot be performed must not be reported as a check that passed. `_thresholdOf` is what keeps
+    ///      this from being a way round the single-owner guard.
     function _isOwner(address safe, address account) internal view returns (bool) {
-        try ISafe(safe).getOwners() returns (address[] memory owners) {
-            for (uint256 i = 0; i < owners.length; i++) {
-                if (owners[i] == account) return true;
-            }
-            return false;
-        } catch {
-            return false;
+        (bool ok, bytes memory ret) = safe.staticcall(abi.encodeWithSelector(ISafe.getOwners.selector));
+        if (!ok || ret.length < 64) return false;
+        address[] memory owners = abi.decode(ret, (address[]));
+        for (uint256 i = 0; i < owners.length; i++) {
+            if (owners[i] == account) return true;
         }
+        return false;
     }
 
+    /// @dev A SAFE that cannot say what its threshold is gets neither owner guard in `_renounce`, and
+    ///      reporting that as a pass is what this used to do. Phase 5 cannot be undone, so such an address is
+    ///      refused unless the operator has said, in so many words, that they read the threshold some other way.
+    ///      Both reads are low-level, like the others that ask a contract this file does not control: a typed
+    ///      call cannot catch a contract whose fallback answers with nothing, and would end the script on a
+    ///      decoding error instead of reaching the refusal.
     function _thresholdOf(address safe) internal view returns (uint256) {
-        try ISafe(safe).getThreshold() returns (uint256 threshold) {
-            return threshold;
-        } catch {
-            return type(uint256).max; // unknown: do not trip the single-owner guard
-        }
+        (bool ok, bytes memory ret) = safe.staticcall(abi.encodeWithSelector(ISafe.getThreshold.selector));
+        if (ok && ret.length == 32) return abi.decode(ret, (uint256));
+
+        string memory said = vm.envOr("CONFIRM_UNINSPECTABLE_SAFE", string(""));
+        if (keccak256(bytes(said)) != keccak256("yes-i-checked-the-threshold")) revert SafeNotInspectable(safe);
+        console2.log("WARNING: the Safe cannot be asked for its threshold. You said you checked it; nothing here has.");
+        return type(uint256).max; // unknown, on the operator's word: do not trip the owner guards
     }
 
     /// @dev Whether DEFAULT_ADMIN_ROLE could grant UPGRADER_ROLE on this contract. Read from
