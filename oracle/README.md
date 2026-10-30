@@ -1083,7 +1083,7 @@ cd oracle
 node --test
 ```
 
-784 tests (as of 29 October 2026) covering scoring formulas, payment verification and decay, per-payer caps and
+789 tests (as of 30 October 2026) covering scoring formulas, payment verification and decay, per-payer caps and
 the trust weighting, Merkle evidence trees, HTTP helpers, store persistence and recovery,
 the streamed state file, chain access with backoff, scan checkpointing, fee caps and transaction replacement,
 metrics, and cooldown logic. Several of the files run the real `index.js` and `watcher.js`
