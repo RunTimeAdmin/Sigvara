@@ -250,6 +250,16 @@ a payer-signed outcome. Where no trustworthy backfill exists, the payment's outc
 unreported (`2` in the evidence leaf), which the score already treats as neither a success nor a
 failure.
 
+**The outcomes already recorded.** From 19 September 2026 (`51adbe0`) until 22 October (`a936ddb`),
+the oracle recorded the `success` of a positive, payment-backed attestation whether or not the
+caller held a token. On testnet that covers every outcome either operator holds, checked on
+31 October: eight, all "delivered" and all for the demo agent `0x8414ce0b…`, two paid on
+18 September and six on 20 September by test wallets for the experiment in the
+[divergence log](../divergence-log.md). They are the project's own traffic, and the state does not
+record whether a token was used. `/evidence` labels them `credentialed`, which for these eight means
+only that the payer did not sign them. They are past the replacement window, so they stay as they
+are.
+
 ## Consequences
 
 - **Outcomes stop depending on a trusted service.** A negative can come from the customer who was
