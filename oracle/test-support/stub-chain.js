@@ -52,6 +52,7 @@
 const fs = require('fs');
 const Module = require('module');
 const path = require('path');
+const { ethers } = require('ethers');
 
 const oracleDir = path.resolve(__dirname, '..');
 // The error classes and their predicates are the real ones, so a test sees the message an
@@ -75,6 +76,25 @@ const provider = {
   getBlockNumber: async () => world().head,
   getBlock: async () => ({ timestamp: world().nowSec - 60 }),
   getLogs: async (filter) => (filter.fromBlock === filter.toBlock ? world().canaryLogs : world().scanLogs) ?? [],
+  // Smart accounts for payer-signed outcomes: world().accounts maps an address to the key that
+  // may sign for it, by block ({ owners: [{ fromBlock, owner }] }). An address listed there has
+  // code; any other has none.
+  getCode: async (address, blockTag) => {
+    record('getCode', String(address).toLowerCase(), blockTag);
+    return world().accounts?.[String(address).toLowerCase()] ? '0x6080' : '0x';
+  },
+  call: async ({ to, data, blockTag }) => {
+    record('call', String(to).toLowerCase(), blockTag);
+    const account = world().accounts?.[String(to).toLowerCase()];
+    if (!account) return '0x';
+    const iface = new ethers.Interface(['function isValidSignature(bytes32 hash, bytes signature) view returns (bytes4)']);
+    const [hash, signature] = iface.decodeFunctionData('isValidSignature', data);
+    const owner = [...account.owners].reverse().find((o) => o.fromBlock <= blockTag)?.owner;
+    let signer = null;
+    try { signer = ethers.recoverAddress(hash, signature); } catch { signer = null; }
+    const yes = owner && signer && signer.toLowerCase() === owner.toLowerCase();
+    return yes ? `0x1626ba7e${'0'.repeat(56)}` : `0xffffffff${'0'.repeat(56)}`;
+  },
 };
 
 const chain = {

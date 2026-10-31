@@ -237,7 +237,47 @@ value returns 401 without a token, and `success` must be exactly `true` for a st
 `"yes"` is not a positive. With a token, a non-boolean `success` is a 400.
 
 A payment credited without an outcome (by the scan, or by a request with no token) can be
-given one afterwards by a token holder, once. An outcome that is already recorded is final.
+given one afterwards by a token holder, once. An outcome that is already recorded is final,
+except that the payer's own signed outcome can replace a token holder's (below).
+
+**An outcome signed by the payer** ([ADR 0006](../docs/adr/0006-payer-signed-outcomes.md)) needs
+no token, whoever carries it: the signature is the credential. It goes in `payerOutcome`
+instead of `success`, and only where `PAYER_OUTCOMES` is on:
+
+```json
+{
+  "didHash": "0x...",
+  "payment": { "txHash": "0x3daf88..." },
+  "payerOutcome": {
+    "payer": "0x5c...", "outcome": 1, "evidence": "0x00...",
+    "signedAt": 1793400000, "deadline": 1793486400, "signature": "0x..."
+  }
+}
+```
+
+The signature is EIP-712 over `PaymentOutcome(bytes32 didHash, bytes32 txHash, address payer,
+uint8 outcome, bytes32 evidence, uint64 signedAt, uint64 deadline)` in the domain `Sigvara`,
+version `1`, on `EXPECTED_CHAIN_ID`, with `REPUTATION_ADDRESS` as the verifying contract.
+`outcome` is `1` delivered or `2` not delivered. A payer without code signs by recovery; one
+with code (a smart account, or an address delegated under EIP-7702) is asked through ERC-1271,
+the rule OpenZeppelin's `SignatureChecker` applies on chain. Both are read at one confirmed
+block, recorded with the outcome as `checkedAtBlock`, and the ERC-1271 call is capped at
+2,000,000 gas. The oracle checks, in order, and refuses at the first failure: the payment, and
+that `payer` has its own leg in it (`payer_mismatch`) that is not a self-payment
+(`self_payment`; another sender's larger leg does not matter); for `2`, that negatives are on
+(`negative_not_accepted`) and the leg reaches `PAYER_NEGATIVE_MIN_AMOUNT` (`below_minimum`);
+`signedAt` no earlier than the payment's block and at most five minutes ahead, `deadline` not
+passed and at most 30 days after `signedAt` (`outcome_window`); the signature (`bad_signature`,
+and after five of those for one leg in an hour, `bad_signature_throttled`); then precedence.
+The outcome goes on the signer's own leg. It is final: a second signature for the leg is
+refused (`outcome_recorded`), before any chain read. It replaces a token holder's outcome if it
+arrives within `PAYER_OUTCOME_WINDOW_DAYS` of the payment's block time and the transaction had
+no other paying leg (a token holder's outcome on a transaction with several payers was given
+for the whole job), and the token holder's `packetId` goes with the outcome it backed. A token
+holder's outcome never replaces a payer's. `/evidence` marks each outcome's source,
+`payer_signed` or `credentialed` (this oracle's label, not part of the leaf), and where
+`PAYER_OUTCOMES_PUBLISH=on` serves the signed payload beside the leaf and the signing domain as
+`payerOutcomeDomain`. The leaf is unchanged.
 
 **With `PAYMENT_VERIFICATION=required`** (what mainnet should run) the attestation must
 carry the settlement transaction of a real payment to the agent — the `transaction`
@@ -878,6 +918,10 @@ with it off, the largest factor in the score is a count of HTTP requests.
 | `PAYMENT_FEE_UNIT` | `100000000` | Base units of volume per point of `feeScore`. With 6-decimal USDC this is one point per $100, so the 20-point cap lands at $2,000 of settled volume |
 | `PAYMENT_HALF_LIFE_DAYS` | `90` | Days after which a payment counts half. `0` disables decay, which makes the score answer "was this agent ever busy" instead of "is it busy now" |
 | `PAYMENT_MAX_PER_PAYER` | `4` | Most points of `feeScore`, and attestations of weight, any one payer can contribute. At 4, reaching the 20-point cap needs five distinct payers. `0` disables the cap |
+| `PAYER_OUTCOMES` | `off` | Payer-signed outcomes ([ADR 0006](../docs/adr/0006-payer-signed-outcomes.md)): `off`, `positive` (only "delivered") or `both`. Needs `PAYMENT_VERIFICATION=required`, `EXPECTED_CHAIN_ID` and `REPUTATION_ADDRESS`, or the process refuses to start. Set it the same on every operator: one taking them and another not is a delivery gap. `both` waits for a challenge process |
+| `PAYER_OUTCOMES_PUBLISH` | `off` | `on` serves each payer's signed payload in `/evidence`. Stays off on mainnet until the retention policy covers copies held by other operators |
+| `PAYER_OUTCOME_WINDOW_DAYS` | `14` | How long after the payment's block time a payer-signed outcome may replace a token holder's |
+| `PAYER_NEGATIVE_MIN_AMOUNT` | `PAYMENT_MIN_AMOUNT` | Smallest payment leg whose payer's "not delivered" counts, in base units |
 | `PAYMENT_TRUST_WEIGHT` | `1` | Raises a counterparty's cap in proportion to its own matured score, and feeds `propagationScore`. `0` weights every payer alike |
 
 Amounts are base units and handled as BigInt throughout, so an 18-decimal token does not
@@ -1086,7 +1130,7 @@ cd oracle
 node --test
 ```
 
-790 tests (as of 31 October 2026) covering scoring formulas, payment verification and decay, per-payer caps and
+812 tests (as of 31 October 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
 the trust weighting, Merkle evidence trees, HTTP helpers, store persistence and recovery,
 the streamed state file, chain access with backoff, scan checkpointing, fee caps and transaction replacement,
 metrics, and cooldown logic. Several of the files run the real `index.js` and `watcher.js`
