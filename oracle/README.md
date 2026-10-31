@@ -214,6 +214,7 @@ Also exposed, and worth knowing about:
 | `sigvara_oracle_fee_charges_total{result="already_paid"}` | agents the epoch fee was not taken from a second time, because the contract had already charged them in the same calendar epoch (an earlier run of this oracle, or anyone else). Scoring carried on. |
 | `sigvara_oracle_evidence_cache_total{result}` | `/evidence` responses served from cache against rebuilt. A miss hashes a Merkle tree over the agent's whole payment history and derives every proof, so the hit rate is the difference between a cheap endpoint and an expensive one. |
 | `sigvara_oracle_fee_charges_total{result="skipped"}` | agents not charged an epoch fee because the contract's dry run said their proposal would be refused, or because the dry run could not be made. Nonzero for long means proposals are being refused: look at the oracle's bond and the agents' status. |
+| `sigvara_oracle_payer_outcomes_imported_total`, `..._payer_outcome_import_refused_total`, `..._import_errors_total`, `..._conflicts_total` | the import from other operators ([`GET /outcomes`](#get-outcomessincems)). Refused climbing means a peer is serving outcomes that fail this oracle's checks; errors, that a peer or this node is not answering; conflicts, that a peer served a different outcome for a payment this oracle already holds one for (not checked, so a peer serving junk raises it too). |
 | `sigvara_oracle_tx_refused_total{reason}` | `fee_cap`: a transaction the oracle would not sign because the fee the RPC quoted was above `MAX_FEE_GWEI` or `MAX_TX_COST`. `unconfirmed`: a transaction that was sent and not seen mined within `TX_WAIT_SECONDS`, even after one replacement. Either one is a reason to look at the RPC. |
 
 The first four were incremented by the epoch for some time while being declared nowhere,
@@ -266,18 +267,24 @@ block, recorded with the outcome as `checkedAtBlock`, and the ERC-1271 call is c
 that `payer` has its own leg in it (`payer_mismatch`) that is not a self-payment
 (`self_payment`; another sender's larger leg does not matter); for `2`, that negatives are on
 (`negative_not_accepted`) and the leg reaches `PAYER_NEGATIVE_MIN_AMOUNT` (`below_minimum`);
-`signedAt` no earlier than the payment's block and at most five minutes ahead, `deadline` not
-passed and at most 30 days after `signedAt` (`outcome_window`); the signature (`bad_signature`,
-and after five of those for one leg in an hour, `bad_signature_throttled`); then precedence.
-The outcome goes on the signer's own leg. It is final: a second signature for the leg is
-refused (`outcome_recorded`), before any chain read. It replaces a token holder's outcome if it
-arrives within `PAYER_OUTCOME_WINDOW_DAYS` of the payment's block time and the transaction had
-no other paying leg (a token holder's outcome on a transaction with several payers was given
-for the whole job), and the token holder's `packetId` goes with the outcome it backed. A token
-holder's outcome never replaces a payer's. `/evidence` marks each outcome's source,
-`payer_signed` or `credentialed` (this oracle's label, not part of the leaf), and where
-`PAYER_OUTCOMES_PUBLISH=on` serves the signed payload beside the leaf and the signing domain as
-`payerOutcomeDomain`. The leaf is unchanged.
+`signedAt` no earlier than the payment's block, at most five minutes ahead of this host's clock
+and at most an hour after the checked block, `deadline` not passed at the checked block's time
+and at most 30 days after `signedAt` (`outcome_window`); the signature (`bad_signature`, and after five of those for one leg in an
+hour, `bad_signature_throttled`); then precedence. The outcome goes on the signer's own leg. It
+is final: a second signature for the leg is refused (`outcome_recorded`), before any chain
+read. It replaces a token holder's outcome if the checked block is within
+`PAYER_OUTCOME_WINDOW_DAYS` of the payment's block and the transaction had no other paying leg
+(a token holder's outcome on a transaction with several payers was given for the whole job),
+and the token holder's `packetId` goes with the outcome it backed. A token holder's outcome
+never replaces a payer's. The deadline reads the checked block's time rather than this host's
+clock, so that another operator importing the outcome later (see
+[`GET /outcomes`](#get-outcomessincems)) reaches the same answer; the window reads this node's
+confirmed head, when the outcome arrived here. Nothing is checked while that head is more than
+`MAX_CLOCK_SKEW_SECONDS` from this host's clock (`rpc_error`), since a node behind would stretch
+both by as much. `/evidence` marks each
+outcome's source, `payer_signed` or `credentialed` (this oracle's label, not part of the leaf),
+and where `PAYER_OUTCOMES_PUBLISH=on` serves the signed payload beside the leaf and the signing
+domain as `payerOutcomeDomain`. The leaf is unchanged.
 
 **With `PAYMENT_VERIFICATION=required`** (what mainnet should run) the attestation must
 carry the settlement transaction of a real payment to the agent — the `transaction`
@@ -526,6 +533,56 @@ convenience; a verifier should derive it from the payment rather than trust it.
 
 This detects a dropped or invented payment. It cannot detect a payment nobody ever
 submitted, which is what an independent chain watcher would be for.
+
+### `GET /outcomes?since=<ms>`
+
+The payer-signed outcomes this oracle has taken, oldest first, 500 to a page
+([ADR 0006](../docs/adr/0006-payer-signed-outcomes.md), section 6). Unauthenticated, because
+each one verifies on its own. Served only with `PAYER_OUTCOMES` on and
+`PAYER_OUTCOMES_PUBLISH=on`, and 404 otherwise, since every copy is one the retention policy has
+to cover.
+
+```json
+{
+  "domain": { "name": "Sigvara", "version": "1", "chainId": 5042, "verifyingContract": "0x..." },
+  "since": 0,
+  "more": false,
+  "next": 1793400000123,
+  "outcomes": [
+    {
+      "didHash": "0x...", "txHash": "0x...", "payer": "0x...",
+      "outcome": 1, "evidence": "0x00...", "signedAt": 1793400000, "deadline": 1793486400,
+      "signature": "0x...", "signer": "eoa", "checkedAtBlock": 1234567, "acceptedAt": 1793400000123
+    }
+  ]
+}
+```
+
+`acceptedAt` is when this oracle took the outcome, in its own milliseconds, each later than the
+one before; pass the response's `next` as `since` for the following page.
+
+**Import.** An oracle with `PAYER_OUTCOMES_PEERS` set pulls from each listed operator at the
+start of every epoch, before the registry read and the scoring, and puts each outcome through
+the same checks as a `POST /attest`, against its own node: the payment from its receipt, the
+signer's leg, the timing, the signature, precedence. The one difference is the block. A post is
+checked at this node's confirmed head; an import at the peer's `checkedAtBlock`, which must not
+be before the payment (`bad_checked_block`), more than an hour before `signedAt`
+(`outcome_window`), or past this node's confirmed head (retried at the next run). That keeps a
+smart account's answer pinned to the state it was given against, and the deadline judged at the
+same time on both operators. The window is judged at this node's own head, as for a post here,
+so a peer naming an old block cannot reopen it. A payer with no code at this node's head is
+checked by recovery, which needs no old state; one with code is checked at the recorded block,
+which needs an archive node, and on a node that keeps only recent state those outcomes fail to
+read and are passed over as below. An outcome this oracle already holds costs no chain read; if
+the peer's says something different, it is counted
+(`sigvara_oracle_payer_outcome_conflicts_total`, unchecked, so anyone serving one raises it) and
+what is held stays. One that cannot be checked for a reason that is not its own (the node not
+answering, an agent or payment it cannot see yet) holds the peer's import for at most three
+runs, then is passed over; the cursor is kept in memory, so a restart reads every peer from the
+start again and retries it. Each run checks at most 200 outcomes and spends at most a minute per
+peer. Imported outcomes are served on at this oracle's `/outcomes`, so they reach operators that
+do not list the first. Every operator should list every other one, and switch import on
+together.
 
 ### `GET /badge/:address.svg`
 
@@ -919,7 +976,8 @@ with it off, the largest factor in the score is a count of HTTP requests.
 | `PAYMENT_HALF_LIFE_DAYS` | `90` | Days after which a payment counts half. `0` disables decay, which makes the score answer "was this agent ever busy" instead of "is it busy now" |
 | `PAYMENT_MAX_PER_PAYER` | `4` | Most points of `feeScore`, and attestations of weight, any one payer can contribute. At 4, reaching the 20-point cap needs five distinct payers. `0` disables the cap |
 | `PAYER_OUTCOMES` | `off` | Payer-signed outcomes ([ADR 0006](../docs/adr/0006-payer-signed-outcomes.md)): `off`, `positive` (only "delivered") or `both`. Needs `PAYMENT_VERIFICATION=required`, `EXPECTED_CHAIN_ID` and `REPUTATION_ADDRESS`, or the process refuses to start. Set it the same on every operator: one taking them and another not is a delivery gap. `both` waits for a challenge process |
-| `PAYER_OUTCOMES_PUBLISH` | `off` | `on` serves each payer's signed payload in `/evidence`. Stays off on mainnet until the retention policy covers copies held by other operators |
+| `PAYER_OUTCOMES_PUBLISH` | `off` | `on` serves each payer's signed payload in `/evidence` and lists them at `GET /outcomes`. Stays off on mainnet until the retention policy covers copies held by other operators |
+| `PAYER_OUTCOMES_PEERS` | (empty) | Comma-separated base URLs of the other operators to import payer-signed outcomes from, at the start of each epoch (see [`GET /outcomes`](#get-outcomessincems)). Needs `PAYER_OUTCOMES`. Off on mainnet for the same reason as publishing |
 | `PAYER_OUTCOME_WINDOW_DAYS` | `14` | How long after the payment's block time a payer-signed outcome may replace a token holder's |
 | `PAYER_NEGATIVE_MIN_AMOUNT` | `PAYMENT_MIN_AMOUNT` | Smallest payment leg whose payer's "not delivered" counts, in base units |
 | `PAYMENT_TRUST_WEIGHT` | `1` | Raises a counterparty's cap in proportion to its own matured score, and feeds `propagationScore`. `0` weights every payer alike |
@@ -1130,7 +1188,7 @@ cd oracle
 node --test
 ```
 
-812 tests (as of 31 October 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
+827 tests (as of 31 October 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
 the trust weighting, Merkle evidence trees, HTTP helpers, store persistence and recovery,
 the streamed state file, chain access with backoff, scan checkpointing, fee caps and transaction replacement,
 metrics, and cooldown logic. Several of the files run the real `index.js` and `watcher.js`

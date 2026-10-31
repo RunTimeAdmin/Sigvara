@@ -1,8 +1,9 @@
 # ADR 0006: Outcomes signed by the payer
 
-**Status:** Accepted as a design · 2026-10-31. Being built: the oracle's checks and precedence
-rules, `PAYER_OUTCOMES` and the source marking on `/evidence` (Rollout 1) are in, off by default;
-`GET /outcomes`, peer import and the SDK are next. The open questions were decided the same day
+**Status:** Accepted as a design · 2026-10-31. Being built: the oracle's part (Rollout 1) is in,
+off by default: the checks and precedence rules, `PAYER_OUTCOMES`, the source marking on
+`/evidence`, `GET /outcomes` and peer import. The test vectors and the SDK are next. The open
+questions were decided the same day
 and are recorded at the end. Public outcome retrieval and peer replication
 wait on a retention review before mainnet (see Rollout). The roadmap puts the build after the
 first audit, and the escrow and receipt parts should follow what x402 standardizes.
@@ -126,7 +127,9 @@ In order, refusing at the first failure with a named code, as the payment path a
    once per sender. A payer's signature names its own leg, so the outcome goes there.
 2. `signedAt` is not before the payment's block time, not more than a few minutes ahead of now, and
    `deadline` has not passed and is at most 30 days after `signedAt`. Checked before the signature,
-   which costs a chain read.
+   which costs a chain read. "Passed" is judged at the time of the block the signature is checked
+   at (section 6), not by the receiving host's clock, so an operator importing the outcome later
+   reaches the same answer, and that block may be at most an hour older than `signedAt`.
 3. The signature is valid for `payer` under the domain of the chain the payment settled on.
 4. The precedence rules below allow it.
 
@@ -143,7 +146,11 @@ party the work was for:
   leg is refused, whatever it says. A refund or a later correction is a separate event linked to
   it, never an edit to the signed outcome or to its evidence leaf.
 - A payer-signed outcome replaces a credentialed one on the same leg if it arrives within
-  `PAYER_OUTCOME_WINDOW_DAYS` (default 14) of the payment's block time.
+  `PAYER_OUTCOME_WINDOW_DAYS` (default 14) of the payment's block time. It arrives when the
+  operator holding the credentialed outcome checks it, at that operator's confirmed head, whether
+  it was posted there or imported, so a peer cannot reopen the window by naming an old block. Two
+  operators can therefore decide differently near the edge, which matters only where they hold
+  different credentialed outcomes, as they already can.
 - A credentialed outcome never replaces a payer-signed one.
 
 The window is only for the immediate payment types this ADR covers. Delayed delivery, escrow and
@@ -190,8 +197,25 @@ the way ADR 0003 has them pull payments from the chain, without the relay ADR 00
   The block is recorded for an externally owned account too: under EIP-7702 an address can gain code
   later, and whether it is checked by recovery or by ERC-1271 depends on the state at the block.
 
+As built, an operator lists the others in `PAYER_OUTCOMES_PEERS` and imports at the start of each
+epoch, before scoring. An importer refuses a recorded block before the payment or more than an
+hour before `signedAt`, and waits for one past its own confirmed head. It reads the payment from
+the receipt as a post does, so an outcome that reaches it after its node has pruned the receipt
+cannot be imported, the same limit a direct post has. A payer with no code at the importer's head
+is checked by recovery, which needs no old state; one with code needs the state at the recorded
+block, so importing smart accounts' outcomes needs an archive node. An outcome that cannot be
+checked for a reason that is not its own is retried for a few runs and then passed over until
+the next restart, so it cannot hold up the rest.
+
 A dishonest or broken peer can therefore fail to share an outcome, which the next import or a
-direct post repairs, but it cannot inject one. Two operators holding the same chain converge on the
+direct post repairs, but it cannot inject one. It does choose the block it says it checked at.
+Within the bounds above it can name an earlier block than it used: one before the deadline for a
+signature it held back, or one before an account rotated away from a compromised key. A payer
+dating its signature back moves the second bound with it. Both need a signature that the payer's
+key at that block actually made; neither writes an outcome nobody signed, and neither reopens
+the replacement window, which each operator judges at its own head. A payer that signs two different outcomes and gives one to each operator leaves them each
+holding a final one. The importer counts and logs the difference and keeps what it holds;
+settling it is the dispute bridge's job. Two operators holding the same chain converge on the
 same payer-signed outcomes by construction. Credentialed outcomes cannot work this way, because a
 peer's copy of a token holder's word is only a copy, so they stay per-operator as they are today.
 

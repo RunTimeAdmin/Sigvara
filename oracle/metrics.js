@@ -68,6 +68,16 @@ const counters = {
   // consult the same predicate, so anything here means they disagree, or a
   // pre-migration bare-hash entry is blocking a settlement.
   paymentScanRefused: 0,
+  // ADR 0006 peer import. Imported is outcomes another operator took that this one now holds
+  // too. Refused is ones it served that fail this oracle's own checks: a few are expected (a
+  // payment this node cannot find), many mean a peer serving what it should not. Errors are
+  // runs that stopped early, usually a peer or this node not answering. Conflicts are outcomes a
+  // peer served that differ from the one held for the same payment, unchecked: a payer who signed
+  // two, or a peer serving something it should not.
+  payerOutcomesImported: 0,
+  payerOutcomeImportRefused: 0,
+  payerOutcomeImportErrors: 0,
+  payerOutcomeConflicts: 0,
   // The provider throttled a write. Separate from proposeErrors and finalizeErrors,
   // which should mean this operator could not do its job: throttling is the provider's
   // limit, with a different fix, and burying it in the same number hides both.
@@ -292,6 +302,26 @@ function toPrometheusText(extra = {}) {
   lines.push('# HELP sigvara_oracle_payment_scan_errors_total Payment scans that could not complete');
   lines.push('# TYPE sigvara_oracle_payment_scan_errors_total counter');
   lines.push(`sigvara_oracle_payment_scan_errors_total ${counters.paymentScanErrors}`);
+
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_payer_outcomes_imported_total Payer-signed outcomes imported from other operators');
+  lines.push('# TYPE sigvara_oracle_payer_outcomes_imported_total counter');
+  lines.push(`sigvara_oracle_payer_outcomes_imported_total ${counters.payerOutcomesImported}`);
+
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_payer_outcome_import_refused_total Outcomes a peer served that failed the checks here');
+  lines.push('# TYPE sigvara_oracle_payer_outcome_import_refused_total counter');
+  lines.push(`sigvara_oracle_payer_outcome_import_refused_total ${counters.payerOutcomeImportRefused}`);
+
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_payer_outcome_import_errors_total Imports from a peer that stopped early');
+  lines.push('# TYPE sigvara_oracle_payer_outcome_import_errors_total counter');
+  lines.push(`sigvara_oracle_payer_outcome_import_errors_total ${counters.payerOutcomeImportErrors}`);
+
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_payer_outcome_conflicts_total Outcomes a peer served that differ from the one held, unchecked');
+  lines.push('# TYPE sigvara_oracle_payer_outcome_conflicts_total counter');
+  lines.push(`sigvara_oracle_payer_outcome_conflicts_total ${counters.payerOutcomeConflicts}`);
 
   lines.push('');
   lines.push('# HELP sigvara_oracle_payment_scan_canary_failures_total Empty scans whose query could not be proved to work');

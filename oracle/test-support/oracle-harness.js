@@ -65,12 +65,13 @@ class World {
   /**
    * A mined, successful transaction carrying ERC-20 Transfer logs of the payment asset.
    * @param {Array<{from: string, to: string, value: bigint}>} transfers
+   * @param {{ asset?: string, blockNumber?: number }} [opts] blockNumber defaults to ten below head
    */
-  addTx(transfers, { asset = ASSET } = {}) {
+  addTx(transfers, { asset = ASSET, blockNumber = this.data.head - 10 } = {}) {
     const hash = ethers.id(`tx-${++this.txCount}-${Math.random()}`);
     this.data.receipts[hash] = {
       status: 1,
-      blockNumber: this.data.head - 10,
+      blockNumber,
       logs: transfers.map((t) => ({
         address: asset,
         topics: [TRANSFER, ethers.zeroPadValue(t.from, 32), ethers.zeroPadValue(t.to, 32)],

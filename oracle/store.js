@@ -62,6 +62,13 @@ const paymentEvents = new Map();
 // transaction can pay several agents: a batch payout, a multicall, a router settling a
 // few providers at once. See creditKey.
 const usedPaymentTxs = new Set();
+// The latest acceptedAt given to a payer-signed outcome. Each is later than the one before, so
+// GET /outcomes?since can page by it without losing or repeating one that shares a millisecond.
+let lastAcceptedAt = 0;
+// Payer-signed outcomes in the order they were taken, as { acceptedAt, did, tx, who }, so that
+// GET /outcomes, which anyone may ask for, finds a page without reading every payment. Rebuilt on
+// load; an entry whose payment has since been pruned is skipped when read.
+let acceptedOrder = [];
 // didHash -> recent occasions this oracle disagreed with a pending proposal, newest
 // last. Only checker mode writes here. Persisted because a divergence is evidence for
 // the slashing committee, and evidence that evaporates on restart is not evidence.
@@ -321,7 +328,16 @@ function applyState(next) {
   attestCooldowns.clear();
   for (const [k, v] of next.attestCooldowns) attestCooldowns.set(k, v);
   paymentEvents.clear();
-  for (const [k, v] of next.paymentEvents) paymentEvents.set(k, v);
+  acceptedOrder = [];
+  for (const [k, v] of next.paymentEvents) {
+    paymentEvents.set(k, v);
+    for (const e of v) {
+      const at = e.payerOutcome?.acceptedAt;
+      if (Number.isSafeInteger(at)) acceptedOrder.push({ acceptedAt: at, did: k, tx: e.txHash, who: String(e.payer).toLowerCase() });
+    }
+  }
+  acceptedOrder.sort((x, y) => x.acceptedAt - y.acceptedAt);
+  lastAcceptedAt = acceptedOrder.length ? acceptedOrder[acceptedOrder.length - 1].acceptedAt : 0;
   usedPaymentTxs.clear();
   for (const h of next.usedPaymentTxs) usedPaymentTxs.add(h);
   divergences.clear();
@@ -703,7 +719,11 @@ function setPaymentOutcome(didHash, txHash, payer, success, packetId = null) {
  *
  * `signed` is the payload and signature, kept beside the event so a verifier can check that
  * the committed outcome is one the payer signed. The evidence leaf is unchanged: it commits to
- * `success` as before.
+ * `success` as before. It gains `acceptedAt`, this host's time of taking it and later than any
+ * before it, which GET /outcomes pages by.
+ *
+ * `now` is when the outcome arrived for the window: the time of the block its signature was
+ * checked at, so an operator importing it later reaches the same answer.
  *
  * @returns {'set'|'replaced'|'already_set'|'outside_window'|'not_found'}
  */
@@ -720,10 +740,47 @@ function recordPayerOutcome(didHash, txHash, payer, success, signed, { windowMs,
   const credentialed = typeof event.success === 'boolean';
   if (credentialed && (!replaceable || now - event.ts > windowMs)) return 'outside_window';
   const { packetId: _backedTheOldOutcome, ...rest } = event;
+  lastAcceptedAt = Math.max(Date.now(), lastAcceptedAt + 1);
   const next = [...list];
-  next[i] = Object.freeze({ ...rest, success, payerOutcome: Object.freeze({ ...signed }) });
+  next[i] = Object.freeze({ ...rest, success, payerOutcome: Object.freeze({ ...signed, acceptedAt: lastAcceptedAt }) });
   paymentEvents.set(did, Object.freeze(next));
+  acceptedOrder.push({ acceptedAt: lastAcceptedAt, did, tx, who });
   return credentialed ? 'replaced' : 'set';
+}
+
+/**
+ * The payer-signed outcomes accepted after `since` (an acceptedAt), oldest first, at most
+ * `limit` of them, for GET /outcomes. `more` says whether any were left out.
+ */
+function payerOutcomesSince(since, limit) {
+  // The first entry after `since`.
+  let lo = 0;
+  let hi = acceptedOrder.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (acceptedOrder[mid].acceptedAt > since) hi = mid;
+    else lo = mid + 1;
+  }
+  const outcomes = [];
+  let i = lo;
+  for (; i < acceptedOrder.length && outcomes.length < limit; i += 1) {
+    const { acceptedAt, did, tx, who } = acceptedOrder[i];
+    const e = (paymentEvents.get(did) ?? []).find(
+      (x) => x.txHash === tx && String(x.payer).toLowerCase() === who && x.payerOutcome?.acceptedAt === acceptedAt,
+    );
+    if (e) outcomes.push({ didHash: did, txHash: e.txHash, payer: e.payer, ...e.payerOutcome });
+  }
+  return { outcomes, more: i < acceptedOrder.length };
+}
+
+/** The payer-signed outcome this oracle holds for a leg, or null. */
+function payerOutcomeFor(didHash, txHash, payer) {
+  const tx = String(txHash).toLowerCase();
+  const who = String(payer).toLowerCase();
+  const e = (paymentEvents.get(String(didHash).toLowerCase()) ?? []).find(
+    (x) => x.payerOutcome && x.txHash === tx && String(x.payer).toLowerCase() === who,
+  );
+  return e ? e.payerOutcome : null;
 }
 
 /** Whether the payer has signed an outcome for its leg of this payment. */
@@ -870,6 +927,8 @@ module.exports = {
   setPaymentOutcome,
   recordPayerOutcome,
   hasPayerOutcome,
+  payerOutcomesSince,
+  payerOutcomeFor,
   divergences,
   recordDivergence,
   getDivergences,

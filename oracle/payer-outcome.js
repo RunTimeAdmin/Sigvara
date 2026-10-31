@@ -28,6 +28,9 @@ const NOT_DELIVERED = 2;
 const MAX_DEADLINE_SECONDS = 30 * 86_400;
 // How far ahead of this host's clock signedAt may be.
 const MAX_FUTURE_SKEW_SECONDS = 300;
+// How far signedAt may be after the time of the block it is checked at. A confirmed block is a
+// little behind the head, and the head a little behind real time; an hour is far more than either.
+const MAX_CHECK_LAG_SECONDS = 3_600;
 // An ERC-1271 signature can be longer than 65 bytes (a multisig's, say), but not unboundedly.
 const MAX_SIGNATURE_BYTES = 4096;
 const ERC1271_MAGIC = '0x1626ba7e';
@@ -67,8 +70,10 @@ const MODES = ['off', 'positive', 'both'];
  *     credentialed one.
  *   negativeMinAmount: the least a payment leg must carry for its payer's "not delivered" to
  *     count, in the payment asset's base units. Starts at PAYMENT_MIN_AMOUNT.
- *   publish: whether the signed payloads are served (in /evidence). Off on mainnet until the
- *     retention policy covers copies held elsewhere (ADR 0006, Rollout 5).
+ *   publish: whether the signed payloads are served (in /evidence and GET /outcomes). Off on
+ *     mainnet until the retention policy covers copies held elsewhere (ADR 0006, Rollout 5).
+ *   peers: the other operators to import payer-signed outcomes from (ADR 0006, section 6), as
+ *     base URLs. Empty means no import; also off on mainnet until that review.
  */
 function readConfig(env = process.env, paymentCfg) {
   const mode = String(env.PAYER_OUTCOMES || 'off').toLowerCase();
@@ -91,12 +96,31 @@ function readConfig(env = process.env, paymentCfg) {
   if (!Number.isFinite(windowDays) || windowDays < 0) {
     throw new Error(`PAYER_OUTCOME_WINDOW_DAYS must be a number of days, 0 or more, got "${env.PAYER_OUTCOME_WINDOW_DAYS}"`);
   }
+  const peers = String(env.PAYER_OUTCOMES_PEERS || '').split(',').map((s) => s.trim()).filter(Boolean).map(peerUrl);
+  if (peers.length && mode === 'off') {
+    throw new Error('PAYER_OUTCOMES_PEERS needs PAYER_OUTCOMES: an oracle that takes no payer outcomes imports none');
+  }
   return {
     mode,
     windowMs: windowDays * 86_400_000,
     negativeMinAmount: negative ? BigInt(negative) : paymentCfg.minAmount,
     publish: publish === 'on',
+    peers,
   };
+}
+
+/** A peer's base URL, without a trailing slash. Plain http is allowed: every import is checked. */
+function peerUrl(raw) {
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(`PAYER_OUTCOMES_PEERS: "${raw}" is not a URL`);
+  }
+  if ((url.protocol !== 'https:' && url.protocol !== 'http:') || url.username || url.password || url.search || url.hash) {
+    throw new Error(`PAYER_OUTCOMES_PEERS: "${raw}" must be an http(s) base URL with no credentials, query or fragment`);
+  }
+  return url.href.replace(/\/+$/, '');
 }
 
 /** The domain: Sigvara, version 1, on the chain the payment settled on, for its SigvaraReputation proxy. */
@@ -169,16 +193,39 @@ function message(didHash, txHash, value) {
 }
 
 /**
- * Whether signedAt and deadline allow this outcome now (ADR 0006, section 3).
+ * Whether signedAt and deadline allow this outcome, before any chain read (ADR 0006, section 3).
+ * Whether the deadline has passed is checkedBlockProblem's question.
+ *
+ * Only "not in the future" reads this host's clock, and an answer that held when one operator
+ * took the outcome still holds when another imports it later.
+ *
  * @param {number} settledAtMs  the payment's block time
  * @returns {string|null} why not, or null
  */
 function timingProblem(value, settledAtMs, nowMs = Date.now()) {
-  const nowSec = Math.floor(nowMs / 1000);
   if (value.signedAt * 1000 < settledAtMs) return 'signed before the payment settled';
-  if (value.signedAt > nowSec + MAX_FUTURE_SKEW_SECONDS) return 'signedAt is in the future';
-  if (value.deadline <= nowSec) return 'the deadline has passed';
+  if (value.signedAt > Math.floor(nowMs / 1000) + MAX_FUTURE_SKEW_SECONDS) return 'signedAt is in the future';
   if (value.deadline > value.signedAt + MAX_DEADLINE_SECONDS) return 'the deadline is more than 30 days after signedAt';
+  return null;
+}
+
+/**
+ * Whether the block the signature is checked at allows this outcome: its deadline not passed at
+ * that block's time, and the block not from well before the signature.
+ *
+ * Judged at the block, not by this host's clock, so an operator importing the outcome later,
+ * checking at the block the first one recorded, reaches the same answer. The second rule stops a
+ * peer naming a block from long before the outcome was signed. A peer can still name one up to
+ * MAX_CHECK_LAG_SECONDS before, and a payer can date its signature back; ADR 0006 says what that
+ * leaves.
+ *
+ * @param {number} checkedAtMs  the time of the block the signature is checked at
+ * @returns {string|null} why not, or null
+ */
+function checkedBlockProblem(value, checkedAtMs) {
+  const checkedSec = Math.floor(checkedAtMs / 1000);
+  if (value.signedAt > checkedSec + MAX_CHECK_LAG_SECONDS) return 'checked at a block from before it was signed';
+  if (value.deadline <= checkedSec) return 'the deadline has passed';
   return null;
 }
 
@@ -198,6 +245,18 @@ class RpcError extends Error {
   }
 }
 
+/** A signature by the payer's own key, checked as OpenZeppelin's ECDSA would. Reads no state. */
+function recover(dom, msg, signature) {
+  if (!canonicalEcdsa(signature)) return { valid: false, signer: 'eoa' };
+  let recovered;
+  try {
+    recovered = ethers.verifyTypedData(dom, TYPES, msg, signature);
+  } catch {
+    return { valid: false, signer: 'eoa' };
+  }
+  return { valid: recovered === msg.payer, signer: 'eoa' };
+}
+
 /**
  * Checks the payer's signature the way OpenZeppelin's SignatureChecker does, which is what
  * SigvaraIdentity applies to agent wallets: an address without code signs by recovery, one with
@@ -215,16 +274,7 @@ async function verifySignature({ provider, dom, msg, signature, blockNumber }) {
   } catch (err) {
     throw new RpcError(`could not read the payer's code: ${err.message}`);
   }
-  if (!code || code === '0x') {
-    if (!canonicalEcdsa(signature)) return { valid: false, signer: 'eoa' };
-    let recovered;
-    try {
-      recovered = ethers.verifyTypedData(dom, TYPES, msg, signature);
-    } catch {
-      return { valid: false, signer: 'eoa' };
-    }
-    return { valid: recovered === msg.payer, signer: 'eoa' };
-  }
+  if (!code || code === '0x') return recover(dom, msg, signature);
   const hash = ethers.TypedDataEncoder.hash(dom, TYPES, msg);
   let answer;
   try {
@@ -248,18 +298,105 @@ async function verifySignature({ provider, dom, msg, signature, blockNumber }) {
   return { valid, signer: 'contract' };
 }
 
+/**
+ * verifySignature for an outcome another operator checked at `blockNumber`, reading as little old
+ * state as it can. A node that is not an archive node keeps state for only the last blocks, and an
+ * import runs an epoch or more after the outcome was taken.
+ *
+ * An address with no code at this node's `headBlock` is checked by recovery, which reads no state.
+ * Only one with code now is checked as of the recorded block: by ERC-1271 if it had code then, by
+ * recovery if it gained code later (EIP-7702). That needs an archive node, and on one without, the
+ * read fails as an RpcError and the import tries again later. An address that had code when the
+ * outcome was taken and has none now is checked by recovery, so a signature only its old code
+ * would accept is refused here.
+ */
+async function verifyImported({ provider, dom, msg, signature, blockNumber, headBlock }) {
+  let code;
+  try {
+    code = await provider.getCode(msg.payer, headBlock);
+  } catch (err) {
+    throw new RpcError(`could not read the payer's code: ${err.message}`);
+  }
+  if (!code || code === '0x') return recover(dom, msg, signature);
+  return verifySignature({ provider, dom, msg, signature, blockNumber });
+}
+
+// ---- Peer import (ADR 0006, section 6) ------------------------------------------------------
+
+// GET /outcomes serves at most this many per page.
+const OUTCOMES_PAGE = 500;
+// A full page is a few hundred kilobytes. A peer that sends more is not answering the question.
+const MAX_PAGE_BYTES = 2 * 1024 * 1024;
+const isMs = (n) => Number.isSafeInteger(n) && n >= 0;
+
+/**
+ * One page of a peer's GET /outcomes after `since`. Throws on anything but a well-formed answer;
+ * the items themselves are checked one by one (parseServed), so one bad item costs only itself.
+ *
+ * redirect: 'error', as the watcher does: the peer is somebody else's server, and following a
+ * redirect it chooses would let it point this oracle at an address it could not reach itself.
+ *
+ * @returns {Promise<{ outcomes: unknown[], more: boolean }>}
+ */
+async function fetchOutcomesPage(peer, since, { timeoutMs = 20_000, maxBytes = MAX_PAGE_BYTES } = {}) {
+  const res = await fetch(`${peer}/outcomes?since=${since}`, { signal: AbortSignal.timeout(timeoutMs), redirect: 'error' });
+  if (!res.ok) {
+    await res.body?.cancel();
+    throw new Error(`GET /outcomes returned ${res.status}`);
+  }
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of res.body) {
+    size += chunk.length;
+    if (size > maxBytes) throw new Error(`GET /outcomes sent more than ${maxBytes} bytes`);
+    chunks.push(chunk);
+  }
+  const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  if (!body || !Array.isArray(body.outcomes)) throw new Error('GET /outcomes sent no outcomes list');
+  // A page is at most OUTCOMES_PAGE long. Anything past that is a peer padding it.
+  return { outcomes: body.outcomes.slice(0, OUTCOMES_PAGE), more: body.more === true };
+}
+
+/**
+ * An item a peer served, checked for shape only: everything that matters is checked again
+ * against this oracle's own chain view, as if it had been posted here.
+ *
+ * @returns {{ ok: true, value: { didHash: string, txHash: string, checkedAtBlock: number,
+ *   acceptedAt: number, signed: object } } | { ok: false, error: string }}
+ */
+function parseServed(item) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return { ok: false, error: 'not an object' };
+  const { didHash, txHash, checkedAtBlock, acceptedAt } = item;
+  if (typeof didHash !== 'string' || !BYTES32.test(didHash)) return { ok: false, error: 'didHash is not 32 bytes' };
+  if (typeof txHash !== 'string' || !BYTES32.test(txHash)) return { ok: false, error: 'txHash is not 32 bytes' };
+  if (!Number.isSafeInteger(checkedAtBlock) || checkedAtBlock < 0) return { ok: false, error: 'checkedAtBlock is not a block number' };
+  if (!isMs(acceptedAt)) return { ok: false, error: 'acceptedAt is not a time' };
+  const signed = parse(item);
+  if (!signed.ok) return signed;
+  return {
+    ok: true,
+    value: { didHash: didHash.toLowerCase(), txHash: txHash.toLowerCase(), checkedAtBlock, acceptedAt, signed: signed.value },
+  };
+}
+
 module.exports = {
   TYPES,
   DELIVERED,
   NOT_DELIVERED,
   MAX_DEADLINE_SECONDS,
   MAX_FUTURE_SKEW_SECONDS,
+  MAX_CHECK_LAG_SECONDS,
   ERC1271_MAGIC,
   readConfig,
   domain,
   parse,
   message,
   timingProblem,
+  checkedBlockProblem,
   verifySignature,
+  verifyImported,
   RpcError,
+  OUTCOMES_PAGE,
+  fetchOutcomesPage,
+  parseServed,
 };
