@@ -17,6 +17,22 @@ export {
   parseDid,
 } from './did';
 export {
+  signPaymentOutcome,
+  verifyPaymentOutcome,
+  paymentOutcomeDomain,
+  PAYMENT_OUTCOME_TYPES,
+  OUTCOME_DELIVERED,
+  OUTCOME_NOT_DELIVERED,
+  MAX_OUTCOME_DEADLINE_SECONDS,
+} from './outcome';
+export type {
+  PaymentOutcomeCode,
+  PaymentOutcomeDeployment,
+  SignedPaymentOutcome,
+  SignPaymentOutcomeOptions,
+  VerifyPaymentOutcomeOptions,
+} from './outcome';
+export {
   base58Encode,
   base58Decode,
   hexToBytes,

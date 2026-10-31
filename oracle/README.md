@@ -261,7 +261,13 @@ uint8 outcome, bytes32 evidence, uint64 signedAt, uint64 deadline)` in the domai
 version `1`, on `EXPECTED_CHAIN_ID`, with `REPUTATION_ADDRESS` as the verifying contract.
 `outcome` is `1` delivered or `2` not delivered. A payer without code signs by recovery; one
 with code (a smart account, or an address delegated under EIP-7702) is asked through ERC-1271,
-the rule OpenZeppelin's `SignatureChecker` applies on chain. Both are read at one confirmed
+the rule OpenZeppelin's `SignatureChecker` applies on chain, down to taking an answer longer than
+one word whose first word is the magic value. `test/vectors/payment-outcome.json` holds the cases,
+and `test/PaymentOutcome.t.sol` checks the same ones with OpenZeppelin's code. Off chain it differs
+only for accounts that break ERC-1271 or lean on its edges: an `eth_call` is not static, so one that
+writes storage while answering is accepted here and refused on chain, and an empty signature (which
+a Safe can take for a message it approved on chain) or one over 4096 bytes is refused before the
+account is asked. Both are read at one confirmed
 block, recorded with the outcome as `checkedAtBlock`, and the ERC-1271 call is capped at
 2,000,000 gas. The oracle checks, in order, and refuses at the first failure: the payment, and
 that `payer` has its own leg in it (`payer_mismatch`) that is not a self-payment
@@ -1188,7 +1194,7 @@ cd oracle
 node --test
 ```
 
-827 tests (as of 31 October 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
+830 tests (as of 31 October 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
 the trust weighting, Merkle evidence trees, HTTP helpers, store persistence and recovery,
 the streamed state file, chain access with backoff, scan checkpointing, fee caps and transaction replacement,
 metrics, and cooldown logic. Several of the files run the real `index.js` and `watcher.js`

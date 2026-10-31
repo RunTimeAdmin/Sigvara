@@ -106,6 +106,13 @@ jobs:
         working-directory: .
         run: node scripts/check-evidence-fixture.mjs
 
+      # The payment-outcome vectors are what the oracle, the SDK and test/PaymentOutcome.t.sol
+      # each check signing and verifying against. They are regenerated here from the oracle's
+      # type and the testnet deployment, so the JSON and the Solidity copy cannot drift apart.
+      - name: Payment-outcome vectors match the oracle
+        working-directory: .
+        run: node scripts/check-outcome-vectors.mjs
+
       # A raw private key is 64 hex characters, which GitHub's push protection does not
       # recognise, and a key pushed to this public repository cannot be taken back. This reads
       # every tracked file for a PEM key block or a 64-hex value assigned to a key-like name.

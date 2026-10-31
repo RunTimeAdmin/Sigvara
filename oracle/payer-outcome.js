@@ -290,11 +290,13 @@ async function verifySignature({ provider, dom, msg, signature, blockNumber }) {
     if (accountRefused(err)) return { valid: false, signer: 'contract' };
     throw new RpcError(`could not ask the payer's account: ${err.message}`);
   }
-  // A bytes4 return is one word: the magic value, then zeros. Anything else is not a yes.
+  // OpenZeppelin's rule: at least one word, and the first word is the magic value then zeros.
+  // Anything after it is ignored (the vectors' contract_longer_answer); four bytes alone are not
+  // a word (contract_short_answer).
   const valid =
     typeof answer === 'string' &&
-    answer.length === 66 &&
-    answer.toLowerCase() === `${ERC1271_MAGIC}${'0'.repeat(56)}`;
+    answer.length >= 66 &&
+    answer.slice(0, 66).toLowerCase() === `${ERC1271_MAGIC}${'0'.repeat(56)}`;
   return { valid, signer: 'contract' };
 }
 

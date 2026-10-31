@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Added: payment outcomes signed by the payer
+
+`signPaymentOutcome(signer, { chainId, reputationAddress, didHash, txHash, outcome })` signs, as an
+agent's payer, whether one payment's work was delivered (ADR 0006). The result is the `payerOutcome`
+a Sigvara oracle takes at `POST /attest` without a token; a wallet's v of 0 or 1 is rewritten to 27 or
+28, and a signature that does not recover to the payer is an error. `verifyPaymentOutcome` checks one
+the way the oracle does, by recovery or ERC-1271, and needs a provider to tell which.
+`PAYMENT_OUTCOME_TYPES` (frozen) and `paymentOutcomeDomain` are exported for wallets that sign typed
+data themselves. Both functions are tested against the
+repository's `test/vectors/payment-outcome.json`, which a Foundry test checks against OpenZeppelin's
+`EIP712` and `SignatureChecker`.
+
 ### Documentation: a nonce store for a fleet
 
 The README now shows a Redis `NonceStore` with an atomic `consume()`, and what a SQL one has to do. No

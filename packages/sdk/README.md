@@ -73,6 +73,9 @@ exposed and rotate it ([Key Rotation](https://github.com/RunTimeAdmin/Sigvara#ke
 - **A gate.** `SigvaraGate` turns the reads above into one decision: issue a
   challenge, admit or refuse, and say which reason applies. It owns
   the nonce, so replay protection is not left to the caller.
+- **Payment outcomes.** After paying an agent, sign whether the work was
+  delivered (`signPaymentOutcome`), so the oracle can count it without a token,
+  and check such a signature the way the oracle does (`verifyPaymentOutcome`).
 
 Scores come in two forms. The earned score is what the oracle last finalized; the total
 score is the matured one, which climbs toward it over time and is what `meetsThreshold`
@@ -238,6 +241,49 @@ a distributed one has to implement.
 **Using `verifySignature` directly still leaves the nonce to you.** It has no memory by
 design, so if you are not going through the gate, store the nonces you issue, reject one
 you have seen, and drop them past the TTL.
+
+## Payment outcomes: `signPaymentOutcome`
+
+The payer of an agent is the party whose opinion of the work counts most, and it already
+holds a key. `signPaymentOutcome` signs, as the payer, whether one payment's work was
+delivered, over EIP-712 typed data bound to that payment
+([ADR 0006](https://github.com/RunTimeAdmin/sigvara/blob/main/docs/adr/0006-payer-signed-outcomes.md)).
+The result is the `payerOutcome` of the oracle's `POST /attest`, which takes it with no token:
+the signature is the credential.
+
+```typescript
+import { signPaymentOutcome, OUTCOME_DELIVERED } from '@sigvara/protocol-sdk';
+
+// payerWallet sent the payment; txHash is its settlement transaction.
+const payerOutcome = await signPaymentOutcome(payerWallet, {
+  chainId: 5042002,                 // the chain the payment settled on
+  reputationAddress: '0x…',          // its SigvaraReputation proxy (deployments/5042002.json)
+  didHash: agent.didHash,           // the agent paid
+  txHash,
+  outcome: OUTCOME_DELIVERED,
+  // evidence: optional 32 bytes, such as the hash of the response received
+  // deadline: seconds, at most 30 days after signing; a day by default
+});
+
+await fetch('https://oracle.sigvara.xyz/attest', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ didHash: agent.didHash, payment: { txHash }, payerOutcome }),
+});
+```
+
+A smart account pays and signs too, if it answers ERC-1271 for its owner's EIP-712
+signatures: pass the owner's signer and the account as `payer`. An account that wraps what
+its owner signs needs its own wallet SDK to sign the same typed data
+(`PAYMENT_OUTCOME_TYPES`, `paymentOutcomeDomain`).
+
+`verifyPaymentOutcome` checks such a signature the way the oracle does: by recovery for an
+address without code, by ERC-1271 for one with code, with OpenZeppelin's rules for both. It
+needs a provider on the payment's chain, because whether the payer has code decides which, and
+takes a `blockTag` so both reads are at one block. It checks the signature only. The oracle also checks the payment, the payer's leg in it, the
+timing and its own records, and takes only "delivered" until negatives are switched on.
+`test/vectors/payment-outcome.json` in the repository holds the cases both functions are
+tested against, and the same cases are checked on chain with OpenZeppelin's own code.
 
 ## Links
 
