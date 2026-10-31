@@ -1248,6 +1248,10 @@ function buildEvidenceBody(didHash, events) {
     // it as a boolean made it collide with a reported failure, which the score counts
     // very differently, so the root stopped covering the arithmetic it commits to.
     committedFields: ['txHash', 'payer', 'amount', 'settledAt', 'success'],
+    // Served beside the leaf but never checked by this oracle beyond its shape. A token
+    // holder supplied it; nothing here fetched the packet or confirmed that it records this
+    // payment or outcome, so it is a pointer, not proof, and says so in the response.
+    unverifiedFields: ['counterauditPacketId'],
     // The leaf is derivable from the payment, so a verifier rebuilds it rather than
     // trusting the one served here; it is included to make that comparison easy.
     evidence: events.map((e, i) => ({
@@ -1258,7 +1262,7 @@ function buildEvidenceBody(didHash, events) {
       success: e.success,
       leaf: tree.leaves[i],
       proof: merkle.proofFor(tree, i),
-      // Corroboration, NOT part of the leaf. See committedFields above.
+      // Not part of the leaf and not verified here. See committedFields and unverifiedFields above.
       ...(e.packetId ? { counterauditPacketId: e.packetId } : {}),
     })),
   });
