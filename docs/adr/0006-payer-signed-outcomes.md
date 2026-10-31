@@ -1,9 +1,10 @@
 # ADR 0006: Outcomes signed by the payer
 
-**Status:** Accepted as a design · 2026-10-31. Being built: the oracle's part (Rollout 1) is in,
-off by default: the checks and precedence rules, `PAYER_OUTCOMES`, the source marking on
-`/evidence`, `GET /outcomes` and peer import. The test vectors and the SDK are next. The open
-questions were decided the same day
+**Status:** Accepted as a design · 2026-10-31. Rollout 1 to 3 are built, all off by default: the
+oracle's checks and precedence rules, `PAYER_OUTCOMES`, the source marking on `/evidence`,
+`GET /outcomes` and peer import; the vectors in `test/vectors/payment-outcome.json`, checked on chain
+by `test/PaymentOutcome.t.sol`; and the SDK's `signPaymentOutcome` and `verifyPaymentOutcome`. Testnet
+(Rollout 4) is next. The open questions were decided the same day
 and are recorded at the end. Public outcome retrieval and peer replication
 wait on a retention review before mainnet (see Rollout). The roadmap puts the build after the
 first audit, and the escrow and receipt parts should follow what x402 standardizes.
@@ -89,7 +90,13 @@ PaymentOutcome(
   account's signature is checked by recovery against this address; a contract account's by calling
   `isValidSignature` on it (ERC-1271). That is the rule `SigvaraIdentity` already applies to agent
   wallets through OpenZeppelin's `SignatureChecker`, so smart accounts that pay can sign without a
-  separate path.
+  separate path. Off chain it differs only for accounts that break ERC-1271 or lean on its edges: an
+  `eth_call` is not a static call, so an account that writes storage while answering is accepted
+  where the static call on chain would revert; the call is capped at 2,000,000 gas; its `bytes`
+  argument is padded to a whole word, where OpenZeppelin sends it unpadded; and an empty signature,
+  or one over 4096 bytes, is refused before the account is asked (a Safe can approve a message on
+  chain and then take an empty signature for it). The vectors record the first as an on-chain-only
+  case.
 - **`outcome`** is `1` delivered or `2` not delivered. `0` and anything above `2` are refused, and
   the values above `2` are left for the dispute types in the
   [x402 dispute bridge](../x402-dispute-bridge.md) (malformed delivery, quality). In the evidence leaf
@@ -260,7 +267,8 @@ failure.
   outcome of either kind since 20 September, but the score should say so while it lasts.
 - **The client has to sign.** An x402 buyer already holds a key and signs typed data for the
   payment; one more signature after delivery is cheap for software and invisible to a person, but it
-  is new work in every buyer integration. `@sigvara/protocol-sdk` should ship the signer.
+  is new work in every buyer integration. `@sigvara/protocol-sdk` ships the signer,
+  `signPaymentOutcome`.
 
 ## What this does not do
 
@@ -283,7 +291,9 @@ failure.
    off by default. Like the payment scan, **on every operator or on none**: one operator accepting
    payer outcomes and another not is a delivery asymmetry.
 2. Test vectors signed by an externally owned account and by an ERC-1271 mock, cross-checked against
-   the contract's domain separator, plus refusal cases: wrong payer, another sender's leg, wrong chain
+   OpenZeppelin's `EIP712` domain separator at the `SigvaraReputation` proxy's address (the contract
+   has no EIP-712 domain of its own; this is the one an on-chain verifier there would have), plus
+   refusal cases: wrong payer, another sender's leg, wrong chain
    or contract in the domain, before settlement, after the deadline, a second signature, a negative
    under `positive`, a forged signature arriving by peer import, and an ERC-1271 account that
    rotates its owner between acceptance and import.

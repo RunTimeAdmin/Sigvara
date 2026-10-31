@@ -225,6 +225,77 @@ describe('payer-outcome', () => {
   });
 });
 
+// ---- the shared vectors ------------------------------------------------------------------
+
+describe('the shared vectors (test/vectors/payment-outcome.json)', () => {
+  const vectors = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'test', 'vectors', 'payment-outcome.json'), 'utf8'));
+  const dom = payerOutcome.domain(vectors.domain.chainId, vectors.domain.verifyingContract);
+  const erc1271 = new ethers.Interface(['function isValidSignature(bytes32 hash, bytes signature) view returns (bytes4)']);
+
+  /**
+   * A node holding the vectors' smart account, answering as test/PaymentOutcome.t.sol's accounts do.
+   * Every read must be at block 1, and a call must go to the account.
+   */
+  const vectorNode = (account) => ({
+    getCode: async (address, blockTag) => {
+      assert.equal(blockTag, 1);
+      return account && address.toLowerCase() === vectors.addresses.account.toLowerCase() ? '0x6080' : '0x';
+    },
+    call: async ({ to, data, blockTag }) => {
+      assert.equal(blockTag, 1);
+      assert.equal(String(to).toLowerCase(), vectors.addresses.account.toLowerCase());
+      const [hash, signature] = erc1271.decodeFunctionData('isValidSignature', data);
+      let yes = false;
+      try {
+        yes = ethers.recoverAddress(hash, signature) === account.owner;
+      } catch { /* not a signature */ }
+      const word = `${yes ? '0x1626ba7e' : '0xffffffff'}${'0'.repeat(56)}`;
+      if (account.kind === 'longer') return `${word}${'0'.repeat(63)}1`;
+      if (account.kind === 'short') return word.slice(0, 10);
+      return word;
+    },
+  });
+
+  test('has the type, domain and digests this oracle signs over', () => {
+    assert.equal(ethers.TypedDataEncoder.from(payerOutcome.TYPES).encodeType('PaymentOutcome'), vectors.typeString);
+    assert.equal(ethers.TypedDataEncoder.hashDomain(dom), vectors.domainSeparator);
+    for (const c of vectors.cases) {
+      const msg = payerOutcome.message(c.message.didHash, c.message.txHash, c.message);
+      assert.equal(ethers.TypedDataEncoder.hash(dom, payerOutcome.TYPES, msg), c.digest, c.name);
+      assert.equal(payerOutcome.parse({ ...c.message, signature: c.signature }).ok, true, c.name);
+    }
+  });
+
+  test('gives every case OpenZeppelin\'s verdict', async () => {
+    const offChain = vectors.cases.filter((c) => !c.onChainOnly);
+    assert.ok(offChain.length >= 11);
+    for (const c of offChain) {
+      const msg = payerOutcome.message(c.message.didHash, c.message.txHash, c.message);
+      const verdict = await payerOutcome.verifySignature({
+        provider: vectorNode(c.account), dom, msg, signature: c.signature, blockNumber: 1,
+      });
+      assert.deepEqual(verdict, { valid: c.valid, signer: c.account ? 'contract' : 'eoa' }, c.name);
+    }
+  });
+
+  test('applies the timing cases', () => {
+    const says = {
+      before_settlement: /before the payment/,
+      future: /future/,
+      deadline_too_far: /30 days/,
+      deadline_passed: /passed/,
+      checked_before_signed: /before it was signed/,
+    };
+    for (const c of vectors.timing) {
+      const value = { signedAt: c.signedAt, deadline: c.deadline };
+      const why = payerOutcome.timingProblem(value, c.settledAt * 1000, c.now * 1000)
+        ?? payerOutcome.checkedBlockProblem(value, c.checkedAt * 1000);
+      if (c.refusal === null) assert.equal(why, null, c.name);
+      else assert.match(why ?? '', says[c.refusal], c.name);
+    }
+  });
+});
+
 test('a node that cannot answer the ERC-1271 call is an RPC failure, not a bad signature', async () => {
   // A real JsonRpcProvider, because ethers reports every eth_call error as CALL_EXCEPTION.
   const http = require('node:http');
