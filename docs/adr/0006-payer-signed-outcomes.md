@@ -245,8 +245,9 @@ failure.
   signature at all. That waits for x402's escrow and arbiter interfaces to settle.
 - It adds no challenge, no arbiter and no refund. Those are the dispute bridge.
 - It does not settle retention. Public outcome retrieval and peer replication copy every accepted
-  outcome to every operator and to anyone who asks, so how those copies, disputes, backups and
-  deletion requests are handled needs counsel's review before either runs on mainnet.
+  outcome to every operator and to anyone who asks, and a copy on another operator's host cannot be
+  guaranteed deleted. The retention policy has to cover those copies, and counsel has to review how
+  copies, disputes, backups and deletion requests are handled, before either runs on mainnet.
 
 ## Rollout
 
@@ -260,11 +261,12 @@ failure.
    rotates its owner between acceptance and import.
 3. `@sigvara/protocol-sdk`: `signPaymentOutcome` and `verifyPaymentOutcome`.
 4. Arc testnet with `PAYER_OUTCOMES=positive`, then the CounterAudit connector.
-5. Mainnet with `positive`, and only after counsel has reviewed retention for public outcome
-   retrieval and peer replication: how copies, disputes, backups and deletion requests are handled.
-   This is a launch gate, not a follow-up. The Agent Bureau's Phase 0 decisions draft holds the same
-   line for outcomes from outside, which it does not accept before its decisions are approved, and
-   its proposed 24-month file retention is not yet an approved policy.
+5. Mainnet with `positive`. There, `GET /outcomes`, the signed payloads in `/evidence` and peer
+   import stay off until the retention policy covers copies held by other operators and counsel has
+   reviewed how copies, disputes, backups and deletion requests are handled. This is a launch gate,
+   not a follow-up. The Agent Bureau has recorded a provisional baseline: an active file keeps an
+   outcome at most 24 months from the Bureau's `received_at`, a chosen product policy rather than a
+   legal safe harbor, and it accepts no outside outcome until counsel has checked its obligations.
 6. `both` only once a challenge process exists, with negatives presented as payer-reported.
 
 ## Decisions on the open questions
