@@ -10,6 +10,7 @@
 //   {
 //     nowSec:    the chain clock, in seconds
 //     head:      the block number
+//     blockTimes: { "<block number>": seconds } a block's time, where it is not nowSec - 60
 //     receipts:  { "<txhash>": { status, blockNumber, logs: [{ address, topics, data }] } }
 //     agents:    { "<didhash>": { operator, agentAddress, registeredAt, status } }
 //     standing:  { "<address>": hard score of a counterparty }
@@ -74,7 +75,7 @@ const fakeHash = (tag) => `0x${tag.repeat(32)}`;
 const provider = {
   getTransactionReceipt: async (hash) => world().receipts[String(hash).toLowerCase()] ?? null,
   getBlockNumber: async () => world().head,
-  getBlock: async () => ({ timestamp: world().nowSec - 60 }),
+  getBlock: async (n) => ({ number: n, timestamp: world().blockTimes?.[n] ?? world().nowSec - 60 }),
   getLogs: async (filter) => (filter.fromBlock === filter.toBlock ? world().canaryLogs : world().scanLogs) ?? [],
   // Smart accounts for payer-signed outcomes: world().accounts maps an address to the key that
   // may sign for it, by block ({ owners: [{ fromBlock, owner }] }). An address listed there has

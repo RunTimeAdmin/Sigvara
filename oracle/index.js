@@ -240,6 +240,8 @@ const {
   setPaymentOutcome,
   recordPayerOutcome,
   hasPayerOutcome,
+  payerOutcomesSince,
+  payerOutcomeFor,
   getScanState: loadScanState,
   setScanState,
   getPaymentScanState,
@@ -644,6 +646,18 @@ async function runEpochInner() {
   // payment record is permanent.
   const skewReason = clockSkewError(await chain.getLatestBlockTimestamp(), Date.now(), cfg.maxClockSkewMs);
   if (skewReason) throw new Error(skewReason);
+
+  // Before scoring, and before the registry read so that failing does not stop it too: this epoch
+  // scores every payer-signed outcome another operator holds, not only the ones posted here
+  // (ADR 0006, section 6). Failure is logged and swallowed, as the payment scan's is.
+  if (payerOutcomeCfg.peers.length) {
+    try {
+      await importPayerOutcomes();
+    } catch (err) {
+      metrics.inc('payerOutcomeImportErrors');
+      console.error('[oracle] payer outcome import failed:', err.message);
+    }
+  }
 
   let agents;
   try {
@@ -1269,71 +1283,102 @@ function noteBadSignature(key, now = Date.now()) {
 }
 
 /**
- * The rest of POST /attest for an outcome the payer signed, once the payment has been verified
- * (docs/adr/0006-payer-signed-outcomes.md, section 3): the signer's own leg, the signature, the
- * timing, then the precedence rules. Refuses at the first failure with a named code.
+ * Takes an outcome the payer signed, once its payment has been verified
+ * (docs/adr/0006-payer-signed-outcomes.md, section 3): the signer's own leg, the timing, the
+ * signature, then the precedence rules. Refuses at the first failure with a named code.
+ *
+ * Shared by POST /attest and the import from other operators (section 6), so an import is
+ * checked as if it had been posted here. The difference is the block the signature is checked at:
+ * a post's is this node's confirmed head, an import's the block the accepting operator recorded,
+ * which must not be before the payment or past this node's confirmed head. The deadline is judged
+ * at that block's time, so both operators reach the same answer about it. The replacement window
+ * is judged at this node's confirmed head, the time the outcome arrived here, so a peer naming an
+ * old block cannot reopen it. An import is also not throttled (the peer is configured, and each
+ * run is bounded) and not saved one by one: the import saves once when it is done.
+ *
+ * @returns {Promise<{ status: number, body: object, metric: string }>} the reply, and the counter
+ *   a POST counts it under
  */
-async function acceptPayerOutcome(res, { didHash, credited, info, signed }) {
+async function admitPayerOutcome({ didHash, credited, info, signed }, { peerBlock = null } = {}) {
+  const fromPeer = peerBlock !== null;
+  const refuse = (status, code, error, metric) => ({ status, body: { error, code }, metric });
   const leg = (credited.legs ?? []).find((l) => l.payer.toLowerCase() === signed.payer.toLowerCase());
   if (!leg) {
-    metrics.inc('attestRejectedPayment');
-    return json(res, 402, {
-      error: 'no payment from this payer to this agent in this transaction',
-      code: 'payer_mismatch',
-    });
+    return refuse(402, 'payer_mismatch', 'no payment from this payer to this agent in this transaction', 'attestRejectedPayment');
   }
   if (payments.isSelfPayment(leg.payer, info)) {
-    metrics.inc('attestRejectedPayment');
-    return json(res, 402, {
-      error: 'an agent cannot attest itself: the payer is its own operator or agent address',
-      code: 'self_payment',
-    });
+    return refuse(402, 'self_payment', 'an agent cannot attest itself: the payer is its own operator or agent address', 'attestRejectedPayment');
   }
   const delivered = signed.outcome === payerOutcome.DELIVERED;
   if (!delivered && leg.amount < payerOutcomeCfg.negativeMinAmount) {
-    metrics.inc('attestRejectedPayment');
-    return json(res, 402, {
-      error: `a "not delivered" needs a payment of at least ${payerOutcomeCfg.negativeMinAmount}`,
-      code: 'below_minimum',
-    });
+    return refuse(402, 'below_minimum', `a "not delivered" needs a payment of at least ${payerOutcomeCfg.negativeMinAmount}`, 'attestRejectedPayment');
   }
-  const late = payerOutcome.timingProblem(signed, credited.settledAt);
-  if (late) {
-    metrics.inc('attestRejectedOther');
-    return json(res, 400, { error: late, code: 'outcome_window' });
-  }
+  // The timing that needs no chain read, first.
+  const early = payerOutcome.timingProblem(signed, credited.settledAt);
+  if (early) return refuse(400, 'outcome_window', early, 'attestRejectedOther');
 
   const throttleKey = `${didHash}|${credited.txHash}|${leg.payer.toLowerCase()}`;
-  if (badSignatureThrottled(throttleKey)) {
-    metrics.inc('attestRejectedOther');
-    return json(res, 429, { error: 'too many bad signatures for this payment; try again later', code: 'bad_signature_throttled' });
+  if (!fromPeer && badSignatureThrottled(throttleKey)) {
+    return refuse(429, 'bad_signature_throttled', 'too many bad signatures for this payment; try again later', 'attestRejectedOther');
   }
+  const provider = chain.getProvider();
+  const blockMs = async (n) => {
+    const ms = Number((await provider.getBlock(n))?.timestamp) * 1000;
+    if (!Number.isFinite(ms) || ms <= 0) throw new Error(`no timestamp for block ${n}`);
+    return ms;
+  };
+  // The block the signature is checked at, recorded with the outcome whatever kind of account
+  // signed: under EIP-7702 an address can gain code later, so another operator checking
+  // afterwards must ask the same question of the same state.
+  let confirmed;
+  let checkedAtBlock;
+  let checkedAtMs;
+  let arrivedAtMs;
+  try {
+    confirmed = Math.max(0, (await provider.getBlockNumber()) - (paymentCfg.minConfirmations - 1));
+    if (confirmed < credited.blockNumber) {
+      // A node behind the one that just confirmed the payment (a load balancer's other half):
+      // a block before the payment would be refused by every operator importing it.
+      throw new Error(`confirmed head ${confirmed} is before the payment's block ${credited.blockNumber}`);
+    }
+    arrivedAtMs = await blockMs(confirmed);
+    // A node far behind would stretch the deadline and the window by as much.
+    const stale = clockSkewError(arrivedAtMs / 1000, Date.now(), cfg.maxClockSkewMs);
+    if (stale) throw new Error(stale);
+    if (!fromPeer) {
+      checkedAtBlock = confirmed;
+      checkedAtMs = arrivedAtMs;
+    } else if (peerBlock < credited.blockNumber) {
+      return refuse(400, 'bad_checked_block', 'the outcome was checked at a block before its payment', 'attestRejectedOther');
+    } else if (peerBlock > confirmed) {
+      return refuse(503, 'not_yet_confirmed', 'the outcome was checked at a block this node has not confirmed', 'paymentRpcErrors');
+    } else {
+      checkedAtBlock = peerBlock;
+      checkedAtMs = await blockMs(peerBlock);
+    }
+  } catch (err) {
+    console.warn(`[oracle] payer outcome block read failed for ${didHash}: ${err.message}`);
+    return refuse(502, 'rpc_error', 'could not read the chain', 'paymentRpcErrors');
+  }
+  // Before the signature, which can cost a contract call.
+  const late = payerOutcome.checkedBlockProblem(signed, checkedAtMs);
+  if (late) return refuse(400, 'outcome_window', late, 'attestRejectedOther');
+
   const dom = payerOutcome.domain(cfg.expectedChainId, cfg.reputationAddress);
   const msg = payerOutcome.message(didHash, credited.txHash, signed);
   let verdict;
-  let checkedAtBlock;
   try {
-    // One confirmed block for the whole check, recorded with the outcome whatever kind of
-    // account signed: under EIP-7702 an address can gain code later, so another operator
-    // checking afterwards must ask the same question of the same state.
-    const head = await chain.getProvider().getBlockNumber();
-    checkedAtBlock = Math.max(0, head - (paymentCfg.minConfirmations - 1));
-    verdict = await payerOutcome.verifySignature({
-      provider: chain.getProvider(),
-      dom,
-      msg,
-      signature: signed.signature,
-      blockNumber: checkedAtBlock,
-    });
+    const check = { provider, dom, msg, signature: signed.signature, blockNumber: checkedAtBlock };
+    verdict = fromPeer
+      ? await payerOutcome.verifyImported({ ...check, headBlock: confirmed })
+      : await payerOutcome.verifySignature(check);
   } catch (err) {
-    metrics.inc('paymentRpcErrors');
-    console.warn(`[oracle] /attest payer signature check failed for ${didHash}: ${err.message}`);
-    return json(res, 502, { error: 'could not read the chain', code: 'rpc_error' });
+    console.warn(`[oracle] payer signature check failed for ${didHash}: ${err.message}`);
+    return refuse(502, 'rpc_error', 'could not read the chain', 'paymentRpcErrors');
   }
   if (!verdict.valid) {
-    noteBadSignature(throttleKey);
-    metrics.inc('attestRejectedOther');
-    return json(res, 400, { error: 'the signature is not the payer\'s for this outcome', code: 'bad_signature' });
+    if (!fromPeer) noteBadSignature(throttleKey);
+    return refuse(400, 'bad_signature', 'the signature is not the payer\'s for this outcome', 'attestRejectedOther');
   }
 
   // Every leg of the transaction is credited as a payment, as the credentialed path does; the
@@ -1363,22 +1408,18 @@ async function acceptPayerOutcome(res, { didHash, credited, info, signed }) {
     // A credentialed outcome on a transaction with several payers was given for the whole
     // job and filed on its largest leg; one payer among several does not get to overturn it.
     replaceable: paidLegs.length === 1,
+    now: arrivedAtMs,
   });
   if (filed === 'already_set' || filed === 'outside_window') {
     // Payments credited above stay credited; keep them through a restart.
-    if (credits > 0) persistState();
-    metrics.inc('attestRejectedPayment');
-    return json(res, 409, {
-      error: filed === 'already_set'
-        ? 'the payer has already signed an outcome for this payment'
-        : 'an outcome recorded for this payment is final',
-      code: 'outcome_recorded',
-    });
+    if (credits > 0 && !fromPeer) persistState();
+    return refuse(409, 'outcome_recorded', filed === 'already_set'
+      ? 'the payer has already signed an outcome for this payment'
+      : 'an outcome recorded for this payment is final', 'attestRejectedPayment');
   }
   if (filed === 'not_found') {
-    if (credits > 0) persistState();
-    metrics.inc('attestRejectedPayment');
-    return json(res, 409, { error: 'this settlement has already been credited', code: 'replayed' });
+    if (credits > 0 && !fromPeer) persistState();
+    return refuse(409, 'replayed', 'this settlement has already been credited', 'attestRejectedPayment');
   }
   metrics.inc('paymentsVerified');
   const att = attestations.get(didHash) ?? { successful: 0, total: 0 };
@@ -1391,20 +1432,172 @@ async function acceptPayerOutcome(res, { didHash, credited, info, signed }) {
     if (delivered) att.successful++;
   }
   attestations.set(didHash, att);
-  const durable = persistState();
-  metrics.inc(durable ? 'attestAccepted' : 'attestAcceptedNotDurable');
-  return json(res, durable ? 200 : 202, {
-    didHash,
-    attester: leg.payer,
-    ...att,
-    ...(durable ? {} : { durable: false }),
-    payment: { txHash: credited.txHash, amount: leg.amount.toString() },
-    outcomeRecorded: true,
-    outcomeSource: 'payer_signed',
-    // 'replaced' when it took the place of a credentialed outcome inside the window.
-    recorded: filed,
-  });
+  const durable = fromPeer ? true : persistState();
+  return {
+    status: durable ? 200 : 202,
+    metric: durable ? 'attestAccepted' : 'attestAcceptedNotDurable',
+    body: {
+      didHash,
+      attester: leg.payer,
+      ...att,
+      ...(durable ? {} : { durable: false }),
+      payment: { txHash: credited.txHash, amount: leg.amount.toString() },
+      outcomeRecorded: true,
+      outcomeSource: 'payer_signed',
+      // 'replaced' when it took the place of a credentialed outcome inside the window.
+      recorded: filed,
+    },
+  };
 }
+
+// ---- Import from other operators (docs/adr/0006-payer-signed-outcomes.md, section 6) --------
+
+// Where each peer's import got to. In memory on purpose: a restart starts every peer from the
+// beginning, which costs a chain read only for what this oracle does not already hold, and picks
+// up anything an earlier run had to pass over.
+const peerImports = new Map();
+// Per peer per run: outcomes checked (one this oracle already holds is not counted), pages, and
+// time. The import holds up the epoch's scoring, so a slow peer must not hold it for long.
+const IMPORT_CHECKS_PER_RUN = 200;
+const IMPORT_PAGES_PER_RUN = 20;
+const IMPORT_MS_PER_RUN = 60_000;
+// Runs in a row one outcome may fail for a reason that is not its own (this node or the chain
+// not answering) before it is passed over, so it cannot hold up everything after it for good.
+const IMPORT_MAX_STALLS = 3;
+
+/**
+ * One outcome a peer served, put through the same checks as a POST, against this oracle's own
+ * chain view.
+ * @returns {Promise<{ kind: 'imported'|'held'|'refused'|'retry', code?: string }>} retry when the
+ *   failure was this node's or the chain's, not the outcome's
+ */
+async function importOne({ didHash, txHash, checkedAtBlock, signed }) {
+  const held = payerOutcomeFor(didHash, txHash, signed.payer);
+  if (held) {
+    // Not checked, so not proof the payer signed both, and anyone serving it raises the count: a
+    // peer serving something other than what this oracle holds is worth a look either way. What
+    // is held stays; it is final.
+    if (held.outcome !== signed.outcome) {
+      metrics.inc('payerOutcomeConflicts');
+      console.warn(`[oracle] a peer serves outcome ${signed.outcome} for ${txHash} from ${signed.payer}; this oracle holds ${held.outcome}`);
+    }
+    return { kind: 'held' };
+  }
+  if (signed.outcome === payerOutcome.NOT_DELIVERED && payerOutcomeCfg.mode !== 'both') {
+    return { kind: 'refused', code: 'negative_not_accepted' };
+  }
+  let info;
+  try {
+    info = await chain.getAgentInfo(didHash);
+  } catch (err) {
+    console.warn(`[oracle] payer outcome import: chain read failed for ${didHash}: ${err.message}`);
+    return { kind: 'retry', code: 'rpc_error' };
+  }
+  // The peer saw the agent registered; this node may not have caught up.
+  if (!info || Number(info.registeredAt) === 0) return { kind: 'retry', code: 'unknown_agent' };
+  let credited;
+  try {
+    credited = await payments.verifyPayment({ provider: chain.getProvider(), cfg: paymentCfg }, txHash, info.agentAddress);
+  } catch (err) {
+    // The peer saw this payment confirmed. This node not answering, or not seeing it yet, is
+    // not the outcome's fault.
+    if (['rpc_error', 'unconfirmed', 'not_found'].includes(err.code)) return { kind: 'retry', code: err.code };
+    return { kind: 'refused', code: err.code || 'payment_invalid' };
+  }
+  const r = await admitPayerOutcome({ didHash, credited, info, signed }, { peerBlock: checkedAtBlock });
+  if (r.status === 200) return { kind: 'imported' };
+  if (r.status === 502 || r.status === 503) return { kind: 'retry', code: r.body.code };
+  return { kind: 'refused', code: r.body.code };
+}
+
+/**
+ * Imports what `peer` has taken since this oracle last asked, counting into `tally` as it goes so
+ * that what it did before a failure is still saved. Throws when the peer cannot be read.
+ */
+async function importFromPeer(peer, tally) {
+  const state = peerImports.get(peer) ?? { cursor: 0, stalls: 0 };
+  peerImports.set(peer, state);
+  const until = Date.now() + IMPORT_MS_PER_RUN;
+  let checks = 0;
+  for (let page = 0; page < IMPORT_PAGES_PER_RUN; page += 1) {
+    if (Date.now() > until) {
+      tally.stopped = 'time';
+      return;
+    }
+    const { outcomes, more } = await payerOutcome.fetchOutcomesPage(peer, state.cursor);
+    let moved = false;
+    for (const raw of outcomes) {
+      const parsed = payerOutcome.parseServed(raw);
+      if (!parsed.ok) {
+        tally.refused += 1;
+        metrics.inc('payerOutcomeImportRefused');
+        console.warn(`[oracle] payer outcome import: ${peer} served an unusable item: ${parsed.error}`);
+        continue;
+      }
+      const item = parsed.value;
+      // Served in order, so anything at or before the cursor is a repeat.
+      if (item.acceptedAt <= state.cursor) continue;
+      if (checks >= IMPORT_CHECKS_PER_RUN || Date.now() > until) {
+        tally.stopped = checks >= IMPORT_CHECKS_PER_RUN ? 'budget' : 'time';
+        return;
+      }
+      let r = await importOne(item);
+      if (r.kind === 'retry') {
+        state.stalls += 1;
+        if (state.stalls < IMPORT_MAX_STALLS) {
+          metrics.inc('payerOutcomeImportErrors');
+          tally.stopped = r.code;
+          return;
+        }
+        console.warn(`[oracle] payer outcome import: passing over ${item.txHash} from ${peer} after ${IMPORT_MAX_STALLS} runs (${r.code})`);
+        r = { kind: 'refused', code: r.code };
+      }
+      state.stalls = 0;
+      state.cursor = item.acceptedAt;
+      moved = true;
+      if (r.kind === 'held') continue;
+      checks += 1;
+      if (r.kind === 'imported') {
+        tally.imported += 1;
+        metrics.inc('payerOutcomesImported');
+      } else {
+        tally.refused += 1;
+        metrics.inc('payerOutcomeImportRefused');
+        console.warn(`[oracle] payer outcome import: refused ${item.txHash} from ${peer}: ${r.code}`);
+      }
+    }
+    if (!more || !moved) break;
+  }
+}
+
+/** Imports payer-signed outcomes from every configured peer, then saves once. */
+async function importPayerOutcomes() {
+  let changed = false;
+  for (const peer of payerOutcomeCfg.peers) {
+    const t = { imported: 0, refused: 0, stopped: null };
+    try {
+      await importFromPeer(peer, t);
+      console.log(
+        `[oracle] payer outcomes from ${peer}: ${t.imported} imported, ${t.refused} refused` +
+        (t.stopped ? `, stopped early (${t.stopped})` : ''),
+      );
+    } catch (err) {
+      metrics.inc('payerOutcomeImportErrors');
+      console.warn(`[oracle] payer outcome import from ${peer} failed after ${t.imported} imported: ${err.message}`);
+    }
+    changed = changed || t.imported + t.refused > 0;
+  }
+  // A refused outcome may still have credited its payment's legs.
+  if (changed) persistState();
+}
+
+/** The signing domain, as /evidence and /outcomes serve it. */
+const servedDomain = () => ({
+  name: 'Sigvara',
+  version: '1',
+  chainId: cfg.expectedChainId,
+  verifyingContract: payerOutcome.domain(cfg.expectedChainId, cfg.reputationAddress).verifyingContract,
+});
 
 function outcomeSource(event) {
   if (event.payerOutcome) return 'payer_signed';
@@ -1438,16 +1631,7 @@ function buildEvidenceBody(didHash, events) {
     committedFields: ['txHash', 'payer', 'amount', 'settledAt', 'success'],
     // What each payer signed over, so a verifier can check a served payload without knowing
     // this deployment. outcomeSource is this oracle's own label, not part of the leaf.
-    ...(payerOutcomeCfg.publish
-      ? {
-        payerOutcomeDomain: {
-          name: 'Sigvara',
-          version: '1',
-          chainId: cfg.expectedChainId,
-          verifyingContract: payerOutcome.domain(cfg.expectedChainId, cfg.reputationAddress).verifyingContract,
-        },
-      }
-      : {}),
+    ...(payerOutcomeCfg.publish ? { payerOutcomeDomain: servedDomain() } : {}),
     // Served beside the leaf but never checked by this oracle beyond its shape. A token
     // holder supplied it; nothing here fetched the packet or confirmed that it records this
     // payment or outcome, so it is a pointer, not proof, and says so in the response.
@@ -1772,7 +1956,7 @@ async function handleRequest(req, res) {
           }
           return json(res, 402, { error: err.message, code: err.code || 'payment_invalid' });
         }
-        // A payer-signed outcome is checked on the signer's own leg (acceptPayerOutcome), so an
+        // A payer-signed outcome is checked on the signer's own leg (admitPayerOutcome), so an
         // operator's larger leg in the same transaction cannot block its customer's outcome.
         if (!signedOutcome && payments.isSelfPayment(credited.payer, info)) {
           metrics.inc('attestRejectedPayment');
@@ -1785,7 +1969,9 @@ async function handleRequest(req, res) {
       }
 
       if (signedOutcome) {
-        return await acceptPayerOutcome(res, { didHash, credited, info, signed: signedOutcome });
+        const r = await admitPayerOutcome({ didHash, credited, info, signed: signedOutcome });
+        metrics.inc(r.metric);
+        return json(res, r.status, r.body);
       }
 
       /* The cooldown throttles strangers. A credential holder reporting on a payment this
@@ -1961,6 +2147,32 @@ async function handleRequest(req, res) {
       tolerance: cfg.divergenceTolerance,
       didHash,
       divergences: getDivergences(didHash),
+    });
+  }
+
+  // GET /outcomes?since=<ms>: the payer-signed outcomes this oracle has taken, oldest first, for
+  // other operators to import (docs/adr/0006-payer-signed-outcomes.md, section 6) and for anyone
+  // to check. Unauthenticated, like /evidence: each one verifies on its own. Served only where
+  // publishing is on, because every copy is one the retention policy has to cover.
+  if (readMethod === 'GET' && pathname === '/outcomes') {
+    if (overLimit(req, res, 'outcomes')) return;
+    if (payerOutcomeCfg.mode === 'off' || !payerOutcomeCfg.publish) {
+      return json(res, 404, { error: 'not_published', message: 'This oracle does not publish payer-signed outcomes.' });
+    }
+    const raw = url.searchParams.get('since') ?? '0';
+    const since = /^\d{1,16}$/.test(raw) ? Number(raw) : NaN;
+    if (!Number.isSafeInteger(since)) {
+      return json(res, 400, { error: 'since must be a time in milliseconds' });
+    }
+    const { outcomes, more } = payerOutcomesSince(since, payerOutcome.OUTCOMES_PAGE);
+    return json(res, 200, {
+      domain: servedDomain(),
+      since,
+      more,
+      // The next page starts after the last acceptedAt here. Each is later than the one before,
+      // so none is skipped or repeated.
+      next: outcomes.length ? outcomes[outcomes.length - 1].acceptedAt : since,
+      outcomes,
     });
   }
 

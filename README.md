@@ -583,7 +583,7 @@ Everything below runs offline, with no deployed contracts, except two fork suite
 | Suite | Count | Command |
 |---|---|---|
 | Contracts: unit, fuzz, E2E, upgrade, deploy-script, handover and 19 invariants | 699 | `forge test` |
-| Oracle | 812 | `cd oracle && node --test` |
+| Oracle | 827 | `cd oracle && node --test` |
 | SDK | 211 | `cd packages/sdk && npx vitest run` |
 
 Counts are individual tests as measured on 29 October 2026 (the oracle's and the SDK's on 31 October), so each of the 19 invariants counts once. Without a fork URL, 692 of the contract tests run and 7 skip. The SDK's 211 include 8 integration tests that skip without a live deployment. Vitest strips types without checking them, so `npm run typecheck` in `packages/sdk` checks the tests against the SDK's types as well as the sources. [`scripts/mutation`](scripts/mutation/README.md) holds the harnesses that measure whether these tests would catch a deliberate break in the contracts or deploy scripts.
