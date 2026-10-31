@@ -236,13 +236,17 @@ stable value per service, normally your origin, not one per request.
 **A shared nonce store, if you run more than one instance.** The gate remembers nonces so
 you do not have to, which is the one thing this section used to say the library could not
 do. The default store is in memory and therefore per process; see the note above for what
-a distributed one has to implement.
+a distributed one has to implement. `atomicNonceStore` builds one from a Redis `SET NX` or a
+database insert, and `instances: 'multiple'` makes the gate refuse to start without one (both
+from 1.0.0-alpha.13).
 
 **Using `verifySignature` directly still leaves the nonce to you.** It has no memory by
 design, so if you are not going through the gate, store the nonces you issue, reject one
 you have seen, and drop them past the TTL.
 
 ## Payment outcomes: `signPaymentOutcome`
+
+From 1.0.0-alpha.13.
 
 The payer of an agent is the party whose opinion of the work counts most, and it already
 holds a key. `signPaymentOutcome` signs, as the payer, whether one payment's work was

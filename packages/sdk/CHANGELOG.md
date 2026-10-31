@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.0.0-alpha.13
 
 ### Added: payment outcomes signed by the payer
 
@@ -13,6 +13,16 @@ the way the oracle does, by recovery or ERC-1271, and needs a provider to tell w
 data themselves. Both functions are tested against the
 repository's `test/vectors/payment-outcome.json`, which a Foundry test checks against OpenZeppelin's
 `EIP712` and `SignatureChecker`.
+
+### Added: `atomicNonceStore`, and a gate that refuses to run a fleet on the default store
+
+`atomicNonceStore(setIfAbsent)` builds a `NonceStore` from any atomic insert-if-absent, such as a
+Redis `SET NX` or a database insert that does nothing on a conflict, without the SDK taking a Redis
+dependency. Its `seen()` and `add()` throw, so the gate cannot fall back to the non-atomic pair.
+`SigvaraGate` takes `instances: 'multiple'` for a gate that runs as more than one process, and then
+refuses to start without a `nonceStore` whose `consume()` is atomic: with the in-memory default, a
+response one instance admitted could be replayed at another until its challenge expired. The default
+is `'single'`, so existing gates behave as before.
 
 ### Documentation: a nonce store for a fleet
 
