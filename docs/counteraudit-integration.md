@@ -37,7 +37,7 @@ When your application calls `POST /v1/audit/ingest` with an `agent_did` field:
 
 1. CounterAudit parses the DID: `did:sigvara:<chainId>:<agentAddress>`
 2. It computes the `didHash` using the same formula as the on-chain contract
-3. It queries `SigvaraIdentity.getIdentity(didHash)` and `SigvaraReputation.getTotalScore(didHash)` in parallel
+3. It reads one block (the `finalized` block by default), then queries `SigvaraIdentity.getIdentity(didHash)` and `SigvaraReputation.getTotalScore(didHash)` in parallel, both at that block
 4. The results are spread into the packet body **before** the AES-GCM seal is applied
 5. The full packet body — including Sigvara fields — is then sealed, hashed, and timestamped
 
@@ -63,6 +63,10 @@ SIGVARA_CHAIN_ID=5042002
 
 # Optional — default is 5000ms
 SIGVARA_ENRICH_TIMEOUT_MS=5000
+
+# Optional. The block both enrichment reads are made at. Default 'finalized'; a node
+# that refuses it falls back to 'latest', and the snapshot is sealed as provisional.
+SIGVARA_BLOCK_TAG=finalized
 
 # Outcome reporting back to the oracle. Both are needed, and the ingesting org must be
 # listed in CA_OUTCOME_PUBLISH_ORG_IDS; without them CounterAudit still enriches packets
@@ -179,7 +183,15 @@ The decrypted `packet` object contains (the values here are illustrative):
   "agent_reputation_score": 47,
   "agent_identity_status": "Active",
   "agent_identity_verified": true,
-  "agent_enriched_at": "2026-06-30T16:33:39.381Z"
+  "agent_enriched_at": "2026-06-30T16:33:39.381Z",
+  "agent_chain_snapshot": {
+    "chain_id": 5042002,
+    "block_number": 69938672,
+    "block_hash": "0xda7876205908989efd3c623c65539daf8f83a310096228daea78b9bf3dc1d598",
+    "finality": "final",
+    "identity_contract": "0x7e3aFC532eE5d922ab3cc3FFb510c7C8151477Dd",
+    "reputation_contract": "0x6603C96275e85F724Cdf74666b399365e4cA29ed"
+  }
 }
 ```
 
@@ -196,6 +208,7 @@ The decrypted `packet` object contains (the values here are illustrative):
 | `agent_identity_status` | string | DID registered | `PendingBond`, `Active`, `Suspended`, or `Slashed` |
 | `agent_identity_verified` | boolean | Always | `true` if registered and Active |
 | `agent_enriched_at` | ISO 8601 | Always | When the enrichment query ran |
+| `agent_chain_snapshot` | object | A block was read | The chain id, block number and hash, `finality` (`final` or `provisional`) and both contract addresses the reads used |
 | `agent_enrichment_error` | string | On failure only | Reason (see below) |
 
 ### Error values for `agent_enrichment_error`
@@ -205,6 +218,7 @@ The decrypted `packet` object contains (the values here are illustrative):
 | `invalid_did_format` | DID string is malformed |
 | `unsupported_chain:<id>` | Chain ID in the DID is not configured |
 | `not_registered` | DID parses and resolves but is not registered |
+| `chain_snapshot_unavailable` | No block could be read, so neither contract was queried |
 | `rpc_timeout` | Enrichment query exceeded `SIGVARA_ENRICH_TIMEOUT_MS` |
 | `rpc_error` | RPC call failed for another reason |
 
@@ -215,6 +229,8 @@ In all error cases, `agent_identity_verified` is `false` and the packet still se
 ## Forensic Properties
 
 **Reputation is frozen at seal time.** If an agent is slashed next month, every audit packet sealed today still shows `agent_reputation_score: 47` and `agent_identity_status: Active`. The RFC 3161 timestamp proves when the seal was applied.
+
+**The chain state is recorded.** Both reads are made at one block, and `agent_chain_snapshot` seals that block's number and hash and the two contracts read, so any party can call `getIdentity` and `getTotalScore` at the same block and get the same values. A `finalized` block is sealed as `final`. When the node offered only its latest block the snapshot says `provisional`, which a reorganization could still change. Packets sealed before CounterAudit added this, on 31 October 2026, carry no snapshot: their two reads went to whatever head the node had and could straddle an update.
 
 **Enrichment is inside the AES-GCM seal.** The seal covers the entire `bodyForHash` object including Sigvara fields. Tampering with any field — including `agent_reputation_score` — invalidates the seal.
 
