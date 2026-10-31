@@ -1,7 +1,7 @@
 export { SigvaraAgent } from './agent';
 export { SigvaraVerifier, registerAgent } from './verifier';
 export { depositStake } from './stake';
-export { SigvaraGate } from './gate';
+export { SigvaraGate, atomicNonceStore } from './gate';
 export type { GateConfig, AdmitResult, AdmitReason, NonceStore } from './gate';
 export type { DepositStakeResult } from './stake';
 export {

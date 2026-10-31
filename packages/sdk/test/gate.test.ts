@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { SigvaraGate } from '../src/gate';
+import { SigvaraGate, atomicNonceStore } from '../src/gate';
 import { signChallenge } from '../src/challenge';
 import { seedToKeyPair } from '../src/keys';
 
@@ -545,5 +545,77 @@ describe('SigvaraGate configuration that would fail open', () => {
 
   it('accepts a positive maxScoreAgeSeconds', () => {
     expect(() => new SigvaraGate({ ...base, threshold: 40, maxScoreAgeSeconds: 86_400 })).not.toThrow();
+  });
+});
+
+describe('SigvaraGate across instances', () => {
+  /** A gate with its chain reads stubbed to admit, so only the nonce decides. */
+  function admitting(config: Record<string, unknown> = {}) {
+    const gate = new SigvaraGate({
+      rpcUrl: 'http://unused', addresses: ADDRESSES, chainId: 5042002, threshold: 40, audience: AUDIENCE,
+      ...config,
+    });
+    const v = (gate as any).verifier;
+    v.verifySignature = vi.fn(async () => true);
+    v.isActive = vi.fn(async () => true);
+    v.hasMinimumStake = vi.fn(async () => true);
+    v.getScoreUpdatedAt = vi.fn(async () => Math.floor(Date.now() / 1000) - 60);
+    v.getTotalScore = vi.fn(async () => 50);
+    return gate;
+  }
+
+  /** One backend shared by every instance, with an atomic insert-if-absent. */
+  function sharedBackend() {
+    const keys = new Map<string, number>();
+    const setIfAbsent = vi.fn((key: string, expiresAt: number) => {
+      if (keys.has(key)) return false;
+      keys.set(key, expiresAt);
+      return true;
+    });
+    return { keys, setIfAbsent };
+  }
+
+  it('lets one response through twice when two instances keep their own in-memory stores', async () => {
+    // The failure the `instances` guard exists for: each process has its own spent set.
+    const a = admitting();
+    const b = admitting();
+    const c = a.challenge(DID);
+    const sig = signChallenge(c.payload, kp.secretKey);
+    expect((await a.admit(DID, c, sig)).ok).toBe(true);
+    expect((await b.admit(DID, c, sig)).ok).toBe(true);
+  });
+
+  it('admits a response once across instances that share an atomic store', async () => {
+    const backend = sharedBackend();
+    const a = admitting({ instances: 'multiple', nonceStore: atomicNonceStore(backend.setIfAbsent) });
+    const b = admitting({ instances: 'multiple', nonceStore: atomicNonceStore(backend.setIfAbsent) });
+    const c = a.challenge(DID);
+    const sig = signChallenge(c.payload, kp.secretKey);
+    expect((await a.admit(DID, c, sig)).ok).toBe(true);
+    const replay = await b.admit(DID, c, sig);
+    expect(replay.ok).toBe(false);
+    expect(replay.reason).toBe('replayed');
+  });
+
+  it("refuses to start as 'multiple' without an atomic consume", () => {
+    expect(() => admitting({ instances: 'multiple' })).toThrow(/atomic consume/);
+    expect(() => admitting({
+      instances: 'multiple',
+      nonceStore: { seen: () => false, add: () => {}, prune: () => {} },
+    })).toThrow(/atomic consume/);
+  });
+
+  it('refuses an instances value it does not know', () => {
+    expect(() => admitting({ instances: 'many' })).toThrow(/instances must be/);
+  });
+
+  it('atomicNonceStore prefixes the key, passes the expiry and will not run the non-atomic pair', async () => {
+    const backend = sharedBackend();
+    const store = atomicNonceStore(backend.setIfAbsent, { prefix: 'gate:' });
+    expect(await store.consume!('n1', 1800000000)).toBe(true);
+    expect(await store.consume!('n1', 1800000000)).toBe(false);
+    expect(backend.setIfAbsent).toHaveBeenCalledWith('gate:n1', 1800000000);
+    expect(() => store.seen('n1')).toThrow(/only consume/);
+    expect(() => store.add('n1', 1800000000)).toThrow(/only consume/);
   });
 });

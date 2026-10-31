@@ -252,9 +252,9 @@ field of an x402 `X-PAYMENT-RESPONSE`, or any transfer that settled on chain:
 }
 ```
 
-`packetId` is optional cross-evidence: the identifier of a sealed, timestamped record
-of the same work. Stored beside the payment and served from `/evidence`, never part of
-the Merkle leaf. Validated for shape only. Only a token holder's `packetId` is kept: a
+`packetId` is an optional pointer to a sealed, timestamped record of the same work.
+Stored beside the payment and served from `/evidence` as unverified, never part of the
+Merkle leaf. Validated for shape only. Only a token holder's `packetId` is kept: a
 stranger's is ignored, as their `success` is. When a token holder gives an outcome to a
 payment credited without one, their `packetId` goes on with it unless the payment
 already has one.
@@ -411,14 +411,17 @@ evidence nobody can fetch is evidence nobody can audit.
 The response names `committedFields` — the exact fields the root commits to, in leaf
 order — so a verifier need not read this source to know what is covered.
 
-`counterauditPacketId` appears on an event when the attestation carried one. It is
-**corroboration, not evidence, and is deliberately not in the leaf**: it identifies a
-tamper-evident, independently timestamped record of the same work, which a verifier
-fetches from CounterAudit and checks for themselves. Two separate things then have to
-be forged for the evidence to be fabricated. Committing to it would have changed the
-leaf format and made roots already published on chain unreproducible, for a field the
-verifier confirms elsewhere regardless. This oracle never calls CounterAudit to
-validate it — an evidence path that depends on someone's SaaS is not evidence.
+`counterauditPacketId` appears on an event when the attestation carried one, and the
+response lists it under `unverifiedFields`. It is **not evidence, is not in the leaf, and
+is not verified here**: the token holder supplied it, and this oracle checks only that it
+is UUID-shaped. Nothing here fetched the packet or confirmed that it records this payment
+or this outcome, so treat it as a pointer, never as proof that the packet supports the
+outcome. A reader who wants that association checks it themselves: if the packet was
+sealed with a public proof, CounterAudit serves it at `/v1/proofs/{packetId}`, and its
+`outcome_claim` names the payment transaction and the outcome to compare. Committing to
+the id would have changed the leaf format and made roots already published on chain
+unreproducible. This oracle never calls CounterAudit to validate it, because an evidence
+path that depends on someone's SaaS is not evidence.
 
 Both read endpoints are rate-limited at 60 requests per caller per minute, the same cap
 the writes use. Unauthenticated is not unmetered: `/score` costs several RPC round trips
@@ -1083,7 +1086,7 @@ cd oracle
 node --test
 ```
 
-789 tests (as of 30 October 2026) covering scoring formulas, payment verification and decay, per-payer caps and
+790 tests (as of 31 October 2026) covering scoring formulas, payment verification and decay, per-payer caps and
 the trust weighting, Merkle evidence trees, HTTP helpers, store persistence and recovery,
 the streamed state file, chain access with backoff, scan checkpointing, fee caps and transaction replacement,
 metrics, and cooldown logic. Several of the files run the real `index.js` and `watcher.js`

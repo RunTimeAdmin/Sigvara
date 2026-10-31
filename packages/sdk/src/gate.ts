@@ -23,7 +23,8 @@ import type { Challenge, ContractAddresses } from './types';
  * The default store is in memory, which is correct for a single process and wrong for a
  * fleet behind a load balancer: two instances do not share a set, so a response accepted
  * by one can be replayed at the other. Pass a `NonceStore` backed by Redis or the like
- * when that applies. The interface is three methods for that reason.
+ * when that applies, such as `atomicNonceStore` over a `SET NX`, and set `instances:
+ * 'multiple'` so the gate refuses to start without one. The interface is small for that reason.
  *
  * ## What a refusal means
  *
@@ -115,6 +116,43 @@ class MemoryNonceStore implements NonceStore {
   }
 }
 
+/**
+ * A `NonceStore` over any atomic insert-if-absent, for gates that run as more than one process.
+ *
+ * `setIfAbsent(key, expiresAt)` must create the key only if it does not exist, expire it at
+ * `expiresAt` (unix seconds), and return true only when THIS call created it. The SDK takes a
+ * function rather than a client so it carries no Redis dependency. With node-redis 4:
+ *
+ *     atomicNonceStore(async (key, exp) => (await redis.set(key, '1', { NX: true, EXAT: exp })) === 'OK')
+ *
+ * With ioredis:
+ *
+ *     atomicNonceStore(async (key, exp) => (await redis.set(key, '1', 'EXAT', exp, 'NX')) === 'OK')
+ *
+ * A database works too: an insert that does nothing on a unique-key conflict, reporting whether
+ * it inserted. The backend expires the keys, so `prune` has nothing to do. `seen` and `add` are
+ * the non-atomic pair the gate falls back to only when `consume` is missing, so they refuse to run
+ * rather than quietly reopening the race this store exists to close.
+ */
+export function atomicNonceStore(
+  setIfAbsent: (key: string, expiresAt: number) => Promise<boolean> | boolean,
+  options: { prefix?: string } = {},
+): NonceStore {
+  if (typeof setIfAbsent !== 'function') {
+    throw new Error('atomicNonceStore: setIfAbsent must be a function.');
+  }
+  const prefix = options.prefix ?? 'sigvara:nonce:';
+  const nonAtomic = (): never => {
+    throw new Error('atomicNonceStore: only consume() is atomic; seen() and add() are not supported.');
+  };
+  return {
+    seen: nonAtomic,
+    add: nonAtomic,
+    prune: () => {},
+    consume: async (nonce, expiresAt) => (await setIfAbsent(prefix + nonce, expiresAt)) === true,
+  };
+}
+
 export interface GateConfig {
   rpcUrl: string;
   addresses: ContractAddresses;
@@ -129,6 +167,13 @@ export interface GateConfig {
   /** How long an issued challenge stays valid. Default 300s. */
   ttlSeconds?: number;
   nonceStore?: NonceStore;
+  /**
+   * How many processes serve this gate. Default 'single'. Say 'multiple' when it runs behind a
+   * load balancer or in several workers, and the gate refuses to start without a `nonceStore`
+   * whose `consume` is atomic across them, such as `atomicNonceStore`: with the in-memory default,
+   * a response one instance admitted can be replayed at another until its challenge expires.
+   */
+  instances?: 'single' | 'multiple';
   /** How long one chain read may take before it is abandoned, in milliseconds. Default 30000. */
   timeoutMs?: number;
   /**
@@ -175,6 +220,19 @@ export class SigvaraGate {
     const maxAge = config.maxScoreAgeSeconds;
     if (maxAge !== undefined && (typeof maxAge !== 'number' || !Number.isFinite(maxAge) || maxAge <= 0)) {
       throw new Error(`SigvaraGate: maxScoreAgeSeconds must be a positive number (got ${String(maxAge)}).`);
+    }
+    // A fleet sharing the in-memory default fails open: each instance has its own spent set, so a
+    // captured response replays at another one. Refuse to start rather than admit twice.
+    const instances = config.instances ?? 'single';
+    if (instances !== 'single' && instances !== 'multiple') {
+      throw new Error(`SigvaraGate: instances must be 'single' or 'multiple' (got ${String(config.instances)}).`);
+    }
+    if (instances === 'multiple' && typeof config.nonceStore?.consume !== 'function') {
+      throw new Error(
+        "SigvaraGate: instances is 'multiple', so nonceStore must implement an atomic consume() shared by " +
+        'every instance (see atomicNonceStore). Without it a response admitted by one instance can be ' +
+        'replayed at another.',
+      );
     }
     this.verifier = new SigvaraVerifier({
       rpcUrl: config.rpcUrl, addresses: config.addresses, chainId: config.chainId,

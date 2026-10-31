@@ -155,6 +155,18 @@ test('a credential holder\'s packetId is served beside the payment it credits', 
   assert.equal((await evidence(agent.didHash))[0].counterauditPacketId, PACKET_A);
 });
 
+test('the evidence response names the packetId as unverified, outside what the root commits to', async () => {
+  // Only its shape is checked: a token holder can attach any UUID, so the response has to say
+  // the oracle never confirmed the packet records this payment or outcome.
+  const agent = world.addAgent();
+  const tx = world.addTx([{ from: wallet(), to: agent.agentAddress, value: 5n * USDC }]);
+  await attest(agent.didHash, tx, { success: true, token: AUDITOR, packetId: PACKET_A });
+
+  const body = (await oracle.call('GET', `/evidence/${agent.didHash}`)).body;
+  assert.deepEqual(body.unverifiedFields, ['counterauditPacketId']);
+  assert.ok(!body.committedFields.includes('counterauditPacketId'));
+});
+
 test('a stranger\'s packetId is ignored, as their outcome is', async () => {
   const agent = world.addAgent();
   const tx = world.addTx([{ from: wallet(), to: agent.agentAddress, value: 5n * USDC }]);
