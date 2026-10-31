@@ -1,8 +1,9 @@
 # ADR 0006: Outcomes signed by the payer
 
-**Status:** Proposed · 2026-10-31. Design only; nothing here is built. The roadmap puts this
-work after the first audit, and the shape of the escrow and receipt parts should follow what
-x402 standardizes, so this is written to be revised, not to be frozen.
+**Status:** Accepted as a design · 2026-10-31. Nothing here is built. The open questions were
+decided the same day and are recorded at the end. Public outcome retrieval and peer replication
+wait on a retention review before mainnet (see Rollout). The roadmap puts the build after the
+first audit, and the escrow and receipt parts should follow what x402 standardizes.
 
 ## Context
 
@@ -57,7 +58,7 @@ payer for all of them. That is true of today's attestations already, and this de
 it; it scopes itself to the payments the rule reads correctly and leaves escrow to a second version
 of the type, below.
 
-## Decision (proposed)
+## Decision
 
 ### 1. The typed data
 
@@ -136,10 +137,15 @@ Today a recorded outcome is final. That stays true, with one exception, because 
 party the work was for:
 
 - A payer-signed outcome is final for its leg. A second signature from the same payer for the same
-  leg is refused, whatever it says.
+  leg is refused, whatever it says. A refund or a later correction is a separate event linked to
+  it, never an edit to the signed outcome or to its evidence leaf.
 - A payer-signed outcome replaces a credentialed one on the same leg if it arrives within
-  `PAYER_OUTCOME_WINDOW_DAYS` of the payment (default 14).
+  `PAYER_OUTCOME_WINDOW_DAYS` (default 14) of the payment's block time.
 - A credentialed outcome never replaces a payer-signed one.
+
+The window is only for the immediate payment types this ADR covers. Delayed delivery, escrow and
+batch settlement need rules of their own. It is not a dispute-response deadline for anyone else,
+the Agent Bureau included.
 
 ### 5. Negatives
 
@@ -149,16 +155,21 @@ This is the part the token was guarding, so it gets its own rules.
   refusal, `PAYMENT_MAX_PER_PAYER` and decay. A negative costs a real payment to the agent it
   criticizes, and the per-payer cap means flooding an agent with negatives takes many funded wallets,
   each of which pays the agent first.
-- `PAYER_NEGATIVE_MIN_AMOUNT`, defaulting to `PAYMENT_MIN_AMOUNT`, can raise the price of a negative
-  above the price of a payment.
-- `PAYER_OUTCOMES` takes `off` (default), `positive` or `both`. On a chain whose payment asset has an
-  open faucet, which is the Arc testnet today, it should be `positive`: there a negative costs
-  nothing, which is exactly the downgrade-anyone attack the token prevents. `both` is for a chain
-  where the payment is real money.
-
-An agent cannot contest a payer's negative under this design. That recourse is the buyer-and-seller
-challenge in the dispute bridge, which is not built. Until it is, a payer's negative counts as
-reported.
+- `PAYER_NEGATIVE_MIN_AMOUNT` starts equal to `PAYMENT_MIN_AMOUNT`, in the payment asset's base
+  units, and can later raise the price of a negative above the price of a payment. There is no
+  universal token amount: the payment minimum is set per deployment, and the deployed mainnet value
+  is not yet verified.
+- `PAYER_OUTCOMES` takes `off` (default), `positive` or `both`, and launches as `positive` on every
+  chain, mainnet included. A payer's signature establishes who made a claim, not whether it is true,
+  and an agent cannot contest a payer's negative under this design: that recourse is the
+  buyer-and-seller challenge in the dispute bridge, which is not built. `both` waits for a challenge
+  process. On a chain whose payment asset has an open faucet, which is the Arc testnet today, there
+  is a second reason: a negative would cost nothing, which is the downgrade-anyone attack the token
+  prevents.
+- Once negatives are enabled, they are presented as payer-reported, not as verified fact.
+  `/evidence` and `/outcomes` mark each outcome's source, `payer_signed` or `credentialed`, and
+  anything that describes an agent's failures says who reported them. The Agent Bureau's own rules
+  for negative evidence and review are separate and unchanged by this.
 
 ### 6. Every operator gets every signed outcome
 
@@ -183,7 +194,8 @@ peer's copy of a token holder's word is only a copy, so they stay per-operator a
 The evidence leaf is unchanged. It already commits to the outcome value per payment, and
 `/evidence` adds the signed payload beside each payer-signed leaf, so a verifier can check that the
 committed outcome is one the payer signed. An on-chain outcome log, the "Later" row in ADR 0003,
-remains the stronger end state; this gets most of its benefit with no contract change.
+is deferred until peer reliability or audit needs justify the extra contract surface. Neither
+mechanism proves an opinion is true.
 
 ### 7. What CounterAudit becomes
 
@@ -194,6 +206,15 @@ allowlist and token its old relay needed do not apply, because the oracle trusts
 CounterAudit, and the self-rating problem the relay was paused for does not arise: the payer rates,
 CounterAudit carries.
 
+### 8. Retiring the token path for outcomes
+
+Once payer-signed outcomes are available, the token path stops taking ordinary new outcomes. At
+most a time-limited backfill remains, for payments whose payer did not sign. A backfilled outcome
+is marked credentialed and operator-local: it is never served for peer import and never replaces
+a payer-signed outcome. Where no trustworthy backfill exists, the payment's outcome stays
+unreported (`2` in the evidence leaf), which the score already treats as neither a success nor a
+failure.
+
 ## Consequences
 
 - **Outcomes stop depending on a trusted service.** A negative can come from the customer who was
@@ -202,7 +223,13 @@ CounterAudit carries.
 - **Outcomes converge across operators** for the first time, by the same argument ADR 0003 made for
   payments.
 - **The rule "a recorded outcome is final" gains an exception** in favour of the payer, inside a
-  window. That changes what a credentialed outcome means: provisional for 14 days.
+  window. That changes what a credentialed outcome means: provisional for 14 days from the
+  payment's block time.
+- **New negatives pause until a challenge process exists.** Payer negatives launch off and the token
+  path keeps only a time-limited backfill, so for new payments the success factor can rise and
+  cannot fall except through that backfill. That is a deliberate trade: no failure enters the score
+  that its agent cannot contest. It changes little against today, since the oracle has recorded no
+  outcome of either kind since 20 September, but the score should say so while it lasts.
 - **The client has to sign.** An x402 buyer already holds a key and signs typed data for the
   payment; one more signature after delivery is cheap for software and invisible to a person, but it
   is new work in every buyer integration. `@sigvara/protocol-sdk` should ship the signer.
@@ -217,6 +244,9 @@ CounterAudit carries.
   payer from the escrow's records, and a refunded payment could count as not delivered without a
   signature at all. That waits for x402's escrow and arbiter interfaces to settle.
 - It adds no challenge, no arbiter and no refund. Those are the dispute bridge.
+- It does not settle retention. Public outcome retrieval and peer replication copy every accepted
+  outcome to every operator and to anyone who asks, so how those copies, disputes, backups and
+  deletion requests are handled needs counsel's review before either runs on mainnet.
 
 ## Rollout
 
@@ -230,15 +260,32 @@ CounterAudit carries.
    rotates its owner between acceptance and import.
 3. `@sigvara/protocol-sdk`: `signPaymentOutcome` and `verifyPaymentOutcome`.
 4. Arc testnet with `PAYER_OUTCOMES=positive`, then the CounterAudit connector.
-5. `both` only on a chain where the payment asset costs money.
+5. Mainnet with `positive`, and only after counsel has reviewed retention for public outcome
+   retrieval and peer replication: how copies, disputes, backups and deletion requests are handled.
+   This is a launch gate, not a follow-up. The Agent Bureau's Phase 0 decisions draft holds the same
+   line for outcomes from outside, which it does not accept before its decisions are approved, and
+   its proposed 24-month file retention is not yet an approved policy.
+6. `both` only once a challenge process exists, with negatives presented as payer-reported.
 
-## Open questions
+## Decisions on the open questions
 
-1. Should a payer get one revision inside the window, for example to withdraw a negative after a
-   refund? The proposal says no, to keep the leaf stable and the rules short.
-2. Is 14 days the right window for a payer to override a credentialed outcome?
-3. What should `PAYER_NEGATIVE_MIN_AMOUNT` be on mainnet?
-4. Once payer outcomes are live, should the token path for outcomes be retired, or kept for
-   backfilling payments whose payers never sign?
-5. Peer import or an on-chain outcome log first? This proposes import, because it needs no contract
-   change before the audit.
+Decided 2026-10-31.
+
+1. **No revision.** One payer-signed outcome per payer and payment leg. A refund or later correction
+   is a separate, linked event, not an edit to the signed outcome or its score leaf. The Agent Bureau
+   may keep its own append-only correction and dispute history, but must not imply that it changed
+   Sigvara's outcome.
+2. **Keep 14 days** as the initial window, measured from the payment's block time. It is the period
+   in which a payer outcome can replace a credentialed one, not the Bureau's dispute-response
+   deadline, and it applies only to the immediate payment types this ADR supports.
+3. **`PAYER_NEGATIVE_MIN_AMOUNT` starts at `PAYMENT_MIN_AMOUNT`**, in the configured asset's base
+   units, with no universal token amount. Launch with `PAYER_OUTCOMES=positive` until a challenge
+   process exists, and when negatives are enabled, label them payer-reported, not verified fact.
+4. **Retire the token path for ordinary new outcomes** once payer-signed outcomes are available. Keep
+   at most a time-limited backfill for payments whose payer did not sign, marked credentialed and
+   operator-local, never peer-imported and never replacing a payer-signed outcome. Without a
+   trustworthy backfill, leave the outcome unreported.
+5. **Peer import first.** Every importer rechecks the payment, the signature, the domain, the timing
+   and the precedence rules, including ERC-1271 signatures at the recorded block, and import is
+   enabled on all operators together. An on-chain outcome log is deferred until peer reliability or
+   audit needs justify the added contract surface. Neither mechanism proves an opinion is true.
