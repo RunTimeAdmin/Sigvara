@@ -34,12 +34,16 @@ const { createResponseCache } = require('./response-cache');
 const badge = require('./badge');
 const jobs = require('./jobs');
 const paymentScan = require('./payment-scan');
+const payerOutcome = require('./payer-outcome');
 const metrics = require('./metrics');
 const { readPrivateKey } = require('./secrets');
 
 // Verified-payment settings. Read once at startup so a malformed value fails the
 // process rather than silently disabling verification on the first request.
 const paymentCfg = payments.readConfig();
+// Outcomes signed by the payer (docs/adr/0006-payer-signed-outcomes.md). Off unless set, and
+// to be set the same on every operator: one taking them and another not is a delivery gap.
+const payerOutcomeCfg = payerOutcome.readConfig(process.env, paymentCfg);
 
 // A minimum of zero with verification on means a transfer of one unit counts as a payment,
 // so a counterparty that is not real costs only the gas to send it. The setting is easy to
@@ -128,6 +132,20 @@ const cfg = {
   // How far the chain's clock may be from this host's before the epoch is not run.
   maxClockSkewMs: Number(process.env.MAX_CLOCK_SKEW_SECONDS || 600) * 1000,
 };
+
+// A payer signs over the chain its payment settled on and this deployment's SigvaraReputation
+// proxy, so both must be known, and the payment must be verified to have a payer at all.
+if (payerOutcomeCfg.mode !== 'off') {
+  const missing = [
+    !payments.required(paymentCfg) && 'PAYMENT_VERIFICATION=required',
+    !cfg.expectedChainId && 'EXPECTED_CHAIN_ID',
+    !cfg.reputationAddress && 'REPUTATION_ADDRESS',
+  ].filter(Boolean);
+  if (missing.length) {
+    console.error(`[oracle] PAYER_OUTCOMES=${payerOutcomeCfg.mode} needs ${missing.join(', ')}.`);
+    process.exit(1);
+  }
+}
 
 if (!cfg.rpcUrl || !cfg.privateKey || !cfg.identityAddress || !cfg.reputationAddress) {
   console.error('[oracle] Missing required env vars. Copy .env.example to .env and fill it in.');
@@ -220,6 +238,8 @@ const {
   recordAttestation,
   creditPayment,
   setPaymentOutcome,
+  recordPayerOutcome,
+  hasPayerOutcome,
   getScanState: loadScanState,
   setScanState,
   getPaymentScanState,
@@ -1223,6 +1243,174 @@ async function readBadgeState(address) {
   }
 }
 
+// Repeated bad signatures for one payment leg. A leg's payer can run its account's code here as
+// often as it likes, so after a few failures the leg waits.
+const BAD_SIGNATURE_LIMIT = 5;
+const BAD_SIGNATURE_WINDOW_MS = 3_600_000;
+const badSignatures = new Map();
+
+function badSignatureThrottled(key, now = Date.now()) {
+  const entry = badSignatures.get(key);
+  if (!entry) return false;
+  if (now - entry.since > BAD_SIGNATURE_WINDOW_MS) {
+    badSignatures.delete(key);
+    return false;
+  }
+  return entry.count >= BAD_SIGNATURE_LIMIT;
+}
+
+function noteBadSignature(key, now = Date.now()) {
+  if (badSignatures.size > 10_000) {
+    for (const [k, v] of badSignatures) if (now - v.since > BAD_SIGNATURE_WINDOW_MS) badSignatures.delete(k);
+  }
+  const entry = badSignatures.get(key);
+  if (!entry || now - entry.since > BAD_SIGNATURE_WINDOW_MS) badSignatures.set(key, { count: 1, since: now });
+  else entry.count += 1;
+}
+
+/**
+ * The rest of POST /attest for an outcome the payer signed, once the payment has been verified
+ * (docs/adr/0006-payer-signed-outcomes.md, section 3): the signer's own leg, the signature, the
+ * timing, then the precedence rules. Refuses at the first failure with a named code.
+ */
+async function acceptPayerOutcome(res, { didHash, credited, info, signed }) {
+  const leg = (credited.legs ?? []).find((l) => l.payer.toLowerCase() === signed.payer.toLowerCase());
+  if (!leg) {
+    metrics.inc('attestRejectedPayment');
+    return json(res, 402, {
+      error: 'no payment from this payer to this agent in this transaction',
+      code: 'payer_mismatch',
+    });
+  }
+  if (payments.isSelfPayment(leg.payer, info)) {
+    metrics.inc('attestRejectedPayment');
+    return json(res, 402, {
+      error: 'an agent cannot attest itself: the payer is its own operator or agent address',
+      code: 'self_payment',
+    });
+  }
+  const delivered = signed.outcome === payerOutcome.DELIVERED;
+  if (!delivered && leg.amount < payerOutcomeCfg.negativeMinAmount) {
+    metrics.inc('attestRejectedPayment');
+    return json(res, 402, {
+      error: `a "not delivered" needs a payment of at least ${payerOutcomeCfg.negativeMinAmount}`,
+      code: 'below_minimum',
+    });
+  }
+  const late = payerOutcome.timingProblem(signed, credited.settledAt);
+  if (late) {
+    metrics.inc('attestRejectedOther');
+    return json(res, 400, { error: late, code: 'outcome_window' });
+  }
+
+  const throttleKey = `${didHash}|${credited.txHash}|${leg.payer.toLowerCase()}`;
+  if (badSignatureThrottled(throttleKey)) {
+    metrics.inc('attestRejectedOther');
+    return json(res, 429, { error: 'too many bad signatures for this payment; try again later', code: 'bad_signature_throttled' });
+  }
+  const dom = payerOutcome.domain(cfg.expectedChainId, cfg.reputationAddress);
+  const msg = payerOutcome.message(didHash, credited.txHash, signed);
+  let verdict;
+  let checkedAtBlock;
+  try {
+    // One confirmed block for the whole check, recorded with the outcome whatever kind of
+    // account signed: under EIP-7702 an address can gain code later, so another operator
+    // checking afterwards must ask the same question of the same state.
+    const head = await chain.getProvider().getBlockNumber();
+    checkedAtBlock = Math.max(0, head - (paymentCfg.minConfirmations - 1));
+    verdict = await payerOutcome.verifySignature({
+      provider: chain.getProvider(),
+      dom,
+      msg,
+      signature: signed.signature,
+      blockNumber: checkedAtBlock,
+    });
+  } catch (err) {
+    metrics.inc('paymentRpcErrors');
+    console.warn(`[oracle] /attest payer signature check failed for ${didHash}: ${err.message}`);
+    return json(res, 502, { error: 'could not read the chain', code: 'rpc_error' });
+  }
+  if (!verdict.valid) {
+    noteBadSignature(throttleKey);
+    metrics.inc('attestRejectedOther');
+    return json(res, 400, { error: 'the signature is not the payer\'s for this outcome', code: 'bad_signature' });
+  }
+
+  // Every leg of the transaction is credited as a payment, as the credentialed path does; the
+  // outcome goes on the signer's own leg only.
+  const paidLegs = (credited.legs ?? []).filter((l) => !payments.isSelfPayment(l.payer, info));
+  let credits = 0;
+  for (const l of paidLegs) {
+    if (creditPayment(didHash, credited.txHash, l.amount, l.payer, null, credited.settledAt, null, credited.blockNumber)) {
+      credits += 1;
+    }
+  }
+  const record = {
+    outcome: signed.outcome,
+    evidence: signed.evidence,
+    signedAt: signed.signedAt,
+    deadline: signed.deadline,
+    signature: signed.signature,
+    signer: verdict.signer,
+    checkedAtBlock,
+  };
+  const before = getPaymentEvents(didHash).find(
+    (e) => e.txHash === credited.txHash && String(e.payer).toLowerCase() === leg.payer.toLowerCase(),
+  );
+  const previous = before ? before.success : null;
+  const filed = recordPayerOutcome(didHash, credited.txHash, leg.payer, delivered, record, {
+    windowMs: payerOutcomeCfg.windowMs,
+    // A credentialed outcome on a transaction with several payers was given for the whole
+    // job and filed on its largest leg; one payer among several does not get to overturn it.
+    replaceable: paidLegs.length === 1,
+  });
+  if (filed === 'already_set' || filed === 'outside_window') {
+    // Payments credited above stay credited; keep them through a restart.
+    if (credits > 0) persistState();
+    metrics.inc('attestRejectedPayment');
+    return json(res, 409, {
+      error: filed === 'already_set'
+        ? 'the payer has already signed an outcome for this payment'
+        : 'an outcome recorded for this payment is final',
+      code: 'outcome_recorded',
+    });
+  }
+  if (filed === 'not_found') {
+    if (credits > 0) persistState();
+    metrics.inc('attestRejectedPayment');
+    return json(res, 409, { error: 'this settlement has already been credited', code: 'replayed' });
+  }
+  metrics.inc('paymentsVerified');
+  const att = attestations.get(didHash) ?? { successful: 0, total: 0 };
+  // A replaced outcome was counted when it was given; only its direction changes.
+  if (filed === 'replaced') {
+    if (delivered && previous === false) att.successful++;
+    if (!delivered && previous === true) att.successful--;
+  } else {
+    att.total++;
+    if (delivered) att.successful++;
+  }
+  attestations.set(didHash, att);
+  const durable = persistState();
+  metrics.inc(durable ? 'attestAccepted' : 'attestAcceptedNotDurable');
+  return json(res, durable ? 200 : 202, {
+    didHash,
+    attester: leg.payer,
+    ...att,
+    ...(durable ? {} : { durable: false }),
+    payment: { txHash: credited.txHash, amount: leg.amount.toString() },
+    outcomeRecorded: true,
+    outcomeSource: 'payer_signed',
+    // 'replaced' when it took the place of a credentialed outcome inside the window.
+    recorded: filed,
+  });
+}
+
+function outcomeSource(event) {
+  if (event.payerOutcome) return 'payer_signed';
+  return typeof event.success === 'boolean' ? 'credentialed' : null;
+}
+
 /**
  * The /evidence body for an agent, as a JSON string.
  *
@@ -1248,6 +1436,18 @@ function buildEvidenceBody(didHash, events) {
     // it as a boolean made it collide with a reported failure, which the score counts
     // very differently, so the root stopped covering the arithmetic it commits to.
     committedFields: ['txHash', 'payer', 'amount', 'settledAt', 'success'],
+    // What each payer signed over, so a verifier can check a served payload without knowing
+    // this deployment. outcomeSource is this oracle's own label, not part of the leaf.
+    ...(payerOutcomeCfg.publish
+      ? {
+        payerOutcomeDomain: {
+          name: 'Sigvara',
+          version: '1',
+          chainId: cfg.expectedChainId,
+          verifyingContract: payerOutcome.domain(cfg.expectedChainId, cfg.reputationAddress).verifyingContract,
+        },
+      }
+      : {}),
     // Served beside the leaf but never checked by this oracle beyond its shape. A token
     // holder supplied it; nothing here fetched the packet or confirmed that it records this
     // payment or outcome, so it is a pointer, not proof, and says so in the response.
@@ -1260,10 +1460,16 @@ function buildEvidenceBody(didHash, events) {
       amount: e.amount,
       settledAt: merkle.settledSeconds(e),
       success: e.success,
+      // Who the outcome is the word of (docs/adr/0006-payer-signed-outcomes.md): the payer, by a
+      // signature anyone can check, or a credential holder. null when there is none.
+      outcomeSource: outcomeSource(e),
       leaf: tree.leaves[i],
       proof: merkle.proofFor(tree, i),
       // Not part of the leaf and not verified here. See committedFields and unverifiedFields above.
       ...(e.packetId ? { counterauditPacketId: e.packetId } : {}),
+      // The payer's signed payload, so a verifier can check that the committed outcome is one
+      // the payer signed. Served only where publishing is switched on (see payer-outcome.js).
+      ...(e.payerOutcome && payerOutcomeCfg.publish ? { payerOutcome: e.payerOutcome } : {}),
     })),
   });
 }
@@ -1421,6 +1627,34 @@ async function handleRequest(req, res) {
       const body = await readBody(req);
       const { success, packetId } = body;
 
+      // An outcome the payer signed (docs/adr/0006-payer-signed-outcomes.md). The signature is
+      // the credential, so whoever carries it needs no token and no say in what it records.
+      let signedOutcome = null;
+      if (body.payerOutcome !== undefined && body.payerOutcome !== null) {
+        if (success !== undefined && success !== null) {
+          metrics.inc('attestRejectedOther');
+          return json(res, 400, { error: 'give success or payerOutcome, not both', code: 'bad_payer_outcome' });
+        }
+        if (payerOutcomeCfg.mode === 'off') {
+          metrics.inc('attestRejectedOther');
+          return json(res, 400, { error: 'this oracle does not take payer-signed outcomes', code: 'payer_outcomes_off' });
+        }
+        const parsed = payerOutcome.parse(body.payerOutcome);
+        if (!parsed.ok) {
+          metrics.inc('attestRejectedOther');
+          return json(res, 400, { error: parsed.error, code: 'bad_payer_outcome' });
+        }
+        // Negatives wait for a challenge process (ADR 0006, section 5).
+        if (parsed.value.outcome === payerOutcome.NOT_DELIVERED && payerOutcomeCfg.mode !== 'both') {
+          metrics.inc('attestRejectedOther');
+          return json(res, 400, {
+            error: 'this oracle takes only "delivered" from payers for now',
+            code: 'negative_not_accepted',
+          });
+        }
+        signedOutcome = parsed.value;
+      }
+
       /* Authorisation depends on what is being claimed, so it is decided after the
        * body is read rather than before.
        *
@@ -1439,7 +1673,7 @@ async function handleRequest(req, res) {
       if (caller && !mayUse(cfg.scopes, caller, 'attest')) {
         return json(res, 403, { error: 'Forbidden' });
       }
-      if (!mayAttestUnauthenticated(success, payments.required(paymentCfg)) && !caller) {
+      if (!signedOutcome && !mayAttestUnauthenticated(success, payments.required(paymentCfg)) && !caller) {
         return json(res, 401, {
           error: 'Unauthorized',
           detail: 'a positive, payment-verified attestation needs no token; anything else does',
@@ -1481,6 +1715,13 @@ async function handleRequest(req, res) {
       if (!didHash) {
         metrics.inc('attestRejectedOther');
         return json(res, 400, { error: 'didHash must be a 32-byte hex string' });
+      }
+      // A leg that already holds its payer's outcome is refused before any chain read: the
+      // answer cannot change, and otherwise every replay costs this oracle's node the full check.
+      if (signedOutcome && typeof body.payment?.txHash === 'string'
+        && hasPayerOutcome(didHash, body.payment.txHash, signedOutcome.payer)) {
+        metrics.inc('attestRejectedPayment');
+        return json(res, 409, { error: 'the payer has already signed an outcome for this payment', code: 'outcome_recorded' });
       }
       // Only needed when payments are off; otherwise it comes from the transfer.
       if (!attester && !payments.required(paymentCfg)) {
@@ -1531,7 +1772,9 @@ async function handleRequest(req, res) {
           }
           return json(res, 402, { error: err.message, code: err.code || 'payment_invalid' });
         }
-        if (payments.isSelfPayment(credited.payer, info)) {
+        // A payer-signed outcome is checked on the signer's own leg (acceptPayerOutcome), so an
+        // operator's larger leg in the same transaction cannot block its customer's outcome.
+        if (!signedOutcome && payments.isSelfPayment(credited.payer, info)) {
           metrics.inc('attestRejectedPayment');
           return json(res, 402, {
             error: 'an agent cannot attest itself: the payer is its own operator or agent address',
@@ -1539,6 +1782,10 @@ async function handleRequest(req, res) {
           });
         }
         attester = credited.payer;
+      }
+
+      if (signedOutcome) {
+        return await acceptPayerOutcome(res, { didHash, credited, info, signed: signedOutcome });
       }
 
       /* The cooldown throttles strangers. A credential holder reporting on a payment this

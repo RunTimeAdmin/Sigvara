@@ -1,7 +1,9 @@
 # ADR 0006: Outcomes signed by the payer
 
-**Status:** Accepted as a design · 2026-10-31. Nothing here is built. The open questions were
-decided the same day and are recorded at the end. Public outcome retrieval and peer replication
+**Status:** Accepted as a design · 2026-10-31. Being built: the oracle's checks and precedence
+rules, `PAYER_OUTCOMES` and the source marking on `/evidence` (Rollout 1) are in, off by default;
+`GET /outcomes`, peer import and the SDK are next. The open questions were decided the same day
+and are recorded at the end. Public outcome retrieval and peer replication
 wait on a retention review before mainnet (see Rollout). The roadmap puts the build after the
 first audit, and the escrow and receipt parts should follow what x402 standardizes.
 
@@ -122,9 +124,10 @@ In order, refusing at the first failure with a named code, as the payment path a
    asset, minimum amount, confirmations, not a self-payment. The signer's own leg, not the largest
    one: ADR 0003 puts a token holder's outcome on the largest leg so that one report is not counted
    once per sender. A payer's signature names its own leg, so the outcome goes there.
-2. The signature is valid for `payer` under the domain of the chain the payment settled on.
-3. `signedAt` is not before the payment's block time, not more than a few minutes ahead of now, and
-   `deadline` has not passed and is at most 30 days after `signedAt`.
+2. `signedAt` is not before the payment's block time, not more than a few minutes ahead of now, and
+   `deadline` has not passed and is at most 30 days after `signedAt`. Checked before the signature,
+   which costs a chain read.
+3. The signature is valid for `payer` under the domain of the chain the payment settled on.
 4. The precedence rules below allow it.
 
 Refusals: `payer_mismatch` (no leg from that payer to that agent in that transaction),
@@ -184,7 +187,8 @@ the way ADR 0003 has them pull payments from the chain, without the relay ADR 00
   change when the account rotates its owner. The operator that accepts an outcome therefore records
   the block it checked at and serves it, and an importer checks at that same block, so a later key
   rotation cannot make two honest operators disagree about a signature that was valid when given.
-  An externally owned account's signature does not depend on state and needs no block.
+  The block is recorded for an externally owned account too: under EIP-7702 an address can gain code
+  later, and whether it is checked by recovery or by ERC-1271 depends on the state at the block.
 
 A dishonest or broken peer can therefore fail to share an outcome, which the next import or a
 direct post repairs, but it cannot inject one. Two operators holding the same chain converge on the

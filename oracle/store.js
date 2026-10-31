@@ -689,6 +689,52 @@ function setPaymentOutcome(didHash, txHash, payer, success, packetId = null) {
   return 'set';
 }
 
+/**
+ * Records an outcome the payer signed for its own leg of a credited payment
+ * (docs/adr/0006-payer-signed-outcomes.md, section 4).
+ *
+ * - A payer-signed outcome is final for its leg: a second one is refused, whatever it says.
+ * - It replaces a credentialed outcome on the same leg if it arrives within `windowMs` of the
+ *   payment's block time (the event's `ts`), since the payer is the party the work was for, and
+ *   only when `replaceable` (the transaction had this one paying leg): a credentialed outcome on
+ *   a transaction with several payers was given for the whole job. The credential holder's
+ *   packetId goes with the outcome it backed.
+ * - A credentialed outcome never replaces it: setPaymentOutcome refuses any leg that has one.
+ *
+ * `signed` is the payload and signature, kept beside the event so a verifier can check that
+ * the committed outcome is one the payer signed. The evidence leaf is unchanged: it commits to
+ * `success` as before.
+ *
+ * @returns {'set'|'replaced'|'already_set'|'outside_window'|'not_found'}
+ */
+function recordPayerOutcome(didHash, txHash, payer, success, signed, { windowMs, replaceable = true, now = Date.now() }) {
+  if (typeof success !== 'boolean') throw new TypeError('recordPayerOutcome: success must be a boolean');
+  const did = String(didHash).toLowerCase();
+  const tx = String(txHash).toLowerCase();
+  const who = String(payer).toLowerCase();
+  const list = paymentEvents.get(did) ?? [];
+  const i = list.findIndex((e) => e.txHash === tx && String(e.payer).toLowerCase() === who);
+  if (i < 0) return 'not_found';
+  const event = list[i];
+  if (event.payerOutcome) return 'already_set';
+  const credentialed = typeof event.success === 'boolean';
+  if (credentialed && (!replaceable || now - event.ts > windowMs)) return 'outside_window';
+  const { packetId: _backedTheOldOutcome, ...rest } = event;
+  const next = [...list];
+  next[i] = Object.freeze({ ...rest, success, payerOutcome: Object.freeze({ ...signed }) });
+  paymentEvents.set(did, Object.freeze(next));
+  return credentialed ? 'replaced' : 'set';
+}
+
+/** Whether the payer has signed an outcome for its leg of this payment. */
+function hasPayerOutcome(didHash, txHash, payer) {
+  const tx = String(txHash).toLowerCase();
+  const who = String(payer).toLowerCase();
+  return (paymentEvents.get(String(didHash).toLowerCase()) ?? []).some(
+    (e) => e.payerOutcome && e.txHash === tx && String(e.payer).toLowerCase() === who,
+  );
+}
+
 /** Every agent's payment log. Read-only use: the canary picks a known settlement. */
 function allPaymentEvents() { return paymentEvents; }
 
@@ -822,6 +868,8 @@ module.exports = {
   paymentEventError,
   creditPayment,
   setPaymentOutcome,
+  recordPayerOutcome,
+  hasPayerOutcome,
   divergences,
   recordDivergence,
   getDivergences,
