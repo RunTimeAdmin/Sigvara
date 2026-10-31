@@ -67,6 +67,14 @@ server {
         include /etc/nginx/proxy_params;
     }
 
+    # Payer-signed outcomes, which the primary and every other operator import (ADR 0006,
+    # PAYER_OUTCOMES_PEERS). Public and read-only: each outcome verifies on its own. The checker
+    # answers 404 unless PAYER_OUTCOMES and PAYER_OUTCOMES_PUBLISH are on.
+    location = /outcomes {
+        proxy_pass http://127.0.0.1:3031;
+        include /etc/nginx/proxy_params;
+    }
+
     # Prefix, not exact: the didHash is part of the path. There is no bare /evidence
     # collection endpoint, so nothing to add here beyond the prefix.
     location ^~ /evidence/ {

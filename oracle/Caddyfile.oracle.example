@@ -44,6 +44,10 @@ oracle.sigvara.xyz {
 		path /health
 		path /score/*
 		path /evidence/*
+		# Payer-signed outcomes, which every other operator imports (ADR 0006, PAYER_OUTCOMES_PEERS).
+		# Public and read-only: each outcome verifies on its own. The oracle answers 404 unless
+		# PAYER_OUTCOMES and PAYER_OUTCOMES_PUBLISH are on.
+		path /outcomes
 		# The badge is loaded from pages this operator does not control. It rides the
 		# same block as the other reads because the two headers set below are harmless
 		# to it: an <img> needs no CORS, so the pinned Allow-Origin costs nothing, and
