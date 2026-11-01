@@ -71,8 +71,12 @@ to the other operator's host, into `/srv/offsite-backups/sigvara-oracle` or `sig
 There a key that can only write (`rrsync -wo`), from that one address, receives it, and a cron
 deletes copies older than 90 days. The `age` private key is held by the project's owner, on
 neither host. On 1 November both off-box copies were fetched, decrypted and found byte for byte
-equal to their source. The log is `/var/log/sigvara-state-backup.log`; neither host sends mail, so
-read it, or check that a copy for each day exists on the receiving host.
+equal to their source. The log is `/var/log/sigvara-state-backup.log`. Neither host sends mail, so
+the receiving side is checked from a third host that does: every day at 05:00 UTC it asks each
+receiver, with a key that can run nothing there but a script printing the newest copy's time in each
+folder, and mails the project's owner when a folder is missing, its newest copy is 25 hours old or
+more, or a receiver cannot be asked (since 1 November 2026). That catches a backup that failed on
+its own host as well as a push that never arrived.
 
 ### Restoring a live operator
 
