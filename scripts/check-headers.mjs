@@ -54,7 +54,9 @@ const VALUE = /default-src[^"\n]*/i;
 /**
  * The policy, directive by directive. The badge is served from the oracle, so its host
  * has to be in img-src or /check renders a broken image on our own page. The wallet talks
- * to the Arc RPC from the page, so that host is the only connect-src entry.
+ * to the Arc RPC from the page. /epochs reads its history from the Arc explorer and asks both
+ * oracle operators for their evidence and health, so those three hosts are in connect-src too.
+ * The policy is site-wide, so /app may reach them as well; the pages only read from them today.
  */
 const EXPECTED_CSP = {
   'default-src': ["'self'"],
@@ -66,7 +68,7 @@ const EXPECTED_CSP = {
   'style-src': ["'self'"],
   'img-src': ["'self'", 'data:', 'https://oracle.sigvara.xyz'],
   'font-src': ["'self'"],
-  'connect-src': ["'self'", 'https://rpc.testnet.arc.io'],
+  'connect-src': ["'self'", 'https://rpc.testnet.arc.io', 'https://explorer.testnet.arc.io', 'https://oracle.sigvara.xyz', 'https://checker.sigvara.xyz'],
   'upgrade-insecure-requests': [],
 };
 

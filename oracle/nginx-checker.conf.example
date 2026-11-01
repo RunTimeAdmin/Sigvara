@@ -85,6 +85,12 @@ server {
     add_header X-Content-Type-Options nosniff always;
     add_header X-Frame-Options DENY always;
     add_header Referrer-Policy no-referrer always;
+    # sigvara.xyz/epochs reads /health and /divergence/<didHash> from the visitor's browser, to
+    # show what the checker found next to the proposal it checked. Everything here is a public
+    # GET with no credentials, so one named origin and no preflight is all it needs. The primary's
+    # Caddyfile allows the same origin on its read paths.
+    add_header Access-Control-Allow-Origin "https://sigvara.xyz" always;
+    add_header Vary Origin always;
 
     server_tokens off;
 }

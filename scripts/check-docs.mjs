@@ -80,7 +80,7 @@ const externalSelectors = new Set(['approve', 'allowance', 'balanceOf', 'symbol'
 // Every page that calls the contracts directly is checked. A page left off this list
 // keeps working until a signature changes and then reads zeros forever, so a new page
 // with its own SEL table belongs here on the day it is written.
-for (const file of ['site/assets/app.js', 'site/assets/testnet.js']) {
+for (const file of ['site/assets/app.js', 'site/assets/testnet.js', 'site/assets/epochs.js']) {
   const selBlock = read(file).match(/(?:const|var|let) SEL = \{([\s\S]*?)\};/);
   if (!selBlock) { fail(file, 'could not find the SEL selector table'); continue; }
   for (const [, name, sel] of selBlock[1].matchAll(/(\w+)\s*:\s*"(0x[0-9a-fA-F]{8})"/g)) {
@@ -108,12 +108,34 @@ const enumMatch = read('src/SigvaraIdentity.sol').match(/enum AgentStatus \{([^}
 if (!enumMatch) fail('src/SigvaraIdentity.sol', 'could not find the AgentStatus enum');
 else {
   const onchain = enumMatch[1].split(',').map(s => s.trim()).filter(Boolean).length;
-  for (const file of ['site/assets/app.js', 'site/assets/testnet.js']) {
+  for (const file of ['site/assets/app.js', 'site/assets/testnet.js', 'site/assets/epochs.js']) {
     const labels = read(file).match(/\[\s*"Active"[^\]]*\]/);
     if (!labels) { fail(file, 'could not find the status label list'); continue; }
     const shown = labels[0].split(',').length;
     if (shown !== onchain) {
       fail(`${file} status labels`, `contract has ${onchain} AgentStatus values, the page labels ${shown}`);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 2b. The event topics the epochs page filters on.
+//     A topic is a hash, so a wrong one matches nothing and the page shows an agent with no
+//     history rather than an error. Each topic must hash from the signature written beside it,
+//     and each signature not marked legacy must be an event SigvaraReputation still emits.
+// ---------------------------------------------------------------------------
+{
+  const file = 'site/assets/epochs.js';
+  const block = read(file).match(/const EVENTS = \[([\s\S]*?)\];/);
+  if (!block) fail(file, 'could not find the EVENTS table');
+  else {
+    const emitted = new Set([...read('src/SigvaraReputation.sol').matchAll(/event\s+(\w+)\s*\(([^)]*)\)/g)]
+      .map(([, name, params]) => `${name}(${params.split(',').map(p => p.trim().split(/\s+/)[0]).filter(Boolean).join(',')})`));
+    const rows = [...block[1].matchAll(/sig:\s*"([^"]+)",\s*topic:\s*"(0x[0-9a-fA-F]{64})"([^}]*)\}/g)];
+    if (rows.length === 0) fail(file, 'the EVENTS table has no rows this check can read');
+    for (const [, sig, topic, rest] of rows) {
+      if (ethers.id(sig) !== topic.toLowerCase()) fail(`${file} EVENTS`, `${sig}: table has ${topic}, the signature hashes to ${ethers.id(sig)}`);
+      if (!/legacy:\s*true/.test(rest) && !emitted.has(sig)) fail(`${file} EVENTS`, `${sig} is not an event in src/SigvaraReputation.sol`);
     }
   }
 }

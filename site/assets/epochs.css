@@ -1,0 +1,26 @@
+/* Score epochs page. Builds on style.css and app.css, which give it the cards, the key/value
+   lists and the pills. */
+.ep-lede { color: var(--sig-text-soft); font-size: 15px; line-height: 1.6; margin: 10px 0 4px; }
+.app-card h3 { font-size: 15px; margin: 18px 0 8px; }
+.card-body p { font-size: 14px; line-height: 1.6; margin: 0 0 10px; }
+.card-body .netnote { font-size: 13px; }
+.card-body a { color: var(--accent); }
+
+.timeline, .pay-list, .recent { list-style: none; margin: 12px 0; padding: 0; }
+
+.timeline .ep { border-left: 3px solid var(--sig-line-strong); padding: 8px 0 10px 14px; margin-bottom: 4px; }
+.timeline .ep-final { border-left-color: var(--sig-mint); }
+.timeline .ep-pending { border-left-color: var(--sig-orange); }
+.timeline .ep-rejected, .timeline .ep-cleared { border-left-color: var(--sig-danger); }
+.ep-head { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 14px; }
+.ep-meta { color: var(--muted); font-size: 13px; margin-top: 2px; }
+.ep-outcome { font-size: 14px; margin-top: 4px; }
+
+.pay-list li, .recent li { display: grid; gap: 4px 14px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.pay-list li { grid-template-columns: 150px 1fr 140px 110px; }
+.recent li { grid-template-columns: 130px 1fr auto; }
+.pay-list li:last-child, .recent li:last-child { border-bottom: 0; }
+
+@media (max-width: 640px) {
+  .pay-list li, .recent li { grid-template-columns: 1fr; }
+}
