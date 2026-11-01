@@ -595,10 +595,12 @@ read and are passed over as below. An outcome this oracle already holds costs no
 the peer's says something different, it is counted
 (`sigvara_oracle_payer_outcome_conflicts_total`, unchecked, so anyone serving one raises it) and
 what is held stays. One that cannot be checked for a reason that is not its own (the node not
-answering, an agent or payment it cannot see yet) holds the peer's import for at most three
-runs, then is passed over; the cursor is kept in memory, so a restart reads every peer from the
-start again and retries it. Each run checks at most 200 outcomes and spends at most a minute per
-peer. Imported outcomes are served on at this oracle's `/outcomes`, so they reach operators that
+answering, an agent or payment it cannot see yet) stops the peer's import for two runs and is
+passed over on the third (the count is the peer's, and starts again whenever its import moves on);
+the cursor is kept in memory, so a restart reads every peer from the start again and retries it.
+Each run checks at most 200 outcomes, reads at most 20 pages and spends at most a minute per peer;
+these limits are fixed in `index.js`, and a run cut short by one says so in its log line
+(`stopped early (budget)`, `(pages)` or `(time)`). Imported outcomes are served on at this oracle's `/outcomes`, so they reach operators that
 do not list the first. Every operator should list every other one, and switch import on
 together.
 
@@ -1103,7 +1105,7 @@ See [Running a second operator](#running-a-second-operator).
 | Variable | Default | Meaning |
 |---|---|---|
 | `ORACLE_MODE` | `primary` | `checker` scores every agent, compares with the pending proposal, records divergences and proposes only into an empty slot. Refused together with `FEE_REGISTRY_ADDRESS`. Any value other than `primary` or `checker`, including `Checker`, stops the process |
-| `DIVERGENCE_TOLERANCE` | `3` | Points of difference in the total that count as benign skew between two honest operators. A non-number, a negative value or one above `10` stops the process at startup, since each would make the checker agree with everything |
+| `DIVERGENCE_TOLERANCE` | `3` | Points of difference, in the total or in any one factor, that count as benign skew between two honest operators (`decideCheckerAction` in `epoch-policy.js`). A non-number, a negative value or one above `10` stops the process at startup, since each would make the checker agree with everything |
 | `PRIMARY_EVIDENCE_URL` | `https://oracle.sigvara.xyz` | The primary's public base URL. Named in each divergence record as `compareWith`, so a reader is told where the other side's evidence lives |
 
 ### Divergence watcher

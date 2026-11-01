@@ -97,7 +97,7 @@ services:
     volumes:
       # Its OWN state. Sharing the primary's would mean sharing the payment observations
       # the score is computed from, which is most of what is being checked. Back it up:
-      # docs/incident-operator-key.md.
+      # docs/operations-runbook.md, section 1.
       - checker_state:/data
       - checker_app:/app
 
