@@ -65,6 +65,15 @@ find "$out" -name 'state-*' -mtime +14 -delete
 It runs while the oracle does. Every save writes a temporary file and renames it into place, so
 each file in the copy is one whole save. The copy holds both the state file and its `.bak`.
 
+**Running on both operators since 1 November 2026.** Each host keeps its copies for 14 days in
+`/root/oracle-state-backups`, encrypts each to the operators' `age` key and pushes it with `rsync`
+to the other operator's host, into `/srv/offsite-backups/sigvara-oracle` or `sigvara-checker`.
+There a key that can only write (`rrsync -wo`), from that one address, receives it, and a cron
+deletes copies older than 90 days. The `age` private key is held by the project's owner, on
+neither host. On 1 November both off-box copies were fetched, decrypted and found byte for byte
+equal to their source. The log is `/var/log/sigvara-state-backup.log`; neither host sends mail, so
+read it, or check that a copy for each day exists on the receiving host.
+
 ### Restoring a live operator
 
 Restore when the oracle stops at startup saying the state file `cannot be used` and to `Restore
@@ -147,7 +156,13 @@ drill passes when the `state loaded` line shows the counts you expect, and `/hea
 use its compose file with `-f`, the volume `restore-drill_checker_state` and port 3031. Write the
 date of each successful drill here.
 
-Last restore drill: never run. Do the first one before mainnet.
+Last restore drill: 1 November 2026, the primary's copy. Its off-box copy (taken 19:34 UTC) was
+fetched from the checker's host, decrypted on a machine that is neither operator, and run there at
+commit `184bc16` with a new key and new tokens. `state loaded` showed the expected state,
+`/health` said `stateSource` `file` and `statePersisted` `true`, and the agent's first 10
+evidence leaves were identical to the live primary's. An 11th payment, made after the copy, came
+back through the payment scan without its payer-signed outcome, as section 1 says it would. The
+checker's copy has not been drilled yet.
 
 ## 2. Payer-outcome import lag
 
