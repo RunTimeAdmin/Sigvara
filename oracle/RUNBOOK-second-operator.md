@@ -494,7 +494,8 @@ nothing is not reaching the finalize branch at all.
 A divergence is not proof the primary is wrong. It is a disagreement between two
 independent recomputations, and the checker can be the broken one. Every entry in
 [`docs/divergence-log.md`](../docs/divergence-log.md) so far was the checker's own cold
-start, a known reweight skew or an evidence delivery gap, not misconduct.
+start, a known reweight skew, an evidence delivery gap or the checker counting payments
+that settled after the proposal, not misconduct.
 
 Whatever you conclude, write it down there, including the cases where the checker was
 the broken one. A checker that reports disagreements and never publishes outcomes is

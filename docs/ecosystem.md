@@ -32,7 +32,7 @@ CounterAudit is a tamper-evident AI audit trail service. An ingest call carrying
 
 ## Where Sigvara sits in CounterAegis
 
-Sigvara shares an owner with [CounterAegis](https://counteraegis.com), a suite of three
+Sigvara shares an owner with [CounterAegis](https://counteraegis.com), a suite of two
 trust products. Stating that plainly matters more than the positioning does, so it comes
 first: **CounterAudit is not an arm's-length third party.** The same people run both. It is
 the intended carrier of outcome attestations, so anyone weighing how
@@ -53,11 +53,12 @@ The suite divides by question:
 | Question | Product | |
 |---|---|---|
 | Who acted? | [Countersig](https://countersig.com) | identity, policy and auth for humans and agents |
-| What was touched? | [ProvenanceAI](https://provenanceai.network) | content fingerprinting, verification, lineage |
 | Can we prove it? | [CounterAudit](https://counteraudit.io) | sealed packets, hash chain, RFC 3161, regulator exports |
 
-Sigvara answers a fourth that none of them do: **should this agent be trusted, and what
-does it lose if it defects?** The three products establish and evidence what happened
+A third, ProvenanceAI (content fingerprinting and lineage), was retired on 30 October 2026.
+
+Sigvara answers a question that neither does: **should this agent be trusted, and what
+does it lose if it defects?** The two products establish and evidence what happened
 inside an organisation's boundary. Sigvara is what makes an agent's track record portable
 and costly to fake outside it, because the bond and the score live on a public chain
 rather than in anyone's database.

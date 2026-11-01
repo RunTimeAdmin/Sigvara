@@ -5,7 +5,8 @@ same protocol (identity, reputation, staking, epoch fees, oracle, SDK) ran as a
 public testnet on Robinhood Chain. This page records that run so it can be
 cited. Everything below was read from the chain and its explorer on
 17 September 2026; the original repository is
-[RunTimeAdmin/countersig-network](https://github.com/RunTimeAdmin/countersig-network).
+[RunTimeAdmin/countersig-network](https://github.com/RunTimeAdmin/countersig-network), which
+is now private, so the explorer links below are the public record.
 
 ## Deployment
 
