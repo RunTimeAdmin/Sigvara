@@ -20,13 +20,13 @@ The bond. An agent registers first and lands in `PendingBond`; the first deposit
 
 ### Oracle
 
-An off-chain service that watches the `AgentRegistered` events on Identity, aggregates its signals (payment volume verified on chain, outcomes reported by token-holding attesters such as CounterAudit, tenure, counterparty standing, watchdog flags, external ERC-8004 trust), and calls `proposeReputation()` on the Reputation contract every epoch, committing to the evidence it used with a Merkle root. Proposed scores sit through a challenge window (rejectable by the slashing committee) before anyone can call `finalizeReputation()` to make them live. The reference implementation is in `oracle/`. Two bonded operators run today. The primary proposes; a second, in checker mode on separate hardware and a separate RPC provider, recomputes each pending score from payment evidence it re-verified itself and records any disagreement, without ever overwriting a live proposal. A watcher on a third host polls that record and alerts while the challenge window is still open. Both operators are bonded in `SigvaraOracleBond`, so a bad proposal costs its proposer. What remains is operators run by *independent parties*: today they are not.
+An off-chain service that watches the `AgentRegistered` events on Identity, aggregates its signals (payment volume verified on chain, outcomes signed by the payer or reported by a token holder, tenure, counterparty standing, watchdog flags, external ERC-8004 trust), and calls `proposeReputation()` on the Reputation contract every epoch, committing to the evidence it used with a Merkle root. Proposed scores sit through a challenge window (rejectable by the slashing committee) before anyone can call `finalizeReputation()` to make them live. The reference implementation is in `oracle/`. Two bonded operators run today. The primary proposes; a second, in checker mode on separate hardware and a separate RPC provider, recomputes each pending score from payment evidence it re-verified itself and records any disagreement, without ever overwriting a live proposal. A watcher on a third host polls that record and alerts while the challenge window is still open. Both operators are bonded in `SigvaraOracleBond`, so a bad proposal costs its proposer. What remains is operators run by *independent parties*: today they are not.
 
 ### CounterAudit (first integration, common ownership — see below)
 
 CounterAudit is a tamper-evident AI audit trail service. An ingest call carrying an `agent_did` field makes CounterAudit query Sigvara at seal time, embed the agent's on-chain identity and reputation score inside the AES-GCM seal, and attach an RFC 3161 timestamp. The property that makes it worth having is that the score is captured *at the moment of the action* and frozen into a tamper-evident record, rather than looked up later from a score that has since moved.
 
-> **Enrichment live as of 19 September 2026; outcome reporting off in production since 30 October 2026.** It was broken for the two days after the rename — the code still parsed `did:countersig:` and hashed that prefix, and was still pointed at the predecessor deployment on Robinhood Chain — so every lookup silently missed. Outcome reporting was separately broken, posting without the `payment.txHash` the oracle requires. All fixed and verified against real traffic. Since 30 October 2026 CounterAudit relays outcomes only for orgs it allowlists, and its production deployment allowlists none, so the oracle's last recorded outcome is from 20 September.
+> **Enrichment live as of 19 September 2026; the outcome relay off in production since 30 October 2026; payer-signed outcomes carried since 1 November 2026.** It was broken for the two days after the rename — the code still parsed `did:countersig:` and hashed that prefix, and was still pointed at the predecessor deployment on Robinhood Chain — so every lookup silently missed. Outcome reporting was separately broken, posting without the `payment.txHash` the oracle requires. All fixed and verified against real traffic. Since 30 October 2026 CounterAudit relays an org's reported outcome only for orgs it allowlists, and its production deployment allowlists none. Outcomes the payer signed take a separate connector with no allowlist: CounterAudit checks the signature, seals the record and forwards it to the operators, and the first went through on 1 November 2026 (see [payer-signed outcomes](counteraudit-integration.md#payer-signed-outcomes)).
 
 ---
 
@@ -35,15 +35,18 @@ CounterAudit is a tamper-evident AI audit trail service. An ingest call carrying
 Sigvara shares an owner with [CounterAegis](https://counteraegis.com), a suite of three
 trust products. Stating that plainly matters more than the positioning does, so it comes
 first: **CounterAudit is not an arm's-length third party.** The same people run both. It is
-the intended source of outcome attestations, which all need a token, negative ones
-especially because they can be weaponised, so anyone weighing how independent this
-reputation signal is should weigh that too. It is an oracle run by one party today by the
+the intended carrier of outcome attestations, so anyone weighing how
+independent this reputation signal is should weigh that too. It is an oracle run by one party today by the
 same token, which the README says as well.
 
-CounterAudit now both reads the score and writes to it, so that concentration is live
-rather than prospective. It is bounded by the same rules as any other credentialed attester: the
-payment is verified on chain, one counterparty's evidence is capped, and everything
-decays. Worth settling the independence question sooner rather than later.
+CounterAudit both reads the score and writes to it, so that concentration is live
+rather than prospective. What it writes has narrowed. Its relay of an org's reported
+outcome, which the oracle took on CounterAudit's token, has been off in production since
+30 October 2026. Since 1 November it carries outcomes the payer signed
+([ADR 0006](adr/0006-payer-signed-outcomes.md)), which every operator checks against the
+payer itself; CounterAudit cannot forge one, and anyone can post the same signature to an
+operator directly. Every outcome is bounded by the same rules either way: the payment is
+verified on chain, one counterparty's evidence is capped, and everything decays. Worth settling the independence question sooner rather than later.
 
 The suite divides by question:
 

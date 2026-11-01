@@ -1,7 +1,7 @@
 # CounterAudit Integration Guide
 
-> **Status: enrichment live since 19 September 2026; outcome reporting built, and off in
-> production since 30 October 2026.**
+> **Status: enrichment live since 19 September 2026; payer-signed outcomes carried since
+> 1 November 2026; the outcome relay built, and off in production since 30 October 2026.**
 >
 > Enrichment works and is running on `api.counteraudit.io`, verified against a real
 > sealed packet carrying `agent_chain_id: 5042002` with the correct DID hash and the
@@ -9,17 +9,21 @@
 > `did:countersig:`, hashed that prefix, and was pointed at the predecessor deployment
 > on Robinhood Chain.
 >
-> **Outcome reporting is built, and off in production.** Add `outcome`
+> **The outcome relay is built, and off in production.** Add `outcome`
 > (`success`/`failure`) and `payment_tx_hash` to an ingest and the result is attested to
 > the oracle, feeding the agent's Success Rate and Fee Activity, but only for an org
 > listed in CounterAudit's `CA_OUTCOME_PUBLISH_ORG_IDS`. The outcome is the ingesting
 > org's word, not something CounterAudit checked, so since 30 October 2026 the production
-> deployment lists no org. The oracle's last recorded outcome is from 20 September. The settlement hash is required: the oracle
+> deployment lists no org. The settlement hash is required: the oracle
 > re-reads that transaction from the chain and takes the payer from the transfer log
 > rather than trusting the caller, so a forged hash fails at the oracle. The outcome is
 > recorded because CounterAudit presents an oracle token (`SIGVARA_ORACLE_URL` and
-> `SIGVARA_ORACLE_TOKEN`, below). A request without a token credits the payment and
-> records no outcome.
+> `SIGVARA_ORACLE_TOKEN`, below). A request with neither a token nor the payer's
+> signature credits the payment and records no outcome.
+>
+> **Payer-signed outcomes are live.** They take their own connector, which needs no
+> allowlist and no oracle token, because the oracle checks the payer's signature itself.
+> See [Payer-signed outcomes](#payer-signed-outcomes).
 
 CounterAudit is a tamper-evident AI audit trail service. An `agent_did` field on an ingest
 call enriches each sealed packet with the agent's on-chain Sigvara identity and reputation
@@ -68,9 +72,9 @@ SIGVARA_ENRICH_TIMEOUT_MS=5000
 # that refuses it falls back to 'latest', and the snapshot is sealed as provisional.
 SIGVARA_BLOCK_TAG=finalized
 
-# Outcome reporting back to the oracle. Both are needed, and the ingesting org must be
+# The outcome relay back to the oracle. Both are needed, and the ingesting org must be
 # listed in CA_OUTCOME_PUBLISH_ORG_IDS; without them CounterAudit still enriches packets
-# and reports nothing.
+# and relays nothing. Payer-signed outcomes need neither (see below).
 SIGVARA_ORACLE_URL=https://oracle.sigvara.xyz
 SIGVARA_ORACLE_TOKEN=...   # a write credential the oracle operator issued for CounterAudit
 
@@ -161,6 +165,44 @@ def audit_action(agent_did: str, event: dict) -> dict:
     resp.raise_for_status()
     return resp.json()
 ```
+
+---
+
+## Payer-signed outcomes
+
+Live on Arc testnet since 1 November 2026. An outcome the payer signed
+([ADR 0006](adr/0006-payer-signed-outcomes.md)) goes through its own connector,
+`sigvara-payment-outcome-v1`, and its `raw_event` is exactly the body the oracle's
+`POST /attest` takes: the agent's `didHash`, the settlement `payment.txHash`, and the
+`payerOutcome` that `signPaymentOutcome` in `@sigvara/protocol-sdk` returns.
+
+```bash
+curl -X POST https://api.counteraudit.io/v1/audit/ingest \
+  -H "Authorization: Bearer $CA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "connector_id": "sigvara-payment-outcome-v1",
+    "raw_event": {
+      "didHash": "0x84...",
+      "payment": { "txHash": "0x..." },
+      "payerOutcome": { "payer": "0x...", "outcome": 1, "evidence": "0x00...",
+                        "signedAt": 1793400000, "deadline": 1793486400, "signature": "0x..." }
+    }
+  }'
+```
+
+CounterAudit checks the signature against the payer with the SDK's `verifyPaymentOutcome`,
+seals the record whole, and forwards it with no token to each operator listed in its
+`SIGVARA_PAYER_OUTCOME_OPERATORS`. The ingest response returns each operator's answer as
+`forwarded`. Sending the same record again asks only the operators that have not taken it,
+and CounterAudit posts to any one operator at most 30 times a minute.
+
+This is the role [ADR 0006 section 7](adr/0006-payer-signed-outcomes.md#7-what-counteraudit-becomes)
+gives it: a courier and a sealer, not an attester. Each operator checks the payment and the
+signature again itself and trusts the payer, not CounterAudit, so the org allowlist and the
+oracle token the relay needs do not apply. Operators import each other's payer-signed
+outcomes, so one that takes the post shares it with the rest. They accept "delivered"
+(`outcome: 1`) only; "not delivered" waits for a challenge process.
 
 ---
 

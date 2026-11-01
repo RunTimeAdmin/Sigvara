@@ -128,7 +128,8 @@ reader to know which machine it is.
 The read and write halves of the service are reachable differently, on purpose. The
 process publishes its port on host loopback only, and the host firewall drops it, so
 nothing reaches the service directly. A reverse proxy then republishes the read paths at
-`oracle.sigvara.xyz`: `/health`, `/score/:didHash`, `/evidence/:didHash` and `/badge/*`.
+`oracle.sigvara.xyz`: `/health`, `/score/:didHash`, `/evidence/:didHash`, `/badge/*` and
+`/outcomes`, the payer-signed outcomes the other operator imports.
 Those are unauthenticated by design — evidence nobody can fetch is evidence nobody can audit, and
 the point of publishing a Merkle root is that a third party can re-derive it. It also publishes `POST /attest`,
 where the oracle decides per request whether a token is required (see
@@ -139,7 +140,7 @@ because `/score` costs several chain reads and `/evidence` rebuilds a Merkle tre
 
 The checking operator that joined the set on 20 September 2026 is published the same way
 and more narrowly: `checker.sigvara.xyz` serves `/health`, `/divergence`,
-`/divergence/:didHash` and `/evidence/:didHash`, and 404s everything else including every write path. It is public
+`/divergence/:didHash`, `/evidence/:didHash` and `/outcomes`, and 404s everything else including every write path. It is public
 for the same reason the evidence root is. The protocol already lets anyone recompute a
 score; letting anyone see whether two independent operators agree on it is that argument
 one step further, and the payload carries nothing that is not already derivable from

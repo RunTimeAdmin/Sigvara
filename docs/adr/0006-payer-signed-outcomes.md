@@ -9,6 +9,17 @@ and are recorded at the end. Public outcome retrieval and peer replication
 wait on a retention review before mainnet (see Rollout). The roadmap puts the build after the
 first audit, and the escrow and receipt parts should follow what x402 standardizes.
 
+**Status update, 1 November 2026.** Rollout 1 to 4 are done. The SDK's signer is published in
+`@sigvara/protocol-sdk` 1.0.0-alpha.13. Rollout 4 was applied on Arc testnet on 31 October at
+23:06 UTC: both operators run `PAYER_OUTCOMES=positive` and `PAYER_OUTCOMES_PUBLISH=on`, each lists
+the other in `PAYER_OUTCOMES_PEERS`, and `GET /outcomes` is public through both proxies. The first
+payer-signed outcome was posted straight to `POST /attest` at 23:15 UTC
+(`0xebb71faa0e0f87432793b4daaf32778a5d14594e7d1a4939662748dd076bcf6d`), and the second came through
+CounterAudit's connector (section 7) at 00:02 UTC on 1 November
+(`0xde612a2fb0b0a3ed6bc1de0d2212e5edcb7dd4ec15ee6b831e4a5a0a4aa8a307`). The checker imported both
+at its next epoch. Rollout 5 (mainnet) and 6 (negatives) are still to come, on the conditions
+under Rollout.
+
 ## Context
 
 A payment's existence is settled. The oracle reads the transfer off the chain, takes the payer
@@ -233,6 +244,9 @@ is deferred until peer reliability or audit needs justify the extra contract sur
 mechanism proves an opinion is true.
 
 ### 7. What CounterAudit becomes
+
+**Built** (Rollout 4, 1 November 2026): CounterAudit's connector `sigvara-payment-outcome-v1`, described
+in the [CounterAudit integration](../counteraudit-integration.md#payer-signed-outcomes).
 
 A courier and a sealer, not an attester. A CounterAudit connector for payer-signed outcomes would
 check the EIP-712 signature against the payer, seal the signed outcome in the org's chain the way it
