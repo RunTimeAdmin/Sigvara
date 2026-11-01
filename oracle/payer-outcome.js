@@ -214,6 +214,14 @@ function message(didHash, txHash, value) {
 }
 
 /**
+ * The EIP-712 hash of a leg's outcome: what its payer signed, and the `signed_outcome_hash` a
+ * CounterAudit packet seals for it.
+ */
+function outcomeHash(dom, didHash, txHash, value) {
+  return ethers.TypedDataEncoder.hash(dom, TYPES, message(didHash, txHash, value));
+}
+
+/**
  * Whether signedAt and deadline allow this outcome, before any chain read (ADR 0006, section 3).
  * Whether the deadline has passed is checkedBlockProblem's question.
  *
@@ -438,6 +446,7 @@ module.exports = {
   parse,
   packetIdOf,
   message,
+  outcomeHash,
   timingProblem,
   checkedBlockProblem,
   importLateProblem,

@@ -414,10 +414,13 @@ describe('POST /attest with a payer-signed outcome', () => {
   test('records the payer\'s "delivered" on its own leg, without a token', async () => {
     const payer = ethers.Wallet.createRandom();
     const { agent, txHash } = paid(payer);
-    const r = await post(oracle, agent.didHash, txHash, await signOutcome(agent.didHash, txHash, payer));
+    const signed = await signOutcome(agent.didHash, txHash, payer);
+    const r = await post(oracle, agent.didHash, txHash, signed);
     assert.equal(r.status, 200, r.text);
     assert.equal(r.body.outcomeSource, 'payer_signed');
     assert.equal(r.body.recorded, 'set');
+    // The hash of what was recorded, which a carrier compares with the one it sealed.
+    assert.equal(r.body.outcomeHash, payerOutcome.outcomeHash(DOMAIN, agent.didHash, txHash, signed));
     const [e] = await evidence(oracle, agent.didHash);
     assert.equal(e.success, true);
     assert.equal(e.outcomeSource, 'payer_signed');
@@ -429,11 +432,21 @@ describe('POST /attest with a payer-signed outcome', () => {
   test('refuses a second signature from the same payer for the same leg, whatever it says', async () => {
     const payer = ethers.Wallet.createRandom();
     const { agent, txHash } = paid(payer);
-    assert.equal((await post(oracle, agent.didHash, txHash, await signOutcome(agent.didHash, txHash, payer))).status, 200);
+    const first = await signOutcome(agent.didHash, txHash, payer);
+    const firstHash = payerOutcome.outcomeHash(DOMAIN, agent.didHash, txHash, first);
+    assert.equal((await post(oracle, agent.didHash, txHash, first)).status, 200);
     const again = await post(oracle, agent.didHash, txHash, await signOutcome(agent.didHash, txHash, payer, { outcome: 2 }));
     assert.equal(again.status, 409, again.text);
     assert.equal(again.body.code, 'outcome_recorded');
+    // A different outcome is held: a carrier must not count its own as delivered.
+    assert.equal(again.body.sameOutcome, false);
+    assert.equal(again.body.heldOutcomeHash, firstHash);
     assert.equal((await evidence(oracle, agent.didHash))[0].success, true);
+    // The same outcome sent again (a carrier retrying) is told it is the one held.
+    const repeat = await post(oracle, agent.didHash, txHash, first);
+    assert.equal(repeat.status, 409, repeat.text);
+    assert.equal(repeat.body.sameOutcome, true);
+    assert.equal(repeat.body.heldOutcomeHash, firstHash);
   });
 
   test('refuses a payer with no leg in the transaction, and a signature for another sender\'s leg', async () => {
@@ -942,6 +955,33 @@ describe('importing payer-signed outcomes from other operators', () => {
     assert.match(b.logs(), new RegExp(`refused ${old.txHash} from ${c.url}: outcome_window`));
     assert.match(b.logs(), new RegExp(`refused ${old.txHash} from ${c.url}: outcome_recorded`));
     assert.equal((await evidence(b, old.agent.didHash))[0].success, false, 'the auditor\'s outcome stays');
+  });
+
+  test('passes over an outcome a peer dates in the future without moving its cursor past later ones', async () => {
+    const payer = ethers.Wallet.createRandom();
+    const forgedFor = paid(payer);
+    const genuineFor = paid(payer);
+    const laterFor = paid(payer);
+    const forged = await signOutcome(forgedFor.agent.didHash, forgedFor.txHash, payer, { signer: ethers.Wallet.createRandom() });
+    const t = Date.now();
+    // Out of order on purpose: the far-future item first, as a peer jumping the cursor would.
+    c.serve([
+      served(forgedFor.agent, forgedFor.txHash, forged, { acceptedAt: t + 86_400_000 }),
+      served(genuineFor.agent, genuineFor.txHash, await signOutcome(genuineFor.agent.didHash, genuineFor.txHash, payer), { acceptedAt: t + 1 }),
+    ]);
+    await runImport();
+    assert.match(lastRun(c.url), /1 imported, 1 refused/);
+    assert.match(b.logs(), new RegExp(`refused ${forgedFor.txHash} from ${c.url}: accepted_in_future`));
+    assert.equal((await evidence(b, genuineFor.agent.didHash))[0].success, true);
+    // An outcome the peer takes later still arrives: the cursor did not jump a day ahead.
+    c.serve([
+      served(forgedFor.agent, forgedFor.txHash, forged, { acceptedAt: t + 86_400_000 }),
+      served(laterFor.agent, laterFor.txHash, await signOutcome(laterFor.agent.didHash, laterFor.txHash, payer), { acceptedAt: t + 2 }),
+    ]);
+    await runImport();
+    assert.match(lastRun(c.url), /1 imported, 1 refused/);
+    assert.equal((await evidence(b, laterFor.agent.didHash))[0].success, true);
+    c.serve([]);
   });
 
   test('says so when a run stops at the page limit, and carries on from there next run', async () => {

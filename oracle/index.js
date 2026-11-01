@@ -1298,6 +1298,28 @@ function noteBadSignature(key, now = Date.now()) {
   else entry.count += 1;
 }
 
+/** The EIP-712 hash of a leg's payer-signed outcome under this oracle's domain. */
+const payerOutcomeHashOf = (didHash, txHash, value) =>
+  payerOutcome.outcomeHash(payerOutcome.domain(cfg.expectedChainId, cfg.reputationAddress), didHash, txHash, value);
+
+/**
+ * What a 409 says of the payer-signed outcome already held for the posted one's leg: its hash,
+ * and whether it is the posted outcome. A carrier sending an outcome again (CounterAudit's outbox)
+ * can then tell its own outcome, taken before, from a different one held in its place.
+ */
+function heldOutcomeReply(didHash, txHash, posted) {
+  const held = payerOutcomeFor(didHash, txHash, posted.payer);
+  if (!held) return { sameOutcome: false };
+  // The stored record leaves out the payer: it is the leg's, the one looked up by.
+  const heldOutcomeHash = payerOutcomeHashOf(didHash, txHash, { ...held, payer: posted.payer });
+  return {
+    heldOutcomeHash,
+    sameOutcome: heldOutcomeHash === payerOutcomeHashOf(didHash, txHash, posted),
+    // Held in memory but not yet saved (the last save failed), as a 202 says: a restart loses it.
+    ...(getLastPersist().ok ? {} : { durable: false }),
+  };
+}
+
 /**
  * Takes an outcome the payer signed, once its payment has been verified
  * (docs/adr/0006-payer-signed-outcomes.md, section 3): the signer's own leg, the timing, the
@@ -1431,13 +1453,15 @@ async function admitPayerOutcome({ didHash, credited, info, signed, packetId = n
   if (filed === 'already_set' || filed === 'outside_window') {
     // Payments credited above stay credited; keep them through a restart.
     if (credits > 0 && !fromPeer) persistState();
-    return refuse(409, 'outcome_recorded', filed === 'already_set'
+    const r = refuse(409, 'outcome_recorded', filed === 'already_set'
       ? 'the payer has already signed an outcome for this payment'
       : 'an outcome recorded for this payment is final', 'attestRejectedPayment');
+    return { ...r, body: { ...r.body, ...heldOutcomeReply(didHash, credited.txHash, signed) } };
   }
   if (filed === 'not_found') {
     if (credits > 0 && !fromPeer) persistState();
-    return refuse(409, 'replayed', 'this settlement has already been credited', 'attestRejectedPayment');
+    const r = refuse(409, 'replayed', 'this settlement has already been credited', 'attestRejectedPayment');
+    return { ...r, body: { ...r.body, sameOutcome: false } };
   }
   metrics.inc('paymentsVerified');
   const att = attestations.get(didHash) ?? { successful: 0, total: 0 };
@@ -1462,6 +1486,8 @@ async function admitPayerOutcome({ didHash, credited, info, signed, packetId = n
       payment: { txHash: credited.txHash, amount: leg.amount.toString() },
       outcomeRecorded: true,
       outcomeSource: 'payer_signed',
+      // What was recorded, so a carrier can match the answer to the outcome it sealed.
+      outcomeHash: payerOutcomeHashOf(didHash, credited.txHash, signed),
       // 'replaced' when it took the place of a credentialed outcome inside the window.
       recorded: filed,
     },
@@ -1482,6 +1508,9 @@ const IMPORT_MS_PER_RUN = 60_000;
 // Runs in a row one outcome may fail for a reason that is not its own (this node or the chain
 // not answering) before it is passed over, so it cannot hold up everything after it for good.
 const IMPORT_MAX_STALLS = 3;
+// How far ahead of this host's clock a peer's acceptedAt may be. It is the peer's word, and it
+// becomes the cursor, so one far in the future would make every later outcome look like a repeat.
+const IMPORT_MAX_FUTURE_MS = 5 * 60_000;
 
 /**
  * One outcome a peer served, put through the same checks as a POST, against this oracle's own
@@ -1561,6 +1590,14 @@ async function importFromPeer(peer, tally) {
       const item = parsed.value;
       // Served in order, so anything at or before the cursor is a repeat.
       if (item.acceptedAt <= state.cursor) continue;
+      // Passed over without moving the cursor, so it cannot hide what comes after it. A peer
+      // serving it again is refused again, each run.
+      if (item.acceptedAt > Date.now() + IMPORT_MAX_FUTURE_MS) {
+        tally.refused += 1;
+        metrics.inc('payerOutcomeImportRefused');
+        console.warn(`[oracle] payer outcome import: refused ${item.txHash} from ${peer}: accepted_in_future (${new Date(item.acceptedAt).toISOString()})`);
+        continue;
+      }
       if (checks >= IMPORT_CHECKS_PER_RUN || Date.now() > until) {
         tally.stopped = checks >= IMPORT_CHECKS_PER_RUN ? 'budget' : 'time';
         return;
@@ -1931,7 +1968,11 @@ async function handleRequest(req, res) {
       if (signedOutcome && typeof body.payment?.txHash === 'string'
         && hasPayerOutcome(didHash, body.payment.txHash, signedOutcome.payer)) {
         metrics.inc('attestRejectedPayment');
-        return json(res, 409, { error: 'the payer has already signed an outcome for this payment', code: 'outcome_recorded' });
+        return json(res, 409, {
+          error: 'the payer has already signed an outcome for this payment',
+          code: 'outcome_recorded',
+          ...heldOutcomeReply(didHash, body.payment.txHash, signedOutcome),
+        });
       }
       // Only needed when payments are off; otherwise it comes from the transfer.
       if (!attester && !payments.required(paymentCfg)) {

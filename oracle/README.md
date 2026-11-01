@@ -278,7 +278,11 @@ and at most an hour after the checked block, `deadline` not passed at the checke
 and at most 30 days after `signedAt` (`outcome_window`); the signature (`bad_signature`, and after five of those for one leg in an
 hour, `bad_signature_throttled`); then precedence. The outcome goes on the signer's own leg. It
 is final: a second signature for the leg is refused (`outcome_recorded`), before any chain
-read. It replaces a token holder's outcome if the checked block is within
+read. That 409 says which outcome is held: `heldOutcomeHash`, its EIP-712 hash, and `sameOutcome`,
+whether it is the one just posted, so a carrier sending an outcome again (CounterAudit's outbox)
+can tell its own, taken before, from a different one; it also says `"durable": false` while the
+last save of the state file has failed. A 200 or 202 carries `outcomeHash`, the hash of what was
+recorded. It replaces a token holder's outcome if the checked block is within
 `PAYER_OUTCOME_WINDOW_DAYS` of the payment's block and the transaction had no other paying leg
 (a token holder's outcome on a transaction with several payers was given for the whole job),
 and the token holder's `packetId` goes with the outcome it backed. A `packetId` beside
@@ -345,10 +349,10 @@ This is fine for local testing and worthless as a trust signal in public.
 | Status | Meaning |
 |---|---|
 | 200 | Accepted and saved |
-| 202 | Accepted, but the state file could not be written, so a restart before the next good save loses it. The body has `"durable": false`. Do not resend: it is recorded here, and a resend is refused (409 for a settlement already credited, 429 inside the cooldown). `/health` is 503 until a save works |
+| 202 | Accepted, but the state file could not be written, so a restart before the next good save loses it. The body has `"durable": false`. Do not resend: it is recorded here, and a resend is refused (409 for a settlement already credited, 429 inside the cooldown). A payer-signed outcome sent again gets a 409 with `sameOutcome: true`, and `durable: false` until a save works. `/health` is 503 until a save works |
 | 400 | Malformed body, unknown agent, or a `success` that is not a boolean |
 | 402 | The payment did not check out; `code` says why (`self_payment`, `no_transfer`, `below_minimum`) |
-| 409 | `replayed`: this settlement was already credited. `outcome_recorded`: it already has an outcome, which is final |
+| 409 | `replayed`: this settlement was already credited. `outcome_recorded`: it already has an outcome, which is final. For a payer-signed outcome both also carry `sameOutcome`, and `outcome_recorded` the held outcome's `heldOutcomeHash` |
 | 413 | The body is over 1 MB. `/flag`, `/flag/resolve` and `/link` answer the same way |
 | 429 | Cooldown active for this (attester, didHash) — `remainingSeconds` says how long. Applies to callers without a token; a token holder reporting on a verified payment is not throttled |
 | 502 | The RPC failed. Not a verdict on the payment; retry |
@@ -583,7 +587,10 @@ be before the payment (`bad_checked_block`), more than an hour before `signedAt`
 (`outcome_window`), or past this node's confirmed head (retried at the next run). That keeps a
 smart account's answer pinned to the state it was given against, and the deadline judged at the
 same time on both operators. The window is judged at this node's own head, as for a post here,
-so a peer naming an old block cannot reopen it. Nothing proves the peer checked at the block it
+so a peer naming an old block cannot reopen it. The peer's `acceptedAt` becomes this node's
+cursor for it, so an item dated more than five minutes ahead of this host's clock is refused
+(`accepted_in_future`) and passed over without moving the cursor, where it would otherwise make
+every later outcome look like a repeat (review F-02, 1 November 2026). Nothing proves the peer checked at the block it
 names, so an import must also reach this node within `PAYER_OUTCOMES_IMPORT_GRACE_HOURS` (6 by
 default) of the outcome's deadline, by this node's confirmed head, or it is refused
 (`outcome_window`): a peer that held a signature back can pass it on at most that long after its
@@ -1211,7 +1218,7 @@ cd oracle
 node --test
 ```
 
-840 tests (as of 1 November 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
+844 tests (as of 1 November 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
 the trust weighting, Merkle evidence trees, HTTP helpers, store persistence and recovery,
 the streamed state file, chain access with backoff, scan checkpointing, fee caps and transaction replacement,
 metrics, and cooldown logic. Several of the files run the real `index.js` and `watcher.js`
