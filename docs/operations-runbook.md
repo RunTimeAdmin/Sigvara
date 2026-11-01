@@ -162,7 +162,9 @@ commit `184bc16` with a new key and new tokens. `state loaded` showed the expect
 `/health` said `stateSource` `file` and `statePersisted` `true`, and the agent's first 10
 evidence leaves were identical to the live primary's. An 11th payment, made after the copy, came
 back through the payment scan without its payer-signed outcome, as section 1 says it would. The
-checker's copy has not been drilled yet.
+checker's copy the same day, at commit `ee0d989`: the same checks passed, and because the primary
+held that outcome, the restored checker imported it at start and its evidence root equalled the
+live checker's.
 
 ## 2. Payer-outcome import lag
 
