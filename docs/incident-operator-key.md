@@ -45,31 +45,4 @@ Write down how the key was exposed and what would have caught it earlier. If any
 
 # Backing up and restoring `oracle_state`
 
-`oracle_state` (`/data/oracle-state.json` and its `.bak`) holds the payment evidence that arrived by `POST /attest`. A chain rescan cannot rebuild it, and losing it means re-seeding every settlement by hand. The provider's weekly disk backups are whole-machine, old, and in the same account as the server, so they are not a substitute.
-
-**Nightly copy, off the box.** From cron on the host, as root, writing to a directory only root can read:
-
-```bash
-umask 077
-out=/root/oracle-state-backups; mkdir -p "$out"
-docker run --rm -v sigvara-oracle_oracle_state:/data -v "$out":/out alpine \
-  tar czf "/out/state-$(date +%F).tgz" -C /data .
-# Encrypt to a public key whose private half is NOT on this box, then copy it elsewhere:
-#   age -r <recipient-public-key> -o "$out/state-$(date +%F).tgz.age" "$out/state-$(date +%F).tgz"
-#   scp "$out/state-$(date +%F).tgz.age" <backup-host>:oracle-state/
-find "$out" -name 'state-*.tgz' -mtime +14 -delete
-```
-
-The volume name is `<compose project>_oracle_state`; read it with `docker volume ls`. The checker's is `<project>_checker_state`.
-
-**Restore drill, once a quarter.** On a spare machine or a scratch volume, never on the live one:
-
-```bash
-docker volume create restore-test
-docker run --rm -v restore-test:/data -v "$PWD":/in alpine tar xzf /in/state-<date>.tgz -C /data
-docker run --rm -v restore-test:/data alpine sh -c 'ls -l /data && head -c 200 /data/oracle-state.json'
-```
-
-Then start an oracle container against `restore-test` with a throwaway key and read `/health`: `stateSource` should say `file` and `statePersisted` should be true. If the image runs as the unprivileged user, a restored volume needs `chown -R 1000:1000 /data` once. Write the date of the last successful drill at the top of this section.
-
-Last restore drill: never run. Do the first one before mainnet.
+Moved to [operations-runbook.md](operations-runbook.md#1-state-backup-and-restore), section 1: what the state file holds, the nightly off-box copy, restoring a live operator, and the quarterly restore drill.

@@ -4,7 +4,14 @@
  *
  *   node scripts/check-live.mjs site       every deployed file equals what main says
  *   node scripts/check-live.mjs services   oracle and checker answer, certificates are not near expiry
- *   node scripts/check-live.mjs            both
+ *   node scripts/check-live.mjs outcomes   oracle and checker hold the same payer-signed outcomes
+ *   node scripts/check-live.mjs            all three
+ *
+ * `outcomes` reads every page of GET /outcomes from both operators and matches them by didHash,
+ * txHash and payer. It fails when the two hold different outcomes for one payment leg, or when one
+ * holds an outcome the other does not and took it more than OUTCOMES_LAG_HOURS ago (default 2: the
+ * other imports at its next hourly epoch, so two hours is a missed import). A younger one is listed
+ * as in flight. The workflow does not run it; docs/operations-runbook.md says when to.
  *
  * Why it exists. The site is uploaded by hand and nothing signs or verifies what reaches
  * users, yet `assets/app.js` decides what a wallet is asked to sign. If a hosting account,
@@ -22,14 +29,16 @@
  */
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import tls from 'node:tls';
+import { fileURLToPath } from 'node:url';
 
 const SITE = process.env.SITE_BASE || 'https://sigvara.xyz';
 const ORACLE = process.env.ORACLE_BASE || 'https://oracle.sigvara.xyz';
 const CHECKER = process.env.CHECKER_BASE || 'https://checker.sigvara.xyz';
 const EPOCH_STALE_MS = 3 * 3600 * 1000;       // the oracle runs hourly; three hours is a missed run
 const CERT_MIN_DAYS = 14;
+const OUTCOMES_LAG_HOURS = process.env.OUTCOMES_LAG_HOURS ? Number(process.env.OUTCOMES_LAG_HOURS) : 2;
 // Repo-facing files under site/ that are never published, and the one file the host does not serve.
 const NOT_SERVED = new Set(['SECURITY.md', 'SECURITY_DEPLOYMENT_CHECKLIST.md', '.htaccess']);
 
@@ -176,17 +185,111 @@ async function checkServices() {
   console.log('services: oracle and checker health, divergence list and certificate expiry checked');
 }
 
-const mode = process.argv[2] || 'all';
-if (!['site', 'services', 'all'].includes(mode)) {
-  console.error('usage: node scripts/check-live.mjs [site|services]');
-  process.exit(2);
+/**
+ * Two operators' payer-signed outcomes, matched by leg (didHash, txHash, payer). Pure, so it can be
+ * tried with `node -e`. Each operator's acceptedAt is its own time of taking the outcome, so for a leg
+ * held by one side only it is how long the other has had to import it. An item without a readable
+ * leg or acceptedAt is a failure: read as zero or NaN it would pass as in flight forever.
+ *
+ * @param {[[string, object[]], [string, object[]]]} sides  [name, outcomes as GET /outcomes serves them]
+ * @returns {{ failures: string[], inFlight: string[], both: number, widestGapMs: number }}
+ *   widestGapMs: the largest difference between the two acceptedAt values of a leg both hold
+ */
+export function compareOutcomes(sides, { nowMs = Date.now(), lagMs = OUTCOMES_LAG_HOURS * 3_600_000 } = {}) {
+  const failures = [];
+  const inFlight = [];
+  const legOf = (o) => [o.didHash, o.txHash, o.payer].map((v) => v.toLowerCase()).join('|');
+  const usable = (o) => o !== null && typeof o === 'object' &&
+    [o.didHash, o.txHash, o.payer].every((v) => typeof v === 'string') && Number.isSafeInteger(o.acceptedAt);
+  const [a, b] = sides.map(([name, list]) => {
+    const held = new Map();
+    for (const o of list) {
+      if (usable(o)) held.set(legOf(o), o);
+      else failures.push(`${name} serves an item that is not an outcome: ${JSON.stringify(o).slice(0, 120)}`);
+    }
+    return { name, held };
+  });
+  const what = (o) => `tx ${o.txHash} from ${o.payer} (agent ${o.didHash.slice(0, 10)}…)`;
+  let both = 0;
+  let widestGapMs = 0;
+  for (const [leg, x] of a.held) {
+    const y = b.held.get(leg);
+    if (!y) continue;
+    both += 1;
+    widestGapMs = Math.max(widestGapMs, Math.abs(x.acceptedAt - y.acceptedAt));
+    if (x.outcome !== y.outcome) failures.push(`${what(x)}: outcome ${x.outcome} on ${a.name}, ${y.outcome} on ${b.name}`);
+  }
+  for (const [holder, other] of [[a, b], [b, a]]) {
+    for (const [leg, x] of holder.held) {
+      if (other.held.has(leg)) continue;
+      const ageMs = nowMs - x.acceptedAt;
+      const line = `${what(x)}: held by ${holder.name}, not ${other.name}, taken ${Math.round(ageMs / 60_000)} minutes ago`;
+      // Asked as `<=`, so a lag that is not a number fails rather than waits.
+      if (ageMs <= lagMs) inFlight.push(line);
+      else failures.push(line);
+    }
+  }
+  return { failures, inFlight, both, widestGapMs };
 }
-if (mode === 'site' || mode === 'all') await checkSite();
-if (mode === 'services' || mode === 'all') await checkServices();
 
-if (problems.length) {
-  console.error('\nlive check: FAILED');
-  for (const p of problems) console.error('  - ' + p);
-  process.exit(1);
+/** Every payer-signed outcome an operator serves, following `next` while `more` is set. */
+async function allOutcomes(base) {
+  const all = [];
+  let since = 0;
+  for (;;) {
+    const { res, body } = await get(`${base}/outcomes?since=${since}`);
+    if (res.status !== 200) throw new Error(`/outcomes?since=${since} status ${res.status}`);
+    const j = JSON.parse(body.toString('utf8'));
+    if (!Array.isArray(j.outcomes)) throw new Error(`/outcomes?since=${since} has no outcomes list`);
+    all.push(...j.outcomes);
+    if (j.more !== true) return all;
+    // A page that says there is more must move the cursor on, or this would ask for it forever.
+    if (!(Number(j.next) > since)) throw new Error(`/outcomes?since=${since} says there is more but next is ${j.next}`);
+    since = Number(j.next);
+  }
 }
-console.log('live check: ok');
+
+async function checkOutcomes() {
+  const sides = [];
+  for (const [name, base] of [['oracle', ORACLE], ['checker', CHECKER]]) {
+    try {
+      sides.push([name, await allOutcomes(base)]);
+    } catch (e) {
+      fail(`${name}: /outcomes unreachable or unreadable (${e.message})`);
+    }
+  }
+  if (sides.length < 2) return;
+  const { failures, inFlight, both, widestGapMs } = compareOutcomes(sides);
+  for (const f of failures) fail(`outcomes: ${f}`);
+  for (const f of inFlight) console.log(`outcomes: in flight, ${f}`);
+  console.log(
+    `outcomes: oracle ${sides[0][1].length}, checker ${sides[1][1].length}, ${both} on both ` +
+    `(taken at most ${Math.round(widestGapMs / 60_000)} minutes apart), ${inFlight.length} in flight, ` +
+    `one side only fails after ${OUTCOMES_LAG_HOURS} hours`,
+  );
+}
+
+// Run only when started as a script, so that `node -e` can import compareOutcomes without
+// making a request. Node resolves the entry file's real path for import.meta.url, so this does too.
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const mode = process.argv[2] || 'all';
+  if (!['site', 'services', 'outcomes', 'all'].includes(mode)) {
+    console.error('usage: node scripts/check-live.mjs [site|services|outcomes]');
+    process.exit(2);
+  }
+  // A value that is not a number would make every comparison false and pass everything as in flight.
+  if (!(OUTCOMES_LAG_HOURS >= 0) || !Number.isFinite(OUTCOMES_LAG_HOURS)) {
+    console.error(`OUTCOMES_LAG_HOURS must be a number of hours, got "${process.env.OUTCOMES_LAG_HOURS}"`);
+    process.exit(2);
+  }
+  if (mode === 'site' || mode === 'all') await checkSite();
+  if (mode === 'services' || mode === 'all') await checkServices();
+  if (mode === 'outcomes' || mode === 'all') await checkOutcomes();
+
+  if (problems.length) {
+    console.error('\nlive check: FAILED');
+    for (const p of problems) console.error('  - ' + p);
+    process.exit(1);
+  }
+  console.log('live check: ok');
+}
