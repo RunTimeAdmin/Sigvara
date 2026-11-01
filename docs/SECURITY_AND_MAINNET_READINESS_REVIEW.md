@@ -9,7 +9,7 @@
 
 > ## Status since this review — 2026-09-20
 >
-> **Later changes.** This status was last revised on 27 October. The mainnet-readiness work of
+> **Later changes.** This status was last revised on 1 November. The mainnet-readiness work of
 > 22 October (split upgrade and admin authority, the guardian pause, launch floors and ceilings,
 > reader freshness) is recorded in [ADR 0005](adr/0005-governance-and-emergency-powers.md), the
 > [launch checklist](launch-checklist.md), the README's
@@ -73,7 +73,7 @@
 >   polling the checker's `/divergence`, re-reading each disputed slot on chain and
 >   alerting while rejection is still possible. It holds no key, mounts no state and
 >   signs nothing. The checker's read-only surface is public at `checker.sigvara.xyz`
->   (`/health`, `/divergence` and `/evidence/` only; every write path 404s). Procedure in
+>   (`/health`, `/divergence`, `/evidence/` and `/outcomes` only; every write path 404s). Procedure in
 >   `oracle/RUNBOOK-second-operator.md` section 11.
 
 ---

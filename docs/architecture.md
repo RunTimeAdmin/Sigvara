@@ -133,9 +133,11 @@ parties do. See section 5.4 of the whitepaper.
 
 ## A deliberate loop-break
 
-CounterAudit feeds the oracle directly (attestations → success factor) **and**
-publishes outcomes to the ERC-8004 Reputation Registry (`giveFeedback`) for
-ecosystem visibility. The oracle also reads ERC-8004 feedback for
+CounterAudit can feed the oracle directly (attestations → success factor) **and**
+publish the same outcomes to the ERC-8004 Reputation Registry (`giveFeedback`) for
+ecosystem visibility. Both paths take an org's own reported outcome, so both are limited to
+orgs CounterAudit allowlists, and in production both have been off since 30 October 2026.
+The oracle also reads ERC-8004 feedback for
 `externalScore` — so CounterAudit's signal could enter a score twice. It does
 not: CounterAudit's feedback carries a distinct `counteraudit` tag that the
 `externalScore` normalizer excludes, so the circle is cut on purpose. No signal

@@ -77,8 +77,8 @@ what is not yet true.
 >
 > **The testnet runs this repository's contracts as of `f89b3b9`, with older role administrators.**
 > The four proxies were upgraded in place on 26 October 2026 with `script/Upgrade.s.sol`, to the
-> contracts at `fdce1a7`, and the staking proxy again on 28 October 2026, to `f89b3b9` (the head of
-> `main`). `--check` confirms the file matches the chain. A contract change merged after it is not on the testnet until the next upgrade. The guardian pause, admin-ruled disputes with a veto, a lapse and a bound on late upholds,
+> contracts at `fdce1a7`, and the staking proxy again on 28 October 2026, to `f89b3b9` (then the head
+> of `main`; `src/` has not changed since). `--check` confirms the file matches the chain. A contract change merged after it is not on the testnet until the next upgrade. The guardian pause, admin-ruled disputes with a veto, a lapse and a bound on late upholds,
 > launch floors and ceilings, operator signers, the reporter check at slash execution, a
 > withdrawal's claim time fixed when it is queued, and the refusal of evidence the admin rejected
 > are live. An upgrade does not rewrite role administrators, so the proxies keep what the
@@ -653,13 +653,14 @@ Key scenarios tested:
 
 ### Repository checks and tools
 
-The first four run in CI on every push. Run them from the repository root.
+The first five run in CI on every push. Run them from the repository root.
 
 | Script | What it does |
 |---|---|
 | `node scripts/check-docs.mjs` | Fails when the site or the docs state something the contracts do not: selectors, status labels, deployed addresses, factor caps, launch amounts |
 | `node scripts/check-headers.mjs` | Fails if the site's response headers have more than one source, or if `site/.htaccess` differs from the exact list in the script (every CSP directive and every other security header). `site/.htaccess` is the only source |
 | `node scripts/check-evidence-fixture.mjs` | Regenerates the Merkle evidence fixture in `test/SigvaraReputation.t.sol` from `oracle/merkle.js` and compares it, so the oracle and the contract cannot drift apart on leaf encoding. `--write` updates it after a deliberate format change |
+| `node scripts/check-outcome-vectors.mjs` | Regenerates the payer-outcome signing vectors (`test/vectors/payment-outcome.json` and `test/vectors/PaymentOutcomeVectors.sol`) from the oracle's EIP-712 type and compares them, so the SDK, the oracle and the on-chain test check against the same cases. `--write` updates both after a deliberate change |
 | `node scripts/check-secrets.mjs` | Fails when a tracked file holds a PEM private key block, 64 hex characters assigned to a key-like name, or a mnemonic phrase. A raw key matches no token format that GitHub's push protection knows, and one pushed to this public repository cannot be taken back. It prints the file and line, never the value. `--staged` scans only what is staged (for a pre-commit hook) and `--self-test` proves the scanner still catches what it should |
 | `node scripts/check-live.mjs` | Looks at the live deployment from outside, with GET requests only. `site` fails when a deployed file differs from `main`, when the security headers differ from `site/.htaccess`, or when a missing path does not get the site's own 404 page with the same policy. `services` fails when the oracle or the checker does not answer, has not finished an epoch in three hours or is not saving its state, when the checker records a divergence, or when a certificate is within 14 days of expiry. The Live checks workflow runs it |
 | `node scripts/record-implementations.mjs` | Reads each proxy's implementation slot from the chain and records it in `deployments/<chainId>.json`. `--check` fails if the file and the chain disagree |
@@ -671,7 +672,7 @@ The first four run in CI on every push. Run them from the repository root.
 | `node scripts/backfill-payment-blocks.mjs` | One-off repair for payment events saved before they carried a block number. Needs `--state`, `--rpc` and `--asset`, is a dry run until `--write` is given, and has to run with the oracle stopped |
 | `node scripts/fat-path.mjs` | Testnet only. Funds separate payer wallets that each pay a live agent and attest the settlements, so its fee factor rests on distinct counterparties (the attestations carry no outcome, so the success rate does not move). Needs `--agent` and `DEPLOYER_PRIVATE_KEY` |
 
-CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on every push to `main` and every pull request, with read-only repository permissions. It builds and tests the contracts (`forge build --sizes`, then `forge test` on the `ci` profile with 5,000 fuzz runs, including the testnet-forking `SlashDrillFork`), builds, typechecks and tests the SDK, runs the oracle tests and the first four scripts above, and runs Slither, which fails the build on High findings only. The Medium and Low findings that were reviewed and accepted are recorded in [ADR 0002](docs/adr/0002-analyzer-accepted-findings.md).
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on every push to `main` and every pull request, with read-only repository permissions. It builds and tests the contracts (`forge build --sizes`, then `forge test` on the `ci` profile with 5,000 fuzz runs, including the testnet-forking `SlashDrillFork`), builds, typechecks and tests the SDK, runs the oracle tests and the first five scripts above, and runs Slither, which fails the build on High findings only. The Medium and Low findings that were reviewed and accepted are recorded in [ADR 0002](docs/adr/0002-analyzer-accepted-findings.md).
 
 A second workflow, [`live-checks.yml`](.github/workflows/live-checks.yml), runs `check-live.mjs` on a schedule (hourly in the file, though GitHub often runs it later) from a place that shares no account or host with what it watches. A failed run emails the repository owner. It also fails when a merged site change has not been uploaded yet, because the site is uploaded by hand. [Dependabot](.github/dependabot.yml) proposes dependency updates monthly, and each one is merged by hand.
 

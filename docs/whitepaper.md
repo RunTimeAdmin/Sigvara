@@ -2,7 +2,7 @@
 
 **Computed reputation and staked accountability for autonomous agents.**
 
-Version 0.4, 20 September 2026, revised 27 October 2026. Live on Arc testnet (chain 5042002). Not yet audited,
+Version 0.4, 20 September 2026, revised 1 November 2026. Live on Arc testnet (chain 5042002). Not yet audited,
 not on mainnet.
 
 ---
@@ -607,8 +607,8 @@ off in production since 30 October 2026, when CounterAudit limited relaying to a
 hardware from the primary and a separate RPC provider, with its own 25,000 SVR bond and
 its own state; and the divergence watcher that consumes its output, on a third host with
 no key and no state. `activeCount` on `SigvaraOracleBond` is 2. The checker exposes
-`/health`, `/divergence` and `/evidence` publicly at `checker.sigvara.xyz`; every write
-path 404s before reaching the service.
+`/health`, `/divergence`, `/evidence` and `/outcomes` publicly at `checker.sigvara.xyz`;
+every write path 404s before reaching the service.
 
 **Not deployed:** `SigvaraEpochFees` and `SigvaraReader`. Scoring on Arc testnet is free and nothing is
 charged. The app disables every fee control rather than pointing at an address with no
