@@ -65,6 +65,15 @@ find "$out" -name 'state-*' -mtime +14 -delete
 It runs while the oracle does. Every save writes a temporary file and renames it into place, so
 each file in the copy is one whole save. The copy holds both the state file and its `.bak`.
 
+**Running on both operators since 1 November 2026.** Each host keeps its copies for 14 days in
+`/root/oracle-state-backups`, encrypts each to the operators' `age` key and pushes it with `rsync`
+to the other operator's host, into `/srv/offsite-backups/sigvara-oracle` or `sigvara-checker`.
+There a key that can only write (`rrsync -wo`), from that one address, receives it, and a cron
+deletes copies older than 90 days. The `age` private key is held by the project's owner, on
+neither host. On 1 November both off-box copies were fetched, decrypted and found byte for byte
+equal to their source. The log is `/var/log/sigvara-state-backup.log`; neither host sends mail, so
+read it, or check that a copy for each day exists on the receiving host.
+
 ### Restoring a live operator
 
 Restore when the oracle stops at startup saying the state file `cannot be used` and to `Restore
