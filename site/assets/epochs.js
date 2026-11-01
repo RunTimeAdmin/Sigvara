@@ -71,9 +71,11 @@ const ZERO32 = "0x" + "0".repeat(64);
 
 // ---- formatting ----
 const short = (h) => `${h.slice(0, 6)}…${h.slice(-4)}`;
-// Times come from three outside services, and toISOString throws on NaN, which would blank a card.
-const fmtWhen = (sec) => Number.isFinite(sec) && sec > 0
-  ? new Date(sec * 1000).toISOString().replace("T", " ").slice(0, 16) + " UTC" : "an unknown time";
+// Times come from four outside services, and toISOString throws on any time a Date cannot hold.
+function fmtWhen(sec) {
+  const d = new Date(Number(sec) * 1000);
+  return sec > 0 && !Number.isNaN(d.getTime()) ? d.toISOString().replace("T", " ").slice(0, 16) + " UTC" : "an unknown time";
+}
 function fmtDuration(sec) {
   if (!Number.isFinite(sec)) return "?";
   if (sec <= 0) return "now";
@@ -163,6 +165,8 @@ async function agentHistory(didHash) {
     if (hit && Date.now() - hit.at < HISTORY_TTL_MS && Array.isArray(hit.value?.logs)) return hit.value;
   } catch (_) { /* no cache */ }
   const value = await explorerLogs({ topic1: didHash });
+  // Likewise an answer about another agent.
+  value.logs = value.logs.filter(l => l.didHash === didHash);
   try { sessionStorage.setItem(key, JSON.stringify({ at: Date.now(), value })); } catch (_) { /* no cache */ }
   return value;
 }
@@ -178,6 +182,7 @@ async function explorerLogs(extra, fromBlock = 0) {
     // "No logs found" comes back as status 0 with an empty result, and is an answer.
     if (!Array.isArray(j?.result)) throw new Error(typeof j?.message === "string" ? j.message : "unexpected answer");
     for (const r of j.result) {
+      if (!r || typeof r !== "object") continue;
       const key = `${r.transactionHash}:${r.logIndex}`;
       if (!seen.has(key)) { seen.add(key); out.push(r); }
     }
@@ -193,8 +198,10 @@ async function explorerLogs(extra, fromBlock = 0) {
 function parseLog(r) {
   const ev = EVENTS.find(e => e.topic === String(r?.topics?.[0]).toLowerCase());
   if (!ev || typeof r.data !== "string" || !/^0x[0-9a-fA-F]*$/.test(r.data)) return null;
+  // The query names the contract; an answer that does not is not this contract's history.
+  if (String(r.address).toLowerCase() !== REPUTATION.toLowerCase()) return null;
   const w = (i) => BigInt(word(r.data, i).length > 2 ? word(r.data, i) : "0x0");
-  const rootAt = (i) => (ev.legacy ? null : word(r.data, i));
+  const rootAt = (i) => (!ev.legacy && isHash(word(r.data, i)) ? word(r.data, i) : null);
   const log = {
     name: ev.name,
     didHash: String(r.topics[1] || "").toLowerCase(),
@@ -278,6 +285,11 @@ function setCard(id, html) {
   $(id).classList.remove("u-hidden");
 }
 const failed = (what, e) => `<p class="pill-err">Could not read ${esc(what)}: ${esc(e?.message ?? e)}.</p>`;
+// Each card renders on its own, so one malformed answer costs only its own card. Without this a
+// bad /evidence row would leave the checker's card, rendered after it, on "Reading…".
+function guard(id, render) {
+  try { render(); } catch (e) { setCard(id, failed("this part of the answer", e)); }
+}
 
 function renderAgent(addr, didHash, chain) {
   $("didStr").textContent = `did:sigvara:${CHAIN_ID}:${addr}`;
@@ -320,7 +332,7 @@ function renderPending(chain) {
 function renderEvidence(didHash, evidence, chain) {
   if (evidence.status === "rejected") return setCard("evidenceCard", failed("the primary oracle's evidence", evidence.reason));
   const j = evidence.value;
-  const list = Array.isArray(j?.evidence) ? j.evidence : [];
+  const list = (Array.isArray(j?.evidence) ? j.evidence : []).filter(e => e && typeof e === "object");
   const root = isHash(j?.evidenceRoot) ? j.evidenceRoot.toLowerCase() : null;
   const by = (s) => list.filter(e => (e.outcomeSource ?? null) === s).length;
   const c = chain.status === "fulfilled" ? chain.value : null;
@@ -385,28 +397,37 @@ function renderOperators(didHash, primaryHealth, checkerHealth, divergence, chai
     const lastEpochMs = Number(health?.lastSuccessfulEpochMs) || 0;
     // A run writes its divergence seconds before it completes, so the run that wrote the newest
     // entry finishes just after it. A completion more than half an epoch later is a later run that
-    // found nothing to record. With no health to go on, the newest entry stands.
+    // recorded nothing. With no health to go on, the newest entry stands.
     const laterRun = mine.length > 0 && lastEpochMs - Number(mine[0].at) > (Number(health?.epochMs) || 3600000) / 2;
     const when = (ms) => esc(fmtWhen(Math.floor(Number(ms) / 1000)));
+    // The checker writes only disagreements, and a run that could not score an agent (a failed
+    // read, a thrown error) still completes and writes nothing for it. So no entry is never shown
+    // as a pass.
+    const notAPass = "No entry is not a confirmation: a run that could not score this agent leaves none either.";
     if (!p) {
       verdict = "<p>Nothing is pending, so there is nothing for the checker to check right now.</p>";
+    } else if (OPERATORS[p.proposer.toLowerCase()] === "checker") {
+      verdict = "<p>The checker made this proposal itself, which it does only when the primary has gone quiet. No second operator has checked it.</p>";
     } else if (mine.length) {
       const d = mine[0];
       const ev = d.evidence || {};
       const factors = Object.entries(d.factors || {}).map(([k, f]) => `${esc(k.replace(/Score$/, ""))} ${Number(f?.pending)} vs ${Number(f?.own)}`).join(", ");
       const gap = `the proposal says ${Number(d.pendingTotal)}, the checker got ${Number(d.ownTotal)} (${factors})`;
       verdict = laterRun
-        ? `<p><span class="pill-ok">No disagreement now.</span> The checker disagreed with this proposal ${mine.length === 1 ? "once" : `${mine.length} times`}, last at ${when(d.at)}: ${gap}. Its latest run, at ${when(lastEpochMs)}, recorded nothing. ${rule}</p>`
+        ? `<p><b>No disagreement recorded since ${when(d.at)}.</b> Before that the checker disagreed with this proposal ${mine.length === 1 ? "once" : `${mine.length} times`}: ${gap}. Its latest run, at ${when(lastEpochMs)}, recorded nothing. ${rule} ${notAPass}</p>`
         : `<p><span class="pill-err">Disagrees</span> with the pending proposal: ${gap}. Recorded at ${when(d.at)}.</p>`;
       if (isHash(ev.ownEvidenceRoot) && isHash(ev.proposedEvidenceRoot) && ev.ownEvidenceRoot.toLowerCase() !== ev.proposedEvidenceRoot.toLowerCase()) {
         verdict += `<p>That entry scored ${rootCode(ev.ownEvidenceRoot)} (${Number(ev.ownPaymentEvents)} payments) against a proposal made on ${rootCode(ev.proposedEvidenceRoot)}. Different evidence on each side can explain the gap, for example payments that settled after the proposal.</p>`;
       }
+    } else if (!health) {
+      verdict = "<p>The checker has recorded no disagreement with the pending proposal, but its health could not be read, so this page cannot tell whether it has run since the proposal was made.</p>";
     } else if (lastEpochMs / 1000 > p.proposedAt) {
-      verdict = `<p><span class="pill-ok">No disagreement</span> recorded for the pending proposal. The checker has run since it was made (last at ${when(lastEpochMs)}). ${rule}</p>`;
+      verdict = `<p><b>No disagreement recorded</b> for the pending proposal. The checker has run since it was made (last at ${when(lastEpochMs)}). ${rule} ${notAPass}</p>`;
     } else {
       verdict = "<p>The checker has not run since the pending proposal was made, so it has no view on it yet.</p>";
     }
-    const earlier = list.filter(d => !mine.includes(d));
+    const mineSet = new Set(mine);
+    const earlier = list.filter(d => !mineSet.has(d));
     if (earlier.length) {
       verdict += `<p class="netnote">${earlier.length} earlier disagreement${earlier.length === 1 ? "" : "s"} for this agent: `
         + earlier.slice(0, 5).map(d => `${esc(fmtWhen(Math.floor(Number(d.at) / 1000)))} (${Number(d.pendingTotal)} proposed, ${Number(d.ownTotal)} by the checker)`).join("; ")
@@ -479,10 +500,11 @@ function renderTimeline(history, chain, showAll) {
   let html = `<p>${proposals.length} proposal${proposals.length === 1 ? "" : "s"} since ${esc(fmtWhen(proposals[0]?.proposedAt ?? epochs[0].at))}, ${finalized} finalized. Newest first.</p>`
     + `<ol class="timeline">${shown.join("")}</ol>`;
   if (shown.length < items.length) html += `<button class="btn btn-secondary btn-sm" id="showAllBtn" type="button">Show all ${items.length}</button>`;
-  if (truncated) html += '<p class="netnote">The explorer returned more history than this page reads, so the oldest entries may be missing.</p>';
+  // Pages are read oldest first, so what a cut-off loses is the newest.
+  if (truncated) html += '<p class="pill-warn">The explorer has more history than this page reads, so the newest entries may be missing.</p>';
   setCard("timelineCard", html);
   const btn = $("showAllBtn");
-  if (btn) btn.onclick = () => renderTimeline(history, chain, true);
+  if (btn) btn.onclick = () => guard("timelineCard", () => renderTimeline(history, chain, true));
 }
 
 // ---- recent activity across all agents ----
@@ -491,7 +513,7 @@ async function loadRecent() {
   setCard(card, "<p class=\"netnote\">Reading the last day of proposals…</p>");
   try {
     const head = await blockNumber();
-    const { logs } = await explorerLogs({}, Math.max(0, head - RECENT_BLOCKS));
+    const { logs, truncated } = await explorerLogs({}, Math.max(0, head - RECENT_BLOCKS));
     const byAgent = new Map();
     for (const l of logs) {
       if (!isHash(l.didHash)) continue;
@@ -512,7 +534,8 @@ async function loadRecent() {
           ? `<a href="?a=${addr}"><code>${short(addr)}</code></a>` : `<code>${esc(short(a.didHash))}</code>`;
         return `<li>${who}<span>${esc(verb[a.last.name])} ${esc(fmtWhen(a.last.time))}</span>`
           + `<span>${a.score === null ? "" : `finalized at ${a.score}`}</span></li>`;
-      }).join("")}</ul>`);
+      }).join("")}</ul>`
+      + (truncated ? '<p class="pill-warn">The explorer has more for this day than this page reads, so the most recent agents may be missing.</p>' : ""));
   } catch (e) {
     setCard(card, failed("recent activity", e));
   }
@@ -540,11 +563,16 @@ async function lookup(addr) {
     getJson(`${CHECKER}/divergence/${didHash}`),
   ]);
   if (seq !== lookupSeq) return; // a newer lookup started while this one was reading
-  renderAgent(addr, didHash, chain);
-  renderPending(chain);
-  renderEvidence(didHash, evidence, chain);
-  renderOperators(didHash, primaryHealth, checkerHealth, divergence, chain);
-  renderTimeline(history, chain, false);
+  try {
+    renderAgent(addr, didHash, chain);
+  } catch (e) {
+    $("status").innerHTML = failed("what the chain returned", e);
+    $("agentInfo").classList.remove("u-hidden");
+  }
+  guard("pendingCard", () => renderPending(chain));
+  guard("evidenceCard", () => renderEvidence(didHash, evidence, chain));
+  guard("operatorsCard", () => renderOperators(didHash, primaryHealth, checkerHealth, divergence, chain));
+  guard("timelineCard", () => renderTimeline(history, chain, false));
 }
 
 // ---- init ----

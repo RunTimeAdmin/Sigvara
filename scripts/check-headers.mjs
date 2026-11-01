@@ -56,7 +56,7 @@ const VALUE = /default-src[^"\n]*/i;
  * has to be in img-src or /check renders a broken image on our own page. The wallet talks
  * to the Arc RPC from the page. /epochs reads its history from the Arc explorer and asks both
  * oracle operators for their evidence and health, so those three hosts are in connect-src too.
- * All four are read-only from the site; nothing on any page writes to them.
+ * The policy is site-wide, so /app may reach them as well; the pages only read from them today.
  */
 const EXPECTED_CSP = {
   'default-src': ["'self'"],
