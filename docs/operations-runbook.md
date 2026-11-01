@@ -156,7 +156,13 @@ drill passes when the `state loaded` line shows the counts you expect, and `/hea
 use its compose file with `-f`, the volume `restore-drill_checker_state` and port 3031. Write the
 date of each successful drill here.
 
-Last restore drill: never run. Do the first one before mainnet.
+Last restore drill: 1 November 2026, the primary's copy. Its off-box copy (taken 19:34 UTC) was
+fetched from the checker's host, decrypted on a machine that is neither operator, and run there at
+commit `184bc16` with a new key and new tokens. `state loaded` showed the expected state,
+`/health` said `stateSource` `file` and `statePersisted` `true`, and the agent's first 10
+evidence leaves were identical to the live primary's. An 11th payment, made after the copy, came
+back through the payment scan without its payer-signed outcome, as section 1 says it would. The
+checker's copy has not been drilled yet.
 
 ## 2. Payer-outcome import lag
 
