@@ -30,6 +30,7 @@ const {
 } = require('./http-helpers');
 const payments = require('./payments');
 const merkle = require('./merkle');
+const { evidenceAsOf } = require('./evidence-as-of');
 const { createResponseCache } = require('./response-cache');
 const badge = require('./badge');
 const jobs = require('./jobs');
@@ -274,15 +275,13 @@ const {
 // reintroduce host-clock drift into a score — the exact failure this parameter exists to
 // remove, and one that shows up as an unexplainable divergence between operators rather
 // than as an error.
-function measuredFactorsFor(didHash, now, payerScores = null) {
+function measuredFactorsFor(didHash, now, payerScores = null, events = getPaymentEvents(didHash)) {
   if (!Number.isFinite(now)) {
     throw new TypeError('measuredFactorsFor: now (ms, from the chain clock) is required');
   }
   if (!payments.required(paymentCfg)) {
     return { measuredFeeScore: null, measuredAttestations: null, activity: null, propagation: 0 };
   }
-  const events = getPaymentEvents(didHash);
-
   // Group once. diversifiedVolume, diversifiedAttestations and distinctPayers each used
   // to call byPayer independently, so one agent's evidence was walked three times an
   // epoch with the BigInt decay arithmetic run on each pass. Same answers, a third of
@@ -350,10 +349,11 @@ async function payerScoresFor(didHash) {
  * shared by the epoch, the checker's re-score at a proposal's own time, and GET /score.
  * It was written out three times, and the point of each copy was to match the others,
  * so the number served is the number proposed. Returns the measured factors too, which
- * callers report.
+ * callers report. `events`, when given, is the evidence to score instead of all this
+ * operator holds: the checker passes the evidence as it stood at a proposal.
  */
-async function scoreAt(didHash, { registeredAt, att, flagWeight, externalScore }, nowMs) {
-  const measured = measuredFactorsFor(didHash, nowMs, await payerScoresFor(didHash));
+async function scoreAt(didHash, { registeredAt, att, flagWeight, externalScore }, nowMs, events) {
+  const measured = measuredFactorsFor(didHash, nowMs, await payerScoresFor(didHash), events);
   const scores = computeScore({
     registeredAt,
     attestations: measured.measuredAttestations ?? att,
@@ -936,10 +936,20 @@ async function runEpochInner() {
           //
           // Cheap: measuredFactorsFor and computeScore are pure functions over payment
           // events already in memory. No extra chain reads.
+          //
+          // And over the evidence as it stood then, not as it stands now. A payment that
+          // settled after the proposal is one its proposer could not have had, and counting it
+          // disputed an honest proposal and asked the committee to reject it (2026-11-01).
+          // evidenceAsOf finds the evidence the proposal committed to when its root says so,
+          // and otherwise keeps only what had settled by then (evidence-as-of.js).
           let auditScores = scores;
+          let asOf = null;
           if (freshPending.exists && freshPending.proposedAt > 0) {
             const atProposalMs = freshPending.proposedAt * 1000;
-            auditScores = (await scoreAt(didHash, inputs, atProposalMs)).scores;
+            asOf = payments.required(paymentCfg)
+              ? evidenceAsOf(getPaymentEvents(didHash), atProposalMs, freshPending.evidenceRoot ?? null)
+              : null;
+            auditScores = (await scoreAt(didHash, inputs, atProposalMs, asOf?.events)).scores;
           }
 
           // auditScores for every comparison; `scores` stays as-is for the propose path
@@ -960,6 +970,12 @@ async function runEpochInner() {
               proposedEvidenceRoot: freshPending.evidenceRoot ?? null,
               ownPaymentEvents: ownEvents.length,
               ownDistinctPayers: measured.distinctPayers ?? null,
+              // What the comparison used: this operator's evidence as it stood at the
+              // proposal, and whether its root is the one the proposal committed to. A match
+              // with different scores is an arithmetic disagreement, the serious kind.
+              ownEvidenceRootAtProposal: asOf ? merkle.rootFor(asOf.events) : null,
+              ownPaymentEventsAtProposal: asOf ? asOf.events.length : null,
+              evidenceMatchesProposal: asOf ? asOf.matchedRoot : null,
               // Where to go next. Named in the payload so the diagnosis does not depend on
               // knowing the protocol's endpoint layout.
               compareWith: `${cfg.primaryEvidenceUrl}/evidence/${didHash}`,

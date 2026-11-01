@@ -277,6 +277,22 @@ its own `proposedAt` before comparing, so it asks what the primary *should have 
 when it proposed*, not what the checker computes now. A divergence after that change means
 the evidence disagreed.
 
+### 2026-11-01: payments after the proposal
+
+The demo agent's proposal of 36 was made at 23:06:32 UTC. Two payer-signed payments then
+settled, at 23:15 and 00:02, and the checker disputed the proposal at 50 (`successScore` 8
+against 9, `ageScore` 3 against 16) and the watcher asked the committee to reject it. The
+proposal was right: it matched the score finalized at 22:22, and its evidence root was the
+root of the eight earlier payments. The checker had re-measured it at its own time but over
+all the evidence it held then, including the two payments its proposer could not have had.
+
+The checker now scores a proposal over the evidence as it stood at `proposedAt`
+(`oracle/evidence-as-of.js`): the payments settled by then, with an outcome a payer signed
+later read as unreported when that is what makes the root match the one the proposal
+committed to. A matching root means the comparison is over exactly the proposal's evidence;
+a divergence record says whether it matched (`evidenceMatchesProposal`) and gives this
+operator's root as of the proposal (`ownEvidenceRootAtProposal`).
+
 ### Why the record is still visible
 
 It cannot be retracted. `/divergence` is append-only by design, because a committee
