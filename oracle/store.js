@@ -725,9 +725,15 @@ function setPaymentOutcome(didHash, txHash, payer, success, packetId = null) {
  * `now` is when the outcome arrived for the window: the time of the block its signature was
  * checked at, so an operator importing it later reaches the same answer.
  *
+ * `packetId` is the CounterAudit packet that sealed this outcome, as its carrier named it
+ * (payerOutcome.packetIdOf). It takes the place of the credential holder's, and like that one it
+ * is corroboration, not evidence, and stays out of the leaf.
+ *
  * @returns {'set'|'replaced'|'already_set'|'outside_window'|'not_found'}
  */
-function recordPayerOutcome(didHash, txHash, payer, success, signed, { windowMs, replaceable = true, now = Date.now() }) {
+function recordPayerOutcome(
+  didHash, txHash, payer, success, signed, { windowMs, replaceable = true, now = Date.now(), packetId = null },
+) {
   if (typeof success !== 'boolean') throw new TypeError('recordPayerOutcome: success must be a boolean');
   const did = String(didHash).toLowerCase();
   const tx = String(txHash).toLowerCase();
@@ -742,7 +748,12 @@ function recordPayerOutcome(didHash, txHash, payer, success, signed, { windowMs,
   const { packetId: _backedTheOldOutcome, ...rest } = event;
   lastAcceptedAt = Math.max(Date.now(), lastAcceptedAt + 1);
   const next = [...list];
-  next[i] = Object.freeze({ ...rest, success, payerOutcome: Object.freeze({ ...signed, acceptedAt: lastAcceptedAt }) });
+  next[i] = Object.freeze({
+    ...rest,
+    success,
+    ...(packetId ? { packetId: String(packetId) } : {}),
+    payerOutcome: Object.freeze({ ...signed, acceptedAt: lastAcceptedAt }),
+  });
   paymentEvents.set(did, Object.freeze(next));
   acceptedOrder.push({ acceptedAt: lastAcceptedAt, did, tx, who });
   return credentialed ? 'replaced' : 'set';
@@ -768,7 +779,15 @@ function payerOutcomesSince(since, limit) {
     const e = (paymentEvents.get(did) ?? []).find(
       (x) => x.txHash === tx && String(x.payer).toLowerCase() === who && x.payerOutcome?.acceptedAt === acceptedAt,
     );
-    if (e) outcomes.push({ didHash: did, txHash: e.txHash, payer: e.payer, ...e.payerOutcome });
+    if (e) {
+      outcomes.push({
+        didHash: did,
+        txHash: e.txHash,
+        payer: e.payer,
+        ...e.payerOutcome,
+        ...(e.packetId ? { counterauditPacketId: e.packetId } : {}),
+      });
+    }
   }
   return { outcomes, more: i < acceptedOrder.length };
 }

@@ -261,6 +261,17 @@ allowlist and token its old relay needed do not apply, because the oracle trusts
 CounterAudit, and the self-rating problem the relay was paused for does not arise: the payer rates,
 CounterAudit carries.
 
+**The link back** (1 November 2026). CounterAudit sends the id of the packet that sealed the outcome
+beside it, as `packetId`. The oracle keeps it on the payer's leg and serves it as
+`counterauditPacketId` in `/evidence`, listed under `unverifiedFields`, and with the outcome at
+`GET /outcomes`, so operators that import the outcome carry it too. Unlike a token holder's
+`packetId`, it is taken from whoever carries the outcome, because it can be checked: CounterAudit
+seals each of these packets with a public proof whose `outcome_claim.signed_outcome_hash` is the
+EIP-712 hash of what the payer signed, which a reader recomputes from the `payerOutcome` and
+`payerOutcomeDomain` that `/evidence` serves. Whoever posts the outcome first fixes the pointer, as
+they fix the outcome, and only the payer and those it gives the signature to can do that. The oracle
+still never fetches the packet.
+
 ### 8. Retiring the token path for outcomes
 
 Once payer-signed outcomes are available, the token path stops taking ordinary new outcomes. At

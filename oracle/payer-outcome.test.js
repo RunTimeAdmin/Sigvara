@@ -184,7 +184,17 @@ describe('payer-outcome', () => {
     };
     const ok = payerOutcome.parseServed(good);
     assert.equal(ok.ok, true);
-    assert.deepEqual(Object.keys(ok.value).sort(), ['acceptedAt', 'checkedAtBlock', 'didHash', 'signed', 'txHash']);
+    assert.deepEqual(Object.keys(ok.value).sort(), ['acceptedAt', 'checkedAtBlock', 'didHash', 'packetId', 'signed', 'txHash']);
+    assert.equal(ok.value.packetId, null);
+    // The CounterAudit packet beside it, when there is one shaped like a packet id. Anything else is
+    // left off rather than refused: the outcome stands on its signature, not on the pointer.
+    const packetId = '0b7d9f3e-2c4a-4e8b-8f1d-5a6b7c8d9e0f';
+    assert.equal(payerOutcome.parseServed({ ...good, counterauditPacketId: packetId }).value.packetId, packetId);
+    for (const odd of ['x', 7, null, `${packetId}0`]) {
+      const parsed = payerOutcome.parseServed({ ...good, counterauditPacketId: odd });
+      assert.equal(parsed.ok, true);
+      assert.equal(parsed.value.packetId, null);
+    }
     for (const bad of [
       null,
       [],
@@ -607,6 +617,35 @@ describe('POST /attest with a payer-signed outcome', () => {
     assert.equal((await evidence(oracle, agent.didHash))[0].counterauditPacketId, undefined);
   });
 
+  test('keeps the CounterAudit packet whoever carried the outcome names, and serves it beside the outcome', async () => {
+    const payer = ethers.Wallet.createRandom();
+    const { agent, txHash } = paid(payer);
+    const packetId = '6f1c2a40-5b7e-4c1d-9a2e-3f4b5c6d7e8f';
+    const r = await post(oracle, agent.didHash, txHash, await signOutcome(agent.didHash, txHash, payer), { packetId });
+    assert.equal(r.status, 200, r.text);
+    assert.equal((await evidence(oracle, agent.didHash))[0].counterauditPacketId, packetId);
+    const outcomes = (await oracle.call('GET', '/outcomes?since=0')).body.outcomes;
+    assert.equal(outcomes.find((o) => o.txHash === txHash).counterauditPacketId, packetId);
+
+    // In place of the credential holder's, when the payer's outcome replaces theirs.
+    const replaced = paid(payer);
+    const auditorPacket = '56ccbfd3-3868-4b98-8e56-97faa0aec031';
+    await oracle.call('POST', '/attest', {
+      didHash: replaced.agent.didHash, success: true, payment: { txHash: replaced.txHash }, packetId: auditorPacket,
+    }, AUDITOR);
+    const swap = await post(oracle, replaced.agent.didHash, replaced.txHash,
+      await signOutcome(replaced.agent.didHash, replaced.txHash, payer), { packetId });
+    assert.equal(swap.body.recorded, 'replaced', swap.text);
+    assert.equal((await evidence(oracle, replaced.agent.didHash))[0].counterauditPacketId, packetId);
+
+    // Anything not shaped like a packet id is left off, and the outcome is still taken.
+    const other = paid(payer);
+    const odd = await post(oracle, other.agent.didHash, other.txHash,
+      await signOutcome(other.agent.didHash, other.txHash, payer), { packetId: 'not a packet' });
+    assert.equal(odd.status, 200, odd.text);
+    assert.equal((await evidence(oracle, other.agent.didHash))[0].counterauditPacketId, undefined);
+  });
+
   test('slows down repeated bad signatures for one payment', async () => {
     const payer = ethers.Wallet.createRandom();
     const { agent, txHash } = paid(payer);
@@ -773,6 +812,20 @@ describe('importing payer-signed outcomes from other operators', () => {
     // Held now, so the next run checks nothing again.
     await runImport();
     assert.match(lastRun(peers[0]), /0 imported, 0 refused/);
+  });
+
+  test('carries the CounterAudit packet a peer serves beside an outcome', async () => {
+    const payer = ethers.Wallet.createRandom();
+    const { agent, txHash } = paid(payer);
+    const packetId = '0b7d9f3e-2c4a-4e8b-8f1d-5a6b7c8d9e0f';
+    const r = await a.call('POST', '/attest', {
+      didHash: agent.didHash, payment: { txHash }, payerOutcome: await signOutcome(agent.didHash, txHash, payer), packetId,
+    });
+    assert.equal(r.status, 200, r.text);
+    await runImport();
+    const [e] = await evidence(b, agent.didHash);
+    assert.equal(e.outcomeSource, 'payer_signed');
+    assert.equal(e.counterauditPacketId, packetId);
   });
 
   test('refuses what a peer serves that is forged, malformed or checked before its payment, and takes what is genuine', async () => {

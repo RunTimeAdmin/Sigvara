@@ -1315,7 +1315,7 @@ function noteBadSignature(key, now = Date.now()) {
  * @returns {Promise<{ status: number, body: object, metric: string }>} the reply, and the counter
  *   a POST counts it under
  */
-async function admitPayerOutcome({ didHash, credited, info, signed }, { peerBlock = null } = {}) {
+async function admitPayerOutcome({ didHash, credited, info, signed, packetId = null }, { peerBlock = null } = {}) {
   const fromPeer = peerBlock !== null;
   const refuse = (status, code, error, metric) => ({ status, body: { error, code }, metric });
   const leg = (credited.legs ?? []).find((l) => l.payer.toLowerCase() === signed.payer.toLowerCase());
@@ -1426,6 +1426,7 @@ async function admitPayerOutcome({ didHash, credited, info, signed }, { peerBloc
     // job and filed on its largest leg; one payer among several does not get to overturn it.
     replaceable: paidLegs.length === 1,
     now: arrivedAtMs,
+    packetId,
   });
   if (filed === 'already_set' || filed === 'outside_window') {
     // Payments credited above stay credited; keep them through a restart.
@@ -1488,7 +1489,7 @@ const IMPORT_MAX_STALLS = 3;
  * @returns {Promise<{ kind: 'imported'|'held'|'refused'|'retry', code?: string }>} retry when the
  *   failure was this node's or the chain's, not the outcome's
  */
-async function importOne({ didHash, txHash, checkedAtBlock, signed }) {
+async function importOne({ didHash, txHash, checkedAtBlock, signed, packetId }) {
   const held = payerOutcomeFor(didHash, txHash, signed.payer);
   if (held) {
     // Not checked, so not proof the payer signed both, and anyone serving it raises the count: a
@@ -1521,7 +1522,7 @@ async function importOne({ didHash, txHash, checkedAtBlock, signed }) {
     if (['rpc_error', 'unconfirmed', 'not_found'].includes(err.code)) return { kind: 'retry', code: err.code };
     return { kind: 'refused', code: err.code || 'payment_invalid' };
   }
-  const r = await admitPayerOutcome({ didHash, credited, info, signed }, { peerBlock: checkedAtBlock });
+  const r = await admitPayerOutcome({ didHash, credited, info, signed, packetId }, { peerBlock: checkedAtBlock });
   if (r.status === 200) return { kind: 'imported' };
   if (r.status === 502 || r.status === 503) return { kind: 'retry', code: r.body.code };
   return { kind: 'refused', code: r.body.code };
@@ -1650,8 +1651,10 @@ function buildEvidenceBody(didHash, events) {
     // this deployment. outcomeSource is this oracle's own label, not part of the leaf.
     ...(payerOutcomeCfg.publish ? { payerOutcomeDomain: servedDomain() } : {}),
     // Served beside the leaf but never checked by this oracle beyond its shape. A token
-    // holder supplied it; nothing here fetched the packet or confirmed that it records this
-    // payment or outcome, so it is a pointer, not proof, and says so in the response.
+    // holder supplied it, or whoever carried a payer-signed outcome; nothing here fetched the
+    // packet or confirmed that it records this payment or outcome, so it is a pointer, not
+    // proof, and says so in the response. For a payer-signed outcome it can be checked:
+    // CounterAudit's public proof names the EIP-712 hash of the outcome it sealed.
     unverifiedFields: ['counterauditPacketId'],
     // The leaf is derivable from the payment, so a verifier rebuilds it rather than
     // trusting the one served here; it is included to make that comparison easy.
@@ -1986,7 +1989,14 @@ async function handleRequest(req, res) {
       }
 
       if (signedOutcome) {
-        const r = await admitPayerOutcome({ didHash, credited, info, signed: signedOutcome });
+        // A packetId beside a payer-signed outcome is taken from whoever carried it, unlike the
+        // credentialed path's. It names the CounterAudit packet that sealed this outcome, and it can
+        // be checked against the payload served here (payerOutcome.packetIdOf). Whoever posts the
+        // outcome first fixes it, as they fix the outcome, and only the payer and those it gave the
+        // signature to can do that.
+        const r = await admitPayerOutcome({
+          didHash, credited, info, signed: signedOutcome, packetId: payerOutcome.packetIdOf(packetId),
+        });
         metrics.inc(r.metric);
         return json(res, r.status, r.body);
       }

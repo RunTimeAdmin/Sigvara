@@ -197,6 +197,13 @@ seals the record whole, and forwards it with no token to each operator listed in
 `forwarded`. Sending the same record again asks only the operators that have not taken it,
 and CounterAudit posts to any one operator at most 30 times a minute.
 
+CounterAudit sends the packet's id beside the record as `packetId`, and the operators serve it
+as `counterauditPacketId`. Each of these packets is sealed with a public proof, and its
+`outcome_claim.signed_outcome_hash` is the EIP-712 hash of what the payer signed. Recompute that
+hash from the `payerOutcome` and `payerOutcomeDomain` an operator's `/evidence` serves and
+compare: a match shows CounterAudit sealed exactly that outcome, at the time and chain position
+its proof gives.
+
 This is the role [ADR 0006 section 7](adr/0006-payer-signed-outcomes.md#7-what-counteraudit-becomes)
 gives it: a courier and a sealer, not an attester. Each operator checks the payment and the
 signature again itself and trusts the payer, not CounterAudit, so the org allowlist and the
