@@ -324,4 +324,6 @@ a divergence record says whether it matched (`evidenceMatchesProposal`) and give
 operator's root as of the proposal (`ownEvidenceRootAtProposal`).
 
 Both records predate that change, so neither carries those two fields, and neither can be
-retracted: they stay on `/divergence` until they age out after 30 days.
+retracted: they stay on `/divergence` until they age out after 30 days. `scripts/check-live.mjs`
+fails only on records whose proposal may still be rejected, so these two no longer turn the
+Live checks workflow red.

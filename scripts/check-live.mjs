@@ -148,7 +148,20 @@ async function checkServices() {
     if (res.status !== 200) fail(`checker: /divergence status ${res.status}`);
     else if (j.mode !== 'checker') fail(`checker: /divergence reports mode "${j.mode}"`);
     else if (j.seesProposals === false) fail('checker: its epoch is too long to see proposals before they expire');
-    else if (Array.isArray(j.divergences) && j.divergences.length > 0) fail(`checker: ${j.divergences.length} recorded divergence(s) from the primary, see ${CHECKER}/divergence`);
+    else if (Array.isArray(j.divergences) && j.divergences.length > 0) {
+      // A record matters while its proposal can still be rejected. Records cannot be retracted
+      // and stay listed for 30 days, so counting all of them kept this red for a month after one
+      // disagreement that was already settled (docs/divergence-log.md, 1 November 2026). The
+      // watcher reads the deadline the contract fixed (oracle/watcher-policy.js); this check makes
+      // GET requests only, so it uses proposedAt plus the window the checker reports. The two
+      // agree unless the window changed while the proposal was pending. A record without a
+      // readable proposedAt, or a response without a readable window, counts as open.
+      const windowSec = Number(j.challengeWindowHours) * 3600;
+      const nowSec = Date.now() / 1000;
+      const open = j.divergences.filter((d) => !(Number(d.proposedAt) + windowSec < nowSec));
+      if (open.length > 0) fail(`checker: ${open.length} divergence(s) from the primary on proposals that may still be rejected, see ${CHECKER}/divergence`);
+      else console.log(`checker: ${j.divergences.length} divergence record(s) past their challenge window, so settled; see ${CHECKER}/divergence and docs/divergence-log.md`);
+    }
   } catch (e) {
     fail(`checker: /divergence unreachable or unreadable (${e.message})`);
   }

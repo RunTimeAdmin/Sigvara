@@ -8,7 +8,8 @@ name: Live checks
 #   site      every deployed file equals what main says, the security headers match
 #             site/.htaccess, and a missing path gets the site's own page
 #   services  the oracle and checker answer and have completed an epoch recently, the
-#             checker records no divergence, and no certificate is within 14 days of expiry
+#             checker records no divergence on a proposal still open to rejection, and
+#             no certificate is within 14 days of expiry
 #
 # It also fails when a merged site change has not been uploaded yet, which is the point.
 # Reads only: every request is a GET to a public URL.
