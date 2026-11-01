@@ -286,7 +286,10 @@ fades tenure are measured against a moment, and two operators on independent sch
 never share one. Comparing a score computed now against a proposal made an hour ago
 produces a difference from honest operators holding identical evidence. Asking instead
 what the primary should have computed when it proposed answers the question actually
-being audited. Then:
+being audited, and that means over the evidence as it stood then too: a payment that
+settled after the proposal is one its proposer could not have had. The checker keeps the
+payments settled by `proposedAt` and checks them against the evidence root the proposal
+committed to. Then:
 
 | Pending proposal | Checker does |
 |---|---|
@@ -619,9 +622,9 @@ roles, and administers `UPGRADER_ROLE`), and the timelocked role grants describe
 apply to a fresh deployment, not to the testnet.
 `node scripts/record-implementations.mjs --check` shows what is live.
 
-**Test coverage**, all passing as of 31 October 2026: 706 contract tests across 31 Foundry test files
+**Test coverage**, all passing as of 1 November 2026: 706 contract tests across 31 Foundry test files
 including fuzz and invariant tests (two fork suites need an RPC, and the seven in
-`SplitAuthorityFork` skip without `--fork-url`), 830 oracle tests and 222 in the SDK (8 of them
+`SplitAuthorityFork` skip without `--fork-url`), 838 oracle tests and 222 in the SDK (8 of them
 need a live deployment and skip without one). CI runs Foundry, the oracle and
 SDK suites, and Slither static analysis on every push, plus a documentation check that
 fails when the site states something the contracts do not.

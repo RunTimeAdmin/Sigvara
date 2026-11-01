@@ -400,9 +400,10 @@ consensus:
    with a tolerance rather than fixed.
 
    Each epoch is anchored to a block timestamp rather than the host's wall clock, and a
-   checker re-measures a pending proposal at that proposal's own `proposedAt` before
-   comparing, so a disagreement means the evidence differed rather than the two epochs
-   running minutes apart.
+   checker re-measures a pending proposal at that proposal's own `proposedAt`, over the
+   evidence as it stood then, before comparing. So a disagreement means the evidence
+   differed, rather than the two epochs running minutes apart or a payment arriving after
+   the proposal.
 
    The arithmetic is still floats. `0.5 ^ (age / halfLife)` on two runtimes can land
    either side of an integer boundary from identical inputs, so two honest operators can

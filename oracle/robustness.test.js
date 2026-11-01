@@ -782,3 +782,76 @@ test('MAX_CLOCK_SKEW_SECONDS widens what is tolerated', async () => {
     assert.deepEqual(names(calls), ['proposeScore']);
   });
 });
+
+// ---- a checker judges a proposal by the evidence it was made on ----------------------------
+//
+// A payment that settles after a proposal is evidence its proposer could not have had. A checker
+// that counted it called an honest proposal wrong and asked the committee to reject it: on
+// 2026-11-01 a proposal made at 23:06 was disputed over two payments at 23:15 and 00:02.
+
+const CHECKER_PAYMENT_ENV = { ...PAYMENT_ENV, ORACLE_MODE: 'checker', DIVERGENCE_TOLERANCE: '3' };
+const AGREED = 'sigvara_oracle_checker_comparisons_total{verdict="agreed"}';
+
+/** Payments from `count` different payers, settled `secondsAgo` before the world's now. */
+function paymentsAt(world, count, secondsAgo, tag) {
+  return Array.from({ length: count }, (_, i) => ({
+    txHash: require('ethers').ethers.id(`${tag}-${i}`),
+    ts: (world.data.nowSec - secondsAgo) * 1000,
+    amount: '5000000',
+    payer: require('ethers').ethers.Wallet.createRandom().address,
+    success: true,
+  }));
+}
+
+/** The score a primary holding these payments proposes for the agent. */
+async function proposedFor(agentWorld, events) {
+  const world = new World();
+  world.data = structuredClone(agentWorld.data);
+  world.flush();
+  const [didHash] = world.data.registered;
+  return inEpoch(
+    { world, env: PAYMENT_ENV, files: { 'state.json': JSON.stringify({ schemaVersion: 1, paymentEvents: { [didHash]: events } }) } },
+    ({ calls }) => {
+      const propose = calls.find((c) => c.name === 'proposeScore');
+      const { feeScore, successScore, ageScore, externalScore, communityScore, propagationScore } = propose.args[1];
+      return { feeScore, successScore, ageScore, externalScore, communityScore, propagationScore };
+    },
+  );
+}
+
+test('a checker agrees with a proposal made before payments it now holds', async () => {
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  const before = paymentsAt(world, 2, 40 * 86_400, 'before');
+  // Settled after the proposal, which was made 100 seconds ago: enough new payers to move the score.
+  const after = paymentsAt(world, 6, 50, 'after');
+  const data = await proposedFor(world, before);
+  world.setFor('pending', agent.didHash, pendingProposal(world, { data }));
+
+  await inEpoch({
+    world,
+    env: CHECKER_PAYMENT_ENV,
+    files: { 'state.json': JSON.stringify({ schemaVersion: 1, paymentEvents: { [agent.didHash]: [...before, ...after] } }) },
+  }, ({ text, logs }) => {
+    assert.doesNotMatch(logs, /DIVERGENCE/);
+    assert.equal(counter(text, DIVERGED), 0, 'payments after the proposal are not held against it');
+    assert.equal(counter(text, AGREED), 1);
+  });
+});
+
+test('a checker still disputes a proposal that left out a payment settled before it', async () => {
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  const before = paymentsAt(world, 6, 40 * 86_400, 'omitted');
+  const data = await proposedFor(world, []);
+  world.setFor('pending', agent.didHash, pendingProposal(world, { data }));
+
+  await inEpoch({
+    world,
+    env: CHECKER_PAYMENT_ENV,
+    files: { 'state.json': JSON.stringify({ schemaVersion: 1, paymentEvents: { [agent.didHash]: before } }) },
+  }, ({ text, logs }) => {
+    assert.match(logs, /DIVERGENCE/);
+    assert.equal(counter(text, DIVERGED), 1);
+  });
+});
