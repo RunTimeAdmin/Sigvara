@@ -109,8 +109,14 @@ async function getJson(url, init) {
   const t = setTimeout(() => ctl.abort(), 20000);
   try {
     const res = await fetch(url, { ...init, signal: ctl.signal });
-    // The explorer allows ten requests a window from one address, and a lookup uses one or two.
-    if (res.status === 429) throw new Error("too many requests from this address just now. Try again in a minute or two");
+    if (res.status === 429) {
+      // The explorer allows ten log requests an hour from one address and says, in milliseconds,
+      // when its window resets. Other hosts get the plain answer.
+      const reset = Number(res.headers.get("x-ratelimit-reset"));
+      throw new Error(url.startsWith(EXPLORER) && reset > 0
+        ? `the explorer limits how often one address can ask, and this one has reached it. It resets in about ${Math.ceil(reset / 60000)} min`
+        : "too many requests from this address. Try again later");
+    }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return await res.json();
   } catch (e) {
@@ -144,6 +150,21 @@ async function blockNumber() {
   });
   if (typeof j?.result !== "string") throw new Error(j?.error?.message ?? "no block number");
   return Number(BigInt(j.result));
+}
+
+// The explorer answers ten log requests an hour per address, so one agent's history is kept in
+// this tab for a few minutes and a reload does not spend another. Storage can be missing or
+// refuse a write; then every lookup asks again.
+const HISTORY_TTL_MS = 10 * 60 * 1000;
+async function agentHistory(didHash) {
+  const key = `sigvara-epochs:${didHash}`;
+  try {
+    const hit = JSON.parse(sessionStorage.getItem(key));
+    if (hit && Date.now() - hit.at < HISTORY_TTL_MS && Array.isArray(hit.value?.logs)) return hit.value;
+  } catch (_) { /* no cache */ }
+  const value = await explorerLogs({ topic1: didHash });
+  try { sessionStorage.setItem(key, JSON.stringify({ at: Date.now(), value })); } catch (_) { /* no cache */ }
+  return value;
 }
 
 // The reputation contract's logs from the explorer, oldest first. A full page is continued from
@@ -512,7 +533,7 @@ async function lookup(addr) {
 
   const [chain, history, evidence, primaryHealth, checkerHealth, divergence] = await Promise.allSettled([
     readChain(didHash),
-    explorerLogs({ topic1: didHash }),
+    agentHistory(didHash),
     getJson(`${PRIMARY}/evidence/${didHash}`),
     getJson(`${PRIMARY}/health`),
     getJson(`${CHECKER}/health`),
