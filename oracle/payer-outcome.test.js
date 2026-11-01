@@ -712,16 +712,17 @@ function shareWorld(world, ...oracles) {
 /** A peer that serves whatever the test gives it, the way a broken or dishonest operator might. */
 async function fakePeer() {
   let items = [];
+  let pageSize = Infinity;
   const server = http.createServer((req, res) => {
     const since = Number(new URL(req.url, 'http://peer').searchParams.get('since') || 0);
     const due = items.filter((i) => !Number.isFinite(i?.acceptedAt) || i.acceptedAt > since);
     res.setHeader('content-type', 'application/json');
-    res.end(JSON.stringify({ more: false, outcomes: due }));
+    res.end(JSON.stringify({ more: due.length > pageSize, outcomes: due.slice(0, pageSize) }));
   });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   return {
     url: `http://127.0.0.1:${server.address().port}`,
-    serve: (list) => { items = list; },
+    serve: (list, { perPage = Infinity } = {}) => { items = list; pageSize = perPage; },
     close: () => new Promise((r) => server.close(r)),
   };
 }
@@ -943,6 +944,21 @@ describe('importing payer-signed outcomes from other operators', () => {
     assert.equal((await evidence(b, old.agent.didHash))[0].success, false, 'the auditor\'s outcome stays');
   });
 
+  test('says so when a run stops at the page limit, and carries on from there next run', async () => {
+    const payer = ethers.Wallet.createRandom();
+    const { agent, txHash } = paid(payer);
+    const signed = await signOutcome(agent.didHash, txHash, payer);
+    assert.equal((await post(b, agent.didHash, txHash, signed)).status, 200);
+    // One outcome B already holds, served again under 21 times, one to a page: each costs no check.
+    const t = Date.now();
+    c.serve(Array.from({ length: 21 }, (_, i) => served(agent, txHash, signed, { acceptedAt: t + 1 + i })), { perPage: 1 });
+    await runImport();
+    assert.match(lastRun(c.url), /0 imported, 0 refused, stopped early \(pages\)/);
+    await runImport();
+    assert.doesNotMatch(lastRun(c.url), /stopped early/);
+    c.serve([]);
+  });
+
   test('keeps what it holds when a peer serves a different outcome for the same payment, and counts it', async () => {
     const payer = ethers.Wallet.createRandom();
     const { agent, txHash } = paid(payer);
@@ -954,7 +970,7 @@ describe('importing payer-signed outcomes from other operators', () => {
     ]);
     await runImport();
     assert.match(lastRun(c.url), /0 imported, 0 refused/);
-    assert.match(b.logs(), new RegExp(`a peer serves outcome 2 for ${txHash}`));
+    assert.match(b.logs(), new RegExp(`peer ${c.url} serves outcome 2 for ${txHash}`));
     assert.match((await b.call('GET', '/metrics')).text, /sigvara_oracle_payer_outcome_conflicts_total 1/);
     assert.equal((await evidence(b, agent.didHash))[0].success, true);
   });

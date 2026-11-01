@@ -99,10 +99,10 @@ services:
       # visitor shares one rate-limit bucket.
       - sigvara-web
     volumes:
-      # oracle_state holds paymentEvents, which a rescan cannot rebuild: attestations
-      # arrive over HTTP, not from the chain. Losing this volume means re-seeding every
-      # settlement by hand, so it outlives container recreates on purpose. Back it up:
-      # docs/incident-operator-key.md.
+      # oracle_state holds what the chain cannot give back: outcomes reported over HTTP,
+      # flags, links, cooldowns and divergence records. Payments come back through the
+      # payment scan. So it outlives container recreates on purpose. Back it up:
+      # docs/operations-runbook.md, section 1.
       - oracle_state:/data
       - oracle_app:/app
 

@@ -1489,7 +1489,7 @@ const IMPORT_MAX_STALLS = 3;
  * @returns {Promise<{ kind: 'imported'|'held'|'refused'|'retry', code?: string }>} retry when the
  *   failure was this node's or the chain's, not the outcome's
  */
-async function importOne({ didHash, txHash, checkedAtBlock, signed, packetId }) {
+async function importOne({ didHash, txHash, checkedAtBlock, signed, packetId }, peer) {
   const held = payerOutcomeFor(didHash, txHash, signed.payer);
   if (held) {
     // Not checked, so not proof the payer signed both, and anyone serving it raises the count: a
@@ -1497,7 +1497,7 @@ async function importOne({ didHash, txHash, checkedAtBlock, signed, packetId }) 
     // is held stays; it is final.
     if (held.outcome !== signed.outcome) {
       metrics.inc('payerOutcomeConflicts');
-      console.warn(`[oracle] a peer serves outcome ${signed.outcome} for ${txHash} from ${signed.payer}; this oracle holds ${held.outcome}`);
+      console.warn(`[oracle] peer ${peer} serves outcome ${signed.outcome} for ${txHash} from ${signed.payer}; this oracle holds ${held.outcome}`);
     }
     return { kind: 'held' };
   }
@@ -1537,7 +1537,13 @@ async function importFromPeer(peer, tally) {
   peerImports.set(peer, state);
   const until = Date.now() + IMPORT_MS_PER_RUN;
   let checks = 0;
-  for (let page = 0; page < IMPORT_PAGES_PER_RUN; page += 1) {
+  for (let page = 0; ; page += 1) {
+    // Out of pages with more to read: the next run carries on from the cursor, and says why this
+    // one stopped, as the other limits do.
+    if (page === IMPORT_PAGES_PER_RUN) {
+      tally.stopped = 'pages';
+      return;
+    }
     if (Date.now() > until) {
       tally.stopped = 'time';
       return;
@@ -1559,7 +1565,7 @@ async function importFromPeer(peer, tally) {
         tally.stopped = checks >= IMPORT_CHECKS_PER_RUN ? 'budget' : 'time';
         return;
       }
-      let r = await importOne(item);
+      let r = await importOne(item, peer);
       if (r.kind === 'retry') {
         state.stalls += 1;
         if (state.stalls < IMPORT_MAX_STALLS) {
