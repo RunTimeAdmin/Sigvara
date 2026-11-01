@@ -147,6 +147,17 @@ const BYTES32 = /^0x[0-9a-fA-F]{64}$/;
 const isUint64 = (n) => Number.isSafeInteger(n) && n >= 0;
 
 /**
+ * The CounterAudit packet that sealed a payer-signed outcome, as whoever carried the outcome named
+ * it, or null. Checked for shape only, as the credentialed path checks its packetId: this oracle
+ * never fetches the packet. It is served beside the outcome as counterauditPacketId, a pointer
+ * anyone can check: CounterAudit's public proof for it names the EIP-712 hash of the outcome it
+ * sealed, which a verifier recomputes from the payload served here.
+ */
+function packetIdOf(value) {
+  return typeof value === 'string' && /^[0-9a-fA-F-]{36}$/.test(value) ? value : null;
+}
+
+/**
  * The `payerOutcome` of a request, checked for shape only.
  * @returns {{ ok: true, value: { payer: string, outcome: 1|2, evidence: string, signedAt: number,
  *   deadline: number, signature: string } } | { ok: false, error: string }}
@@ -390,7 +401,7 @@ async function fetchOutcomesPage(peer, since, { timeoutMs = 20_000, maxBytes = M
  * against this oracle's own chain view, as if it had been posted here.
  *
  * @returns {{ ok: true, value: { didHash: string, txHash: string, checkedAtBlock: number,
- *   acceptedAt: number, signed: object } } | { ok: false, error: string }}
+ *   acceptedAt: number, signed: object, packetId: string|null } } | { ok: false, error: string }}
  */
 function parseServed(item) {
   if (!item || typeof item !== 'object' || Array.isArray(item)) return { ok: false, error: 'not an object' };
@@ -403,7 +414,14 @@ function parseServed(item) {
   if (!signed.ok) return signed;
   return {
     ok: true,
-    value: { didHash: didHash.toLowerCase(), txHash: txHash.toLowerCase(), checkedAtBlock, acceptedAt, signed: signed.value },
+    value: {
+      didHash: didHash.toLowerCase(),
+      txHash: txHash.toLowerCase(),
+      checkedAtBlock,
+      acceptedAt,
+      signed: signed.value,
+      packetId: packetIdOf(item.counterauditPacketId),
+    },
   };
 }
 
@@ -418,6 +436,7 @@ module.exports = {
   readConfig,
   domain,
   parse,
+  packetIdOf,
   message,
   timingProblem,
   checkedBlockProblem,

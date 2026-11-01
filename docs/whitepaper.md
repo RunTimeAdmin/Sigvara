@@ -341,7 +341,8 @@ Anything outside that list is unverified. A CounterAudit packet id, when an atte
 carried one, is returned as `counterauditPacketId` and listed under `unverifiedFields`:
 the oracle checks only its shape, never fetches the packet, and does not confirm that it
 records this payment or outcome, so it is a pointer, not proof. A reader can check the
-association against the packet's public proof, where one exists. It is deliberately not in
+association against the packet's public proof, where one exists. For a payer-signed outcome
+the proof names the EIP-712 hash of what the payer signed, so the check is exact. It is deliberately not in
 the leaf: committing to it would change the leaf format and make every root already
 published unreproducible.
 

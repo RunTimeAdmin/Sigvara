@@ -281,8 +281,10 @@ is final: a second signature for the leg is refused (`outcome_recorded`), before
 read. It replaces a token holder's outcome if the checked block is within
 `PAYER_OUTCOME_WINDOW_DAYS` of the payment's block and the transaction had no other paying leg
 (a token holder's outcome on a transaction with several payers was given for the whole job),
-and the token holder's `packetId` goes with the outcome it backed. A token holder's outcome
-never replaces a payer's. The deadline reads the checked block's time rather than this host's
+and the token holder's `packetId` goes with the outcome it backed. A `packetId` beside
+`payerOutcome` is kept from whoever carried it: it names the CounterAudit packet that sealed this
+outcome, and it can be checked against that packet's proof (see [`GET /evidence`](#get-evidencedidhash)).
+A token holder's outcome never replaces a payer's. The deadline reads the checked block's time rather than this host's
 clock, so that another operator importing the outcome later (see
 [`GET /outcomes`](#get-outcomessincems)) reaches the same answer; the window reads this node's
 confirmed head, when the outcome arrived here. Nothing is checked while that head is more than
@@ -308,7 +310,8 @@ field of an x402 `X-PAYMENT-RESPONSE`, or any transfer that settled on chain:
 `packetId` is an optional pointer to a sealed, timestamped record of the same work.
 Stored beside the payment and served from `/evidence` as unverified, never part of the
 Merkle leaf. Validated for shape only. Only a token holder's `packetId` is kept: a
-stranger's is ignored, as their `success` is. When a token holder gives an outcome to a
+stranger's is ignored, as their `success` is. The exception is a `packetId` beside a
+payer-signed outcome, described above. When a token holder gives an outcome to a
 payment credited without one, their `packetId` goes on with it unless the payment
 already has one.
 
@@ -466,12 +469,14 @@ order — so a verifier need not read this source to know what is covered.
 
 `counterauditPacketId` appears on an event when the attestation carried one, and the
 response lists it under `unverifiedFields`. It is **not evidence, is not in the leaf, and
-is not verified here**: the token holder supplied it, and this oracle checks only that it
-is UUID-shaped. Nothing here fetched the packet or confirmed that it records this payment
+is not verified here**: the token holder supplied it, or whoever carried a payer-signed
+outcome, and this oracle checks only that it is UUID-shaped. Nothing here fetched the packet or confirmed that it records this payment
 or this outcome, so treat it as a pointer, never as proof that the packet supports the
 outcome. A reader who wants that association checks it themselves: if the packet was
 sealed with a public proof, CounterAudit serves it at `/v1/proofs/{packetId}`, and its
-`outcome_claim` names the payment transaction and the outcome to compare. Committing to
+`outcome_claim` names the payment transaction and the outcome to compare. For a payer-signed
+outcome the check is exact: the claim's `signed_outcome_hash` is the EIP-712 hash of what the
+payer signed, which a reader recomputes from `payerOutcome` and `payerOutcomeDomain`. Committing to
 the id would have changed the leaf format and made roots already published on chain
 unreproducible. This oracle never calls CounterAudit to validate it, because an evidence
 path that depends on someone's SaaS is not evidence.
@@ -558,14 +563,16 @@ to cover.
     {
       "didHash": "0x...", "txHash": "0x...", "payer": "0x...",
       "outcome": 1, "evidence": "0x00...", "signedAt": 1793400000, "deadline": 1793486400,
-      "signature": "0x...", "signer": "eoa", "checkedAtBlock": 1234567, "acceptedAt": 1793400000123
+      "signature": "0x...", "signer": "eoa", "checkedAtBlock": 1234567, "acceptedAt": 1793400000123,
+      "counterauditPacketId": "6f1c2a40-5b7e-4c1d-9a2e-3f4b5c6d7e8f"
     }
   ]
 }
 ```
 
 `acceptedAt` is when this oracle took the outcome, in its own milliseconds, each later than the
-one before; pass the response's `next` as `since` for the following page.
+one before; pass the response's `next` as `since` for the following page. `counterauditPacketId`
+is there when the outcome came with one, unverified as in `/evidence`; an importing operator keeps it.
 
 **Import.** An oracle with `PAYER_OUTCOMES_PEERS` set pulls from each listed operator at the
 start of every epoch, before the registry read and the scoring, and puts each outcome through
