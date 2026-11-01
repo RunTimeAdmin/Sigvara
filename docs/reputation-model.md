@@ -9,7 +9,7 @@ Sigvara reputation is a deterministic 6-factor score between 0 and 100. It is co
 | Factor | Max Points | Source | Formula |
 |---|---|---|---|
 | Fee Activity | 20 | Settled payments to the agent, verified on chain | `min(20, decayedVolume / PAYMENT_FEE_UNIT)`, capped per payer |
-| Success Rate | 15 | Outcome reported by a credentialed service (CounterAudit, whose relay is off today) | `floor(successful / (total + 5) × 15)`, on decayed weights |
+| Success Rate | 15 | Outcome signed by the payer (positive only for now), or reported by a credentialed service | `floor(successful / (total + 5) × 15)`, on decayed weights |
 | Tenure | 30 | Span of verified trading, faded by how long since the last of it | `min(30, floor(log₂(spanDays+1) × 3)) × recency` |
 | External Trust | 25 | Normalized ERC-8004 feedback for a linked agent | mean of recognized rating tags × 25 |
 | Community | 5 | Unresolved flags | `max(0, 5 − flags × 2)` |
@@ -49,8 +49,13 @@ an address you do not control, repeatedly, from wallets that each had to be fund
 
 ### Success Rate (15 pts)
 
-Based on outcomes reported by credentialed services, such as CounterAudit, which relays
-the outcome an org reports with the sealed record of the work. An attestation must
+Based on outcomes attached to verified payments. On Arc testnet since 31 October 2026 an
+outcome can be signed by the payer itself, as EIP-712 typed data over the payment
+([ADR 0006](adr/0006-payer-signed-outcomes.md)), which any operator can check and which
+needs no token. The operators take positive ones only until an agent has a way to contest
+a negative. A credentialed service holding an oracle token can also report an outcome
+(CounterAudit's relay of an org's reported outcome is one, off in production since
+30 October 2026). An attestation must
 carry the settlement transaction of a real payment to the agent, and the attester is
 taken from the transfer log rather than asserted by the caller. The oracle aggregates
 these per agent, decaying each by age and capping any one payer's contribution.
@@ -76,8 +81,11 @@ weights are fractional and pull every row down as the record ages.
 
 CounterAudit seals the agent's identity and score into every audited packet, live since
 19 September. It can also relay an org's reported outcome back to the oracle; that went
-live the same day, but since 30 October 2026 the production deployment relays for no org,
-and no outcome has been recorded since 20 September. An
+live the same day, but since 30 October 2026 the production deployment relays for no org.
+Since 1 November 2026 it carries payer-signed outcomes instead: it checks the payer's
+signature, seals the record and forwards it to the operators, which check the signature
+again themselves. The first payer-signed outcomes were recorded on 31 October and
+1 November, the first outcomes of any kind since 20 September. An
 outcome must carry the settlement transaction that paid for the work, which the oracle
 re-verifies against the chain. See [counteraudit-integration.md](counteraudit-integration.md).
 

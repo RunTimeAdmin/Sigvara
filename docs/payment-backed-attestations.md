@@ -43,22 +43,29 @@ curl -X POST https://oracle.sigvara.xyz/attest \
 The payment is the credential for the payment. You do not identify yourself, because the
 oracle does not take your word for who you are: it reads the payer off the transfer log.
 
-What a request with no token records is the payment, as fee volume and tenure. It records
-no outcome. A settlement hash is public, so whoever submits one has not shown that they
-paid or that they saw the work, and the first credit for a settlement is final. Outcomes
-come from a token holder such as CounterAudit, and can be added to a payment that was
-credited without one (once; a recorded outcome is final). The response says which
-happened with `outcomeRecorded`.
+What a request with no token records is the payment, as fee volume and tenure. A
+settlement hash alone records no outcome: it is public, so whoever submits one has not
+shown that they paid or that they saw the work, and the first credit for a settlement is
+final. An outcome needs the payer's signature or a token. The payer can sign, as EIP-712
+typed data over that payment, that the work was delivered
+([ADR 0006](adr/0006-payer-signed-outcomes.md)), and anyone can carry the signature in
+`payerOutcome` with no token; the Arc testnet operators have taken these since
+31 October 2026, positive ones only. A token holder can also add an outcome. Either can be
+added to a payment that was credited without one, once: a recorded outcome is final,
+except that the payer's own signed outcome can replace a token holder's within 14 days of
+the payment. The response says which happened with `outcomeRecorded`.
 
 **A negative attestation still needs a write credential.** The asymmetry is deliberate.
 `successScore` is `successful / (total + prior)`, so a negative lowers the score
 directly, and a verified payment proves money moved but never that the work failed.
 Leaving that open would mean anyone could downgrade any agent for the price of one
 `PAYMENT_MIN_AMOUNT` transfer — which, on a testnet whose bond token has an open
-faucet, is free. Negative outcomes therefore need a token holder such as
-CounterAudit, which relays the outcome the ingesting org reported beside its sealed record
-of the work; it does not judge the work itself. Positive claims carry their own cost and can be left open as
-payment evidence; negative ones cannot.
+faucet, is free. Negative outcomes therefore need a token holder, and the operators
+refuse a payer's signed "not delivered" too until an agent has a way to contest it.
+CounterAudit's relay, which held a token for this and reported the ingesting org's word
+rather than judging the work itself, has been off in production since 30 October 2026.
+Positive claims carry their own cost and can be left open as payment evidence; negative
+ones cannot.
 
 The oracle then:
 
@@ -280,5 +287,6 @@ into at least five wallets to max the factor, each with its own funding trail, b
 a determined attacker with capital can still build one.
 
 Attestation state also still lives in the oracle's JSON file rather than on chain.
-The payments in it are checkable through the evidence root, but an outcome is a
-credentialed service's word: the leaf commits to it, and nothing on chain can confirm it.
+The payments in it are checkable through the evidence root, but an outcome is the word
+of the payer who signed it or of a credentialed service: the leaf commits to it, and
+nothing on chain can confirm it.

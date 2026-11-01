@@ -43,10 +43,14 @@ graph TB
 
 The oracle recomputes every factor each epoch from observable data:
 
-- **Payment-backed attestations** — a consuming platform reports, per completed
-  job, whether the agent succeeded or failed, and cites the settlement
-  transaction of the payment for that job.
-  [CounterAudit](counteraudit-integration.md) does this today. The oracle
+- **Payment-backed attestations** — each cites the settlement transaction of
+  the payment for a job and can say whether the agent delivered. Since
+  31 October 2026 the payer can sign that outcome itself
+  ([ADR 0006](adr/0006-payer-signed-outcomes.md); "delivered" only for now), and
+  [CounterAudit](counteraudit-integration.md) carries such signatures to the
+  operators. A platform holding an oracle token can also report an outcome, as
+  CounterAudit's relay did until it was switched off in production on
+  30 October 2026. The oracle
   verifies the transfer on chain and takes the payer from the log rather than
   from the request, which is what makes the attester an identity rather than a
   claim. This drives the success-rate and fee-activity factors.

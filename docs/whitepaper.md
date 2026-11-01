@@ -158,9 +158,11 @@ attested, because there is no log to read.
 Negative outcomes are different: they need a credential, because an uncredentialed
 negative attestation is a free denial-of-service against a competitor. Anyone may
 submit a payment-backed attestation, since the payment is itself the credential for the
-payment and forging it means forging a chain transfer. Only a credentialed service can
-attach an outcome to it, because a settlement hash is public and proves neither who paid
-nor that the work went well.
+payment and forging it means forging a chain transfer. A settlement hash alone cannot
+attach an outcome, because it is public and proves neither who paid nor that the work went
+well. The outcome needs a credentialed service's token or the payer's own EIP-712
+signature over the payment ([ADR 0006](adr/0006-payer-signed-outcomes.md)), which the
+testnet operators have taken since 31 October 2026 for "delivered" only.
 
 What this does not fix, on the deployment as it runs today: a payment that settled but
 which nobody submits. Detecting unreported work requires an independent watcher of the
@@ -593,10 +595,13 @@ All are UUPS proxies except the token.
 
 **Running:** hourly oracle epochs proposing and finalizing scores; payment-verified
 attestations with evidence roots; public unauthenticated reads at `/health`, `/score`,
-`/evidence`; `POST /attest`, which credits a verified payment without a token and takes an outcome only from a credentialed service; flag
+`/evidence`; `POST /attest`, which credits a verified payment without a token and takes an outcome from a
+credentialed service or, since 31 October 2026, a positive one signed by the payer, which the
+two operators share through the public `GET /outcomes`; flag
 raising and resolution with half-life decay; an integration with CounterAudit that
-enriches audit packets with Sigvara identity and can report settlement outcomes back (off in
-production since 30 October 2026, when CounterAudit limited relaying to allowlisted orgs).
+enriches audit packets with Sigvara identity and, since 1 November 2026, carries
+payer-signed outcomes to the operators (its relay of an org's own reported outcome has been
+off in production since 30 October 2026, when CounterAudit limited relaying to allowlisted orgs).
 
 **Deployed 20 September 2026:** a second bonded operator in checker mode, on separate
 hardware from the primary and a separate RPC provider, with its own 25,000 SVR bond and
@@ -687,12 +692,12 @@ Ordered by what unblocks what, not by difficulty.
 5. **A reward distributor.** Replaces `rewardPool` as a plain address with a contract
    paying operators for epochs served.
 6. **External audit**, then Arc mainnet with a committee multisig.
-7. **Delivery and disputes for x402 payments.** Not started, and outside the first audit.
-   Money moving is verified from the chain today, but whether the work was delivered arrives
-   as an attestation from a trusted service, so a payer that was not delivered what it paid
-   for has no recourse of its own. The plan is outcomes bound to the settled payment by a
-   payer signature, a payer-initiated challenge against the agent's bond, and an arbiter
-   path beyond the committee. x402 now has an authorize, capture and refund scheme and open
+7. **Delivery and disputes for x402 payments.** Partly built. Outcomes bound to the settled
+   payment by a payer signature are built ([ADR 0006](adr/0006-payer-signed-outcomes.md))
+   and live on Arc testnet since 31 October 2026, for "delivered" only. A payer that was not
+   delivered what it paid for still has no recourse of its own: the payer-initiated
+   challenge against the agent's bond and an arbiter path beyond the committee are not
+   started, and are outside the first audit. x402 now has an authorize, capture and refund scheme and open
    escrow and delivery-receipt proposals, so the aim is to supply the bonded verifier and
    the seller's standing to those, not to add a competing payment scheme. Order and scope
    follow what the x402 Foundation takes into the standard.

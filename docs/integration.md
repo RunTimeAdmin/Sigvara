@@ -155,7 +155,7 @@ Show the facts and the date they were read:
 Avoid wording that claims more than the data does: "Trusted by Sigvara", "Verified safe",
 "Audited", "Insured", "Guaranteed". Next to the score, one line is enough:
 
-> An oracle computes the score from payments verified on chain, outcomes reported by a credentialed service
+> An oracle computes the score from payments verified on chain, outcomes reported for those payments
 > and the other signals in the reputation model. A bond stands behind it that a committee can
 > slash. It is not an audit, insurance or a guarantee.
 
