@@ -74,6 +74,9 @@ const MODES = ['off', 'positive', 'both'];
  *     mainnet until the retention policy covers copies held elsewhere (ADR 0006, Rollout 5).
  *   peers: the other operators to import payer-signed outcomes from (ADR 0006, section 6), as
  *     base URLs. Empty means no import; also off on mainnet until that review.
+ *   importGraceMs: how long after an outcome's deadline an import may still reach this operator.
+ *     A peer names the block it checked at and nothing proves it did, so past this an import is
+ *     refused rather than judged at that block (PAYER_OUTCOMES_IMPORT_GRACE_HOURS, default 6).
  */
 function readConfig(env = process.env, paymentCfg) {
   const mode = String(env.PAYER_OUTCOMES || 'off').toLowerCase();
@@ -96,6 +99,12 @@ function readConfig(env = process.env, paymentCfg) {
   if (!Number.isFinite(windowDays) || windowDays < 0) {
     throw new Error(`PAYER_OUTCOME_WINDOW_DAYS must be a number of days, 0 or more, got "${env.PAYER_OUTCOME_WINDOW_DAYS}"`);
   }
+  const graceHours = env.PAYER_OUTCOMES_IMPORT_GRACE_HOURS === undefined || env.PAYER_OUTCOMES_IMPORT_GRACE_HOURS === ''
+    ? 6
+    : Number(env.PAYER_OUTCOMES_IMPORT_GRACE_HOURS);
+  if (!Number.isFinite(graceHours) || graceHours < 0) {
+    throw new Error(`PAYER_OUTCOMES_IMPORT_GRACE_HOURS must be a number of hours, 0 or more, got "${env.PAYER_OUTCOMES_IMPORT_GRACE_HOURS}"`);
+  }
   const peers = String(env.PAYER_OUTCOMES_PEERS || '').split(',').map((s) => s.trim()).filter(Boolean).map(peerUrl);
   if (peers.length && mode === 'off') {
     throw new Error('PAYER_OUTCOMES_PEERS needs PAYER_OUTCOMES: an oracle that takes no payer outcomes imports none');
@@ -106,6 +115,7 @@ function readConfig(env = process.env, paymentCfg) {
     negativeMinAmount: negative ? BigInt(negative) : paymentCfg.minAmount,
     publish: publish === 'on',
     peers,
+    importGraceMs: graceHours * 3_600_000,
   };
 }
 
@@ -226,6 +236,22 @@ function checkedBlockProblem(value, checkedAtMs) {
   const checkedSec = Math.floor(checkedAtMs / 1000);
   if (value.signedAt > checkedSec + MAX_CHECK_LAG_SECONDS) return 'checked at a block from before it was signed';
   if (value.deadline <= checkedSec) return 'the deadline has passed';
+  return null;
+}
+
+/**
+ * Why an imported outcome arrived too late to judge at the block its peer names, or null.
+ *
+ * The deadline is judged at the block the accepting operator says it checked at, and the payer's
+ * signature does not cover that block. A peer could hold a signature past its deadline and pass
+ * it on naming an earlier block. Nothing proves when the peer took it, so this bounds how late
+ * that can be: the import must reach this operator, at its own confirmed head, within the grace
+ * after the deadline (review M-02, 1 November 2026).
+ */
+function importLateProblem(value, arrivedAtMs, graceMs) {
+  if (arrivedAtMs > value.deadline * 1000 + graceMs) {
+    return `it reached this operator more than ${graceMs / 3_600_000} hours after its deadline`;
+  }
   return null;
 }
 
@@ -395,6 +421,7 @@ module.exports = {
   message,
   timingProblem,
   checkedBlockProblem,
+  importLateProblem,
   verifySignature,
   verifyImported,
   RpcError,

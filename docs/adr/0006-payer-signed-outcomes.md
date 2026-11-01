@@ -231,7 +231,13 @@ Within the bounds above it can name an earlier block than it used: one before th
 signature it held back, or one before an account rotated away from a compromised key. A payer
 dating its signature back moves the second bound with it. Both need a signature that the payer's
 key at that block actually made; neither writes an outcome nobody signed, and neither reopens
-the replacement window, which each operator judges at its own head. A payer that signs two different outcomes and gives one to each operator leaves them each
+the replacement window, which each operator judges at its own head. The first is bounded in time:
+an importer refuses an outcome that reaches it more than `PAYER_OUTCOMES_IMPORT_GRACE_HOURS`
+(default 6) after its deadline, by its own confirmed head, so a held-back signature can be
+passed on at most that long after the deadline (review M-02, 1 November 2026). The cost is that
+an operator down for longer than the grace refuses outcomes another took in time, and the two
+then differ on that payment. Proving when an operator took an outcome would remove the bound's
+need, and is open before mainnet peer import. A payer that signs two different outcomes and gives one to each operator leaves them each
 holding a final one. The importer counts and logs the difference and keeps what it holds;
 settling it is the dispute bridge's job. Two operators holding the same chain converge on the
 same payer-signed outcomes by construction. Credentialed outcomes cannot work this way, because a
