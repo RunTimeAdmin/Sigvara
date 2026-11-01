@@ -25,9 +25,9 @@ const merkle = require('./merkle');
  * proposer had. That is why it only counts when its root matches, and what it can hide is
  * bounded: a proposer that left out an outcome it had passes only for an outcome this operator
  * took after the proposal, and only for that one proposal, because by the next this operator
- * has taken it before the proposal's time and reading 2 no longer unsets it. A credentialed outcome a payer
- * later replaced is not recoverable from the event, so it reads as unreported in reading 2; the
- * root check catches that case the same way.
+ * has taken it before the proposal's time and reading 2 no longer unsets it. A credentialed
+ * outcome a payer later replaced is not recoverable from the event, so it reads as unreported in
+ * reading 2; the root check catches that case the same way.
  *
  * @param {object[]} events   one agent's payment events, as the store holds them
  * @param {number} atMs       the proposal's time, in ms
