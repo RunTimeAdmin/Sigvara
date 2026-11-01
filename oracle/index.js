@@ -1377,7 +1377,8 @@ async function admitPayerOutcome({ didHash, credited, info, signed }, { peerBloc
     return refuse(502, 'rpc_error', 'could not read the chain', 'paymentRpcErrors');
   }
   // Before the signature, which can cost a contract call.
-  const late = payerOutcome.checkedBlockProblem(signed, checkedAtMs);
+  const late = payerOutcome.checkedBlockProblem(signed, checkedAtMs)
+    ?? (fromPeer ? payerOutcome.importLateProblem(signed, arrivedAtMs, payerOutcomeCfg.importGraceMs) : null);
   if (late) return refuse(400, 'outcome_window', late, 'attestRejectedOther');
 
   const dom = payerOutcome.domain(cfg.expectedChainId, cfg.reputationAddress);

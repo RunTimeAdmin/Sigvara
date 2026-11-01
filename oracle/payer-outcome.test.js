@@ -40,9 +40,22 @@ async function signOutcome(didHash, txHash, payer, {
 // ---- the module on its own --------------------------------------------------------------
 
 describe('payer-outcome', () => {
+  test('bounds how long after its deadline an import may arrive, whatever block its peer names', () => {
+    const value = { signedAt: 1_000, deadline: 2_000 };
+    const grace = 6 * 3_600_000;
+    assert.equal(payerOutcome.importLateProblem(value, 2_000_000, grace), null, 'at the deadline');
+    assert.equal(payerOutcome.importLateProblem(value, 2_000_000 + grace, grace), null, 'at the end of the grace');
+    assert.match(payerOutcome.importLateProblem(value, 2_000_001 + grace, grace), /more than 6 hours after its deadline/);
+    assert.match(payerOutcome.importLateProblem(value, 2_000_001, 0), /more than 0 hours/, 'no grace');
+  });
+
   test('reads its settings, off by default, negatives priced at the payment minimum', () => {
     const cfg = payerOutcome.readConfig({}, { minAmount: MIN });
-    assert.deepEqual(cfg, { mode: 'off', windowMs: 14 * 86_400_000, negativeMinAmount: MIN, publish: false, peers: [] });
+    assert.deepEqual(cfg, { mode: 'off', windowMs: 14 * 86_400_000, negativeMinAmount: MIN, publish: false, peers: [], importGraceMs: 6 * 3_600_000 });
+    assert.equal(payerOutcome.readConfig({ PAYER_OUTCOMES_IMPORT_GRACE_HOURS: '0.5' }, { minAmount: MIN }).importGraceMs, 1_800_000);
+    for (const bad of ['-1', 'soon', 'Infinity']) {
+      assert.throws(() => payerOutcome.readConfig({ PAYER_OUTCOMES_IMPORT_GRACE_HOURS: bad }, { minAmount: MIN }), bad);
+    }
     assert.equal(payerOutcome.readConfig({ PAYER_OUTCOMES: 'POSITIVE' }, { minAmount: MIN }).mode, 'positive');
     assert.throws(() => payerOutcome.readConfig({ PAYER_OUTCOMES: 'yes' }, { minAmount: MIN }));
     assert.throws(() => payerOutcome.readConfig({ PAYER_NEGATIVE_MIN_AMOUNT: '1.5' }, { minAmount: MIN }));
@@ -893,7 +906,7 @@ describe('importing payer-signed outcomes from other operators', () => {
     assert.equal((await evidence(b, agent.didHash))[0].success, true);
   });
 
-  test('judges the deadline at the recorded block, not at this node\'s head when it imports', async () => {
+  test('judges the deadline at the recorded block when the import arrives within the grace', async () => {
     const payer = ethers.Wallet.createRandom();
     const { agent, txHash } = paid(payer);
     const { head, nowSec } = world.data;
@@ -901,12 +914,33 @@ describe('importing payer-signed outcomes from other operators', () => {
     world.set('blockTimes', { ...(world.data.blockTimes || {}), [head - 10]: nowSec - 60, [head]: nowSec - 60 });
     const signed = await signOutcome(agent.didHash, txHash, payer, { deadline: nowSec + 600 });
     assert.equal((await post(a, agent.didHash, txHash, signed)).status, 200);
-    // Two days on, the deadline is long past by the chain's clock.
-    world.set('nowSec', nowSec + 2 * 86_400);
-    world.set('head', head + 50_000);
+    // An hour past the deadline by the chain's clock: B was behind, within the six-hour grace.
+    world.set('nowSec', nowSec + 600 + 3_600);
+    world.set('head', head + 1_000);
     try {
       await runImport();
       assert.equal((await evidence(b, agent.didHash))[0].success, true);
+    } finally {
+      world.set('nowSec', nowSec);
+    }
+  });
+
+  test('refuses an outcome a peer passes on past the grace, naming a block before the deadline', async () => {
+    const payer = ethers.Wallet.createRandom();
+    const { agent, txHash } = paid(payer);
+    const { head, nowSec } = world.data;
+    world.set('blockTimes', { ...(world.data.blockTimes || {}), [head - 10]: nowSec - 60, [head]: nowSec - 60 });
+    // Signed with a ten-minute deadline; the peer held it and serves it two days later as if it had
+    // checked it at the head block, before the deadline. Nothing proves when it took it (review M-02).
+    const signed = await signOutcome(agent.didHash, txHash, payer, { deadline: nowSec + 600 });
+    world.set('nowSec', nowSec + 2 * 86_400);
+    world.set('head', head + 50_000);
+    try {
+      c.serve([served(agent, txHash, signed, { acceptedAt: Date.now(), checkedAtBlock: head })]);
+      await runImport();
+      assert.match(lastRun(c.url), /0 imported, 1 refused/);
+      assert.match(b.logs(), new RegExp(`refused ${txHash} from ${c.url}: outcome_window`));
+      assert.equal((await evidence(b, agent.didHash)).length, 0, 'it credits nothing on B');
     } finally {
       world.set('nowSec', nowSec);
     }

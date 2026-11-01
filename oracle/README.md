@@ -576,7 +576,12 @@ be before the payment (`bad_checked_block`), more than an hour before `signedAt`
 (`outcome_window`), or past this node's confirmed head (retried at the next run). That keeps a
 smart account's answer pinned to the state it was given against, and the deadline judged at the
 same time on both operators. The window is judged at this node's own head, as for a post here,
-so a peer naming an old block cannot reopen it. A payer with no code at this node's head is
+so a peer naming an old block cannot reopen it. Nothing proves the peer checked at the block it
+names, so an import must also reach this node within `PAYER_OUTCOMES_IMPORT_GRACE_HOURS` (6 by
+default) of the outcome's deadline, by this node's confirmed head, or it is refused
+(`outcome_window`): a peer that held a signature back can pass it on at most that long after its
+deadline (review M-02, 1 November 2026). An operator down for longer than the grace refuses
+outcomes another operator took in time, and the two then differ on that payment. A payer with no code at this node's head is
 checked by recovery, which needs no old state; one with code is checked at the recorded block,
 which needs an archive node, and on a node that keeps only recent state those outcomes fail to
 read and are passed over as below. An outcome this oracle already holds costs no chain read; if
@@ -984,6 +989,7 @@ with it off, the largest factor in the score is a count of HTTP requests.
 | `PAYER_OUTCOMES` | `off` | Payer-signed outcomes ([ADR 0006](../docs/adr/0006-payer-signed-outcomes.md)): `off`, `positive` (only "delivered") or `both`. Needs `PAYMENT_VERIFICATION=required`, `EXPECTED_CHAIN_ID` and `REPUTATION_ADDRESS`, or the process refuses to start. Set it the same on every operator: one taking them and another not is a delivery gap. `both` waits for a challenge process |
 | `PAYER_OUTCOMES_PUBLISH` | `off` | `on` serves each payer's signed payload in `/evidence` and lists them at `GET /outcomes`. Stays off on mainnet until the retention policy covers copies held by other operators |
 | `PAYER_OUTCOMES_PEERS` | (empty) | Comma-separated base URLs of the other operators to import payer-signed outcomes from, at the start of each epoch (see [`GET /outcomes`](#get-outcomessincems)). Needs `PAYER_OUTCOMES`. Off on mainnet for the same reason as publishing |
+| `PAYER_OUTCOMES_IMPORT_GRACE_HOURS` | `6` | How long after an outcome's deadline an import from a peer may still reach this operator, by its confirmed head. Past it the import is refused, since nothing proves the peer took it before the deadline |
 | `PAYER_OUTCOME_WINDOW_DAYS` | `14` | How long after the payment's block time a payer-signed outcome may replace a token holder's |
 | `PAYER_NEGATIVE_MIN_AMOUNT` | `PAYMENT_MIN_AMOUNT` | Smallest payment leg whose payer's "not delivered" counts, in base units |
 | `PAYMENT_TRUST_WEIGHT` | `1` | Raises a counterparty's cap in proportion to its own matured score, and feeds `propagationScore`. `0` weights every payer alike |
@@ -1194,7 +1200,7 @@ cd oracle
 node --test
 ```
 
-838 tests (as of 1 November 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
+840 tests (as of 1 November 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
 the trust weighting, Merkle evidence trees, HTTP helpers, store persistence and recovery,
 the streamed state file, chain access with backoff, scan checkpointing, fee caps and transaction replacement,
 metrics, and cooldown logic. Several of the files run the real `index.js` and `watcher.js`
