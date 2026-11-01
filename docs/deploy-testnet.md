@@ -2,6 +2,8 @@
 
 Chain ID `5042002`. Gas is USDC. This is the runbook for the first deployment;
 `docs/arc.md` has the network background and the upgrade procedure.
+Running the two oracle operators after that (state backups and restores, payer-outcome import
+lag, the operators disagreeing) is in [operations-runbook.md](operations-runbook.md).
 
 Run every command from the repository root with `lib/` populated (see
 [docs/arc.md](arc.md) section 1).
