@@ -75,6 +75,7 @@
 
     $('evidenceLink').href = ORACLE + '/evidence/';
     $('explorerLink').href = EXPLORER + '/address/' + a;
+    $('epochsLink').href = 'epochs?a=' + a;
 
     $('snipMd').textContent = '[![Sigvara score](' + url + ')](https://sigvara.xyz/check?a=' + a + ')';
     $('snipHtml').textContent = '<a href="https://sigvara.xyz/check?a=' + a + '">'
