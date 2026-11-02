@@ -64,29 +64,38 @@ async function loadAgents() {
   renderAgents(registrations.truncated);
 }
 
-function renderAgents(truncated) {
+// Which group an agent is in, for the badge and the filter.
+function groupOf(a) {
+  const profile = X.simAgent(a.address);
+  if (profile) return { key: "sim", profile, label: `Simulated · ${profile === "ring" ? "Sybil ring" : profile}` };
+  if (KNOWN_AGENTS[a.didHash]) return { key: "own", label: KNOWN_AGENTS[a.didHash] };
+  if (X.same(a.operator, X.DEPLOYER)) return { key: "own", label: "Sigvara's own" };
+  return { key: "outside", label: "Outside" };
+}
+let filter = "all";
+let lastTruncated = false;
+
+function renderAgents(truncated = lastTruncated) {
+  lastTruncated = truncated;
   const sorted = [...agents].sort((a, b) => b.total - a.total || b.earned - a.earned || a.time - b.time);
+  const count = (key) => agents.filter((a) => groupOf(a).key === key).length;
+  const n = { all: agents.length, outside: count("outside"), sim: count("sim"), own: count("own") };
   const active = agents.filter((a) => a.status === 0).length;
-  const scored = agents.filter((a) => a.earned > 0).length;
-  const simulated = agents.filter((a) => X.simAgent(a.address)).length;
-  const ours = agents.filter((a) => !X.simAgent(a.address) && (KNOWN_AGENTS[a.didHash] || X.same(a.operator, X.DEPLOYER))).length;
-  const others = agents.length - simulated - ours;
-  const groups = [];
-  if (simulated) groups.push(`${simulated} belong to Sigvara's <a href="https://github.com/RunTimeAdmin/Sigvara/blob/main/docs/simulation.md" target="_blank" rel="noopener">testnet simulation</a>`);
-  if (ours) groups.push(`${ours} ${ours === 1 ? "is" : "are"} Sigvara's own${simulated ? " outside it" : ""}`);
-  groups.push(`${others} ${others === 1 ? "is" : "are"} anyone else's`);
-  const list = groups.length > 1 ? `${groups.slice(0, -1).join(", ")} and ${groups.at(-1)}` : groups[0];
-  let html = `<p><b>${plural(agents.length, "agent")}</b> registered on this deployment: ${active} active, ${scored} with a score above zero. Of them, ${list}; each is marked below.`
-    + ` Both oracle operators are run by the Sigvara team too (see <a href="operators">Operators</a>), so read these scores as the protocol working, not as outside demand.</p>`;
+  let html = `<p><b>${plural(agents.length, "agent")}</b> registered on this deployment, ${active} active.`
+    + (n.sim ? ` <b>${n.sim}</b> of them are Sigvara's <a href="simulation">testnet simulation</a>, which runs a simulated economy so the protocol can be watched working.` : "")
+    + ` Both oracle operators are run by the Sigvara team (see <a href="operators">Operators</a>), so read these scores as the protocol working, not as outside demand.</p>`;
+  const choices = [["all", "All"], ["outside", "Outside"], ["sim", "Simulated"], ["own", "Sigvara's own"]].filter(([k]) => k === "all" || n[k]);
+  html += `<div class="ex-filter" role="group" aria-label="Show agents">${choices.map(([k, label]) =>
+    `<button type="button" data-filter="${k}" aria-pressed="${filter === k}">${X.esc(label)} (${n[k]})</button>`).join("")}</div>`;
+  const shown = sorted.filter((a) => filter === "all" || groupOf(a).key === filter);
   html += `<div class="ex-scroll"><table class="ex-table">
-    <thead><tr><th>Agent</th><th>Operator</th><th>Status</th><th title="getTotalScore: the score other contracts read, which matures toward the earned score">Score</th><th title="getEarnedScore: the score as last finalized">Earned</th><th>Stake</th><th>Evidence root</th><th></th></tr></thead><tbody>`;
-  for (const a of sorted) {
-    const simProfile = X.simAgent(a.address);
-    const label = simProfile ? `<div class="ex-note">simulated: ${X.esc(simProfile)}</div>`
-      : KNOWN_AGENTS[a.didHash] ? `<div class="ex-note">${X.esc(KNOWN_AGENTS[a.didHash])}</div>` : "";
+    <thead><tr><th>Agent</th><th>Who</th><th>Status</th><th title="getTotalScore: the score other contracts read, which matures toward the earned score">Score</th><th title="getEarnedScore: the score as last finalized">Earned</th><th>Stake</th><th>Evidence root</th><th></th></tr></thead><tbody>`;
+  for (const a of shown) {
+    const g = groupOf(a);
+    const pillClass = g.key === "sim" ? g.profile : g.key;
     html += `<tr>
-      <td><a href="epochs?a=${a.address}"><code>${X.short(a.address)}</code></a>${label}</td>
-      <td>${X.whoIs(a.operator)}</td>
+      <td><a href="epochs?a=${a.address}"><code>${X.short(a.address)}</code></a></td>
+      <td><span class="ex-pill ${X.esc(pillClass)}">${X.esc(g.label)}</span><div class="ex-note">operator ${X.whoIs(a.operator)}</div></td>
       <td>${X.esc(X.STATUS[a.status] ?? "?")}</td>
       <td><b>${a.total}</b></td>
       <td>${a.earned}</td>
@@ -101,6 +110,9 @@ function renderAgents(truncated) {
   setCard("agentsCard", html);
   for (const btn of document.querySelectorAll("[data-check]")) {
     btn.addEventListener("click", () => checkEvidence(btn.getAttribute("data-check")));
+  }
+  for (const btn of document.querySelectorAll("[data-filter]")) {
+    btn.addEventListener("click", () => { filter = btn.getAttribute("data-filter"); renderAgents(); });
   }
 }
 
@@ -199,7 +211,7 @@ async function renderCheck(a, evidence, pendingRead) {
       const layers = X.layersOf(confirmJob.leaves);
       const answers = await X.ethCalls(confirmJob.leaves.map((leaf, i) => ({
         to: X.REPUTATION, data: X.verifyEvidenceCall(a.didHash, leaf, X.proofOf(layers, i)),
-      })), 20);
+      })));
       if (seq !== checkSeq) return;
       const yes = answers.filter((r) => BigInt(X.word(r, 0)) === 1n).length;
       render(yes === answers.length

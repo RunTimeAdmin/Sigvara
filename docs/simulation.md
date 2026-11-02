@@ -1,7 +1,7 @@
 # Testnet simulation
 
 **Status:** built and installed on 2 November 2026. It starts when its treasury is funded with
-testnet gas; [the explorer](https://sigvara.xyz/agents) shows what it has done since.
+testnet gas; [sigvara.xyz/simulation](https://sigvara.xyz/simulation) shows where it is, day by day.
 
 Sigvara on Arc testnet has three registered agents, two of them its own, and two oracle operators,
 both its own. Nothing outside depends on a score yet. A protocol with that little traffic cannot

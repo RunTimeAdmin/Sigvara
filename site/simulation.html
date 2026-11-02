@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Testnet simulation | Sigvara</title>
+  <meta name="description" content="Sigvara's labelled testnet simulation at a glance: which day it is on, what has happened, and how each kind of simulated agent is doing. None of it is real demand." />
+  <link rel="canonical" href="https://sigvara.xyz/simulation" />
+  <meta property="og:title" content="Testnet simulation | Sigvara" />
+  <meta property="og:description" content="Sigvara's labelled testnet simulation at a glance: which day it is on, what has happened, and how each kind of simulated agent is doing. None of it is real demand." />
+  <meta property="og:url" content="https://sigvara.xyz/simulation" />
+  <meta property="og:image" content="https://sigvara.xyz/assets/sigvara-card.png" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:image" content="https://sigvara.xyz/assets/sigvara-card.png" />
+  <meta property="og:type" content="website" />
+  <link rel="icon" type="image/svg+xml" href="./assets/sigvara-avatar.svg" />
+  <link rel="icon" type="image/png" sizes="512x512" href="assets/sigvara-card.png" />
+  <link rel="apple-touch-icon" href="assets/sigvara-card.png" />
+  <link rel="stylesheet" href="assets/style.css?v=4d3c26f" />
+  <link rel="stylesheet" href="assets/app.css?v=ac69814" />
+  <link rel="stylesheet" href="assets/epochs.css?v=6081b79" />
+  <link rel="stylesheet" href="assets/explorer.css?v=simview1" />
+</head>
+<body>
+
+<nav>
+  <div class="nav-inner">
+    <a href="./" class="logo" aria-label="Sigvara home"><svg class="brand-mark" viewBox="0 0 64 64" role="img" aria-label="Sigvara mark"><defs><linearGradient id="brand-gradient" x1="8" y1="8" x2="56" y2="56" gradientUnits="userSpaceOnUse"><stop stop-color="#c5b7ff"/><stop offset=".55" stop-color="#9475ff"/><stop offset="1" stop-color="#6fe5ea"/></linearGradient></defs><rect x="1" y="1" width="62" height="62" rx="19" fill="#15172b" stroke="rgba(197,183,255,.25)"/><path d="M46.5 20.5c-4.5-5-12.5-6.8-19.2-4.1-6.5 2.7-8.5 9.4-3.4 13.2 2.3 1.7 5.1 2.1 8.7 2.7 5.8.9 8 2.6 7.1 6.2-1.1 4.6-7.4 7-12.9 5.8-3.4-.8-6-2.4-8.2-5.3" fill="none" stroke="url(#brand-gradient)" stroke-width="5.2" stroke-linecap="round"/><circle cx="47" cy="20" r="3.1" fill="#6fe5ea"/><circle cx="18.5" cy="39" r="3.1" fill="#c5b7ff"/></svg><span class="wordmark">sig<span class="accent">vara</span></span></a>
+    <ul class="nav-links">
+      <li><a href="testnet">Run an agent</a></li>
+      <li><a href="./#protocol">Protocol</a></li>
+      <li><a href="agents">Explorer</a></li>
+      <li><a href="demo">Demo</a></li>
+      <li><a href="docs/quickstart">Docs</a></li>
+      <li><a href="https://github.com/RunTimeAdmin/Sigvara" rel="noopener">Source</a></li>
+      <li><a href="check" class="nav-cta">Check an agent</a></li>
+    </ul>
+  </div>
+</nav>
+
+<div class="app-wrap">
+  <ul class="ex-tabs">
+    <li><a href="agents">Agents</a></li>
+    <li><a href="operators">Operators</a></li>
+    <li><a href="slashes">Slashes</a></li>
+    <li><a href="simulation" aria-current="page">Simulation</a></li>
+    <li><a href="epochs">Score epochs</a></li>
+  </ul>
+  <section class="sim-hero" id="simHero">
+    <span class="sim-flag">Simulation</span>
+    <h1 class="u-h1-28">Testnet simulation</h1>
+    <p class="ep-lede">Sigvara is running a small, simulated agent economy on Arc testnet so anyone can watch its scoring and slashing work. <b>Every agent and customer on this page is operated by Sigvara.</b> None of it is real demand, and none of it should be read as traction.</p>
+    <div class="card-body"><p class="netnote">Reading…</p></div>
+  </section>
+
+  <div class="app-card u-hidden" id="timelineCard">
+    <h2>Timeline</h2>
+    <p class="sub">What happens when, over the four weeks.</p>
+    <div class="card-body"></div>
+  </div>
+
+  <div class="app-card u-hidden" id="castCard">
+    <h2>The cast</h2>
+    <p class="sub">Twenty simulated agents in four kinds. Each kind behaves differently, so its score should end up somewhere different.</p>
+    <div class="card-body"></div>
+  </div>
+
+  <div class="app-card" id="watchCard">
+    <h2>What to look for</h2>
+    <div class="card-body">
+      <ul class="sim-watch">
+        <li><b>Steady agents climb.</b> They deliver almost every job, so their scores should rise week by week. A score matures slowly, so the score other contracts read trails the earned one.</li>
+        <li><b>Failing agents stall.</b> Testnet records only successful outcomes, so a failing agent shows up as fewer signed outcomes and customers drifting away, not as a list of failures.</li>
+        <li><b>The ring does not buy a high score.</b> Its customers are wallets its own operator funds. Caps on what one payer can add should limit what that money buys, and two ring agents are slashed.</li>
+        <li><b>Every number can be checked.</b> Open an agent on the <a href="agents">Agents</a> page and press <i>Check evidence</i> to recompute its score's evidence yourself.</li>
+      </ul>
+      <p class="netnote">How it works and what it cannot show: <a href="https://github.com/RunTimeAdmin/Sigvara/blob/main/docs/simulation.md" target="_blank" rel="noopener">docs/simulation.md</a>. Every address it controls: <a href="simulation.json">simulation.json</a>.</p>
+    </div>
+  </div>
+</div>
+
+<footer>
+  <div class="footer-inner">
+    <div class="footer-left">
+      <a class="u-mono-13" href="./">sigvara.xyz</a> &nbsp;·&nbsp; MIT License
+    </div>
+    <div class="footer-links">
+      <a href="docs/quickstart">Quickstart</a>
+      <a href="docs/reputation">Reputation</a>
+      <a href="https://github.com/RunTimeAdmin/Sigvara" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </div>
+</footer>
+
+<script src="assets/did.js?v=32000f8"></script>
+<script src="assets/explorer.js?v=simview1"></script>
+<script src="assets/simulation.js?v=simview1"></script>
+</body>
+</html>
