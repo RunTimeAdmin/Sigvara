@@ -47,6 +47,7 @@ what is not yet true.
 | [AI Framework Integration](docs/ai-frameworks.md) | Developers — LangChain, AutoGen, CrewAI, Node.js |
 | [Reputation Model](docs/reputation-model.md) | Everyone — how the 6-factor score works and grows |
 | [Payment-backed attestations](docs/payment-backed-attestations.md) | Developers — how an attestation is tied to a settled payment, and the decay, diversity and evidence-root rules around it |
+| [Testnet simulation](docs/simulation.md) | Everyone: the labelled, simulated agent economy that exercises the protocol on Arc testnet, and why none of it is outside demand |
 | [Lineage](docs/lineage.md) | Everyone — the Robinhood Chain testnet run this protocol came from (addresses, oracle activity, what changed) |
 | [Security & Mainnet Readiness Review](docs/SECURITY_AND_MAINNET_READINESS_REVIEW.md) | Everyone — a point-in-time review dated 17 Sep 2026: conditional no-go for mainnet, with the blockers named |
 | [Governance and emergency powers](docs/adr/0005-governance-and-emergency-powers.md) | Everyone: who can do what in an emergency and who can stop whom, with the decisions behind the role split, the guardian pause and the launch floors |

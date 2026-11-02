@@ -15,6 +15,12 @@ packages/sdk/node_modules/
 
 # Oracle
 oracle/node_modules/
+sim/node_modules/
+# The simulation's state, manual steps and pause file when run from a checkout (docs/simulation.md).
+sim-state.json
+sim-state.json.tmp
+sim-manual-steps.md
+sim-pause
 oracle/.state/
 
 # Environment

@@ -165,6 +165,19 @@ else {
 }
 
 // ---------------------------------------------------------------------------
+// 2d. The testnet simulation's address list (docs/simulation.md) is published twice: in
+//     deployments/ for the record and in site/ for the explorer, which marks every address on it.
+//     A copy that drifts leaves simulated activity unmarked, so the two must be identical.
+// ---------------------------------------------------------------------------
+{
+  const record = 'deployments/5042002.simulation.json', served = 'site/simulation.json';
+  if (existsSync(join(root, record)) || existsSync(join(root, served))) {
+    if (!existsSync(join(root, record)) || !existsSync(join(root, served))) fail(served, `${record} and ${served} must both exist or neither`);
+    else if (read(record) !== read(served)) fail(served, `differs from ${record}; copy it again`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 3. Every Arc testnet address published anywhere must match the deployment artifact.
 // ---------------------------------------------------------------------------
 const deployed = JSON.parse(read('deployments/5042002.json'));

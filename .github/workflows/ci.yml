@@ -82,6 +82,12 @@ jobs:
       - run: npm ci
       - run: node --test
 
+      # The testnet simulation's cast and hour plans (docs/simulation.md). Runs here because
+      # this job already has node; it needs no chain and no keys.
+      - name: Simulation plan
+        working-directory: sim
+        run: npm ci && node --test
+
       # Runs here because this job already has node and ethers installed. The check
       # reads src/*.sol and asserts the site and docs still describe it accurately:
       # selectors, the status enum, published addresses, and claims that were true
