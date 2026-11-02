@@ -107,7 +107,7 @@ convenience copy.
 
 Every contract above, and the implementation behind each proxy, is source-verified on the
 [Arc explorer](https://explorer.testnet.arc.io) and reproduced byte for byte by a build of the
-commit tagged `arc-testnet-2026-11-02`. To check it yourself: `git checkout arc-testnet-2026-11-02`,
+commit tagged `arc-testnet-2026-11-02b`. To check it yourself: `git checkout arc-testnet-2026-11-02b`,
 then `sh scripts/fetch-deps.sh && forge build && node scripts/check-bytecode.mjs`
 ([how](docs/arc.md#verifying-the-deployed-code)).
 
