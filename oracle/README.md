@@ -352,7 +352,7 @@ This is fine for local testing and worthless as a trust signal in public.
 | 202 | Accepted, but the state file could not be written, so a restart before the next good save loses it. The body has `"durable": false`. Do not resend: it is recorded here, and a resend is refused (409 for a settlement already credited, 429 inside the cooldown). A payer-signed outcome sent again gets a 409 with `sameOutcome: true`, and `durable: false` until a save works. `/health` is 503 until a save works |
 | 400 | Malformed body, unknown agent, or a `success` that is not a boolean |
 | 402 | The payment did not check out; `code` says why (`self_payment`, `no_transfer`, `below_minimum`) |
-| 409 | `replayed`: this settlement was already credited. `outcome_recorded`: it already has an outcome, which is final. For a payer-signed outcome both also carry `sameOutcome`, and `outcome_recorded` the held outcome's `heldOutcomeHash` |
+| 409 | `replayed`: this settlement was already credited. `outcome_recorded`: it already has an outcome, which is final. For a payer-signed outcome both also carry `sameOutcome`, and `outcome_recorded` the held outcome's `heldOutcomeHash` when the payer signed the outcome held (a token holder's held outcome gives only `sameOutcome: false`) |
 | 413 | The body is over 1 MB. `/flag`, `/flag/resolve` and `/link` answer the same way |
 | 429 | Cooldown active for this (attester, didHash) — `remainingSeconds` says how long. Applies to callers without a token; a token holder reporting on a verified payment is not throttled |
 | 502 | The RPC failed. Not a verdict on the payment; retry |
