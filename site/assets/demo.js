@@ -14,9 +14,11 @@
  *     until someone expires the proposal, which anyone can do from 14 days after its
  *     deadline. The admin can veto a pending or disputed proposal, a committee member
  *     can cancel a pending one, and after any dropped proposal the committee waits one
- *     challenge period before filing again. Reporter = the committee member who filed,
- *     and victim/reporter shares are credited for them to claim, not pushed. The Arc
- *     testnet proxies run these rules since their upgrades on 26 and 28 October 2026. Two newer
+ *     challenge period before filing again. Reporter = the committee member who filed;
+ *     it takes no share. 75% burns and the victim's 25% is credited for it to claim, not
+ *     pushed. The Arc testnet proxies run these rules since their upgrades on 26 and 28
+ *     October 2026, except the split: the staking proxy burns 50% and pays the reporter
+ *     25% until it is upgraded to the current code. Two newer
  *     rules are not modelled,
  *     because the simulator has no committee that changes and no choice of evidence: the
  *     reporter must still sit on the committee when a slash executes, and evidence the
@@ -289,7 +291,7 @@
     }
     // Gate on active stake plus anything queued for withdrawal.
     if (this.stake + (this.pendingWithdrawal ? this.pendingWithdrawal.amount : 0n) === 0n) throw new Error('NoStake');
-    // The reporter is the committee member who files (msg.sender); they receive the reporter share.
+    // The reporter is the committee member who files (msg.sender); it takes no share of the slash.
     this.slash = { victim: victim, reporter: this.committee, initiatedAt: this.now, deadline: this.now + PARAMS.challengePeriod, state: 'Pending' };
     this.agent.status = 'Suspended';
     this.emit('AgentStatusUpdated', { didHash: this.agent.didHash, newStatus: 'Suspended' }, 'SigvaraIdentity, applied by the staking core (operator cannot lift it)');
@@ -377,25 +379,24 @@
     return this._settle(p);
   };
 
-  /// Shared settlement for an undisputed slash and for an upheld dispute. Victim and
-  /// reporter shares are credited and pulled, so a recipient that cannot receive the
-  /// token cannot block settlement and freeze the bond.
+  /// Shared settlement for an undisputed slash and for an upheld dispute. The victim's
+  /// share is credited and pulled, so a recipient that cannot receive the token cannot
+  /// block settlement and freeze the bond. The committee that filed takes nothing.
   Simulator.prototype._settle = function (p) {
     var total = this.stake + (this.pendingWithdrawal ? this.pendingWithdrawal.amount : 0n);
-    var burned = total / 2n, toVictim = total / 4n, toReporter = total - burned - toVictim;
+    var toVictim = total / 4n, burned = total - toVictim;
     this.stake = 0n; this.pendingWithdrawal = null;
     this.burned += burned;
     // Pull, not push: credited now, withdrawn by the recipient later.
     this.claimable[p.victim] = (this.claimable[p.victim] || 0n) + toVictim;
-    this.claimable[p.reporter] = (this.claimable[p.reporter] || 0n) + toReporter;
     p.state = 'Executed';
     this.agent.status = 'Slashed';
     this.score = { factors: { feeScore: 0, successScore: 0, ageScore: 0, externalScore: 0, communityScore: 0, propagationScore: 0 }, total: 0, lastUpdated: this.now };
     this.pendingScore = null;
     this.emit('AgentStatusUpdated', { didHash: this.agent.didHash, newStatus: 'Slashed' }, 'SigvaraIdentity: terminal, no further transitions');
     this.emit('ReputationZeroed', { didHash: this.agent.didHash }, 'SigvaraReputation.zeroReputation, called by the staking core; pending proposal cleared');
-    this.emit('SlashExecuted', { didHash: this.agent.didHash, burned: burned, toVictim: toVictim, toReporter: toReporter }, '50% burned to 0xdead; 25% victim and 25% reporter credited for them to claim');
-    return { burned: burned, toVictim: toVictim, toReporter: toReporter };
+    this.emit('SlashExecuted', { didHash: this.agent.didHash, burned: burned, toVictim: toVictim }, '75% burned to 0xdead; 25% credited to the victim to claim; the reporter takes nothing');
+    return { burned: burned, toVictim: toVictim };
   };
   Simulator.prototype.requireAgent = function () { if (!this.agent) throw new Error('NoAgent: register first'); };
 

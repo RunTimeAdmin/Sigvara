@@ -95,8 +95,8 @@ contract SecurityFixesTest is Test, RegistrationHelper {
 
     // ------------------------------------------------- staking: slash guards --
 
-    /// The caller is recorded as the reporter and takes 25%. Naming itself as the
-    /// victim too would make one committee signature a 50% self-payment.
+    /// The victim takes 25%. Naming itself as the victim would make one committee
+    /// signature a self-payment out of the accused party's stake.
     function test_fix_initiateSlash_rejectsVictimEqualsReporter() public {
         vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.VictimIsReporter.selector, committee));
         vm.prank(committee);

@@ -6,6 +6,12 @@ Sigvara's claim is that reputation carries weight because misbehaviour costs cap
 contracts implement that and the contract suite covers it, but before this drill nobody had
 watched a bond actually get taken. What happened is in [slash-drill-log.md](slash-drill-log.md).
 
+> **The split changed after this drill.** The drill ran on the first split: 50% burned, 25% to
+> the victim, 25% to the reporter. The code on main now burns 75%, pays the victim 25% and pays
+> the reporter nothing, and refuses any committee member as the victim. The Arc testnet staking
+> proxy keeps the first split until it is upgraded; a drill after that costs 750 SVR of a
+> 1,000 SVR bond, not 500. The figures below are the first split's.
+
 Budget **seven days**. `challengePeriod()` is 604800 seconds. An admin can lower it to no
 less than `MIN_CHALLENGE_PERIOD` (3 days), but not for a proposal already filed, whose
 deadline is snapshotted at filing. That makes this the long pole in front of anything that depends on the
@@ -287,8 +293,10 @@ cast call <staking> "claimable(address)(uint256)" <VICTIM> --rpc-url arc_testnet
 cast call <svr> "balanceOf(address)(uint256)" 0x000000000000000000000000000000000000dEaD --rpc-url arc_testnet
 ```
 
-The split is 50% burned to `0xdead`, 25% to the victim, 25% to the reporter. Proceeds are
-credited rather than pushed, so claim them to show the last step works:
+On the first split, which the testnet proxy runs until it is upgraded, 50% is burned to
+`0xdead`, 25% goes to the victim and 25% to the reporter. On the current code 75% is burned
+and 25% goes to the victim. Proceeds are credited rather than pushed, so claim them to show
+the last step works:
 
 ```bash
 cast send <staking> "claimSlashProceeds()" --rpc-url arc_testnet --private-key <VICTIM_KEY>

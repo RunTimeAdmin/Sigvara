@@ -156,7 +156,7 @@ contract ReporterAuthorityTest is Test, RegistrationHelper {
         staking.executeSlash(didHash);
 
         assertEq(staking.getStake(didHash), 0);
-        assertEq(staking.claimable(committee), STAKE / 4);
+        assertEq(staking.claimable(committee), 0, "the reporter is never paid");
         assertEq(staking.claimable(victim), STAKE / 4);
     }
 
@@ -233,6 +233,26 @@ contract ReporterAuthorityTest is Test, RegistrationHelper {
 
         assertEq(staking.getStake(didHash), 0);
         assertEq(uint8(_status(didHash)), uint8(SigvaraIdentity.AgentStatus.Slashed));
-        assertEq(staking.claimable(committee), STAKE / 4, "paid as the reporter of record");
+        assertEq(staking.claimable(committee), 0, "the reporter of record is not paid");
+        assertEq(staking.claimable(victim), STAKE / 4);
+    }
+
+    /// No member profits from a slash: one member cannot name another as the victim and split
+    /// the victim's share between them.
+    function test_initiateSlash_rejectsAnotherCommitteeMemberAsVictim() public {
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.VictimIsCommittee.selector, committee2));
+        vm.prank(committee);
+        staking.initiateSlash(didHash, committee2, bytes("evidence"));
+
+        assertEq(uint8(staking.getSlashProposal(didHash).state), uint8(SigvaraStaking.SlashState.None));
+        assertEq(uint8(_status(didHash)), uint8(SigvaraIdentity.AgentStatus.Active), "agent not suspended");
+    }
+
+    /// The same address is a fine victim once it has left the committee.
+    function test_initiateSlash_acceptsAFormerMemberAsVictim() public {
+        _revoke(committee2);
+        vm.prank(committee);
+        staking.initiateSlash(didHash, committee2, bytes("evidence"));
+        assertEq(staking.getSlashProposal(didHash).victim, committee2);
     }
 }

@@ -143,7 +143,7 @@ contract DisputeFreezeTest is Test, RegistrationHelper {
         staking.resolveDispute(didHash, true);
 
         assertEq(staking.getStake(didHash), 0, "stake slashed");
-        assertEq(svr.balanceOf(address(0xdead)), STAKE / 2, "half burned");
+        assertEq(svr.balanceOf(address(0xdead)), STAKE - STAKE / 4, "three quarters burned");
         assertEq(staking.claimable(victim), STAKE / 4, "victim credited");
         assertEq(
             uint8(identity.getIdentity(didHash).status),
@@ -237,16 +237,15 @@ contract DisputeFreezeTest is Test, RegistrationHelper {
         // Settlement succeeds: the victim's share is credited, not pushed.
         s2.executeSlash(did2);
         assertEq(s2.claimable(victim), STAKE / 4, "victim credited despite being unreceivable");
-        assertEq(token.balanceOf(address(0xdead)), STAKE / 2, "burn still went out");
+        assertEq(token.balanceOf(address(0xdead)), STAKE - STAKE / 4, "burn still went out");
 
         // Only the victim's own claim fails, and only for the victim.
         vm.prank(victim);
         vm.expectRevert();
         s2.claimSlashProceeds();
 
-        vm.prank(committee);
-        s2.claimSlashProceeds();
-        assertEq(token.balanceOf(committee), STAKE - STAKE / 2 - STAKE / 4, "reporter paid out");
+        // The reporter has no share to claim.
+        assertEq(s2.claimable(committee), 0, "reporter not paid");
     }
 
     /// An admin must not be able to shorten a dispute window that is already running.

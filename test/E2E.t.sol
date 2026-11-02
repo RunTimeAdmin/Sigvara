@@ -188,20 +188,18 @@ contract E2EIntegrationTest is Test, RegistrationHelper {
 
         staking.executeSlash(didHash);
 
-        // Verify distributions: 50% burn, 25% victim, 25% reporter
+        // Verify distributions: 75% burn, 25% victim, nothing to the reporter
         uint256 totalSlashed = MIN_STAKE * 2;
-        assertEq(svr.balanceOf(address(0xdead)), totalSlashed / 2, "Burn amount incorrect");
-        // Victim and reporter shares are credited and pulled, so an unreceivable
-        // recipient cannot block settlement and freeze the bond.
+        assertEq(svr.balanceOf(address(0xdead)), totalSlashed - totalSlashed / 4, "Burn amount incorrect");
+        // The victim's share is credited and pulled, so an unreceivable recipient
+        // cannot block settlement and freeze the bond.
         assertEq(staking.claimable(victim), totalSlashed / 4, "Victim credit incorrect");
-        assertEq(staking.claimable(committee), totalSlashed - totalSlashed / 2 - totalSlashed / 4, "Reporter credit incorrect");
+        assertEq(staking.claimable(committee), 0, "Reporter credited");
 
         vm.prank(victim);
         staking.claimSlashProceeds();
-        vm.prank(committee);
-        staking.claimSlashProceeds();
         assertEq(svr.balanceOf(victim) - victimBalBefore, totalSlashed / 4, "Victim payment incorrect");
-        assertEq(svr.balanceOf(committee) - committeeBalBefore, totalSlashed - totalSlashed / 2 - totalSlashed / 4, "Reporter payment incorrect");
+        assertEq(svr.balanceOf(committee), committeeBalBefore, "Reporter paid");
 
         // -------------------------------------------------------------------------
         // Step 7: Verify agent is slashed and reputation zeroed
