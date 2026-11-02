@@ -618,4 +618,55 @@ describe('SigvaraGate across instances', () => {
     expect(() => store.seen('n1')).toThrow(/only consume/);
     expect(() => store.add('n1', 1800000000)).toThrow(/only consume/);
   });
+
+  describe("with profile: 'production'", () => {
+    const fleet = { profile: 'production', instances: 'multiple', maxScoreAgeSeconds: 3600 };
+
+    it('refuses to start without instances', () => {
+      expect(() => admitting({ profile: 'production', maxScoreAgeSeconds: 3600 })).toThrow(/must be set: instances/);
+    });
+
+    it('refuses to start without maxScoreAgeSeconds', () => {
+      expect(() => admitting({ profile: 'production', instances: 'single' }))
+        .toThrow(/must be set: maxScoreAgeSeconds/);
+    });
+
+    it('names everything missing in one message', () => {
+      expect(() => admitting({ profile: 'production' })).toThrow(/instances .*; maxScoreAgeSeconds/);
+    });
+
+    // A typo read from the environment must not quietly build the gate the profile exists to rule out.
+    it.each(['prod', 'Production', '', 'development'])('refuses a profile of %j rather than ignoring it', (profile) => {
+      expect(() => admitting({ profile, instances: 'single', maxScoreAgeSeconds: 3600 })).toThrow(/profile must be/);
+    });
+
+    it('starts as one process with an age limit, and without a profile keeps the defaults', () => {
+      expect(() => admitting({ profile: 'production', instances: 'single', maxScoreAgeSeconds: 3600 })).not.toThrow();
+      expect(() => admitting()).not.toThrow();
+    });
+
+    it("still refuses 'multiple' without an atomic consume", () => {
+      expect(() => admitting(fleet)).toThrow(/atomic consume/);
+    });
+
+    it('admits a response once across a fleet sharing an atomic store', async () => {
+      const backend = sharedBackend();
+      const a = admitting({ ...fleet, nonceStore: atomicNonceStore(backend.setIfAbsent) });
+      const b = admitting({ ...fleet, nonceStore: atomicNonceStore(backend.setIfAbsent) });
+      const c = a.challenge(DID);
+      const sig = signChallenge(c.payload, kp.secretKey);
+      const [first, second] = await Promise.all([a.admit(DID, c, sig), b.admit(DID, c, sig)]);
+      expect([first.ok, second.ok].sort()).toEqual([false, true]);
+      expect([first.reason, second.reason]).toContain('replayed');
+    });
+
+    it('refuses a score the oracle stopped refreshing', async () => {
+      const gate = admitting({ profile: 'production', instances: 'single', maxScoreAgeSeconds: 3600 });
+      // The oracle's last write was two hours ago.
+      (gate as any).verifier.getScoreUpdatedAt = vi.fn(async () => Math.floor(Date.now() / 1000) - 7200);
+      const c = gate.challenge(DID);
+      const r = await gate.admit(DID, c, signChallenge(c.payload, kp.secretKey));
+      expect(r).toMatchObject({ ok: false, reason: 'stale_score', score: 50 });
+    });
+  });
 });

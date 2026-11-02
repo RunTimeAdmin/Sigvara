@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Added: `profile: 'production'` on `SigvaraGate`
+
+A gate built with `profile: 'production'` refuses to start unless `instances` and
+`maxScoreAgeSeconds` are both set, and the error names everything missing. Left out, they default to
+one process and no age limit, so a fleet that forgot `instances` replays a response admitted at one
+instance at another, and a gate without a limit keeps admitting on a score the oracle stopped
+refreshing. `instances: 'multiple'` still needs a `nonceStore` with an atomic `consume()`. A
+`profile` other than `'production'` is refused rather than ignored. Without a profile nothing
+changes.
+
 ## 1.0.0-alpha.13
 
 ### Added: payment outcomes signed by the payer

@@ -171,6 +171,26 @@ The constructor refuses a `threshold` that is not a finite number of 0 or more, 
 `Number(process.env.THRESHOLD)` with the variable unset, would otherwise admit every active
 agent that can prove its key, whatever its score.
 
+**A gate that has to say how it runs.** Two of the defaults suit a test bench and not a
+deployment, and both fail open by being left out: `instances` defaults to one process, and no
+`maxScoreAgeSeconds` means no age limit. `profile: 'production'` makes the constructor refuse to
+build the gate until both are set, and names everything missing in one error:
+
+```typescript
+const gate = new SigvaraGate({
+  rpcUrl: RPC, addresses, chainId: CHAIN_ID,
+  threshold: 40,
+  audience: 'https://your-service.example',
+  profile: 'production',
+  instances: 'multiple',      // or 'single' if exactly one process serves this gate
+  nonceStore,                 // shared and atomic, required with 'multiple' (see below)
+  maxScoreAgeSeconds: 7_200,  // a few times your oracle's epoch
+});
+```
+
+Any other `profile` value is refused rather than ignored, so `'prod'` read from an environment
+variable does not quietly build the unchecked gate.
+
 The proof is checked before the status or the score is read, so a caller who cannot prove an
 identity cannot make your gate read either, and a failed proof does not consume the nonce, so
 nobody can lock out a challenge's legitimate holder by spending it with garbage. Checking the
@@ -239,6 +259,11 @@ do. The default store is in memory and therefore per process; see the note above
 a distributed one has to implement. `atomicNonceStore` builds one from a Redis `SET NX` or a
 database insert, and `instances: 'multiple'` makes the gate refuse to start without one (both
 from 1.0.0-alpha.13).
+
+**An explicit topology and score age in production.** Pass `profile: 'production'` and the gate
+will not start until `instances` and `maxScoreAgeSeconds` are set, so a fleet cannot run on the
+per-process store, or admit on a score the oracle stopped refreshing, because a setting was left
+out (not yet released).
 
 **Using `verifySignature` directly still leaves the nonce to you.** It has no memory by
 design, so if you are not going through the gate, store the nonces you issue, reject one
