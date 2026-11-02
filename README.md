@@ -579,15 +579,15 @@ FOUNDRY_PROFILE=ci forge test
 
 ## Testing
 
-Everything below runs offline, with no deployed contracts, except two fork suites. `test/SlashDrillFork.t.sol` forks Arc testnet on every run, so it needs the `arc_testnet` endpoint in `foundry.toml` to answer. `test/SplitAuthorityFork.t.sol` skips its seven tests unless you pass `--fork-url https://rpc.testnet.arc.io`.
+Everything below runs offline, with no deployed contracts, except two fork suites. `test/SlashDrillFork.t.sol` forks Arc testnet on every run, so it needs the `arc_testnet` endpoint in `foundry.toml` to answer. `test/SplitAuthorityFork.t.sol` skips its twelve tests unless you pass `--fork-url https://rpc.testnet.arc.io`.
 
 | Suite | Count | Command |
 |---|---|---|
-| Contracts: unit, fuzz, E2E, upgrade, deploy-script, handover and 19 invariants | 706 | `forge test` |
+| Contracts: unit, fuzz, E2E, upgrade, deploy-script, handover and 19 invariants | 711 | `forge test` |
 | Oracle | 844 | `cd oracle && node --test` |
 | SDK | 233 | `cd packages/sdk && npx vitest run` |
 
-Counts are individual tests as measured on 1 November 2026, so each of the 19 invariants counts once. Without a fork URL, 699 of the contract tests run and 7 skip. The SDK's 233 include 8 integration tests that skip without a live deployment. Vitest strips types without checking them, so `npm run typecheck` in `packages/sdk` checks the tests against the SDK's types as well as the sources. [`scripts/mutation`](scripts/mutation/README.md) holds the harnesses that measure whether these tests would catch a deliberate break in the contracts or deploy scripts.
+Counts are individual tests as measured on 1 November 2026, so each of the 19 invariants counts once. Without a fork URL, 699 of the contract tests run and 12 skip. The SDK's 233 include 8 integration tests that skip without a live deployment. Vitest strips types without checking them, so `npm run typecheck` in `packages/sdk` checks the tests against the SDK's types as well as the sources. [`scripts/mutation`](scripts/mutation/README.md) holds the harnesses that measure whether these tests would catch a deliberate break in the contracts or deploy scripts.
 
 ### Unit Tests (default)
 
