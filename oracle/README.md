@@ -867,6 +867,7 @@ Setup, step by step with the exact transactions, is in
    `seesProposals` so a reader can tell the two apart.
 
 Exit is not instant: `initiateUnbond()` starts a 7-day cooldown before `withdrawBond()`.
+The date is fixed when the cooldown starts; a later change to `unbondingPeriod` does not move it.
 
 ## The divergence watcher
 

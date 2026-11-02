@@ -18,7 +18,7 @@ Any of these is enough: the `.env` or a copy of it was readable by someone it sh
    - `removeOperator(<key>)` on `SigvaraOracleBond` (admin). If the key is only a signer, the bond owner calls `clearSigner()` instead (any status works). Neither testnet operator has a signer named, so that case does not arise there yet.
    - If funds could move, the guardian calls `pauseInflows()` (the admin can lift it). It closes registrations, deposits, proposals and bonds for 3 days and moves nothing.
 3. **Reject what it already proposed.** The committee calls `rejectReputation(didHash)` for every pending proposal from that key, before the window closes (6 hours on the testnet). To find them: read the `ScoreProposed` logs of the last window and check the sender of each transaction; for each agent you can also read `getPendingScore(didHash)`, whose `proposer` field names who made the proposal. The checker's `GET /divergence` lists the ones it disagrees with.
-4. **If no signer is named, watch for `initiateUnbond`.** If the thief starts it, the committee slashes the operator inside the 7 days.
+4. **If no signer is named, watch for `initiateUnbond`.** If the thief starts it, the committee slashes the operator inside the 7 days. The 7 days are fixed when the unbond starts (`unbondingClaimableAt(<key>)`), so changing `unbondingPeriod` afterwards neither buys time nor shortens it. On the testnet this holds once the bond registry is upgraded to the code on `main`; until then the period is read at withdrawal.
 
 ## 2. Keep the evidence before anything is deleted
 
