@@ -173,8 +173,8 @@ agent that can prove its key, whatever its score.
 
 **A gate that has to say how it runs.** Two of the defaults suit a test bench and not a
 deployment, and both fail open by being left out: `instances` defaults to one process, and no
-`maxScoreAgeSeconds` means no age limit. `profile: 'production'` makes the constructor refuse to
-build the gate until both are set, and names everything missing in one error:
+`maxScoreAgeSeconds` means no age limit. `profile: 'production'` (from 1.0.0-alpha.14) makes the
+constructor refuse to build the gate until both are set, and names everything missing in one error:
 
 ```typescript
 const gate = new SigvaraGate({
@@ -263,7 +263,7 @@ from 1.0.0-alpha.13).
 **An explicit topology and score age in production.** Pass `profile: 'production'` and the gate
 will not start until `instances` and `maxScoreAgeSeconds` are set, so a fleet cannot run on the
 per-process store, or admit on a score the oracle stopped refreshing, because a setting was left
-out (not yet released).
+out (from 1.0.0-alpha.14).
 
 **Using `verifySignature` directly still leaves the nonce to you.** It has no memory by
 design, so if you are not going through the gate, store the nonces you issue, reject one
