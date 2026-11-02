@@ -68,9 +68,12 @@ import {TimelockController} from "@openzeppelin/contracts/governance/TimelockCon
  * about themselves, so phases 3 and 5 also refuse a timelock whose code is not the TimelockController phase 2
  * deploys, or that the deployer did not create, and a Safe that is an account which has delegated to a
  * contract (EIP-7702). The Safe's owners and threshold are its own answers too, so phase 5 believes them only
- * from a Safe proxy running code Safe published (1.3.0, 1.4.1 or 1.5.0, by code hash), and refuses one with a
- * module enabled, since a module acts as the Safe without its owners. Any other multisig is refused unless the
- * operator says they checked its code, owners, threshold and modules some other way.
+ * from a Safe proxy running code Safe published (1.3.0, 1.4.1 or 1.5.0, by code hash) whose storage Safe's own
+ * factory made, from a setup that delegated to nothing but Safe's L2 switch: Safe's code decides who may act from
+ * storage, and its getters list only what is linked into their lists. It refuses a Safe with a module enabled,
+ * since a module acts as the Safe without its owners, and one with a guard, which can refuse every transaction
+ * the Safe makes, the ones that schedule upgrades included. Any other multisig is refused unless the operator
+ * names it as one they checked some other way.
  *
  * ## Usage
  *
@@ -98,8 +101,10 @@ import {TimelockController} from "@openzeppelin/contracts/governance/TimelockCon
  *   BEFORE_RENOUNCE=1 SAFE=0x... TIMELOCK=0x... COMMITTEE=0x... ORACLE=0x... GUARDIAN=0x... \
  *     node scripts/check-role-holders.mjs
  *
- *   # 5. Only now does the EOA drop anything. Refuses unless step 4 actually landed.
- *   PHASE=renounce SAFE=0x... TIMELOCK=0x... CONFIRM=yes-drop-the-deployer \
+ *   # 5. Only now does the EOA drop anything. Refuses unless step 4 actually landed. SAFE_FACTORY and
+ *   #    SAFE_CREATION_CALL come from the transaction that created the Safe: its factory and its input.
+ *   PHASE=renounce SAFE=0x... TIMELOCK=0x... SAFE_FACTORY=0x... SAFE_CREATION_CALL=0x... \
+ *     CONFIRM=yes-drop-the-deployer \
  *     forge script script/SplitAuthority.s.sol --rpc-url arc_testnet --broadcast -vv
  *
  * Env:
@@ -111,11 +116,14 @@ import {TimelockController} from "@openzeppelin/contracts/governance/TimelockCon
  *   DEPLOYER_PRIVATE_KEY Broadcasting key for phases 2, 3 and 5. Must be the current
  *                        admin and upgrader. Phases 1 and 4 never broadcast and never read it.
  *   CONFIRM              Must be `yes-drop-the-deployer` for phase 5.
+ *   SAFE_FACTORY         The Safe proxy factory that created SAFE: the `to` of the creation transaction.
+ *   SAFE_CREATION_CALL   That transaction's input, a createProxyWithNonce or createChainSpecificProxyWithNonce call.
+ *                        Phase 5 works out the address it creates and refuses a SAFE that is not that address.
  *   CONFIRM_UNINSPECTABLE_SAFE
- *                        `yes-i-checked-the-safe` lets phase 5 go ahead when SAFE is not a Safe proxy running code
- *                        Safe published (another multisig, or a Safe version this file does not list). Say it only
- *                        once you have checked its code, owners, threshold and modules some other way. Unset, such
- *                        a SAFE is refused.
+ *                        SAFE's own address lets phase 5 go ahead when SAFE is not a Safe proxy running code Safe
+ *                        published (another multisig, or a Safe version this file does not list). Set it only once
+ *                        you have checked its code, owners, threshold, modules and history some other way. Unset,
+ *                        or naming another address, such a SAFE is refused.
  *
  * Rehearse first: test/SplitAuthority.t.sol runs every phase offline against fresh registries
  * and a stand-in Safe. test/SplitAuthorityFork.t.sol runs the same steps against a fork of
@@ -151,6 +159,13 @@ contract SplitAuthority is Script {
     bytes32 internal constant SAFE_L2_1_4_1 = 0xb1f926978a0f44a2c0ec8fe822418ae969bd8c3f18d61e5103100339894f81ff;
     bytes32 internal constant SAFE_1_5_0 = 0xdda019cbd7c867a533a2a86e5c53434fdc50b13122b5a5ddb4a8df61b31c20f2;
     bytes32 internal constant SAFE_L2_1_5_0 = 0x180193227186ccb85316c94db1f0d156ed932b14712cfaac78901899178572dc;
+    /// The runtime of each version's SafeProxyFactory, and of the SafeToL2Setup a Safe made for an L2 delegates to
+    /// in its setup, from safe-deployments as well and checked on Arc testnet.
+    bytes32 internal constant SAFE_FACTORY_1_3_0 = 0x337d7f54be11b6ed55fef7b667ea5488db53db8320a05d1146aa4bd169a39a9b;
+    bytes32 internal constant SAFE_FACTORY_1_4_1 = 0x50c3cdc4074750a7a974204a716c999edd37482f907608d960b2b025ee0b3317;
+    bytes32 internal constant SAFE_FACTORY_1_5_0 = 0x967dae4cda22b0c9ef7f31b010bdc1ceb0af9904b0c3dc060b5302e4c18a4529;
+    bytes32 internal constant SAFE_TO_L2_SETUP_1_4_1 = 0x2f25df28caf984366ee584e13241707e85dcd5a6ea0c14267928dafc1fd6274b;
+    bytes32 internal constant SAFE_TO_L2_SETUP_1_5_0 = 0xf6034d841bcbff8912aa55526b0f1609212536aaf60bb16f5e8a269a4ab38f18;
     /// Where a Safe keeps its guard and its fallback handler, which the plan prints.
     bytes32 internal constant SAFE_GUARD_SLOT = keccak256("guard_manager.guard.address");
     bytes32 internal constant SAFE_FALLBACK_HANDLER_SLOT = keccak256("fallback_manager.handler.address");
@@ -193,6 +208,12 @@ contract SplitAuthority is Script {
     error SafeNotRecognized(address safe, bytes32 proxyCodeHash, address implementation);
     error SafeHasModules(address safe, address module);
     error SafeModulesUnreadable(address safe);
+    error SafeHasGuard(address safe, address guard);
+    error DeployerIsAModule(address safe);
+    error SafeCreationNotShown(address safe);
+    error SafeFactoryNotRecognized(address factory, bytes32 codeHash);
+    error SafeNotCreatedAsShown(address safe, address created);
+    error SafeSetupDelegatedTo(address safe, address to);
     error SafeIsADelegatedAccount(address safe);
     error DeployerStillAdmin(string target, address deployer);
     error UpgraderRoleNotSelfAdministered(string target);
@@ -261,7 +282,7 @@ contract SplitAuthority is Script {
         (string memory proxy, string memory implementation) = _safeVersion(safe);
         if (bytes(proxy).length == 0 || bytes(implementation).length == 0) {
             console2.log("NOTE: SAFE is not a Safe proxy running code Safe published, so its owners and threshold are");
-            console2.log("      its own word. PHASE=renounce refuses it unless CONFIRM_UNINSPECTABLE_SAFE=yes-i-checked-the-safe.");
+            console2.log("      its own word. PHASE=renounce refuses it unless CONFIRM_UNINSPECTABLE_SAFE is set to its address.");
         } else {
             console2.log("safe proxy    ", proxy);
             console2.log("safe code     ", implementation);
@@ -271,8 +292,12 @@ contract SplitAuthority is Script {
                 console2.log("WARNING: module enabled, which can act as the Safe without its owners:", modules[i]);
             }
             if (modules.length > 0) console2.log("         PHASE=renounce refuses this Safe until the owners disable it.");
-            console2.log("safe guard    ", address(uint160(uint256(vm.load(safe, SAFE_GUARD_SLOT)))));
+            address guard = address(uint160(uint256(vm.load(safe, SAFE_GUARD_SLOT))));
+            if (guard != address(0)) {
+                console2.log("WARNING: a guard, which can refuse any Safe transaction. PHASE=renounce refuses it:", guard);
+            }
             console2.log("safe fallback ", address(uint160(uint256(vm.load(safe, SAFE_FALLBACK_HANDLER_SLOT)))));
+            console2.log("PHASE=renounce also needs SAFE_FACTORY and SAFE_CREATION_CALL from the Safe's creation transaction.");
         }
         try ISafe(safe).getThreshold() returns (uint256 threshold) {
             address[] memory owners = ISafe(safe).getOwners();
@@ -463,9 +488,12 @@ contract SplitAuthority is Script {
      *          timelock can), but they can change who proposes, cancels and executes
      *        - a Safe with a threshold under two, which leaves one owner key acting alone on
      *          everything DEFAULT_ADMIN_ROLE administers, with no delay
-     *        - a Safe that cannot be asked for its threshold, which would pass the two owner checks without
-     *          either having looked at it. Another multisig can be a legitimate target, so the operator may say
-     *          they read the threshold some other way (CONFIRM_UNINSPECTABLE_SAFE); nothing here has
+     *        - a Safe that is not Safe's code, or that Safe's factory did not create from a plain setup: its
+     *          owners and threshold would be only what it says, and storage written around its lists can act
+     *          without showing. Another multisig can be a legitimate target, so the operator may name it as one
+     *          they checked some other way (CONFIRM_UNINSPECTABLE_SAFE); nothing here has
+     *        - a Safe with a module enabled, the deployer as a module, or a guard: a module acts as the Safe
+     *          without the owners, and a guard can refuse whatever the Safe does
      *        - a timelock whose code is not the TimelockController phase 2 deploys. Its delay and its roles are
      *          only what it says they are, and a contract can say the right things while letting its owner
      *          upgrade at once
@@ -486,8 +514,10 @@ contract SplitAuthority is Script {
         address timelock = _requireTimelock();
         address deployer = _deployerAddress();
         if (safe == deployer) revert SafeIsTheDeployer(safe);
-        // Everything below asks the Safe about itself, so first that the answers are Safe's own code.
-        _requireKnownSafe(safe);
+        // Everything below asks the Safe about itself, so first that the answers are Safe's own code and storage.
+        _requireKnownSafe(
+            safe, deployer, vm.envOr("SAFE_FACTORY", address(0)), vm.envOr("SAFE_CREATION_CALL", bytes(""))
+        );
 
         // `safe != deployer` is not enough on its own. A Safe whose only owner is the
         // deployer, at a threshold of one, passes every other check here while leaving
@@ -678,24 +708,103 @@ contract SplitAuthority is Script {
         return type(uint256).max; // unknown, on the operator's word: do not trip the owner guards
     }
 
-    /// @dev Phase 5's answer to "is this a Safe": a Safe proxy running code Safe published, with no module
-    ///      enabled. Anything else goes ahead only on the operator's word, and is then still asked for its owners
-    ///      and threshold, so an answer that fails the owner guards is refused even so.
-    function _requireKnownSafe(address safe) internal view {
+    /// @dev Phase 5's answer to "is this a Safe": a Safe proxy running code Safe published, created by Safe's
+    ///      factory as the operator shows, with no module and no guard. Anything else goes ahead only when the
+    ///      operator names it, and is then still asked for its owners and threshold, so an answer that fails the
+    ///      owner guards is refused even so.
+    function _requireKnownSafe(address safe, address deployer, address factory, bytes memory creation)
+        internal
+        view
+    {
         (string memory proxy, string memory implementation) = _safeVersion(safe);
         if (bytes(proxy).length == 0 || bytes(implementation).length == 0) {
-            string memory said = vm.envOr("CONFIRM_UNINSPECTABLE_SAFE", string(""));
-            if (keccak256(bytes(said)) != keccak256("yes-i-checked-the-safe")) {
-                revert SafeNotRecognized(safe, safe.codehash, _implementationOf(safe));
-            }
-            console2.log("WARNING: SAFE is not code Safe published. You said you checked it; nothing here has.");
+            if (!_vouchedFor(safe)) revert SafeNotRecognized(safe, safe.codehash, _implementationOf(safe));
+            // Its own word, but a module it admits to is still one too many.
+            (, address[] memory admitted) = _modulesOf(safe);
+            if (admitted.length > 0) revert SafeHasModules(safe, admitted[0]);
+            console2.log("WARNING: SAFE is not code Safe published. You named it as checked; nothing here has.");
             return;
         }
+        // Safe's code decides who may act from storage, and getOwners and getModulesPaginated list only the
+        // entries linked into their lists. One written around them, by a delegatecall at setup or later or by a
+        // constructor that left Safe's proxy code behind, acts and does not show. So the storage has to be what
+        // Safe's factory and a plain setup made.
+        _requireSafeCreatedByFactory(safe, factory, creation);
         // A module runs any call as the Safe with none of the owners' signatures, so no threshold limits whoever
-        // controls it.
+        // controls it. The deployer is asked about by name too, which finds it even outside the list.
         (bool answered, address[] memory modules) = _modulesOf(safe);
         if (!answered) revert SafeModulesUnreadable(safe);
         if (modules.length > 0) revert SafeHasModules(safe, modules[0]);
+        (bool ok, bytes memory ret) = safe.staticcall(abi.encodeWithSelector(ISafe.isModuleEnabled.selector, deployer));
+        if (!ok || ret.length != 32) revert SafeModulesUnreadable(safe);
+        if (abi.decode(ret, (bool))) revert DeployerIsAModule(safe);
+        // A guard can refuse any transaction the Safe makes, the ones that schedule upgrades and the one that would
+        // remove the guard included. Phase 4 shows only that it let the role changes through.
+        address guard = address(uint160(uint256(vm.load(safe, SAFE_GUARD_SLOT))));
+        if (guard != address(0)) revert SafeHasGuard(safe, guard);
+    }
+
+    /// @dev Whether CONFIRM_UNINSPECTABLE_SAFE names this SAFE. A sentence would carry over, in a .env file that
+    ///      forge reads by itself, to whatever SAFE a later run is given; an address vouches for one contract.
+    function _vouchedFor(address safe) internal view returns (bool) {
+        string memory said = vm.envOr("CONFIRM_UNINSPECTABLE_SAFE", string(""));
+        if (bytes(said).length == 0) return false;
+        try vm.parseAddress(said) returns (address named) {
+            return named == safe;
+        } catch {
+            return false;
+        }
+    }
+
+    /// @dev SAFE is the address `factory` gives the call in `creation`, the input of the transaction that created
+    ///      the Safe, so its storage is what that factory's proxy and that call's setup left. The factory is known
+    ///      by its code, the address is worked out here and not taken from anything SAFE says, and the setup may
+    ///      delegate to nothing or to Safe's SafeToL2Setup. What the Safe has done since is not here: the launch
+    ///      checklist has two signers review every transaction it makes. Virtual only for the unit tests' stand-in.
+    function _requireSafeCreatedByFactory(address safe, address factory, bytes memory creation)
+        internal
+        view
+        virtual
+    {
+        if (factory == address(0) || creation.length < 4) revert SafeCreationNotShown(safe);
+        bytes32 factoryCode = factory.codehash;
+        if (factoryCode != SAFE_FACTORY_1_3_0 && factoryCode != SAFE_FACTORY_1_4_1 && factoryCode != SAFE_FACTORY_1_5_0) {
+            revert SafeFactoryNotRecognized(factory, factoryCode);
+        }
+        (address singleton, bytes memory initializer, uint256 saltNonce) =
+            abi.decode(_afterSelector(creation), (address, bytes, uint256));
+        // forge-lint: disable-next-line(unsafe-typecast)
+        bytes4 how = bytes4(creation); // the selector, which is all the first four bytes are
+        bytes32 salt;
+        if (how == ISafeProxyFactory.createProxyWithNonce.selector) {
+            salt = keccak256(abi.encodePacked(keccak256(initializer), saltNonce));
+        } else if (how == ISafeProxyFactory.createChainSpecificProxyWithNonce.selector) {
+            salt = keccak256(abi.encodePacked(keccak256(initializer), saltNonce, block.chainid));
+        } else {
+            revert SafeCreationNotShown(safe);
+        }
+        bytes memory deployment =
+            abi.encodePacked(ISafeProxyFactory(factory).proxyCreationCode(), uint256(uint160(singleton)));
+        address created = vm.computeCreate2Address(salt, keccak256(deployment), factory);
+        if (created != safe) revert SafeNotCreatedAsShown(safe, created);
+        // The factory calls the new Safe with the initializer, and setup is the only call that does anything before
+        // the Safe has owners. Its `to` runs as the Safe, by delegatecall, and could write any storage at all.
+        if (initializer.length < 4) revert SafeCreationNotShown(safe);
+        // forge-lint: disable-next-line(unsafe-typecast)
+        if (bytes4(initializer) != ISafe.setup.selector) revert SafeCreationNotShown(safe);
+        (,, address to,,,,,) = abi.decode(
+            _afterSelector(initializer), (address[], uint256, address, bytes, address, address, uint256, address)
+        );
+        if (to != address(0) && to.codehash != SAFE_TO_L2_SETUP_1_4_1 && to.codehash != SAFE_TO_L2_SETUP_1_5_0) {
+            revert SafeSetupDelegatedTo(safe, to);
+        }
+    }
+
+    function _afterSelector(bytes memory data) internal pure returns (bytes memory rest) {
+        rest = new bytes(data.length - 4);
+        for (uint256 i = 0; i < rest.length; i++) {
+            rest[i] = data[i + 4];
+        }
     }
 
     /// @dev Which SafeProxy SAFE's code is and which Safe its implementation runs, each empty when it is not code
@@ -734,8 +843,10 @@ contract SplitAuthority is Script {
     }
 
     /// @dev Up to ten of SAFE's enabled modules, and whether it answered at all. One is already too many.
+    ///      Asked with a gas limit: Safe's own code answers in well under it, and a list that does not end, or a Safe
+    ///      whose setup never ran (1.4.1 then hits an invalid opcode), cannot spend the rest of the run.
     function _modulesOf(address safe) internal view returns (bool answered, address[] memory modules) {
-        (bool ok, bytes memory ret) = safe.staticcall(
+        (bool ok, bytes memory ret) = safe.staticcall{gas: 1_000_000}(
             abi.encodeWithSignature("getModulesPaginated(address,uint256)", SAFE_MODULES_HEAD, uint256(10))
         );
         // An empty list still takes three words: its offset, the next-page pointer and its length.
@@ -839,4 +950,25 @@ interface IAccessControl {
 interface ISafe {
     function getThreshold() external view returns (uint256);
     function getOwners() external view returns (address[] memory);
+    function isModuleEnabled(address module) external view returns (bool);
+    function setup(
+        address[] calldata owners,
+        uint256 threshold,
+        address to,
+        bytes calldata data,
+        address fallbackHandler,
+        address paymentToken,
+        uint256 payment,
+        address payable paymentReceiver
+    ) external;
+}
+
+interface ISafeProxyFactory {
+    function proxyCreationCode() external pure returns (bytes memory);
+    function createProxyWithNonce(address singleton, bytes memory initializer, uint256 saltNonce)
+        external
+        returns (address proxy);
+    function createChainSpecificProxyWithNonce(address singleton, bytes memory initializer, uint256 saltNonce)
+        external
+        returns (address proxy);
 }

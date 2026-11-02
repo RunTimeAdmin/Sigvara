@@ -25,6 +25,7 @@ contract MockSafe {
     uint256 internal threshold_;
     address[] internal modules_;
     bool internal modulesHidden_;
+    mapping(address => bool) internal planted_;
 
     constructor(address[] memory owners, uint256 threshold) {
         owners_ = owners;
@@ -38,8 +39,18 @@ contract MockSafe {
         return (modules_, address(0x1));
     }
 
+    function isModuleEnabled(address module) external view returns (bool) {
+        if (planted_[module]) return true;
+        for (uint256 i = 0; i < modules_.length; i++) {
+            if (modules_[i] == module) return true;
+        }
+        return false;
+    }
+
     function enableModule(address module) external { modules_.push(module); }
     function hideModules() external { modulesHidden_ = true; }
+    /// A module that acts and is not in the list, the way a delegatecall can leave one in a real Safe.
+    function plantModule(address module) external { planted_[module] = true; }
 
     function exec(address to, bytes calldata data) external {
         (bool ok, bytes memory ret) = to.call(data);
@@ -107,13 +118,27 @@ contract LegacyRoles {
     function getRoleAdmin(bytes32) external pure returns (bytes32) { return bytes32(0); }
 }
 
-/// The script, told that a MockSafe stands for a Safe proxy running Safe's code. Nothing else changes, so every
-/// other check still runs against the stand-in, its modules included. Which code counts as a Safe is checked
-/// against Safes made by Arc's own factories in test/SplitAuthorityFork.t.sol.
+/// The script, told that a MockSafe stands for a Safe proxy running Safe's code that Safe's factory created.
+/// Nothing else changes, so every other check still runs against the stand-in, its modules and guard included.
+/// Which code counts as a Safe, and how its creation is shown, are checked against Safes made by Arc's own
+/// factories in test/SplitAuthorityFork.t.sol.
 contract SplitAuthority_StandIn is SplitAuthority {
     function _safeVersion(address safe) internal view override returns (string memory, string memory) {
-        if (safe.codehash == keccak256(type(MockSafe).runtimeCode)) return ("stand-in", "MockSafe");
+        if (_isStandIn(safe)) return ("stand-in", "MockSafe");
         return super._safeVersion(safe);
+    }
+
+    function _requireSafeCreatedByFactory(address safe, address factory, bytes memory creation)
+        internal
+        view
+        override
+    {
+        if (_isStandIn(safe)) return;
+        super._requireSafeCreatedByFactory(safe, factory, creation);
+    }
+
+    function _isStandIn(address safe) internal view returns (bool) {
+        return safe.codehash == keccak256(type(MockSafe).runtimeCode);
     }
 }
 
@@ -667,19 +692,11 @@ contract SplitAuthorityTest is Test {
         vm.etch(address(tampered), code);
         assertTrue(address(rebuilt).codehash != address(real[0]).codehash, "the metadata differs");
 
-        // 1. Not a Safe, so no threshold to believe. Refused, and a nearly right confirmation (or the sentence an
-        //    older version of the script asked for) is not the operator saying they checked. Neither keeps anything
-        //    in storage slot 0, where a Safe proxy keeps its implementation.
+        // 1. Not a Safe, so no threshold to believe. Refused, and only its own address is the operator vouching for
+        //    it: not a near miss, not the sentences older versions of the script asked for, and not the address of
+        //    the other one. Neither keeps anything in storage slot 0, where a Safe proxy keeps its implementation.
         for (uint256 i = 0; i < others.length; i++) {
-            bytes memory err = abi.encodeWithSelector(
-                SplitAuthority.SafeNotRecognized.selector, address(others[i]), address(others[i]).codehash, address(0)
-            );
-            _renounceIsRefused(s, address(others[i]), address(real[i]), err);
-            vm.setEnv("CONFIRM_UNINSPECTABLE_SAFE", "yes");
-            _renounceIsRefused(s, address(others[i]), address(real[i]), err);
-            vm.setEnv("CONFIRM_UNINSPECTABLE_SAFE", "yes-i-checked-the-threshold");
-            _renounceIsRefused(s, address(others[i]), address(real[i]), err);
-            vm.setEnv("CONFIRM_UNINSPECTABLE_SAFE", "");
+            _refusedWhateverElseIsSaid(s, address(others[i]), address(real[i]), address(others[1 - i]));
         }
 
         // 2. Not the timelock phase 2 makes. The lookalike and the changed byte are told by their code, which differs
@@ -687,7 +704,7 @@ contract SplitAuthorityTest is Test {
         //    `cast codehash` and `forge inspect TimelockController deployedBytecode | cast keccak` print. The genuine
         //    copy that someone else created has the right code and is told by where it came from: equal code is not
         //    equal state, since a constructor can leave an operation already scheduled or a role holder with no event.
-        address[3] memory notIt = [address(fake), address(tampered), address(foreign)];
+        address[3] memory notTheTimelock = [address(fake), address(tampered), address(foreign)];
         bytes[3] memory notItError = [
             abi.encodeWithSelector(
                 SplitAuthority.TimelockCodeNotRecognized.selector, address(fake), address(fake).codehash, address(real[0]).codehash
@@ -697,12 +714,12 @@ contract SplitAuthorityTest is Test {
             ),
             abi.encodeWithSelector(SplitAuthority.TimelockNotCreatedByDeployer.selector, address(foreign), deployer)
         ];
-        for (uint256 i = 0; i < notIt.length; i++) {
+        for (uint256 i = 0; i < notTheTimelock.length; i++) {
             // Phase 3 is the one that gives the timelock the right to upgrade every registry, so it refuses first.
-            _env("grant", address(safe), notIt[i], "");
+            _env("grant", address(safe), notTheTimelock[i], "");
             vm.expectRevert(notItError[i]);
             s.run();
-            _renounceIsRefused(s, address(safe), notIt[i], notItError[i]);
+            _renounceIsRefused(s, address(safe), notTheTimelock[i], notItError[i]);
         }
 
         // None of that dropped anything.
@@ -710,14 +727,11 @@ contract SplitAuthorityTest is Test {
 
         // 3. Everything above had the same registries and the same Safes, so what separates a refusal from a pass is
         //    the one thing each case changes. Each pass runs from the same starting point, and the deployer losing
-        //    its upgrader role is what shows that the renounce ran. With the exact sentence a multisig that cannot be
-        //    read goes through; so does a timelock whose code runs the same and whose metadata does not.
+        //    its upgrader role is what shows that the renounce ran. Named by the operator, a multisig that is not
+        //    Safe's code goes through; so does a timelock whose code runs the same and whose metadata does not.
         uint256 start = vm.snapshotState();
-        vm.setEnv("CONFIRM_UNINSPECTABLE_SAFE", "yes-i-checked-the-safe");
         for (uint256 i = 0; i < others.length; i++) {
-            _env("renounce", address(others[i]), address(real[i]), "yes-drop-the-deployer");
-            s.run();
-            _assertDeployerDropped();
+            _goesThroughWhenNamed(s, address(others[i]), address(real[i]));
             vm.revertToState(start);
         }
         vm.setEnv("CONFIRM_UNINSPECTABLE_SAFE", "");
@@ -727,6 +741,26 @@ contract SplitAuthorityTest is Test {
 
         _clearEnv();
         vm.removeFile(_artifactPath());
+    }
+
+    /// A multisig that is not Safe's code is refused unless CONFIRM_UNINSPECTABLE_SAFE names it, whatever else it says.
+    function _refusedWhateverElseIsSaid(SplitAuthority s, address multisig, address timelock, address another) internal {
+        bytes memory err =
+            abi.encodeWithSelector(SplitAuthority.SafeNotRecognized.selector, multisig, multisig.codehash, address(0));
+        _renounceIsRefused(s, multisig, timelock, err);
+        string[4] memory said = ["yes", "yes-i-checked-the-threshold", "yes-i-checked-the-safe", vm.toString(another)];
+        for (uint256 j = 0; j < said.length; j++) {
+            vm.setEnv("CONFIRM_UNINSPECTABLE_SAFE", said[j]);
+            _renounceIsRefused(s, multisig, timelock, err);
+        }
+        vm.setEnv("CONFIRM_UNINSPECTABLE_SAFE", "");
+    }
+
+    function _goesThroughWhenNamed(SplitAuthority s, address multisig, address timelock) internal {
+        vm.setEnv("CONFIRM_UNINSPECTABLE_SAFE", vm.toString(multisig));
+        _env("renounce", multisig, timelock, "yes-drop-the-deployer");
+        s.run();
+        _assertDeployerDropped();
     }
 
     /// An account that has delegated to a contract (EIP-7702) has 23 bytes of code: 0xef0100 and an address. On Arc a
@@ -762,9 +796,11 @@ contract SplitAuthorityTest is Test {
     /// A Safe's owners and threshold are what its implementation answers, and a Safe address is a proxy that runs
     /// whatever implementation it keeps in storage slot 0. So phase 5 believes them only from a proxy and an
     /// implementation that are code Safe published, and not from a Safe with a module enabled, since a module acts
-    /// as the Safe with none of the owners. Here the plain script, which has no stand-in, refuses the MockSafe the
-    /// other tests use, and the stand-in, which takes it for Safe's code, still holds it to its modules. Run from
-    /// the migration test, because the environment is process-wide.
+    /// as the Safe with none of the owners, or with a guard, which can refuse whatever the Safe does. Here the plain
+    /// script, which has no stand-in, refuses the MockSafe the other tests use, and the stand-in, which takes it for
+    /// Safe's code, still holds it to its modules and its guard. How the creation is shown is checked against real
+    /// Safes in test/SplitAuthorityFork.t.sol. Run from the migration test, because the environment is
+    /// process-wide.
     function _renounceNeedsSafesOwnCodeAndNoModules() internal {
         vm.chainId(7777008);
         _deployRegistries();
@@ -778,8 +814,19 @@ contract SplitAuthorityTest is Test {
             SplitAuthority.SafeNotRecognized.selector, address(mSafe), address(mSafe).codehash, slot0
         );
         _renounceIsRefused(plain, address(mSafe), address(mTimelock), notASafe);
-        vm.setEnv("CONFIRM_UNINSPECTABLE_SAFE", "yes-i-checked-the-threshold");
+        vm.setEnv("CONFIRM_UNINSPECTABLE_SAFE", "yes-i-checked-the-safe");
         _renounceIsRefused(plain, address(mSafe), address(mTimelock), notASafe);
+        vm.setEnv("CONFIRM_UNINSPECTABLE_SAFE", vm.toString(address(mTimelock)));
+        _renounceIsRefused(plain, address(mSafe), address(mTimelock), notASafe);
+
+        // Named, but a module it lists is still refused.
+        vm.setEnv("CONFIRM_UNINSPECTABLE_SAFE", vm.toString(address(mSafe)));
+        address listed = makeAddr("a module it admits to");
+        mSafe.enableModule(listed);
+        _renounceIsRefused(plain, address(mSafe), address(mTimelock), abi.encodeWithSelector(
+            SplitAuthority.SafeHasModules.selector, address(mSafe), listed
+        ));
+        vm.revertToState(start);
 
         // 2. A module enabled. It can run any call as the Safe, so the threshold limits nobody who controls it.
         vm.setEnv("CONFIRM_UNINSPECTABLE_SAFE", "");
@@ -797,12 +844,28 @@ contract SplitAuthorityTest is Test {
         ));
         vm.revertToState(start);
 
+        // 4. The deployer as a module the list does not show: the one key the handover takes away, kept.
+        mSafe.plantModule(deployer);
+        _renounceIsRefused(mScript, address(mSafe), address(mTimelock), abi.encodeWithSelector(
+            SplitAuthority.DeployerIsAModule.selector, address(mSafe)
+        ));
+        vm.revertToState(start);
+
+        // 5. A guard, in the slot a Safe keeps it in. It can refuse every transaction the Safe makes, the upgrades
+        //    it would schedule and the guard's own removal included.
+        address guard = makeAddr("a guard");
+        vm.store(address(mSafe), keccak256("guard_manager.guard.address"), bytes32(uint256(uint160(guard))));
+        _renounceIsRefused(mScript, address(mSafe), address(mTimelock), abi.encodeWithSelector(
+            SplitAuthority.SafeHasGuard.selector, address(mSafe), guard
+        ));
+        vm.revertToState(start);
+
         // None of that dropped anything.
         _assertDeployerHolds();
 
-        // 4. What separates those from a pass is the one thing each changed: the plain script goes through on the
-        //    exact sentence, and the stand-in with no module needs none.
-        vm.setEnv("CONFIRM_UNINSPECTABLE_SAFE", "yes-i-checked-the-safe");
+        // 6. What separates those from a pass is the one thing each changed: the plain script goes through when the
+        //    operator names this Safe, and the stand-in with no module and no guard needs no word at all.
+        vm.setEnv("CONFIRM_UNINSPECTABLE_SAFE", vm.toString(address(mSafe)));
         _env("renounce", address(mSafe), address(mTimelock), "yes-drop-the-deployer");
         plain.run();
         _assertDeployerDropped();

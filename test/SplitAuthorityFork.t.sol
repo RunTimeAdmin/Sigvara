@@ -13,7 +13,14 @@ contract SplitAuthority_SafeProbe is SplitAuthority {
     function version(address safe) external view returns (string memory proxy, string memory implementation) {
         return _safeVersion(safe);
     }
-    function requireKnown(address safe) external view { _requireKnownSafe(safe); }
+    function requireKnown(address safe, address deployer, address factory, bytes memory creation) external view {
+        _requireKnownSafe(safe, deployer, factory, creation);
+    }
+}
+
+/// Something a Safe's setup could delegate to, which then runs as the Safe.
+contract SetupHelper {
+    function noop() external {}
 }
 
 /**
@@ -66,6 +73,10 @@ contract SplitAuthorityForkTest is Test {
     address constant SAFE_L2_SINGLETON_1_3_0 = 0x3E5c63644E683549055b9Be8653de26E0B4CD36E;
     address constant SAFE_FACTORY_1_5_0 = 0x14F2982D601c9458F93bd70B218933A6f8165e7b;
     address constant SAFE_SINGLETON_1_5_0 = 0xFf51A5898e281Db6DfC7855790607438dF2ca44b;
+    address constant SAFE_SINGLETON_1_3_0 = 0xd9Db270c1B5E3Bd161E8c8503c55cEABeE709552;
+    address constant SAFE_L2_SINGLETON_1_5_0 = 0xEdd160fEBBD92E350D4D398fb636302fccd67C7e;
+    /// What app.safe.global has a Safe made for an L2 delegate to in its setup, to switch to the L2 implementation.
+    address constant SAFE_TO_L2_SETUP = 0xBD89A1CE4DDe368FFAB0eC35506eEcE0b1fFdc54;
 
     bytes32 constant ADMIN_ROLE = 0x00;
     bytes32 constant UPGRADER_ROLE = keccak256("UPGRADER_ROLE");
@@ -299,22 +310,84 @@ contract SplitAuthorityForkTest is Test {
 
     /**
      * Phase 5 believes a Safe's owners and threshold only from a proxy and an implementation whose code hashes
-     * the script lists. These are Safes made the way app.safe.global makes them, by Safe's own factories on Arc,
-     * one per version and with both kinds of implementation, so a wrong hash in the script fails here.
+     * the script lists, created by a factory it knows from the call that created it. These are Safes made by
+     * Safe's own factories on Arc, every version with both kinds of implementation, so a wrong hash in the script,
+     * or a wrong reading of how a factory picks the address, fails here.
      */
     function test_theScriptKnowsASafeFromEachOfArcsFactories() public onlyArcFork {
         SplitAuthority_SafeProbe probe = new SplitAuthority_SafeProbe();
-        address[4] memory factories = [SAFE_FACTORY, SAFE_FACTORY, SAFE_FACTORY_1_3_0, SAFE_FACTORY_1_5_0];
-        address[4] memory singletons = [SAFE_SINGLETON, SAFE_L2_SINGLETON, SAFE_L2_SINGLETON_1_3_0, SAFE_SINGLETON_1_5_0];
-        string[4] memory proxies = ["1.4.1", "1.4.1", "1.3.0", "1.5.0"];
-        string[4] memory implementations = ["Safe 1.4.1", "SafeL2 1.4.1", "SafeL2 1.3.0", "Safe 1.5.0"];
+        address[6] memory factories =
+            [SAFE_FACTORY, SAFE_FACTORY, SAFE_FACTORY_1_3_0, SAFE_FACTORY_1_3_0, SAFE_FACTORY_1_5_0, SAFE_FACTORY_1_5_0];
+        address[6] memory singletons = [
+            SAFE_SINGLETON, SAFE_L2_SINGLETON, SAFE_SINGLETON_1_3_0, SAFE_L2_SINGLETON_1_3_0,
+            SAFE_SINGLETON_1_5_0, SAFE_L2_SINGLETON_1_5_0
+        ];
+        string[6] memory proxies = ["1.4.1", "1.4.1", "1.3.0", "1.3.0", "1.5.0", "1.5.0"];
+        string[6] memory implementations =
+            ["Safe 1.4.1", "SafeL2 1.4.1", "Safe 1.3.0", "SafeL2 1.3.0", "Safe 1.5.0", "SafeL2 1.5.0"];
         for (uint256 i = 0; i < factories.length; i++) {
-            address made = _deploySafe(factories[i], singletons[i], safeOwner, i + 1);
+            (address made, bytes memory creation) = _makeSafe(factories[i], singletons[i], _plainSetup(), i + 1);
             (string memory proxy, string memory implementation) = probe.version(made);
             assertEq(proxy, proxies[i], implementations[i]);
             assertEq(implementation, implementations[i], implementations[i]);
-            probe.requireKnown(made);
+            probe.requireKnown(made, DEPLOYER, factories[i], creation);
         }
+
+        // The way app.safe.global makes a Safe on an L2: the 1.4.1 implementation, with a setup that delegates to
+        // Safe's SafeToL2Setup, which switches the proxy to SafeL2. That delegatecall is the one the script allows.
+        bytes memory toL2 = _setup(SAFE_TO_L2_SETUP, abi.encodeWithSignature("setupToL2(address)", SAFE_L2_SINGLETON));
+        (address viaL2Setup, bytes memory itsCreation) = _makeSafe(SAFE_FACTORY, SAFE_SINGLETON, toL2, 7);
+        (, string memory became) = probe.version(viaL2Setup);
+        assertEq(became, "SafeL2 1.4.1", "SafeToL2Setup did not switch the implementation");
+        probe.requireKnown(viaL2Setup, DEPLOYER, SAFE_FACTORY, itsCreation);
+    }
+
+    /**
+     * Safe's code decides who may act from storage, and its getters list only what is linked into their lists, so
+     * the storage has to be what the factory and a plain setup made. Refused: a creation call that does not give
+     * this address, a factory that is not Safe's, no creation shown at all, the same code and storage copied to
+     * another address, and a setup that delegated to a contract of anyone's choosing.
+     */
+    function test_theScriptRefusesASafeWhoseCreationItCannotShow() public onlyArcFork {
+        SplitAuthority_SafeProbe probe = new SplitAuthority_SafeProbe();
+        bytes memory creation = _creation(SAFE_SINGLETON, _plainSetup(), 0);
+        probe.requireKnown(safe, DEPLOYER, SAFE_FACTORY, creation);
+
+        bytes memory otherSalt = _creation(SAFE_SINGLETON, _plainSetup(), 1);
+        address otherAddress = vm.computeCreate2Address(
+            keccak256(abi.encodePacked(keccak256(_plainSetup()), uint256(1))),
+            keccak256(abi.encodePacked(ISafeProxyFactory(SAFE_FACTORY).proxyCreationCode(), uint256(uint160(SAFE_SINGLETON)))),
+            SAFE_FACTORY
+        );
+        vm.expectRevert(abi.encodeWithSelector(SplitAuthority.SafeNotCreatedAsShown.selector, safe, otherAddress));
+        probe.requireKnown(safe, DEPLOYER, SAFE_FACTORY, otherSalt);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(SplitAuthority.SafeFactoryNotRecognized.selector, IDENTITY, IDENTITY.codehash)
+        );
+        probe.requireKnown(safe, DEPLOYER, IDENTITY, creation);
+
+        vm.expectRevert(abi.encodeWithSelector(SplitAuthority.SafeCreationNotShown.selector, safe));
+        probe.requireKnown(safe, DEPLOYER, address(0), "");
+
+        // Safe's proxy code with the same storage, at an address no factory made: what a constructor that writes
+        // storage and then leaves the proxy's code behind would give.
+        address copy = address(0xC0FFEE);
+        vm.etch(copy, safe.code);
+        for (uint256 slot = 0; slot < 8; slot++) {
+            vm.store(copy, bytes32(slot), vm.load(safe, bytes32(slot)));
+        }
+        (, string memory copied) = probe.version(copy);
+        assertEq(copied, "Safe 1.4.1", "the copy runs Safe's code");
+        vm.expectRevert(abi.encodeWithSelector(SplitAuthority.SafeNotCreatedAsShown.selector, copy, safe));
+        probe.requireKnown(copy, DEPLOYER, SAFE_FACTORY, creation);
+
+        // A setup that delegated: whatever it ran, it ran as the Safe, with the run of its storage.
+        address helper = address(new SetupHelper());
+        bytes memory delegating = _setup(helper, abi.encodeCall(SetupHelper.noop, ()));
+        (address made, bytes memory itsCreation) = _makeSafe(SAFE_FACTORY, SAFE_SINGLETON, delegating, 9);
+        vm.expectRevert(abi.encodeWithSelector(SplitAuthority.SafeSetupDelegatedTo.selector, made, helper));
+        probe.requireKnown(made, DEPLOYER, SAFE_FACTORY, itsCreation);
     }
 
     /**
@@ -323,12 +396,13 @@ contract SplitAuthorityForkTest is Test {
      */
     function test_theScriptRefusesARealSafeWithAModule() public onlyArcFork {
         SplitAuthority_SafeProbe probe = new SplitAuthority_SafeProbe();
-        probe.requireKnown(safe);
+        bytes memory creation = _creation(SAFE_SINGLETON, _plainSetup(), 0);
+        probe.requireKnown(safe, DEPLOYER, SAFE_FACTORY, creation);
 
         address module = address(0x0D01E);
         _execFromSafe(safe, abi.encodeWithSignature("enableModule(address)", module));
         vm.expectRevert(abi.encodeWithSelector(SplitAuthority.SafeHasModules.selector, safe, module));
-        probe.requireKnown(safe);
+        probe.requireKnown(safe, DEPLOYER, SAFE_FACTORY, creation);
     }
 
     // -------------------------------------------------------------------------
@@ -361,23 +435,39 @@ contract SplitAuthorityForkTest is Test {
     // Safe plumbing
     // -------------------------------------------------------------------------
 
-    function _deployRealSafe(address owner) internal returns (address) {
-        return _deploySafe(SAFE_FACTORY, SAFE_SINGLETON, owner, 0);
+    function _deployRealSafe(address owner) internal returns (address proxy) {
+        assertEq(owner, safeOwner, "every Safe here has the one owner");
+        (proxy,) = _makeSafe(SAFE_FACTORY, SAFE_SINGLETON, _plainSetup(), 0);
     }
 
-    function _deploySafe(address factory, address singleton, address owner, uint256 saltNonce)
+    /// @dev A Safe from `factory`, and the call that made it, which is what an operator copies from the creation
+    ///      transaction for SAFE_CREATION_CALL.
+    function _makeSafe(address factory, address singleton, bytes memory initializer, uint256 saltNonce)
         internal
-        returns (address)
+        returns (address proxy, bytes memory creation)
     {
-        address[] memory owners = new address[](1);
-        owners[0] = owner;
-        bytes memory initializer = abi.encodeCall(
-            ISafe.setup, (owners, 1, address(0), "", address(0), address(0), 0, payable(address(0)))
-        );
-        address proxy = ISafeProxyFactory(factory).createProxyWithNonce(singleton, initializer, saltNonce);
+        creation = _creation(singleton, initializer, saltNonce);
+        proxy = ISafeProxyFactory(factory).createProxyWithNonce(singleton, initializer, saltNonce);
         assertGt(proxy.code.length, 0, "Safe factory produced no code");
         assertEq(ISafe(proxy).getThreshold(), 1, "unexpected threshold");
-        return proxy;
+    }
+
+    function _creation(address singleton, bytes memory initializer, uint256 saltNonce)
+        internal
+        pure
+        returns (bytes memory)
+    {
+        return abi.encodeCall(ISafeProxyFactory.createProxyWithNonce, (singleton, initializer, saltNonce));
+    }
+
+    function _plainSetup() internal view returns (bytes memory) {
+        return _setup(address(0), "");
+    }
+
+    function _setup(address to, bytes memory data) internal view returns (bytes memory) {
+        address[] memory owners = new address[](1);
+        owners[0] = safeOwner;
+        return abi.encodeCall(ISafe.setup, (owners, 1, to, data, address(0), address(0), 0, payable(address(0))));
     }
 
     /// @dev With safeTxGas and gasPrice both zero, Safe reverts the whole transaction
@@ -443,6 +533,7 @@ interface ISafeProxyFactory {
     function createProxyWithNonce(address singleton, bytes memory initializer, uint256 saltNonce)
         external
         returns (address proxy);
+    function proxyCreationCode() external pure returns (bytes memory);
 }
 
 interface ISafe {
