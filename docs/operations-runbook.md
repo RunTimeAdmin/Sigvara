@@ -191,7 +191,8 @@ epoch. They are constants in `oracle/index.js`, not settings.
 | Time | 60 seconds | `IMPORT_MS_PER_RUN` |
 
 The cursor is kept in memory. A restart reads each peer from the start again, which costs a chain
-read only for outcomes this operator does not hold.
+read only for outcomes this operator does not hold. The cursor is the peer's `acceptedAt`; an item
+more than five minutes ahead of this host's clock is refused (`accepted_in_future`) without moving it.
 
 **Stalls.** An outcome that cannot be checked for a reason that is not its own (`rpc_error`,
 `unknown_agent`, `unconfirmed`, `not_found`, `not_yet_confirmed`) stops that peer's import for

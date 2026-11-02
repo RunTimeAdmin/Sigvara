@@ -226,7 +226,9 @@ checked for a reason that is not its own is retried for a few runs and then pass
 the next restart, so it cannot hold up the rest.
 
 A dishonest or broken peer can therefore fail to share an outcome, which the next import or a
-direct post repairs, but it cannot inject one. It does choose the block it says it checked at.
+direct post repairs, but it cannot inject one. Nor can it stall the import by dating an item ahead;
+one more than five minutes ahead is refused without moving the cursor (review F-02, 1 November 2026).
+It does choose the block it says it checked at.
 Within the bounds above it can name an earlier block than it used: one before the deadline for a
 signature it held back, or one before an account rotated away from a compromised key. A payer
 dating its signature back moves the second bound with it. Both need a signature that the payer's

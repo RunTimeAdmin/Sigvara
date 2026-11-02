@@ -136,10 +136,10 @@ The codes that depend on the payment check are below. The [oracle README](../ora
 
 | Status | Meaning |
 |---|---|
-| 200 | Accepted. The body echoes the verified payer and amount |
+| 200 | Accepted. The body echoes the verified payer and amount; for a payer-signed outcome, `outcomeHash`, the EIP-712 hash recorded |
 | 202 | Accepted, but the oracle could not save its state file, so a restart before its next good save loses it. The body has `durable: false`. Do not resend: the payment is credited, and a resend of the same settlement gets 409 |
 | 402 | The payment did not check out. `code` says why |
-| 409 | This settlement was already credited, or it already has an outcome, which is final |
+| 409 | This settlement was already credited, or it already has an outcome, which is final. For a payer-signed outcome it carries `sameOutcome`, and `outcome_recorded` names the held one (`heldOutcomeHash`) |
 | 502 | The RPC failed. Not a verdict on the payment, retry |
 
 The 502 case matters. A node having a bad minute must not read as a caller trying

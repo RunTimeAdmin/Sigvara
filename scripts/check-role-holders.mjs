@@ -13,8 +13,9 @@
  * last phase: the deployer renounces UPGRADER_ROLE), and a holder nobody expected is cheap to remove
  * before it and slow to remove after, because the upgrader role then answers only to the timelock. So:
  *
- *   1. After the Safe has removed the deployer's admin and before the last phase, with
- *      BEFORE_RENOUNCE=1. The deployer is then expected to hold UPGRADER_ROLE beside the timelock, and
+ *   1. After the Safe has removed the deployer's admin and before the last phase, through
+ *      scripts/check-before-renounce.mjs, which runs this with BEFORE_RENOUNCE=1 and writes the report
+ *      the renounce takes. Run alone, it writes nothing the renounce accepts. The deployer is then expected to hold UPGRADER_ROLE beside the timelock, and
  *      nothing else about the table changes. A second upgrader, a missing grant or an admin that is
  *      not the Safe alone stops it. The script's own checks read the contracts it is shown; this reads
  *      the history, which is the only way to see a holder it was not looking for.

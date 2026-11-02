@@ -216,11 +216,16 @@ console.log(rep.ageScore);       <span class="cm">// 0–30 (tenure)</span>
 
 <span class="kw">const</span> result = <span class="kw">await</span> gate.<span class="fn">admit</span>(agentDid, challenge, signature);
 <span class="kw">if</span> (!result.ok) <span class="kw">return</span> <span class="fn">refuse</span>(result.reason);
-<span class="cm">// 'bad_proof' | 'replayed' | 'not_active' | 'below_threshold'</span></code></pre>
+<span class="cm">// 'bad_proof' | 'replayed' | 'not_active' | 'stale_score' | 'below_threshold'</span>
+<span class="cm">// ('stale_score' only when maxScoreAgeSeconds is set)</span></code></pre>
         <p class="u-muted-13">Only <code>below_threshold</code> is about reputation. <code>not_active</code>
         is a real, proven agent that is unbonded, suspended or slashed, and telling that caller to go earn
-        points would be the wrong instruction. The default nonce store is per process; behind a load balancer
-        pass a <code>NonceStore</code> with an atomic <code>consume()</code>.</p>
+        points would be the wrong instruction. The default nonce store is per process. In a deployment pass
+        <code>profile: 'production'</code> (1.0.0-alpha.14): the gate then refuses to start until
+        <code>instances</code> and <code>maxScoreAgeSeconds</code> are set, and <code>instances: 'multiple'</code>
+        needs a shared <code>NonceStore</code> with an atomic <code>consume()</code>, such as
+        <code>atomicNonceStore</code> over a Redis <code>SET NX</code>. The gate exists from 1.0.0-alpha.9; use
+        1.0.0-alpha.14.</p>
 
         <div class="callout"><strong>Pick the threshold against what is reachable.</strong> External trust
         and propagation both depend on ERC-8004 standing that no agent holds yet, so 30 of the 100 points
