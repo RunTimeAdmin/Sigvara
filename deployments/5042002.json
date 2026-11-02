@@ -59,7 +59,7 @@
       "reproducedAt": "53d3a89"
     },
     "oracleBond": {
-      "current": "0xA33FC1b6EE82309BbF77FDE4113A223742C53931",
+      "current": "0x3C06A98bA5137E967AF182e91F88729ca1880e83",
       "history": [
         {
           "implementation": "0xf8464144726850d222a06b85a230c8030673b933",
@@ -70,16 +70,22 @@
           "implementation": "0x9ED31f024E0C3E7dF853c411744bABB53f5AaFFA",
           "replacedAt": "2026-10-27T01:19:47.000Z",
           "note": "replaced by the in-place upgrade to fdce1a7: upgradeToAndCall in block 69256882, tx 0xbf27ddd577bc182cd821006d9eaf60dc48cce3c10de9b3afaf74af94d8b244b8"
+        },
+        {
+          "implementation": "0xA33FC1b6EE82309BbF77FDE4113A223742C53931",
+          "replacedAt": "2026-11-02T21:36:44.000Z",
+          "reproducedAt": "53d3a89",
+          "note": "replaced by the upgrade of the oracle bond proxy to 76bbc97 (an operator's exit time is fixed when it starts to leave, pull request 151): upgradeToAndCall in block 70413542, tx 0xe03948094b8b0405c0055c408946ee02d0ea64f32f8a1c4e841c03de2a05f9f2"
         }
       ],
-      "recordedAt": "2026-10-27T01:36:51.565Z",
-      "reproducedAt": "53d3a89"
+      "recordedAt": "2026-11-02T21:38:11.233Z",
+      "reproducedAt": "76bbc97"
     }
   },
   "bytecode": {
-    "note": "Every contract here, each implementation, each proxy and the SVR token, is reproduced byte for byte (immutables aside) by building reproducedAt, tagged as below; scripts/check-bytecode.mjs checks it. All are verified on the Arc explorer.",
-    "reproducedAt": "53d3a89",
-    "tag": "arc-testnet-2026-11-02",
+    "note": "Every contract here, each implementation, each proxy and the SVR token, is reproduced byte for byte (immutables aside) by building reproducedAt; scripts/check-bytecode.mjs checks it. The tag marks the commit that records this, whose contract sources are those of reproducedAt. All are verified on the Arc explorer.",
+    "reproducedAt": "76bbc97",
+    "tag": "arc-testnet-2026-11-02b",
     "checkedAt": "2026-11-02"
   }
 }
