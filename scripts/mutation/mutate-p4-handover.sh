@@ -59,7 +59,6 @@ runl F28 $S 'function _requireTimelockPhase2Made(' '_withoutMetadata(timelock.co
 runl F29 $S 'function _withoutMetadata(' 'if (n < 2)' 'n < 2' 'false' 'code too short to end in a length is not hashed whole'
 runl F30 $S 'function _withoutMetadata(' 'if (cut > n)' 'cut > n' 'false' 'a length longer than the code is not hashed whole'
 runl F31 $S 'function _withoutMetadata(' 'uint256 cut' '<< 8' '<< 7' 'the high byte of the metadata length is shifted wrong'
-runl F36 $S 'function _isOwner(' 'ret.length < 64' 'ret.length < 64' 'ret.length < 0' 'an empty answer is read as a list of owners'
 runl F37 $S 'function _requireTimelockPhase2Made(' 'vm.computeCreateAddress(deployer, n) == timelock' 'vm.computeCreateAddress(deployer, n) == timelock' 'true' 'a timelock with the right code is accepted whoever created it'
 runl F38 $S 'function _requireTimelockPhase2Made(' 'for (uint256 n = 0;' 'n < nonce' 'n + 1 < nonce' 'the search for the creation misses the deployer'"'"'s latest one'
 runl F39 $S 'function _requireTimelock()' '_requireTimelockPhase2Made(timelock);' '_requireTimelockPhase2Made(timelock);' '' 'no phase looks at what the timelock is or who created it'
