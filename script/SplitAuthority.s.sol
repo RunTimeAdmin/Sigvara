@@ -118,7 +118,9 @@ import {TimelockController} from "@openzeppelin/contracts/governance/TimelockCon
  *   CONFIRM              Must be `yes-drop-the-deployer` for phase 5.
  *   SAFE_FACTORY         The Safe proxy factory that created SAFE: the `to` of the creation transaction.
  *   SAFE_CREATION_CALL   That transaction's input, a createProxyWithNonce or createChainSpecificProxyWithNonce call.
- *                        Phase 5 works out the address it creates and refuses a SAFE that is not that address.
+ *                        Phase 5 works out the address it creates and refuses a SAFE that is not that address. A Safe
+ *                        made with createProxyWithCallback is given as createProxyWithNonce with the saltNonce that
+ *                        call derives, keccak256(abi.encodePacked(saltNonce, callback)).
  *   CONFIRM_UNINSPECTABLE_SAFE
  *                        SAFE's own address lets phase 5 go ahead when SAFE is not a Safe proxy running code Safe
  *                        published (another multisig, or a Safe version this file does not list). Set it only once
@@ -214,6 +216,7 @@ contract SplitAuthority is Script {
     error SafeFactoryNotRecognized(address factory, bytes32 codeHash);
     error SafeNotCreatedAsShown(address safe, address created);
     error SafeSetupDelegatedTo(address safe, address to);
+    error SafeSetupRanOtherCode(address safe, address code);
     error SafeIsADelegatedAccount(address safe);
     error DeployerStillAdmin(string target, address deployer);
     error UpgraderRoleNotSelfAdministered(string target);
@@ -297,6 +300,10 @@ contract SplitAuthority is Script {
                 console2.log("WARNING: a guard, which can refuse any Safe transaction. PHASE=renounce refuses it:", guard);
             }
             console2.log("safe fallback ", address(uint160(uint256(vm.load(safe, SAFE_FALLBACK_HANDLER_SLOT)))));
+            (bool counted, bytes memory nonce) = safe.staticcall(abi.encodeWithSignature("nonce()"));
+            if (counted && nonce.length == 32) {
+                console2.log("safe nonce     (transactions it has made, each to be reviewed)", abi.decode(nonce, (uint256)));
+            }
             console2.log("PHASE=renounce also needs SAFE_FACTORY and SAFE_CREATION_CALL from the Safe's creation transaction.");
         }
         try ISafe(safe).getThreshold() returns (uint256 threshold) {
@@ -758,9 +765,10 @@ contract SplitAuthority is Script {
 
     /// @dev SAFE is the address `factory` gives the call in `creation`, the input of the transaction that created
     ///      the Safe, so its storage is what that factory's proxy and that call's setup left. The factory is known
-    ///      by its code, the address is worked out here and not taken from anything SAFE says, and the setup may
-    ///      delegate to nothing or to Safe's SafeToL2Setup. What the Safe has done since is not here: the launch
-    ///      checklist has two signers review every transaction it makes. Virtual only for the unit tests' stand-in.
+    ///      by its code, the address is worked out here and not taken from anything SAFE says, and every piece of
+    ///      code that ran in the proxy at creation is Safe's own (see `_requirePlainSetup`). What the Safe has done
+    ///      since is not here: the launch checklist has two signers review every transaction it makes. Virtual only
+    ///      for the unit tests' stand-in.
     function _requireSafeCreatedByFactory(address safe, address factory, bytes memory creation)
         internal
         view
@@ -787,17 +795,36 @@ contract SplitAuthority is Script {
             abi.encodePacked(ISafeProxyFactory(factory).proxyCreationCode(), uint256(uint160(singleton)));
         address created = vm.computeCreate2Address(salt, keccak256(deployment), factory);
         if (created != safe) revert SafeNotCreatedAsShown(safe, created);
-        // The factory calls the new Safe with the initializer, and setup is the only call that does anything before
-        // the Safe has owners. Its `to` runs as the Safe, by delegatecall, and could write any storage at all.
+        // The factory calls the new proxy with the initializer, which runs as `singleton`'s code. Anything but Safe's
+        // could write owners and modules around the lists and then point the proxy at Safe's code.
+        if (!_isSafeImplementation(singleton)) revert SafeSetupRanOtherCode(safe, singleton);
+        _requirePlainSetup(safe, initializer);
+    }
+
+    /// @dev The initializer is Safe's setup, the only call that does anything before a Safe has owners. Its `to`
+    ///      runs as the Safe, by delegatecall, and could write any storage at all, so it may be nothing, or Safe's
+    ///      SafeToL2Setup pointing the proxy at another of Safe's implementations: whatever it names runs as the
+    ///      Safe from then on.
+    function _requirePlainSetup(address safe, bytes memory initializer) internal view {
         if (initializer.length < 4) revert SafeCreationNotShown(safe);
         // forge-lint: disable-next-line(unsafe-typecast)
         if (bytes4(initializer) != ISafe.setup.selector) revert SafeCreationNotShown(safe);
-        (,, address to,,,,,) = abi.decode(
+        (,, address to, bytes memory data,,,,) = abi.decode(
             _afterSelector(initializer), (address[], uint256, address, bytes, address, address, uint256, address)
         );
-        if (to != address(0) && to.codehash != SAFE_TO_L2_SETUP_1_4_1 && to.codehash != SAFE_TO_L2_SETUP_1_5_0) {
+        if (to == address(0)) return;
+        if (to.codehash != SAFE_TO_L2_SETUP_1_4_1 && to.codehash != SAFE_TO_L2_SETUP_1_5_0) {
             revert SafeSetupDelegatedTo(safe, to);
         }
+        if (data.length < 36) revert SafeSetupDelegatedTo(safe, to);
+        // forge-lint: disable-next-line(unsafe-typecast)
+        if (bytes4(data) != ISafeToL2Setup.setupToL2.selector) revert SafeSetupDelegatedTo(safe, to);
+        address next = abi.decode(_afterSelector(data), (address));
+        if (!_isSafeImplementation(next)) revert SafeSetupRanOtherCode(safe, next);
+    }
+
+    function _isSafeImplementation(address code) internal view returns (bool) {
+        return bytes(_safeImplementationName(code.codehash)).length > 0;
     }
 
     function _afterSelector(bytes memory data) internal pure returns (bytes memory rest) {
@@ -961,6 +988,10 @@ interface ISafe {
         uint256 payment,
         address payable paymentReceiver
     ) external;
+}
+
+interface ISafeToL2Setup {
+    function setupToL2(address l2Singleton) external;
 }
 
 interface ISafeProxyFactory {

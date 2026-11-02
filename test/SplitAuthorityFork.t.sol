@@ -23,6 +23,45 @@ contract SetupHelper {
     function noop() external {}
 }
 
+/// Not Safe's code, with a setup that leaves storage the way Safe 1.4.1's would, owners, threshold and module list
+/// included, plus one module that is not in the list, and then points the proxy at Safe's own SafeL2. From then on
+/// the proxy runs Safe's code against that storage, and every getter answers as if nothing had happened.
+contract RiggedSingleton {
+    address internal constant SENTINEL = address(0x1);
+    address internal constant SAFE_L2 = 0x29fcB43b46531BcA003ddC8FCB67FFE91900C762;
+    address internal constant HIDDEN_MODULE = address(0xBAD);
+
+    // Safe 1.4.1's first five slots: singleton, modules, owners, ownerCount, threshold.
+    address internal singleton;
+    mapping(address => address) internal modules;
+    mapping(address => address) internal owners;
+    uint256 internal ownerCount;
+    uint256 internal threshold;
+
+    function setup(
+        address[] calldata newOwners,
+        uint256 newThreshold,
+        address,
+        bytes calldata,
+        address,
+        address,
+        uint256,
+        address payable
+    ) external {
+        address previous = SENTINEL;
+        for (uint256 i = 0; i < newOwners.length; i++) {
+            owners[previous] = newOwners[i];
+            previous = newOwners[i];
+        }
+        owners[previous] = SENTINEL;
+        ownerCount = newOwners.length;
+        threshold = newThreshold;
+        modules[SENTINEL] = SENTINEL;
+        modules[HIDDEN_MODULE] = SENTINEL;
+        singleton = SAFE_L2;
+    }
+}
+
 /**
  * Rehearsal for script/SplitAuthority.s.sol, against a fork of the live Arc testnet
  * deployment with its real roles and real bonds, and the slash drill's final state in it.
@@ -388,6 +427,37 @@ contract SplitAuthorityForkTest is Test {
         (address made, bytes memory itsCreation) = _makeSafe(SAFE_FACTORY, SAFE_SINGLETON, delegating, 9);
         vm.expectRevert(abi.encodeWithSelector(SplitAuthority.SafeSetupDelegatedTo.selector, made, helper));
         probe.requireKnown(made, DEPLOYER, SAFE_FACTORY, itsCreation);
+
+        // Safe's own SafeToL2Setup, told to point the proxy at something that is not Safe's: that code would run as
+        // the Safe on the next call, and could put Safe's code back when it was done.
+        bytes memory toElsewhere = _setup(SAFE_TO_L2_SETUP, abi.encodeWithSignature("setupToL2(address)", helper));
+        bytes memory pointedCreation = _creation(SAFE_SINGLETON, toElsewhere, 10);
+        address pointed = ISafeProxyFactory(SAFE_FACTORY).createProxyWithNonce(SAFE_SINGLETON, toElsewhere, 10);
+        assertEq(address(uint160(uint256(vm.load(pointed, bytes32(0))))), helper, "the proxy now runs the helper");
+        vm.store(pointed, bytes32(0), bytes32(uint256(uint160(SAFE_L2_SINGLETON)))); // what it would put back
+        vm.expectRevert(abi.encodeWithSelector(SplitAuthority.SafeSetupRanOtherCode.selector, pointed, helper));
+        probe.requireKnown(pointed, DEPLOYER, SAFE_FACTORY, pointedCreation);
+    }
+
+    /**
+     * Safe's own factory, Safe's own code in the proxy afterwards, a plain setup, an empty module list and no guard,
+     * and still a module that acts: the setup ran as code that is not Safe's, which wrote one around the list and
+     * then pointed the proxy at Safe's SafeL2. Only the code the creation call names gives it away.
+     */
+    function test_theScriptRefusesASafeWhoseSetupRanOtherCode() public onlyArcFork {
+        SplitAuthority_SafeProbe probe = new SplitAuthority_SafeProbe();
+        address rigged = address(new RiggedSingleton());
+        (address made, bytes memory creation) = _makeSafe(SAFE_FACTORY, rigged, _plainSetup(), 11);
+
+        (string memory proxy, string memory implementation) = probe.version(made);
+        assertEq(proxy, "1.4.1", "Safe's own proxy");
+        assertEq(implementation, "SafeL2 1.4.1", "Safe's own code from now on");
+        (address[] memory listed,) = IModuleList(made).getModulesPaginated(address(0x1), 10);
+        assertEq(listed.length, 0, "no module in the list");
+        assertTrue(IModuleList(made).isModuleEnabled(address(0xBAD)), "and yet one acts");
+
+        vm.expectRevert(abi.encodeWithSelector(SplitAuthority.SafeSetupRanOtherCode.selector, made, rigged));
+        probe.requireKnown(made, DEPLOYER, SAFE_FACTORY, creation);
     }
 
     /**
@@ -504,6 +574,11 @@ contract SplitAuthorityForkTest is Test {
     function _implOf(address proxy) internal view returns (address) {
         return address(uint160(uint256(vm.load(proxy, IMPL_SLOT))));
     }
+}
+
+interface IModuleList {
+    function getModulesPaginated(address start, uint256 pageSize) external view returns (address[] memory, address);
+    function isModuleEnabled(address module) external view returns (bool);
 }
 
 interface IUUPS {
