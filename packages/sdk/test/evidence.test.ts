@@ -100,3 +100,22 @@ describe('matchEvidenceRoot', () => {
     expect(matchEvidenceRoot(FIXTURE, 'not a hash')).toBeNull();
   });
 });
+
+describe('the leaf written out by hand', () => {
+  it('is the ABI coder\'s encoding, for any payment', () => {
+    for (let i = 0; i < 200; i++) {
+      const r: EvidenceRecord = {
+        txHash: ethers.hexlify(ethers.randomBytes(32)),
+        payer: ethers.Wallet.createRandom().address,
+        amount: i % 7 === 0 ? ((1n << 256n) - 1n).toString() : BigInt(ethers.hexlify(ethers.randomBytes(1 + (i % 32)))).toString(),
+        settledAt: i % 5 === 0 ? 0 : 1_700_000_000 + i,
+        success: [true, false, null][i % 3] as boolean | null,
+      };
+      const inner = ethers.AbiCoder.defaultAbiCoder().encode(
+        ['bytes32', 'address', 'uint256', 'uint256', 'uint8'],
+        [r.txHash, r.payer, BigInt(r.amount), BigInt(r.settledAt), outcomeCode(r.success)],
+      );
+      expect(evidenceLeaf(r), `case ${i}`).toBe(ethers.keccak256(ethers.keccak256(inner)));
+    }
+  });
+});

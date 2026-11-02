@@ -377,13 +377,23 @@ staking token's own decimals, read from the chain. The tools read the current st
 oracle's `/evidence` lists and rebuilds every leaf from its fields, never from the leaf the oracle serves. It
 then finds which of them the finalized root on chain covers: all of them, those settled by a cut-off when more
 came later, or with an outcome the payer signed afterwards read as not yet reported. The same readings are
-tried by sigvara.xyz/agents. Up to the 100 most recent covered payments are confirmed with the contract's
-`verifyEvidence`, and the root match covers the rest. A reproduced root shows the oracle scored on exactly
-the payments it lists. It does not show that each transaction happened as listed; read a payment's
-`txHash` on chain for that. The leaf and tree rules are in `evidenceLeaf`, `evidenceRoot` and
-`matchEvidenceRoot`, exported from the main entry, and `test/evidence.test.ts` holds them to the fixture
-that CI holds to both `oracle/merkle.js` and the contract. Only the fields a leaf commits to are returned,
-whatever else the oracle sends, and its answer is read to at most 4 MB.
+tried by sigvara.xyz/agents. Up to the last 100 covered payments listed are confirmed with the contract's
+`verifyEvidence`, and the root match covers the rest. The contract's answer is a consistency check: the proofs
+come from a tree whose root was just read from it, so a refusal means the root changed in between.
+
+A reproduced root shows the oracle scored on exactly the payments it lists, with the outcome each row gives as
+`committedOutcome`. An `outcome` that differs from it is one the payer signed after the root was made, and is the
+oracle's word until its signature is checked. Neither shows that a transaction happened as listed; read a
+payment's `txHash` on chain for that. A payment committed twice is flagged as `duplicatedPayments`.
+
+The leaf and tree rules are in `evidenceLeaf`, `evidenceRoot` and `matchEvidenceRoot`, exported from the main
+entry, and `test/evidence.test.ts` holds them to the fixture that CI holds to both `oracle/merkle.js` and the
+contract. The oracle's answer is untrusted:
+- It is read to at most 4 MB, with no redirects followed.
+- It is refused unless it names the agent asked about, or if it lists more than 2,000 payments.
+- Only the fields a leaf commits to, and the oracle's `outcomeSource` label from two fixed values, are returned.
+- Matching a long list tries fewer settlement cut-offs, newest first, so a hostile list costs about a second,
+  not a minute.
 
 The server is also a module, for a host that runs its own transport:
 

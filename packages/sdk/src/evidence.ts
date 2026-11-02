@@ -58,10 +58,13 @@ export function evidenceLeaf(record: EvidenceRecord, success: boolean | null = r
   if (amount < 0n || amount >= UINT256 || settled < 0n || settled >= UINT256) {
     throw new Error('a payment amount or time out of range');
   }
-  const inner = ethers.AbiCoder.defaultAbiCoder().encode(
-    ['bytes32', 'address', 'uint256', 'uint256', 'uint8'],
-    [record.txHash.toLowerCase(), ethers.getAddress(record.payer.toLowerCase()), amount, settled, outcomeCode(success)],
-  );
+  // abi.encode(bytes32, address, uint256, uint256, uint8), written out: five 32-byte words, the address
+  // left-padded. The ABI coder takes several times longer per leaf, which oracle/merkle.js found too, and a
+  // long evidence list rebuilds every leaf; test/evidence.test.ts holds this to the coder's own output.
+  const word = (n: bigint) => n.toString(16).padStart(64, '0');
+  const inner = '0x' + record.txHash.slice(2).toLowerCase()
+    + '0'.repeat(24) + ethers.getAddress(record.payer.toLowerCase()).slice(2).toLowerCase()
+    + word(amount) + word(settled) + word(BigInt(outcomeCode(success)));
   return ethers.keccak256(ethers.keccak256(inner));
 }
 
@@ -122,18 +125,22 @@ export interface RootMatch {
  * A proposal commits to the payments settled by the time it was made, and a payer can sign an outcome after
  * that. So the root is tried against every payment, against those settled by each cut-off, and against both
  * with every payer-signed outcome read as not reported. With `at` (a proposal's time, in seconds) only that
- * cut-off is tried. Throws if a record cannot be a leaf at all.
+ * cut-off is tried. Each try rebuilds a tree, so the work is about (cut-offs tried) times (payments) times two;
+ * a caller facing a long list from a source it does not trust lowers `maxCuts`. `leaves`, when given, are the
+ * records' leaves as served, already built. Throws if a record cannot be a leaf at all.
  */
 export function matchEvidenceRoot(
   records: EvidenceRecord[],
   committed: string,
-  { at, maxCuts = 64 }: { at?: number; maxCuts?: number } = {},
+  { at, maxCuts = 64, leaves }: { at?: number; maxCuts?: number; leaves?: string[] } = {},
 ): RootMatch | null {
   if (!HASH.test(committed)) return null;
   const want = committed.toLowerCase();
-  const asServed = records.map((r) => evidenceLeaf(r));
+  const asServed = leaves ?? records.map((r) => evidenceLeaf(r));
   const signed = records.map((r) => r.outcomeSource === 'payer_signed');
-  const unsetLeaves = records.map((r, i) => (signed[i] ? evidenceLeaf(r, null) : asServed[i]));
+  const unsetLeaves = signed.some(Boolean)
+    ? records.map((r, i) => (signed[i] ? evidenceLeaf(r, null) : asServed[i]))
+    : asServed;
   const cuts = at !== undefined
     ? [Number(at)]
     : [Infinity, ...[...new Set(records.map((r) => Number(r.settledAt)))].sort((a, b) => b - a).slice(0, maxCuts)];

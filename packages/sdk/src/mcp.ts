@@ -97,18 +97,33 @@ export interface TrustServerOptions {
 
 /** Largest /evidence body read, and most payments taken from it. */
 const MAX_EVIDENCE_BYTES = 4 * 1024 * 1024;
-const MAX_EVIDENCE_RECORDS = 10_000;
-/** Payments confirmed one by one with verifyEvidence, the most recent first. The root match covers the rest. */
+const MAX_EVIDENCE_RECORDS = 2_000;
+/**
+ * Leaves hashed into trees while matching a root, at most. Each cut-off tried rebuilds a tree over the list, so an
+ * oracle serving a long list that matches nothing could otherwise hold the server's only thread for close to a
+ * minute. A long list gets fewer cut-offs, the newest first, where a finalized root usually sits.
+ */
+const MATCH_BUDGET = 20_000;
+/** Payments confirmed one by one with verifyEvidence, the last listed. The root match covers the rest. */
 const MAX_CONFIRMED = 100;
-/** Payments listed in the result, the most recent. Counts cover them all. */
+/** Payments shown in the result, the last listed. Counts cover them all. */
 const MAX_LISTED = 50;
+/** The latest settlement time accepted, the end of the year 9999, so a date can always be written. */
+const MAX_SETTLED_AT = 253_402_300_799;
+
+/** How many cut-offs to try for a list of `n`, within MATCH_BUDGET. */
+function cutsFor(n: number): number {
+  return Math.max(1, Math.min(64, Math.floor(MATCH_BUDGET / (2 * Math.max(1, n)))));
+}
 
 /** GET a JSON body, giving up after `timeoutMs` and refusing one larger than `maxBytes`. */
 export async function fetchJsonBounded(url: string, timeoutMs: number, maxBytes: number): Promise<unknown> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { signal: controller.signal, headers: { accept: 'application/json' } });
+    // No redirects: the oracle answers at the URL it was given, or not at all. Following one would let whoever
+    // controls it point this host at an address of their choosing, internal ones included.
+    const res = await fetch(url, { signal: controller.signal, redirect: 'error', headers: { accept: 'application/json' } });
     if (!res.ok) throw new Error(`the oracle answered HTTP ${res.status}`);
     const reader = res.body?.getReader();
     if (!reader) throw new Error('the oracle sent no body');
@@ -316,7 +331,10 @@ const REASON_DETAIL: Record<StandingReason, string> = {
 
 function iso(seconds: bigint | number): string | null {
   const n = Number(seconds);
-  return n === 0 ? null : new Date(n * 1000).toISOString();
+  if (n === 0) return null;
+  const d = new Date(n * 1000);
+  // A time no calendar can write (a contract value past the year 275760) is reported as unknown, not thrown.
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
 
 type Factors = { feeScore: number; successScore: number; ageScore: number; externalScore: number; communityScore: number; propagationScore: number };
@@ -342,8 +360,8 @@ function readEvidence(body: unknown, didHash: string) {
     throw new ToolError('The oracle\'s answer is not an evidence list.');
   }
   const b = body as { didHash?: unknown; evidence?: unknown; evidenceRoot?: unknown };
-  if (typeof b.didHash === 'string' && b.didHash.toLowerCase() !== didHash.toLowerCase()) {
-    throw new ToolError('The oracle answered for a different agent.');
+  if (typeof b.didHash !== 'string' || b.didHash.toLowerCase() !== didHash.toLowerCase()) {
+    throw new ToolError('The oracle\'s answer does not name this agent, so it is not checked.');
   }
   if (!Array.isArray(b.evidence)) throw new ToolError('The oracle\'s answer has no list of payments.');
   if (b.evidence.length > MAX_EVIDENCE_RECORDS) {
@@ -356,16 +374,22 @@ function readEvidence(body: unknown, didHash: string) {
   const problems: string[] = [];
   b.evidence.forEach((item: unknown, i: number) => {
     const e = (item && typeof item === 'object' ? item : {}) as Record<string, unknown>;
+    // Only plain 0x addresses, as the explorer takes them: ethers also accepts ICAP spellings, which
+    // getAddress then refuses in lower case, and that error would read as a failed chain read.
+    const payer = typeof e.payer === 'string' && /^0x[0-9a-fA-F]{40}$/.test(e.payer) ? e.payer.toLowerCase() : '';
     const record: EvidenceRecord = {
       txHash: isHash(e.txHash) ? e.txHash.toLowerCase() : '',
-      payer: typeof e.payer === 'string' && ethers.isAddress(e.payer) ? ethers.getAddress(e.payer.toLowerCase()) : '',
+      payer,
       amount: typeof e.amount === 'string' && /^\d{1,78}$/.test(e.amount) ? e.amount : '',
-      settledAt: typeof e.settledAt === 'number' && Number.isSafeInteger(e.settledAt) && e.settledAt >= 0 ? e.settledAt : -1,
+      settledAt: typeof e.settledAt === 'number' && Number.isSafeInteger(e.settledAt)
+        && e.settledAt >= 0 && e.settledAt <= MAX_SETTLED_AT ? e.settledAt : -1,
       success: e.success === true ? true : e.success === false ? false : null,
       outcomeSource: typeof e.outcomeSource === 'string' && OUTCOME_SOURCES.has(e.outcomeSource) ? e.outcomeSource : null,
     };
     try {
-      if (record.settledAt === -1 || record.amount === '') throw new Error('a payment amount or time that is not a whole number');
+      if (record.amount === '') throw new Error('a payment amount that is not a whole number');
+      if (record.settledAt === -1) throw new Error('a payment time that is not a whole number of seconds before the year 10000');
+      if (payer) record.payer = ethers.getAddress(payer);
       leaves.push(evidenceLeaf(record));
     } catch (err) {
       problems.push(`payment ${i + 1}: ${(err as Error).message}`);
@@ -685,21 +709,26 @@ export function createTrustServer(options: TrustServerOptions): TrustServer {
       let finalized: Record<string, unknown>;
       const covered = new Set<number>();
       const confirmed = new Map<number, boolean>();
+      // Payments whose outcome the root covers as not reported, though the oracle now lists one the payer signed.
+      const readAsUnreported = new Set<number>();
+      const maxCuts = cutsFor(records.length);
       if (problems.length) {
         finalized = { root: finalRoot === ZERO_ROOT ? null : finalRoot, reproduced: null,
           detail: 'Not checked: some payments listed cannot be part of any root.' };
       } else if (finalRoot === ZERO_ROOT) {
         finalized = { root: null, reproduced: null, detail: 'No score with an evidence root has been finalized for this agent.' };
       } else {
-        const m = matchEvidenceRoot(records, finalRoot);
+        const m = matchEvidenceRoot(records, finalRoot, { leaves, maxCuts });
         if (!m) {
           finalized = { root: finalRoot, reproduced: false,
             detail: 'No reading of the payments listed reproduces the finalized root. The oracle no longer lists the set '
-              + 'this score was made on, or lists it differently.' };
+              + 'this score was made on, or lists it differently.'
+              + (maxCuts < 64 ? ` With ${records.length} payments listed, only the ${maxCuts} latest settlement cut-offs were tried.` : '') };
         } else {
           m.indexes.forEach((i) => covered.add(i));
+          if (m.unset) m.indexes.forEach((i) => { if (records[i].outcomeSource === 'payer_signed') readAsUnreported.add(i); });
           const layers = evidenceLayers(m.leaves);
-          // The most recent first, in waves of eight: the public Arc RPC refuses a batch of more than about ten.
+          // The last listed, in waves of eight: the public Arc RPC refuses a batch of more than about ten.
           const positions = m.indexes.map((_, p) => p).slice(-MAX_CONFIRMED);
           for (let w = 0; w < positions.length; w += 8) {
             const wave = positions.slice(w, w + 8);
@@ -707,20 +736,28 @@ export function createTrustServer(options: TrustServerOptions): TrustServer {
             wave.forEach((p, k) => confirmed.set(m.indexes[p], answers[k]));
           }
           const yes = [...confirmed.values()].filter(Boolean).length;
+          // A payment in the committed set twice was counted twice. Legs of one transaction share a txHash with
+          // different payers, so it is identical leaves that are flagged, not shared hashes.
+          const duplicated = m.leaves.length - new Set(m.leaves.map((l) => l.toLowerCase())).size;
           finalized = {
             root: finalRoot,
             reproduced: true,
             covers: m.indexes.length,
             settledBy: m.cut === Infinity ? null : iso(m.cut),
-            outcomesReadAsUnreported: m.unset,
+            outcomesReadAsUnreported: readAsUnreported.size,
+            duplicatedPayments: duplicated,
             checkedWithContract: confirmed.size,
             confirmedByContract: yes,
             detail: `Reproduced from ${m.indexes.length === records.length ? `all ${records.length}` : `${m.indexes.length} of the ${records.length}`} `
               + 'payments listed'
               + (m.cut === Infinity || m.indexes.length === records.length ? '' : `, those settled by ${iso(m.cut)}`)
-              + (m.unset ? ', reading each outcome the payer signed afterwards as not yet reported' : '')
+              + (readAsUnreported.size ? `, reading ${readAsUnreported.size} outcome(s) the payer signed afterwards as not yet reported, as the root does` : '')
               + `. verifyEvidence confirmed ${yes} of the ${confirmed.size} checked`
-              + (confirmed.size < m.indexes.length ? ', the most recent; the root match covers the rest' : '') + '.',
+              + (confirmed.size < m.indexes.length ? ', the last listed; the root match covers the rest' : '') + '.'
+              + (duplicated ? ` ${duplicated} payment(s) appear more than once in the committed set, so the score counted them more than once.` : '')
+              // The proofs come from a tree whose root was just read, so the two disagree only if the root
+              // changed between the reads: a finalize or a zeroing landed in between.
+              + (yes < confirmed.size ? ' The contract refused some: its root may have changed since it was read, so run this again.' : ''),
           };
         }
       }
@@ -730,7 +767,8 @@ export function createTrustServer(options: TrustServerOptions): TrustServer {
         pendingResult = { root: null, proposedAt: iso(pending.proposedAt), reproduced: null,
           detail: 'Proposed with no evidence root, so it commits to no payments.' };
       } else if (pending.exists) {
-        const m = problems.length ? null : matchEvidenceRoot(records, pending.evidenceRoot, { at: Number(pending.proposedAt) });
+        const m = problems.length ? null
+          : matchEvidenceRoot(records, pending.evidenceRoot, { at: Number(pending.proposedAt), leaves });
         pendingResult = { root: pending.evidenceRoot, proposedAt: iso(pending.proposedAt), reproduced: problems.length ? null : !!m };
       }
       const notYetFinalized = problems.length ? null
@@ -750,19 +788,24 @@ export function createTrustServer(options: TrustServerOptions): TrustServer {
         pending: pendingResult,
         payments: records.slice(first).map((r, k) => {
           const i = first + k;
+          const label = (s: boolean | null) => (s === true ? 'delivered' : s === false ? 'failed' : 'not reported');
           return {
             txHash: r.txHash, payer: r.payer, amount: String(r.amount),
             settledAt: iso(BigInt(r.settledAt)),
-            outcome: r.success === true ? 'delivered' : r.success === false ? 'failed' : 'not reported',
+            // What the oracle lists now. A payer-signed outcome added after the root is the oracle's word here.
+            outcome: label(r.success),
             outcomeSource: r.outcomeSource ?? null,
             inFinalizedRoot: covered.has(i),
+            // What the finalized root, and so the contract's confirmation, covers.
+            committedOutcome: covered.has(i) ? label(readAsUnreported.has(i) ? null : r.success) : null,
             confirmedByContract: confirmed.has(i) ? confirmed.get(i) : null,
           };
         }),
-        paymentsShown: `${records.length - first} of ${records.length}, the most recent`,
-        meaning: 'A reproduced finalized root shows the oracle scored on exactly the payments it lists, and verifyEvidence '
-          + 'is the contract confirming each against that root. Neither shows a transaction happened as listed: read a '
-          + 'payment\'s txHash on chain for that.',
+        paymentsShown: `${records.length - first} of ${records.length}, the last listed`,
+        meaning: 'A reproduced finalized root shows the oracle scored on exactly the payments it lists, with the outcomes in '
+          + 'committedOutcome; verifyEvidence is the contract agreeing, payment by payment. An outcome that differs from '
+          + 'committedOutcome was added afterwards and is the oracle\'s word. Neither shows a transaction happened as '
+          + 'listed: read a payment\'s txHash on chain for that.',
         source: source(),
       };
     },
