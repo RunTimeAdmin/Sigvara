@@ -20,7 +20,7 @@ const settle = (p) => p.then((value) => ({ status: "fulfilled", value }), (reaso
 async function load() {
   setCard("slashCard", X.READING_HISTORY);
   setCard("bondSlashCard", X.READING_HISTORY);
-  const staking = await settle(X.contractLogs(X.STAKING, STAKING_EVENTS));
+  const [staking] = await Promise.all([settle(X.contractLogs(X.STAKING, STAKING_EVENTS)), X.loadSimulation()]);
   try { await renderSlashes(staking); } catch (e) { setCard("slashCard", X.failed("the slashes", e)); }
   const bond = await settle(X.contractLogs(X.ORACLE_BOND, X.BOND_EVENTS));
   try { renderBondSlashes(bond); } catch (e) { setCard("bondSlashCard", X.failed("the bond slashes", e)); }
@@ -84,7 +84,8 @@ async function renderSlashes(staking) {
     + "</p>";
   html += [...list].reverse().map((p) => {
     const addr = addrOf.get(p.didHash);
-    const agent = X.isAddr(addr) && !/^0x0{40}$/.test(addr) ? `<a href="epochs?a=${addr}"><code>${X.short(addr)}</code></a>` : `<code>${X.esc(X.short(p.didHash))}</code>`;
+    const agent = (X.isAddr(addr) && !/^0x0{40}$/.test(addr) ? `<a href="epochs?a=${addr}"><code>${X.short(addr)}</code></a>` : `<code>${X.esc(X.short(p.didHash))}</code>`)
+      + (X.simAgent(addr) ? ` <span class="ex-note">simulated: ${X.esc(X.simAgent(addr))}</span>` : "");
     const ev = evidenceFrom(txs[list.indexOf(p)]?.input);
     const evidence = ev
       ? (ev.text ? `“${X.esc(ev.text)}”` : `<code class="ex-evidence" title="${X.esc(ev.hex)}">${X.esc(ev.len === 32 ? X.short(ev.hex) : ev.hex)}</code>`)

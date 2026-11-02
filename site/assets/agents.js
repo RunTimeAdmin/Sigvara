@@ -29,7 +29,7 @@ async function loadAgents() {
   setCard("agentsCard", X.READING_HISTORY);
   let registrations;
   try {
-    registrations = await X.contractLogs(X.IDENTITY, ["AgentRegistered"]);
+    [registrations] = await Promise.all([X.contractLogs(X.IDENTITY, ["AgentRegistered"]), X.loadSimulation()]);
   } catch (e) {
     return setCard("agentsCard", X.failed("the registrations from the explorer", e)
       + `<p class="netnote">You can look an agent up by address on <a href="epochs">the epochs page</a>, which reads the chain directly.</p>`);
@@ -68,17 +68,25 @@ function renderAgents(truncated) {
   const sorted = [...agents].sort((a, b) => b.total - a.total || b.earned - a.earned || a.time - b.time);
   const active = agents.filter((a) => a.status === 0).length;
   const scored = agents.filter((a) => a.earned > 0).length;
-  const ours = agents.filter((a) => KNOWN_AGENTS[a.didHash] || X.same(a.operator, X.DEPLOYER)).length;
-  let html = `<p><b>${plural(agents.length, "agent")}</b> registered on this deployment: ${active} active, ${scored} with a score above zero.`
-    + (ours ? ` ${ours === 1 ? "One is" : `${ours} are`} Sigvara's own, marked below.` : "")
+  const simulated = agents.filter((a) => X.simAgent(a.address)).length;
+  const ours = agents.filter((a) => !X.simAgent(a.address) && (KNOWN_AGENTS[a.didHash] || X.same(a.operator, X.DEPLOYER))).length;
+  const others = agents.length - simulated - ours;
+  const groups = [];
+  if (simulated) groups.push(`${simulated} belong to Sigvara's <a href="https://github.com/RunTimeAdmin/Sigvara/blob/main/docs/simulation.md" target="_blank" rel="noopener">testnet simulation</a>`);
+  if (ours) groups.push(`${ours} ${ours === 1 ? "is" : "are"} Sigvara's own${simulated ? " outside it" : ""}`);
+  groups.push(`${others} ${others === 1 ? "is" : "are"} anyone else's`);
+  const list = groups.length > 1 ? `${groups.slice(0, -1).join(", ")} and ${groups.at(-1)}` : groups[0];
+  let html = `<p><b>${plural(agents.length, "agent")}</b> registered on this deployment: ${active} active, ${scored} with a score above zero. Of them, ${list}; each is marked below.`
     + ` Both oracle operators are run by the Sigvara team too (see <a href="operators">Operators</a>), so read these scores as the protocol working, not as outside demand.</p>`;
   html += `<div class="ex-scroll"><table class="ex-table">
     <thead><tr><th>Agent</th><th>Operator</th><th>Status</th><th title="getTotalScore: the score other contracts read, which matures toward the earned score">Score</th><th title="getEarnedScore: the score as last finalized">Earned</th><th>Stake</th><th>Evidence root</th><th></th></tr></thead><tbody>`;
   for (const a of sorted) {
-    const label = KNOWN_AGENTS[a.didHash] ? `<div class="ex-note">${X.esc(KNOWN_AGENTS[a.didHash])}</div>` : "";
+    const simProfile = X.simAgent(a.address);
+    const label = simProfile ? `<div class="ex-note">simulated: ${X.esc(simProfile)}</div>`
+      : KNOWN_AGENTS[a.didHash] ? `<div class="ex-note">${X.esc(KNOWN_AGENTS[a.didHash])}</div>` : "";
     html += `<tr>
       <td><a href="epochs?a=${a.address}"><code>${X.short(a.address)}</code></a>${label}</td>
-      <td>${X.same(a.operator, X.DEPLOYER) ? `Sigvara deployer<div class="ex-note">${X.addrLink(a.operator)}</div>` : X.addrLink(a.operator)}</td>
+      <td>${X.whoIs(a.operator)}</td>
       <td>${X.esc(X.STATUS[a.status] ?? "?")}</td>
       <td><b>${a.total}</b></td>
       <td>${a.earned}</td>
@@ -235,7 +243,7 @@ async function checkPayments(a, list) {
       + (list.length > picked.length ? ` The newest ${picked.length} of ${list.length} were checked.` : "") + "</p>"
       + `<ul class="pay-list">${results.map(({ e, problem }) => `<li>
           <span>${X.esc(X.fmtWhen(Number(e.settledAt)))}</span>
-          <span>${X.esc(X.fmtSvr(e.amount))} from ${X.addrLink(e.payer)}</span>
+          <span>${X.esc(X.fmtSvr(e.amount))} from ${X.whoIs(e.payer)}</span>
           <span class="${problem ? "pill-err" : "pill-ok"}">${X.esc(problem || "matches")}</span>
           <span>${X.txLink(e.txHash)}</span>
         </li>`).join("")}</ul>`;

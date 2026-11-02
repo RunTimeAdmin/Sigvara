@@ -122,8 +122,36 @@
     const name = OPERATORS[a.toLowerCase()];
     if (name) return `the ${name} oracle (${addrLink(a)})`;
     if (same(a, DEPLOYER)) return `the Sigvara deployer (${addrLink(a)})`;
+    const sim = simWallet(a);
+    if (sim) return `the simulation's ${esc(sim)} (${addrLink(a)})`;
     return addrLink(a);
   }
+
+  // ---- the testnet simulation ----
+  // Every address Sigvara's testnet simulation controls (docs/simulation.md), served beside the
+  // site so the pages can mark it. Absent until the simulation starts; then nothing it does can
+  // pass for outside demand on these pages.
+  let sim = { agents: new Map(), wallets: new Map(), loaded: false };
+  async function loadSimulation() {
+    if (sim.loaded) return sim;
+    const agents = new Map(), wallets = new Map();
+    try {
+      const j = await getJson("simulation.json");
+      const put = (addr, role) => { if (isAddr(addr)) wallets.set(addr.toLowerCase(), role); };
+      put(j?.treasury, "treasury");
+      put(j?.ringOperator, "ring operator");
+      for (const o of Array.isArray(j?.operators) ? j.operators : []) put(o?.address, `operator ${String(o?.name ?? "")}`.trim());
+      for (const p of Array.isArray(j?.payers) ? j.payers : []) put(p, "customer");
+      for (const p of Array.isArray(j?.ringPayers) ? j.ringPayers : []) put(p, "ring customer");
+      for (const a of Array.isArray(j?.agents) ? j.agents : []) {
+        if (isAddr(a?.address)) agents.set(a.address.toLowerCase(), String(a.profile ?? "agent"));
+      }
+    } catch (_) { /* no simulation published, or not readable: nothing is marked */ }
+    sim = { agents, wallets, loaded: true };
+    return sim;
+  }
+  const simAgent = (a) => sim.agents.get(String(a).toLowerCase()) ?? null;
+  const simWallet = (a) => sim.wallets.get(String(a).toLowerCase()) ?? null;
   const failed = (what, e) => `<p class="pill-err">Could not read ${esc(what)}: ${esc(e?.message ?? e)}.</p>`;
 
   // ---- io ----
@@ -335,6 +363,7 @@
     SEL, EVENTS, BOND_EVENTS, STATUS, BOND_STATUS, ZERO32, READING_HISTORY,
     esc, strip, pad32, word, wordAddr, isAddr, isHash, same, short, topicAddr,
     fmtWhen, fmtSvr, txLink, addrLink, rootCode, commitLink, whoIs, failed,
+    loadSimulation, simAgent, simWallet,
     getJson, rpcMany, ethCalls, contractLogs,
     outcomeCode, leafOf, hashPair, layersOf, rootOf, proofOf, matchRoot, verifyEvidenceCall,
   };

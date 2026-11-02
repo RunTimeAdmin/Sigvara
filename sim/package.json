@@ -1,0 +1,19 @@
+{
+  "name": "@sigvara/testnet-sim",
+  "version": "0.1.0",
+  "description": "A labelled, simulated agent economy on Arc testnet, driven through the public SDK. See docs/simulation.md.",
+  "type": "module",
+  "scripts": {
+    "plan": "node src/run.mjs plan",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@sigvara/protocol-sdk": "1.0.0-alpha.14",
+    "ethers": "6.17.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "private": true
+}
