@@ -104,10 +104,12 @@ function registry(w) {
 async function tick(state, opts = {}) {
   const provider = new ethers.JsonRpcProvider(RPC, CHAIN_ID, { staticNetwork: true });
   const w = wallets(provider);
+  // Paused before the first hour, the run has not started: its 28 days begin at the first tick
+  // that is not paused. A pause after that does not stop the clock; its hours' jobs are skipped.
+  if (existsSync(PAUSE_FILE)) { log(`paused: ${PAUSE_FILE} exists`); return true; }
   if (!state.start) { state.start = Math.floor(Date.now() / 3600000) * 3600; saveState(state); }
   const h = Math.floor((Date.now() / 1000 - state.start) / 3600);
   if (h >= HOURS) { log(`run over (${HOURS} hours since ${new Date(state.start * 1000).toISOString()})`); return false; }
-  if (existsSync(PAUSE_FILE)) { log(`paused: ${PAUSE_FILE} exists`); return true; }
 
   const svr = (signer) => new ethers.Contract(SVR, SVR_ABI, signer ?? provider);
   const staking = (signer) => new ethers.Contract(STAKING, STAKING_ABI, signer ?? provider);
