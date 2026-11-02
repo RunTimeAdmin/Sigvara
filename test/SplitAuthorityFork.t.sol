@@ -333,14 +333,10 @@ contract SplitAuthorityForkTest is Test {
         assertEq(stateAfter, 2, "proposal did not reach Executed");
         assertEq(IStakingView(STAKING).getStake(DRILL_DID), 0, "stake not swept");
 
-        // 50 burn / 25 victim / 25 reporter, on the real 1,000 SVR bond.
-        assertEq(IERC20(SVR).balanceOf(address(0xdead)) - burnedBefore, staked / 2, "burn");
+        // 75 burn / 25 victim / nothing to the reporter (ADR 0007), on the real 1,000 SVR bond.
+        assertEq(IERC20(SVR).balanceOf(address(0xdead)) - burnedBefore, staked - staked / 4, "burn");
         assertEq(IStakingView(STAKING).claimable(victim) - victimBefore, staked / 4, "victim share");
-        assertEq(
-            IStakingView(STAKING).claimable(COMMITTEE_KEY) - reporterBefore,
-            staked - (staked / 2) - (staked / 4),
-            "reporter share"
-        );
+        assertEq(IStakingView(STAKING).claimable(COMMITTEE_KEY), reporterBefore, "reporter credited");
     }
 
     // -------------------------------------------------------------------------

@@ -76,13 +76,13 @@ what is not yet true.
 > `node scripts/record-implementations.mjs --check` fails if the file and the chain
 > disagree.
 >
-> **The testnet runs this repository's contracts as of `f89b3b9`, with older role administrators.**
+> **The testnet runs this repository's contracts as of `25c2d59`, with older role administrators.**
 > The four proxies were upgraded in place on 26 October 2026 with `script/Upgrade.s.sol`, to the
-> contracts at `fdce1a7`, and the staking proxy again on 28 October 2026, to `f89b3b9` (then the head
-> of `main`; `src/` has not changed since). `--check` confirms the file matches the chain. A contract change merged after it is not on the testnet until the next upgrade. The guardian pause, admin-ruled disputes with a veto, a lapse and a bound on late upholds,
+> contracts at `fdce1a7`, the staking proxy again on 28 October 2026, to `f89b3b9`, and on
+> 2 November 2026, to `25c2d59` (then the head of `main`; `src/` has not changed since). `--check` confirms the file matches the chain. A contract change merged after it is not on the testnet until the next upgrade. The guardian pause, admin-ruled disputes with a veto, a lapse and a bound on late upholds,
 > launch floors and ceilings, operator signers, the reporter check at slash execution, a
-> withdrawal's claim time fixed when it is queued, and the refusal of evidence the admin rejected
-> are live. An upgrade does not rewrite role administrators, so the proxies keep what the
+> withdrawal's claim time fixed when it is queued, the refusal of evidence the admin rejected,
+> and a slash that pays the committee nothing are live. An upgrade does not rewrite role administrators, so the proxies keep what the
 > 21 September code set up: the admin still grants the slasher, committee and staking-core roles
 > and administers `UPGRADER_ROLE`, and the timelocked role grants described below do not apply to
 > them. A withdrawal queued before the upgrade follows the live unbonding period until it is
@@ -314,8 +314,8 @@ sequenceDiagram
 
 The committee that files a slash takes no share of it, and `initiateSlash` refuses a victim
 who is on the committee (`VictimIsReporter`, `VictimIsCommittee`). The Arc testnet staking
-proxy still runs the earlier split (50% burned, 25% victim, 25% reporter) until it is
-upgraded to this version.
+proxy runs this split since its upgrade on 2 November 2026. The slash drill in October ran
+on the earlier split: 50% burned, 25% to the victim, 25% to the reporter.
 
 The committee files slashes and names the victim, so a second key keeps the check: the
 admin rules on every dispute and can `vetoSlash(didHash)` while the

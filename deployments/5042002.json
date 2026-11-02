@@ -30,7 +30,7 @@
       "recordedAt": "2026-10-27T01:36:51.565Z"
     },
     "staking": {
-      "current": "0x210ed3F7ef42F01EE94b9543F67b8291e27Aaa6b",
+      "current": "0x347D01d33bc07120c67BCaDB5C32fe0D8AF6C943",
       "history": [
         {
           "implementation": "0x3501f936f629dbC2E97AE0717C501456Ca8215E0",
@@ -46,9 +46,14 @@
           "implementation": "0x147B687ab3299B454dB8E413D62e251CF89588D5",
           "replacedAt": "2026-10-28T14:47:08.000Z",
           "note": "replaced by the upgrade of the staking proxy to f89b3b9 (the dispute bound, pull request 94): upgradeToAndCall in block 69516766, tx 0x600927044edb99a12aa4fbc263dd1f69fb7f6565b11ee01590e00904639f6a26"
+        },
+        {
+          "implementation": "0x210ed3F7ef42F01EE94b9543F67b8291e27Aaa6b",
+          "replacedAt": "2026-11-02T16:28:50.000Z",
+          "note": "replaced by the upgrade of the staking proxy to 25c2d59 (no committee share of a slash, pull request 144): upgradeToAndCall in block 70377384, tx 0x1456bb5af6db20ed8181ad4742587b187e74b54a6286ceba534dc3ed48af794a"
         }
       ],
-      "recordedAt": "2026-10-28T14:50:31.690Z"
+      "recordedAt": "2026-11-02T16:30:20.634Z"
     },
     "oracleBond": {
       "current": "0xA33FC1b6EE82309BbF77FDE4113A223742C53931",

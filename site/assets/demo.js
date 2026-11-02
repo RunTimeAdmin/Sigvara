@@ -17,8 +17,7 @@
  *     challenge period before filing again. Reporter = the committee member who filed;
  *     it takes no share. 75% burns and the victim's 25% is credited for it to claim, not
  *     pushed. The Arc testnet proxies run these rules since their upgrades on 26 and 28
- *     October 2026, except the split: the staking proxy burns 50% and pays the reporter
- *     25% until it is upgraded to the current code. Two newer
+ *     October 2026, and the split since the staking upgrade on 2 November. Two newer
  *     rules are not modelled,
  *     because the simulator has no committee that changes and no choice of evidence: the
  *     reporter must still sit on the committee when a slash executes, and evidence the
