@@ -36,10 +36,12 @@ end of this page for the address and decimals). The testnet bond still uses the 
 **Fee estimation.** Arc is EIP-1559 style in practice, but if `forge script`
 fails at the fee-estimation step, retry with `--legacy`.
 
-**Explorer verification.** `explorer.arc.io` verification flow is not documented
-in this repo yet. Do not add `[etherscan]` entries for `5042` / `5042002` to
-`foundry.toml` until Foundry ships chain metadata for Arc; unknown chain IDs
-break `forge script`.
+**Explorer verification.** Every Arc testnet contract, each proxy and the implementation
+behind it, is source-verified on [explorer.testnet.arc.io](https://explorer.testnet.arc.io), and
+each is reproduced byte for byte by a build of the commit `deployments/5042002.json` names
+(`bytecode.reproducedAt`, tagged `arc-testnet-2026-11-02`). See [Verifying the deployed code](#verifying-the-deployed-code)
+below. Do not add `[etherscan]` entries for `5042` / `5042002` to `foundry.toml` until Foundry
+ships chain metadata for Arc; unknown chain IDs break `forge script`.
 
 ## 1. Prerequisites
 
@@ -687,6 +689,39 @@ Read the current one straight from the proxy rather than trusting this table:
 ```bash
 cast storage <proxy> 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc --rpc-url arc_testnet
 ```
+
+### Verifying the deployed code
+
+Anyone can check that the code on chain is this repository's, without trusting the explorer:
+
+```bash
+git checkout arc-testnet-2026-11-02
+sh scripts/fetch-deps.sh && forge build
+node scripts/check-bytecode.mjs
+```
+
+`check-bytecode.mjs` reads each proxy, the implementation it runs and the SVR token from the
+chain, blanks the immutables (a UUPS implementation stores its own address in one), and compares
+the rest with the build, byte for byte, source metadata included. On 2 November 2026 all nine
+matched the build of `53d3a89`. Build in an ordinary checkout: a `lib/` that is a symlink or
+junction changes the source paths solc records, and with them the metadata hash. CI runs the
+same check after every build; when main's sources have moved on since the recorded commit, a
+mismatch is expected and reported as such.
+
+After an upgrade, record the implementation, check the new code, and verify it:
+
+```bash
+node scripts/record-implementations.mjs
+forge build && node scripts/check-bytecode.mjs
+forge verify-contract --chain-id 5042002 --verifier blockscout   --verifier-url https://explorer.testnet.arc.io/api/ --compiler-version 0.8.24   --num-of-optimizations 200 --evm-version cancun --watch <implementation> src/<File>.sol:<Contract>
+```
+
+Then set the implementation's `reproducedAt` in `deployments/5042002.json` to the commit it was
+built from and tag that commit `arc-testnet-<date>`. The explorer's v1 API, which `forge` uses,
+answers ten requests an hour from one address, and a verification takes three or four. When it
+runs out, `forge verify-contract --show-standard-json-input <address> <contract> ...` writes the
+input, and the v2 endpoint `POST /api/v2/smart-contracts/<address>/verification/via/standard-input`
+(fields `compiler_version`, `contract_name`, `license_type`, `files[0]`) takes it.
 
 ## 6. Mainnet (5042)
 

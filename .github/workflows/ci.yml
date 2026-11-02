@@ -38,6 +38,12 @@ jobs:
       - name: Build
         run: forge build --sizes
 
+      # Every deployed contract must be what this repository builds (docs/arc.md, "Verifying
+      # the deployed code"). Once main's sources move past the commit the deployment file
+      # records, a mismatch is expected and reported, not failed.
+      - name: Deployed bytecode matches the build
+        run: node scripts/check-bytecode.mjs
+
       - name: Test (ci profile — 5000 fuzz runs)
         env:
           FOUNDRY_PROFILE: ci

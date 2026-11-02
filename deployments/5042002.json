@@ -16,7 +16,8 @@
           "note": "replaced by the in-place upgrade to fdce1a7: upgradeToAndCall in block 69256838, tx 0xa0708524a15da6d0eddc28adeb8affd2adb87a6145a8712a71ce30c316f10aa1"
         }
       ],
-      "recordedAt": "2026-10-27T01:36:51.565Z"
+      "recordedAt": "2026-10-27T01:36:51.565Z",
+      "reproducedAt": "53d3a89"
     },
     "reputation": {
       "current": "0xd23fffA937CFE37BbC6eE1e14C3c844c78BFE3CA",
@@ -27,7 +28,8 @@
           "note": "replaced by the in-place upgrade to fdce1a7: upgradeToAndCall in block 69256858, tx 0x853c5325bd9bc1a9e6a75370dd5bf53739a2c1dc3773a0954535e0d4dc7cde3b"
         }
       ],
-      "recordedAt": "2026-10-27T01:36:51.565Z"
+      "recordedAt": "2026-10-27T01:36:51.565Z",
+      "reproducedAt": "53d3a89"
     },
     "staking": {
       "current": "0x347D01d33bc07120c67BCaDB5C32fe0D8AF6C943",
@@ -53,7 +55,8 @@
           "note": "replaced by the upgrade of the staking proxy to 25c2d59 (no committee share of a slash, pull request 144): upgradeToAndCall in block 70377384, tx 0x1456bb5af6db20ed8181ad4742587b187e74b54a6286ceba534dc3ed48af794a"
         }
       ],
-      "recordedAt": "2026-11-02T16:30:20.634Z"
+      "recordedAt": "2026-11-02T16:30:20.634Z",
+      "reproducedAt": "53d3a89"
     },
     "oracleBond": {
       "current": "0xA33FC1b6EE82309BbF77FDE4113A223742C53931",
@@ -69,7 +72,14 @@
           "note": "replaced by the in-place upgrade to fdce1a7: upgradeToAndCall in block 69256882, tx 0xbf27ddd577bc182cd821006d9eaf60dc48cce3c10de9b3afaf74af94d8b244b8"
         }
       ],
-      "recordedAt": "2026-10-27T01:36:51.565Z"
+      "recordedAt": "2026-10-27T01:36:51.565Z",
+      "reproducedAt": "53d3a89"
     }
+  },
+  "bytecode": {
+    "note": "Every contract here, each implementation, each proxy and the SVR token, is reproduced byte for byte (immutables aside) by building reproducedAt, tagged as below; scripts/check-bytecode.mjs checks it. All are verified on the Arc explorer.",
+    "reproducedAt": "53d3a89",
+    "tag": "arc-testnet-2026-11-02",
+    "checkedAt": "2026-11-02"
   }
 }

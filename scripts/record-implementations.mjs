@@ -101,7 +101,16 @@ for (const name of PROXIES) {
 
   // Append rather than replace. The previous implementation is what a rollback targets
   // and what an incident review reads, so losing it defeats the purpose.
-  if (entry.current) entry.history.push({ implementation: entry.current, replacedAt: now });
+  if (entry.current) {
+    entry.history.push({
+      implementation: entry.current,
+      replacedAt: now,
+      ...(entry.reproducedAt ? { reproducedAt: entry.reproducedAt } : {}),
+    });
+  }
+  // The commit that reproduced the old implementation says nothing about the new one; record the
+  // new one's once scripts/check-bytecode.mjs has matched it.
+  delete entry.reproducedAt;
   entry.current = onChain;
   entry.recordedAt = now;
   changed++;
