@@ -620,12 +620,12 @@ charged. The app disables every fee control rather than pointing at an address w
 code.
 
 **Deployed contracts versus `main`.** The Arc testnet proxies run the implementations recorded in
-`deployments/5042002.json`, which are the contracts at commit `25c2d59`, the head of `main` on
+`deployments/5042002.json`, which are the contracts at commit `76bbc97`, the head of `main` on
 2 November 2026. The four proxies were upgraded in place with `script/Upgrade.s.sol` to `fdce1a7` on
-26 October, and the staking proxy again to `f89b3b9` on 28 October and to `25c2d59` on 2 November. A contract
+26 October, the staking proxy again to `f89b3b9` on 28 October and to `25c2d59` on 2 November, and the oracle bond proxy to `76bbc97` the same day. A contract
 change merged after that commit is not on the testnet until the next upgrade. The guardian pause, admin-ruled disputes with a veto, a lapse and a bound on late upholds, launch
 floors and ceilings, operator signers, the reporter check at slash execution, a withdrawal's claim time
-fixed when it is queued, the refusal of evidence the admin rejected and a slash that pays the
+fixed when it is queued, an oracle operator's exit time fixed when it starts to leave, the refusal of evidence the admin rejected and a slash that pays the
 committee nothing are live on the testnet. One
 thing the upgrade could not change: role administrators are written when a proxy is initialised, so
 the testnet keeps the older arrangement (the admin grants the slasher, committee and staking-core
@@ -633,7 +633,7 @@ roles, and administers `UPGRADER_ROLE`), and the timelocked role grants describe
 apply to a fresh deployment, not to the testnet.
 `node scripts/record-implementations.mjs --check` shows what is live.
 
-**Test coverage**, as of 2 November 2026: 713 contract tests across 31 Foundry test files
+**Test coverage**, as of 2 November 2026: 724 contract tests across 32 Foundry test files
 including fuzz and invariant tests (two fork suites need an RPC, and the twelve in
 `SplitAuthorityFork` skip without `--fork-url`), 852 oracle tests and 233 in the SDK (9 skip
 outside CI and without a live deployment; every test that runs passes). CI runs Foundry, the oracle and

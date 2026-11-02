@@ -719,7 +719,7 @@ forge verify-contract --chain-id 5042002 --verifier blockscout   --verifier-url 
 ```
 
 Then set the implementation's `reproducedAt` in `deployments/5042002.json` to the commit it was
-built from and tag that commit `arc-testnet-<date>`. The explorer's v1 API, which `forge` uses,
+built from and, once that record is merged, tag the commit that records it `arc-testnet-<date>`. The explorer's v1 API, which `forge` uses,
 answers ten requests an hour from one address, and a verification takes three or four. When it
 runs out, `forge verify-contract --show-standard-json-input <address> <contract> ...` writes the
 input, and the v2 endpoint `POST /api/v2/smart-contracts/<address>/verification/via/standard-input`
