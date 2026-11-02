@@ -102,6 +102,13 @@ jobs:
         working-directory: .
         run: node scripts/check-docs.mjs
 
+      # Every state-changing function in src/ has a row in docs/authorisation-matrix.md, and
+      # the row's caller and pause guard match the modifiers. A new function, or a changed
+      # modifier, fails here until the matrix says who may call it.
+      - name: Authorisation matrix matches the contracts
+        working-directory: .
+        run: node scripts/check-authz.mjs
+
       # The site's response headers were defined in four files, of which one was live.
       # Editing the policy meant editing four places by hand, and two untracked copies
       # of the site had already drifted to allowing 'unsafe-inline'. This fails the

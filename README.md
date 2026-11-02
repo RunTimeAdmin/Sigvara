@@ -51,6 +51,7 @@ what is not yet true.
 | [Lineage](docs/lineage.md) | Everyone — the Robinhood Chain testnet run this protocol came from (addresses, oracle activity, what changed) |
 | [Security & Mainnet Readiness Review](docs/SECURITY_AND_MAINNET_READINESS_REVIEW.md) | Everyone — a point-in-time review dated 17 Sep 2026: conditional no-go for mainnet, with the blockers named |
 | [Governance and emergency powers](docs/adr/0005-governance-and-emergency-powers.md) | Everyone: who can do what in an emergency and who can stop whom, with the decisions behind the role split, the guardian pause and the launch floors |
+| [Authorisation matrix](docs/authorisation-matrix.md) | Reviewers: every function that changes state, who may call it, what it requires and what it changes, checked against the code in CI |
 | [Architecture decision records](docs/adr) | Reviewers: why the ERC-8004 identity layer, accepted analyzer findings, evidence intake, operator custody, governance, payer-signed outcomes and the committee's share of a slash were decided the way they were |
 | [Oracle](oracle/README.md) | Operators: endpoints, settings, state file, monitoring and the production checklist |
 | [Second operator runbook](oracle/RUNBOOK-second-operator.md) | Operators: bond, admit and run a checking operator, step by step |
