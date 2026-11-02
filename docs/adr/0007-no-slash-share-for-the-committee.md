@@ -1,7 +1,7 @@
 # ADR 0007: The committee takes no share of a slash
 
-**Status:** Accepted · 2026-11-02. Built on main. The Arc testnet staking proxy still runs the
-earlier split until it is upgraded to this version.
+**Status:** Accepted · 2026-11-02. Built on main at `25c2d59` and live on Arc testnet since the
+staking proxy's upgrade on 2 November 2026 (block 70377384).
 
 ## Context
 
@@ -33,9 +33,8 @@ split did not make true.
   possible. The accused operator sees the victim in `SlashInitiated` and can dispute; the admin rules
   and can veto. That is the check on it.
 - Storage is unchanged, so the staking proxy upgrades in place. Credits already in `claimable` stay
-  claimable. Until the upgrade, the testnet contract keeps the earlier split, and
-  `test/SlashDrillFork.t.sol`, which checks the live deployment, keeps asserting it; that test
-  changes with the upgrade.
+  claimable. The testnet staking proxy was upgraded the same day, and
+  `test/SlashDrillFork.t.sol`, which checks the live deployment, asserts the new split.
 - `SlashExecuted`'s signature changes. Nothing in this repository decodes it; an outside indexer
   that does sees the new topic from the upgrade on.
 - Operator bonds are slashed through `SigvaraOracleBond.slash`, which sends the whole amount to

@@ -9,7 +9,7 @@ watched a bond actually get taken. What happened is in [slash-drill-log.md](slas
 > **The split changed after this drill.** The drill ran on the first split: 50% burned, 25% to
 > the victim, 25% to the reporter. The code on main now burns 75%, pays the victim 25% and pays
 > the reporter nothing, and refuses any committee member as the victim. The Arc testnet staking
-> proxy keeps the first split until it is upgraded; a drill after that costs 750 SVR of a
+> proxy runs the new split since 2 November 2026, so a drill now costs 750 SVR of a
 > 1,000 SVR bond, not 500. The figures below are the first split's.
 
 Budget **seven days**. `challengePeriod()` is 604800 seconds. An admin can lower it to no
@@ -293,9 +293,8 @@ cast call <staking> "claimable(address)(uint256)" <VICTIM> --rpc-url arc_testnet
 cast call <svr> "balanceOf(address)(uint256)" 0x000000000000000000000000000000000000dEaD --rpc-url arc_testnet
 ```
 
-On the first split, which the testnet proxy runs until it is upgraded, 50% is burned to
-`0xdead`, 25% goes to the victim and 25% to the reporter. On the current code 75% is burned
-and 25% goes to the victim. Proceeds are credited rather than pushed, so claim them to show
+75% is burned to `0xdead` and 25% goes to the victim; the reporter gets nothing. (The drill
+in September and October ran on the first split: 50% burned, 25% victim, 25% reporter.) Proceeds are credited rather than pushed, so claim them to show
 the last step works:
 
 ```bash

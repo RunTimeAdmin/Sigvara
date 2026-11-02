@@ -120,6 +120,7 @@ contract SlashDrillForkTest is Test {
         vm.warp(p.challengeDeadline + 1);
         uint256 burnBefore   = SVR.balanceOf(BURN);
         uint256 stakingBefore = SVR.balanceOf(address(STAKING));
+        uint256 committeeCreditBefore = STAKING.claimable(COMMITTEE);
 
         vm.prank(makeAddr("some passerby"));
         STAKING.executeSlash(DID);
@@ -130,15 +131,15 @@ contract SlashDrillForkTest is Test {
         assertEq(uint8(statusAfter), uint8(SigvaraIdentity.AgentStatus.Slashed), "agent not Slashed");
         assertEq(REP.getTotalScore(DID), 0, "reputation not zeroed");
 
-        // 6. The split the docs promise: 50% burned, 25% victim, 25% reporter.
-        uint256 burned     = stakeBefore / 2;
-        uint256 toVictim   = stakeBefore / 4;
-        uint256 toReporter = stakeBefore - burned - toVictim;
+        // 6. The split the docs promise: 75% burned, 25% to the victim, nothing to the reporter
+        //    (ADR 0007; the live proxy runs it since the upgrade of 2 November 2026).
+        uint256 toVictim = stakeBefore / 4;
+        uint256 burned   = stakeBefore - toVictim;
 
         assertEq(SVR.balanceOf(BURN) - burnBefore, burned, "burn share wrong");
         assertEq(STAKING.claimable(victim), toVictim, "victim share wrong");
-        assertEq(STAKING.claimable(COMMITTEE), toReporter, "reporter share wrong");
-        assertEq(burned + toVictim + toReporter, stakeBefore, "split does not conserve the stake");
+        assertEq(STAKING.claimable(COMMITTEE), committeeCreditBefore, "the reporter was credited");
+        assertEq(burned + toVictim, stakeBefore, "split does not conserve the stake");
 
         // 7. Proceeds are credited, not pushed. They have to be claimable.
         uint256 victimBefore = SVR.balanceOf(victim);
@@ -155,7 +156,6 @@ contract SlashDrillForkTest is Test {
 
         emit log_named_uint("burned              ", burned);
         emit log_named_uint("to victim           ", toVictim);
-        emit log_named_uint("to reporter         ", toReporter);
     }
 
     /// Disputing freezes the bond. It does not release it, and it does not un-suspend.
