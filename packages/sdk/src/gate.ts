@@ -25,6 +25,9 @@ import type { Challenge, ContractAddresses } from './types';
  * by one can be replayed at the other. Pass a `NonceStore` backed by Redis or the like
  * when that applies, such as `atomicNonceStore` over a `SET NX`, and set `instances:
  * 'multiple'` so the gate refuses to start without one. The interface is small for that reason.
+ * A fleet that leaves `instances` out gets the per-process default without a word, so
+ * `profile: 'production'` refuses to start until `instances` is said either way, along with
+ * how old a score may be.
  *
  * ## What a refusal means
  *
@@ -183,6 +186,13 @@ export interface GateConfig {
    * Pick a number a few times your oracle's epoch. Measured against this host's clock.
    */
   maxScoreAgeSeconds?: number;
+  /**
+   * 'production' makes the gate refuse to start unless `instances` and `maxScoreAgeSeconds` are both set.
+   * Left out, they default to what suits a test bench and not a deployment: one process, so a fleet that
+   * forgot to say otherwise replays a response admitted at one instance at another, and no age limit, so a
+   * score left over from an oracle outage keeps passing. Unset, the gate keeps those defaults.
+   */
+  profile?: 'production';
 }
 
 export class SigvaraGate {
@@ -220,6 +230,22 @@ export class SigvaraGate {
     const maxAge = config.maxScoreAgeSeconds;
     if (maxAge !== undefined && (typeof maxAge !== 'number' || !Number.isFinite(maxAge) || maxAge <= 0)) {
       throw new Error(`SigvaraGate: maxScoreAgeSeconds must be a positive number (got ${String(maxAge)}).`);
+    }
+    // The defaults fail open in a deployment by omission, not by anything set wrong, so a production gate has
+    // to say how many processes serve it and how old a score may be. Any other profile is refused rather than
+    // ignored: 'prod' from an environment variable would otherwise build the unchecked gate it meant to rule out.
+    if (config.profile !== undefined && config.profile !== 'production') {
+      throw new Error(`SigvaraGate: profile must be 'production' or unset (got ${JSON.stringify(config.profile)}).`);
+    }
+    if (config.profile === 'production') {
+      const missing: string[] = [];
+      if (config.instances === undefined) {
+        missing.push("instances ('single' for one process, 'multiple' with a shared atomic nonceStore)");
+      }
+      if (maxAge === undefined) missing.push("maxScoreAgeSeconds (a few times your oracle's epoch)");
+      if (missing.length > 0) {
+        throw new Error(`SigvaraGate: profile is 'production', so these must be set: ${missing.join('; ')}.`);
+      }
     }
     // A fleet sharing the in-memory default fails open: each instance has its own spent set, so a
     // captured response replays at another one. Refuse to start rather than admit twice.
