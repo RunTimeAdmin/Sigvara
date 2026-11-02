@@ -9,7 +9,7 @@
 .ex-table th { text-align: left; font-weight: 600; color: var(--muted); padding: 6px 10px 6px 0; border-bottom: 1px solid var(--sig-line-strong); white-space: nowrap; }
 .ex-table td { padding: 8px 10px 8px 0; border-bottom: 1px solid var(--border); vertical-align: top; }
 .ex-table tr:last-child td { border-bottom: 0; }
-.ex-table .num, .ex-table .btn { white-space: nowrap; }
+.ex-table .num, .ex-table .btn, .ex-table code { white-space: nowrap; }
 .ex-note { color: var(--muted); font-size: 12px; margin-top: 2px; }
 #chainCheck { margin-top: 8px; }
 .pay-list.ex-history li { grid-template-columns: 140px 110px 1fr 100px; }
@@ -21,4 +21,84 @@
 .ex-evidence { word-break: break-all; }
 @media (max-width: 640px) {
   .pay-list.ex-history li, .pay-list.ex-divergences li { grid-template-columns: 1fr; }
+}
+
+/* Kinds of simulated agent: a colour and always a label, never colour alone (docs/brand.md). */
+.ex-pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; font-size: 11px; font-weight: 650; letter-spacing: .03em; border: 1px solid var(--sig-line-strong); color: var(--sig-text-soft); white-space: nowrap; }
+.ex-pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.ex-pill.steady { color: var(--sig-mint); border-color: rgba(163, 241, 198, .35); }
+.ex-pill.mediocre { color: var(--sig-violet-bright); border-color: rgba(184, 165, 255, .35); }
+.ex-pill.failing { color: var(--sig-orange); border-color: rgba(255, 191, 122, .35); }
+.ex-pill.ring { color: var(--sig-danger); border-color: rgba(255, 133, 133, .35); }
+.ex-pill.sim { color: var(--sig-cyan); border-color: rgba(111, 229, 234, .35); }
+.ex-pill.own { color: var(--sig-text-soft); }
+.ex-pill.outside { color: var(--sig-text); border-color: var(--sig-violet); }
+
+/* The simulation page. */
+.sim-hero { position: relative; margin: 0 0 18px; padding: 26px 26px 22px; border-radius: var(--radius-card); border: 1px solid rgba(111, 229, 234, .28); background: linear-gradient(160deg, rgba(111, 229, 234, .07), rgba(155, 124, 255, .05) 60%, transparent), var(--sig-surface); }
+.sim-flag { display: inline-block; margin-bottom: 10px; padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: #0b0c18; background: var(--sig-cyan); }
+.sim-day-row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-top: 18px; }
+.sim-day { font-size: 18px; margin: 0; color: var(--sig-text); }
+.sim-day b { font-size: 26px; letter-spacing: -.02em; }
+.sim-dates { margin: 0; font-size: 13px; color: var(--muted); }
+.sim-track { height: 8px; margin: 10px 0 20px; border-radius: 999px; background: #242841; overflow: hidden; }
+.sim-fill { height: 100%; width: 0; border-radius: inherit; background: var(--sig-gradient-signal); }
+.sim-tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.sim-tile { padding: 14px 16px; border-radius: var(--radius); background: var(--sig-bg-soft); border: 1px solid var(--sig-line); }
+.sim-tile-value { font-size: 28px; font-weight: 750; letter-spacing: -.03em; line-height: 1.1; color: var(--sig-text); }
+.sim-tile-label { font-size: 13px; color: var(--sig-text-soft); margin-top: 4px; }
+.sim-tile-sub { font-size: 11px; color: var(--sig-text-faint); margin-top: 2px; }
+.sim-of { font-size: .55em; font-weight: 500; color: var(--muted); letter-spacing: 0; }
+
+.sim-timeline { list-style: none; margin: 10px 0 0; padding: 0; }
+.sim-step { display: grid; grid-template-columns: 18px 1fr; gap: 12px; position: relative; padding-bottom: 14px; }
+.sim-step:not(:last-child)::after { content: ""; position: absolute; left: 6px; top: 16px; bottom: 0; width: 2px; background: var(--sig-line-strong); }
+.sim-step.done:not(:last-child)::after { background: rgba(163, 241, 198, .45); }
+.sim-dot { width: 14px; height: 14px; margin-top: 3px; border-radius: 50%; border: 2px solid var(--sig-line-strong); background: var(--sig-bg); }
+.sim-step.done .sim-dot { border-color: var(--sig-mint); background: var(--sig-mint); }
+.sim-step.next .sim-dot { border-color: var(--sig-cyan); box-shadow: 0 0 0 5px rgba(111, 229, 234, .12), 0 0 18px rgba(111, 229, 234, .5); }
+.sim-step-head { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.sim-step.later .sim-step-head { color: var(--sig-text-soft); }
+.sim-step-when { font-size: 12px; color: var(--muted); margin-top: 1px; }
+.sim-step p { margin: 4px 0 0; font-size: 13px; color: var(--sig-text-soft); line-height: 1.5; }
+.sim-tag { font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; padding: 1px 7px; border-radius: 999px; }
+.sim-tag.done { color: var(--sig-mint); border: 1px solid rgba(163, 241, 198, .35); }
+.sim-tag.next { color: #0b0c18; background: var(--sig-cyan); }
+
+.sim-legend { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 14px; }
+.sim-kind { margin: 0 0 16px; padding: 14px 16px; border-radius: var(--radius); background: var(--sig-bg-soft); border: 1px solid var(--sig-line); border-left: 3px solid var(--sig-line-strong); }
+.sim-kind.steady { border-left-color: var(--sig-mint); }
+.sim-kind.mediocre { border-left-color: var(--sig-violet-bright); }
+.sim-kind.failing { border-left-color: var(--sig-orange); }
+.sim-kind.ring { border-left-color: var(--sig-danger); }
+.sim-kind-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.sim-kind-count { font-size: 12px; color: var(--muted); }
+.sim-kind-expect { margin: 8px 0 6px; font-size: 13px; color: var(--sig-text-soft); }
+.sim-agents { list-style: none; margin: 0; padding: 0; }
+.sim-agents li { display: grid; grid-template-columns: 110px 130px 1fr 100px; align-items: center; gap: 12px; padding: 8px 0; border-top: 1px solid var(--sig-line); font-size: 13px; }
+.sim-status { justify-self: start; font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--sig-line-strong); color: var(--sig-text-soft); }
+.sim-status.live { color: var(--sig-mint); border-color: rgba(163, 241, 198, .35); }
+.sim-status.warn { color: var(--sig-orange); border-color: rgba(255, 191, 122, .35); }
+.sim-status.slashed { color: var(--sig-danger); border-color: rgba(255, 133, 133, .35); }
+.sim-status.waiting { color: var(--sig-text-faint); }
+.sim-score { display: flex; align-items: center; gap: 10px; }
+.sim-bar { flex: 1; height: 6px; border-radius: 999px; background: #242841; overflow: hidden; }
+.sim-bar > span { display: block; height: 100%; width: 0; border-radius: inherit; background: var(--sig-gradient-signal); }
+.sim-score-num { min-width: 70px; text-align: right; }
+.sim-pays { color: var(--muted); text-align: right; white-space: nowrap; }
+.sim-watch { margin: 6px 0 12px; padding-left: 18px; font-size: 14px; line-height: 1.6; }
+.sim-watch li { margin-bottom: 8px; }
+
+/* Agents page filter. */
+.ex-filter { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 4px; }
+.ex-filter button { font: inherit; font-size: 12px; padding: 4px 11px; border-radius: 999px; border: 1px solid var(--border); background: transparent; color: var(--sig-text-soft); cursor: pointer; }
+.ex-filter button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+
+@media (max-width: 760px) {
+  .sim-tiles { grid-template-columns: repeat(2, 1fr); }
+  .sim-agents li { grid-template-columns: 1fr 112px; grid-template-areas: "addr status" "score pays"; gap: 6px 12px; }
+  .sim-agent { grid-area: addr; }
+  .sim-status { grid-area: status; justify-self: end; }
+  .sim-score { grid-area: score; }
+  .sim-pays { grid-area: pays; }
 }

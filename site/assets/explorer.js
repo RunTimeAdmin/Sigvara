@@ -48,6 +48,7 @@
     evidenceRoots: "0x42201823", getPendingScore: "0x56cf76e7", verifyEvidence: "0x7f168792",
     getStake: "0xe765c122", operators: "0x13e7c9d8", bondOf: "0x72d2b6c0", signerOf: "0x5b5175d5",
     bondAmount: "0x80f323a7", slashBeneficiary: "0xf0ef6c53", initiateSlash: "0x6c05a5d7",
+    getSlashProposal: "0xc984f6f8",
   };
   // topic0 of each event the pages read, and the contract that emits it. scripts/check-docs.mjs
   // checks every topic against its signature, and every current one against that contract.
@@ -179,32 +180,43 @@
     }
   }
 
-  // Many JSON-RPC requests in one, matched on id. `calls` are [method, params] pairs.
+  // Many JSON-RPC requests, matched on id. `calls` are [method, params] pairs.
+  //
+  // The public RPC answers about ten calls in one batch; past that it refuses each extra call with
+  // "rate limit exceeded", and it limits how fast batches arrive too. So calls go ten at a time with
+  // a short gap, and a call it refused is asked again after a pause, up to four times.
+  const RPC_BATCH = 10;
+  const pause = (ms) => new Promise((r) => setTimeout(r, ms));
   async function rpcMany(calls) {
-    if (!calls.length) return [];
-    const arr = await getJson(RPC, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(calls.map(([method, params], i) => ({ jsonrpc: "2.0", id: i, method, params }))),
-    });
-    if (!Array.isArray(arr)) throw new Error(arr?.error?.message ?? "batch call failed");
-    const byId = new Map(arr.map((r) => [r.id, r]));
-    return calls.map((_, i) => {
-      const r = byId.get(i);
-      if (!r || r.error || r.result === undefined) throw new Error(r?.error?.message ?? "missing result in batch");
-      return r.result;
-    });
-  }
-  // eth_calls, in chunks, so one page never sends the public RPC an unbounded batch.
-  async function ethCalls(calls, chunk = 40) {
-    const out = [];
-    for (let i = 0; i < calls.length; i += chunk) {
-      const part = await rpcMany(calls.slice(i, i + chunk).map((c) => ["eth_call", [{ to: c.to, data: c.data }, "latest"]]));
-      for (const r of part) {
-        if (typeof r !== "string") throw new Error("a contract read came back empty");
-        out.push(r);
+    const out = new Array(calls.length);
+    for (let start = 0; start < calls.length; start += RPC_BATCH) {
+      if (start) await pause(150);
+      let pending = calls.slice(start, start + RPC_BATCH).map((c, k) => start + k);
+      for (let attempt = 0; pending.length; attempt++) {
+        const arr = await getJson(RPC, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(pending.map((i) => ({ jsonrpc: "2.0", id: i, method: calls[i][0], params: calls[i][1] }))),
+        });
+        if (!Array.isArray(arr)) throw new Error(arr?.error?.message ?? "batch call failed");
+        const byId = new Map(arr.map((r) => [r.id, r]));
+        const refused = [];
+        for (const i of pending) {
+          const r = byId.get(i);
+          if (r && !r.error && r.result !== undefined) out[i] = r.result;
+          else if (/rate limit/i.test(r?.error?.message ?? "") && attempt < 4) refused.push(i);
+          else throw new Error(r?.error?.message ?? "missing result in batch");
+        }
+        pending = refused;
+        if (pending.length) await pause(500 * 2 ** attempt);
       }
     }
+    return out;
+  }
+  // eth_calls: the result of each, as hex.
+  async function ethCalls(calls) {
+    const out = await rpcMany(calls.map((c) => ["eth_call", [{ to: c.to, data: c.data }, "latest"]]));
+    for (const r of out) if (typeof r !== "string") throw new Error("a contract read came back empty");
     return out;
   }
 
