@@ -25,6 +25,7 @@
  * mainnet launch (docs/adr/0005). The holders come from the environment, so a wrong artifact
  * cannot vouch for itself.
  *
+ * CHAIN_ID (default 5042) picks the artifact and the chain, for a rehearsal; RPC_URL then names the endpoint.
  * RPC_URL overrides the default endpoint. The public endpoint caps eth_getLogs at 10,000
  * blocks and throttles bursts, so the scan is chunked and paced (PACE_MS, default 500).
  * A provider with a larger range makes a late run faster.
@@ -39,8 +40,13 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(join(root, 'oracle', 'index.js'));
 const { ethers } = require('ethers');
 
-const CHAIN_ID = 5042;
-const RPC = process.env.RPC_URL || 'https://rpc.mainnet.arc.io';
+// Mainnet unless told otherwise, for a rehearsal (scripts/check-before-renounce.mjs passes both on).
+const CHAIN_ID = Number(process.env.CHAIN_ID || 5042);
+const RPC = process.env.RPC_URL || (CHAIN_ID === 5042 ? 'https://rpc.mainnet.arc.io' : null);
+if (!RPC) {
+  console.error(`set RPC_URL for chain ${CHAIN_ID}`);
+  process.exit(1);
+}
 const RANGE = Number(process.env.MAX_RANGE || 10000);
 const PACE_MS = Number(process.env.PACE_MS || 500);
 

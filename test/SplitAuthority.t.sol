@@ -26,6 +26,7 @@ contract MockSafe {
     address[] internal modules_;
     bool internal modulesHidden_;
     mapping(address => bool) internal planted_;
+    uint256 internal nonce_;
 
     constructor(address[] memory owners, uint256 threshold) {
         owners_ = owners;
@@ -51,6 +52,9 @@ contract MockSafe {
     function hideModules() external { modulesHidden_ = true; }
     /// A module that acts and is not in the list, the way a delegatecall can leave one in a real Safe.
     function plantModule(address module) external { planted_[module] = true; }
+    function nonce() external view returns (uint256) { return nonce_; }
+    /// A transaction made through the Safe, as far as its nonce shows.
+    function bumpNonce() external { nonce_ += 1; }
 
     function exec(address to, bytes calldata data) external {
         (bool ok, bytes memory ret) = to.call(data);
@@ -225,6 +229,58 @@ contract SplitAuthorityTest is Test {
         vm.setEnv("TIMELOCK", timelock == address(0) ? "" : vm.toString(timelock));
         vm.setEnv("CONFIRM", confirm);
         vm.setEnv("DEPLOYER_PRIVATE_KEY", vm.toString(bytes32(KEY)));
+        // A renounce is set up as the operator would run it, just after a passing reconciliation, so each test
+        // reaches the check it is about. The gate's own refusals are in _renounceNeedsAFreshReconciliation.
+        if (keccak256(bytes(phase)) == keccak256("renounce")) _reconciled(safe, timelock);
+    }
+
+    function _reportPath() internal view returns (string memory) {
+        return string.concat("deployments/", vm.toString(block.chainid), ".renounce-check.json");
+    }
+
+    /// What scripts/check-before-renounce.mjs writes when it passes, for the Safe and timelock as they stand now.
+    function _reconciled(address safe, address timelock) internal {
+        // With a gas limit: the delegated account in _anAccountThatHasDelegatedIsNotASafe runs an invalid opcode.
+        (bool ok, bytes memory ret) = safe.staticcall{gas: 100_000}(abi.encodeWithSignature("nonce()"));
+        _report(Report({
+            schema: "sigvara/renounce-check/v1",
+            passed: true,
+            chainId: block.chainid,
+            safe: safe,
+            timelock: timelock,
+            deployer: deployer,
+            checkedAt: block.timestamp,
+            safeNonce: ok && ret.length == 32 ? abi.decode(ret, (uint256)) : 0,
+            deployerNonce: vm.getNonce(deployer)
+        }));
+    }
+
+    struct Report {
+        string schema;
+        bool passed;
+        uint256 chainId;
+        address safe;
+        address timelock;
+        address deployer;
+        uint256 checkedAt;
+        uint256 safeNonce;
+        uint256 deployerNonce;
+    }
+
+    function _report(Report memory r) internal {
+        string memory json = string.concat(
+            '{"schema":"', r.schema, '","passed":', r.passed ? "true" : "false",
+            ',"chain_id":', vm.toString(r.chainId), ',"safe":"', vm.toString(r.safe)
+        );
+        json = string.concat(
+            json, '","timelock":"', vm.toString(r.timelock), '","deployer":"', vm.toString(r.deployer),
+            '","checked_at":', vm.toString(r.checkedAt)
+        );
+        json = string.concat(
+            json, ',"safe_nonce":', vm.toString(r.safeNonce), ',"deployer_nonce":', vm.toString(r.deployerNonce), "}"
+        );
+        vm.createDir("deployments", true);
+        vm.writeFile(_reportPath(), json);
     }
 
     /// DEPLOYER_PRIVATE_KEY is not cleared. test/DeployScripts.t.sol sets the same public key,
@@ -236,7 +292,7 @@ contract SplitAuthorityTest is Test {
         vm.setEnv("SAFE", "");
         vm.setEnv("TIMELOCK", "");
         vm.setEnv("CONFIRM", "");
-        vm.setEnv("CONFIRM_UNINSPECTABLE_SAFE", "");
+        if (vm.exists(_reportPath())) vm.removeFile(_reportPath());
     }
 
     function test_theMigration_runsPhaseByPhase_andTheSafeCannotGiveItselfUpgrade() public {
@@ -350,6 +406,9 @@ contract SplitAuthorityTest is Test {
 
         // And that a Safe's answers count only from Safe's own code, and not from a Safe with a module enabled.
         _renounceNeedsSafesOwnCodeAndNoModules();
+
+        // And that it renounces only after a fresh reconciliation of the histories the contracts cannot answer for.
+        _renounceNeedsAFreshReconciliation();
     }
 
     MockSafe internal mSafe;
@@ -692,11 +751,10 @@ contract SplitAuthorityTest is Test {
         vm.etch(address(tampered), code);
         assertTrue(address(rebuilt).codehash != address(real[0]).codehash, "the metadata differs");
 
-        // 1. Not a Safe, so no threshold to believe. Refused, and only its own address is the operator vouching for
-        //    it: not a near miss, not the sentences older versions of the script asked for, and not the address of
-        //    the other one. Neither keeps anything in storage slot 0, where a Safe proxy keeps its implementation.
+        // 1. Not a Safe, so no threshold to believe and no Safe history to reconcile: refused. Neither keeps
+        //    anything in storage slot 0, where a Safe proxy keeps its implementation.
         for (uint256 i = 0; i < others.length; i++) {
-            _refusedWhateverElseIsSaid(s, address(others[i]), address(real[i]), address(others[1 - i]));
+            _notASafe(s, address(others[i]), address(real[i]));
         }
 
         // 2. Not the timelock phase 2 makes. The lookalike and the changed byte are told by their code, which differs
@@ -727,14 +785,8 @@ contract SplitAuthorityTest is Test {
 
         // 3. Everything above had the same registries and the same Safes, so what separates a refusal from a pass is
         //    the one thing each case changes. Each pass runs from the same starting point, and the deployer losing
-        //    its upgrader role is what shows that the renounce ran. Named by the operator, a multisig that is not
-        //    Safe's code goes through; so does a timelock whose code runs the same and whose metadata does not.
-        uint256 start = vm.snapshotState();
-        for (uint256 i = 0; i < others.length; i++) {
-            _goesThroughWhenNamed(s, address(others[i]), address(real[i]));
-            vm.revertToState(start);
-        }
-        vm.setEnv("CONFIRM_UNINSPECTABLE_SAFE", "");
+        //    its upgrader role is what shows that the renounce ran. A timelock whose code runs the same and whose
+        //    metadata does not goes through.
         _env("renounce", address(safe), address(rebuilt), "yes-drop-the-deployer");
         s.run();
         _assertDeployerDropped();
@@ -743,24 +795,10 @@ contract SplitAuthorityTest is Test {
         vm.removeFile(_artifactPath());
     }
 
-    /// A multisig that is not Safe's code is refused unless CONFIRM_UNINSPECTABLE_SAFE names it, whatever else it says.
-    function _refusedWhateverElseIsSaid(SplitAuthority s, address multisig, address timelock, address another) internal {
-        bytes memory err =
-            abi.encodeWithSelector(SplitAuthority.SafeNotRecognized.selector, multisig, multisig.codehash, address(0));
-        _renounceIsRefused(s, multisig, timelock, err);
-        string[4] memory said = ["yes", "yes-i-checked-the-threshold", "yes-i-checked-the-safe", vm.toString(another)];
-        for (uint256 j = 0; j < said.length; j++) {
-            vm.setEnv("CONFIRM_UNINSPECTABLE_SAFE", said[j]);
-            _renounceIsRefused(s, multisig, timelock, err);
-        }
-        vm.setEnv("CONFIRM_UNINSPECTABLE_SAFE", "");
-    }
-
-    function _goesThroughWhenNamed(SplitAuthority s, address multisig, address timelock) internal {
-        vm.setEnv("CONFIRM_UNINSPECTABLE_SAFE", vm.toString(multisig));
-        _env("renounce", multisig, timelock, "yes-drop-the-deployer");
-        s.run();
-        _assertDeployerDropped();
+    function _notASafe(SplitAuthority s, address multisig, address timelock) internal {
+        _renounceIsRefused(s, multisig, timelock, abi.encodeWithSelector(
+            SplitAuthority.SafeNotRecognized.selector, multisig, multisig.codehash, address(0)
+        ));
     }
 
     /// An account that has delegated to a contract (EIP-7702) has 23 bytes of code: 0xef0100 and an address. On Arc a
@@ -814,22 +852,8 @@ contract SplitAuthorityTest is Test {
             SplitAuthority.SafeNotRecognized.selector, address(mSafe), address(mSafe).codehash, slot0
         );
         _renounceIsRefused(plain, address(mSafe), address(mTimelock), notASafe);
-        vm.setEnv("CONFIRM_UNINSPECTABLE_SAFE", "yes-i-checked-the-safe");
-        _renounceIsRefused(plain, address(mSafe), address(mTimelock), notASafe);
-        vm.setEnv("CONFIRM_UNINSPECTABLE_SAFE", vm.toString(address(mTimelock)));
-        _renounceIsRefused(plain, address(mSafe), address(mTimelock), notASafe);
-
-        // Named, but a module it lists is still refused.
-        vm.setEnv("CONFIRM_UNINSPECTABLE_SAFE", vm.toString(address(mSafe)));
-        address listed = makeAddr("a module it admits to");
-        mSafe.enableModule(listed);
-        _renounceIsRefused(plain, address(mSafe), address(mTimelock), abi.encodeWithSelector(
-            SplitAuthority.SafeHasModules.selector, address(mSafe), listed
-        ));
-        vm.revertToState(start);
 
         // 2. A module enabled. It can run any call as the Safe, so the threshold limits nobody who controls it.
-        vm.setEnv("CONFIRM_UNINSPECTABLE_SAFE", "");
         address module = makeAddr("a module");
         mSafe.enableModule(module);
         _renounceIsRefused(mScript, address(mSafe), address(mTimelock), abi.encodeWithSelector(
@@ -863,20 +887,107 @@ contract SplitAuthorityTest is Test {
         // None of that dropped anything.
         _assertDeployerHolds();
 
-        // 6. What separates those from a pass is the one thing each changed: the plain script goes through when the
-        //    operator names this Safe, and the stand-in with no module and no guard needs no word at all.
-        vm.setEnv("CONFIRM_UNINSPECTABLE_SAFE", vm.toString(address(mSafe)));
-        _env("renounce", address(mSafe), address(mTimelock), "yes-drop-the-deployer");
-        plain.run();
-        _assertDeployerDropped();
-        vm.revertToState(start);
-        vm.setEnv("CONFIRM_UNINSPECTABLE_SAFE", "");
+        // 6. What separates those from a pass is the one thing each changed: with no module and no guard, the
+        //    stand-in goes through.
         _env("renounce", address(mSafe), address(mTimelock), "yes-drop-the-deployer");
         mScript.run();
         _assertDeployerDropped();
 
         _clearEnv();
         vm.removeFile(_artifactPath());
+    }
+
+    /// What the contracts cannot answer for, the chain's logs can: scripts/check-before-renounce.mjs reconciles every
+    /// role holder and everything the Safe has done since it was made, and phase 5 takes its report only for this
+    /// handover, within the hour, and while neither the Safe nor the deployer has made a transaction since. Each case
+    /// starts from a passing report and changes one thing. Run from the migration test, because the environment is
+    /// process-wide.
+    function _renounceNeedsAFreshReconciliation() internal {
+        vm.chainId(7777009);
+        _deployRegistries();
+        _handoverUpToTheRenounce();
+        address safe = address(mSafe);
+        address timelock = address(mTimelock);
+        vm.warp(1_800_000_000);
+        Report memory good = Report({
+            schema: "sigvara/renounce-check/v1",
+            passed: true,
+            chainId: block.chainid,
+            safe: safe,
+            timelock: timelock,
+            deployer: deployer,
+            checkedAt: block.timestamp,
+            safeNonce: 0,
+            deployerNonce: vm.getNonce(deployer)
+        });
+
+        _env("renounce", safe, timelock, "yes-drop-the-deployer");
+        vm.removeFile(_reportPath());
+        _refusedFor(string.concat("no report at ", _reportPath(), ": run scripts/check-before-renounce.mjs"));
+
+        Report memory r = _copy(good);
+        r.schema = "sigvara/renounce-check/v0";
+        _report(r);
+        _refusedFor("the report is not a sigvara/renounce-check/v1");
+        r = _copy(good);
+        r.passed = false;
+        _report(r);
+        _refusedFor("the report did not pass");
+        r = _copy(good);
+        r.chainId = 5042;
+        _report(r);
+        _refusedFor("the report is for another chain");
+        r = _copy(good);
+        r.safe = makeAddr("another Safe");
+        _report(r);
+        _refusedFor("the report is for another Safe");
+        r = _copy(good);
+        r.timelock = makeAddr("another timelock");
+        _report(r);
+        _refusedFor("the report is for another timelock");
+        r = _copy(good);
+        r.deployer = makeAddr("another deployer");
+        _report(r);
+        _refusedFor("the report is for another deployer");
+        string memory old = "the report is more than an hour old: run scripts/check-before-renounce.mjs again";
+        r = _copy(good);
+        r.checkedAt = block.timestamp - 1 hours - 1;
+        _report(r);
+        _refusedFor(old);
+        r = _copy(good);
+        r.checkedAt = block.timestamp + 6 minutes;
+        _report(r);
+        _refusedFor(old);
+
+        // A transaction since the report, by the Safe or by the deployer, may be one it never saw.
+        uint256 start = vm.snapshotState();
+        _report(good);
+        mSafe.bumpNonce();
+        _refusedFor("the Safe has made a transaction since the report: run it again");
+        vm.revertToState(start);
+        _report(good);
+        vm.setNonce(deployer, uint64(good.deployerNonce + 1));
+        _refusedFor("the deployer has made a transaction since the report: run it again");
+        vm.revertToState(start);
+
+        // None of that dropped anything; an hour to the second after it, the same report goes through.
+        _assertDeployerHolds();
+        _report(good);
+        vm.warp(good.checkedAt + 1 hours);
+        mScript.run();
+        _assertDeployerDropped();
+
+        _clearEnv();
+        vm.removeFile(_artifactPath());
+    }
+
+    function _refusedFor(string memory reason) internal {
+        vm.expectRevert(abi.encodeWithSelector(SplitAuthority.ReconciliationRefused.selector, reason));
+        mScript.run();
+    }
+
+    function _copy(Report memory r) internal pure returns (Report memory) {
+        return Report(r.schema, r.passed, r.chainId, r.safe, r.timelock, r.deployer, r.checkedAt, r.safeNonce, r.deployerNonce);
     }
 
     function _assertDeployerHolds() internal view {

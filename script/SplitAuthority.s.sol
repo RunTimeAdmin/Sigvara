@@ -72,8 +72,11 @@ import {TimelockController} from "@openzeppelin/contracts/governance/TimelockCon
  * factory made, from a setup that delegated to nothing but Safe's L2 switch: Safe's code decides who may act from
  * storage, and its getters list only what is linked into their lists. It refuses a Safe with a module enabled,
  * since a module acts as the Safe without its owners, and one with a guard, which can refuse every transaction
- * the Safe makes, the ones that schedule upgrades included. Any other multisig is refused unless the operator
- * names it as one they checked some other way.
+ * the Safe makes, the ones that schedule upgrades included. Any other multisig is refused.
+ *
+ * Last, phase 5 refuses unless scripts/check-before-renounce.mjs has reconciled, from the chain's own logs, every
+ * role holder and everything the Safe has done since it was made, within the hour, and neither the Safe nor the
+ * deployer has made a transaction since (the owner's decision, 2026-11-02: a hard gate, not a checklist step).
  *
  * ## Usage
  *
@@ -94,12 +97,13 @@ import {TimelockController} from "@openzeppelin/contracts/governance/TimelockCon
  *   PHASE=safe-calldata SAFE=0x... \
  *     forge script script/SplitAuthority.s.sol --rpc-url arc_testnet -vv
  *
- *   # 4b. Before dropping anything, read the grant history. This script checks the contracts it is
- *   #     shown, and only the history shows a holder nobody expected. The upgrader role answers only to
- *   #     the timelock once the deployer is gone, so an extra holder is cheap to remove now and slow
- *   #     to remove later. Go on only if it passes; run it again without BEFORE_RENOUNCE afterwards.
- *   BEFORE_RENOUNCE=1 SAFE=0x... TIMELOCK=0x... COMMITTEE=0x... ORACLE=0x... GUARDIAN=0x... \
- *     node scripts/check-role-holders.mjs
+ *   # 4b. Before dropping anything, reconcile the histories. This script checks the contracts it is
+ *   #     shown, and only the history shows a holder nobody expected, or a Safe that once let other code
+ *   #     act for it. The report it writes is what phase 5 asks for, and it holds for an hour, while
+ *   #     neither the Safe nor the deployer makes a transaction. Run scripts/check-role-holders.mjs
+ *   #     without BEFORE_RENOUNCE after phase 5.
+ *   SAFE=0x... TIMELOCK=0x... COMMITTEE=0x... ORACLE=0x... GUARDIAN=0x... SAFE_CREATION_BLOCK=n \
+ *     node scripts/check-before-renounce.mjs
  *
  *   # 5. Only now does the EOA drop anything. Refuses unless step 4 actually landed. SAFE_FACTORY and
  *   #    SAFE_CREATION_CALL come from the transaction that created the Safe: its factory and its input.
@@ -121,11 +125,6 @@ import {TimelockController} from "@openzeppelin/contracts/governance/TimelockCon
  *                        Phase 5 works out the address it creates and refuses a SAFE that is not that address. A Safe
  *                        made with createProxyWithCallback is given as createProxyWithNonce with the saltNonce that
  *                        call derives, keccak256(abi.encodePacked(saltNonce, callback)).
- *   CONFIRM_UNINSPECTABLE_SAFE
- *                        SAFE's own address lets phase 5 go ahead when SAFE is not a Safe proxy running code Safe
- *                        published (another multisig, or a Safe version this file does not list). Set it only once
- *                        you have checked its code, owners, threshold, modules and history some other way. Unset,
- *                        or naming another address, such a SAFE is refused.
  *
  * Rehearse first: test/SplitAuthority.t.sol runs every phase offline against fresh registries
  * and a stand-in Safe. test/SplitAuthorityFork.t.sol runs the same steps against a fork of
@@ -189,6 +188,10 @@ contract SplitAuthority is Script {
     bytes32 internal constant SAFE_FALLBACK_HANDLER_SLOT = keccak256("fallback_manager.handler.address");
     /// The head of a Safe's module list (SENTINEL_MODULES).
     address internal constant SAFE_MODULES_HEAD = address(0x1);
+    /// The longest a reconciliation report counts for. Long enough to run phase 5 after it; the nonces in it
+    /// catch anything the Safe or the deployer does in between.
+    uint256 internal constant MAX_RECONCILIATION_AGE = 1 hours;
+    string internal constant RECONCILIATION_SCHEMA = "sigvara/renounce-check/v1";
 
     /// Every contract in the artifact that gates anything on these two roles. The first four are the
     /// launch registries and are required in every phase: one that is missing from the artifact, holds
@@ -233,6 +236,7 @@ contract SplitAuthority is Script {
     error SafeNotCreatedAsShown(address safe, address created);
     error SafeSetupDelegatedTo(address safe, address to);
     error SafeSetupRanOtherCode(address safe, address code);
+    error ReconciliationRefused(string reason);
     error SafeIsADelegatedAccount(address safe);
     error DeployerStillAdmin(string target, address deployer);
     error UpgraderRoleNotSelfAdministered(string target);
@@ -301,7 +305,7 @@ contract SplitAuthority is Script {
         (string memory proxy, string memory implementation) = _safeVersion(safe);
         if (bytes(proxy).length == 0 || bytes(implementation).length == 0) {
             console2.log("NOTE: SAFE is not a Safe proxy running code Safe published, so its owners and threshold are");
-            console2.log("      its own word. PHASE=renounce refuses it unless CONFIRM_UNINSPECTABLE_SAFE is set to its address.");
+            console2.log("      its own word. PHASE=renounce refuses it.");
         } else {
             console2.log("safe proxy    ", proxy);
             console2.log("safe code     ", implementation);
@@ -513,8 +517,7 @@ contract SplitAuthority is Script {
      *          everything DEFAULT_ADMIN_ROLE administers, with no delay
      *        - a Safe that is not Safe's code, or that Safe's factory did not create from a plain setup: its
      *          owners and threshold would be only what it says, and storage written around its lists can act
-     *          without showing. Another multisig can be a legitimate target, so the operator may name it as one
-     *          they checked some other way (CONFIRM_UNINSPECTABLE_SAFE); nothing here has
+     *          without showing
      *        - a Safe with a module enabled, the deployer as a module, or a guard: a module acts as the Safe
      *          without the owners, and a guard can refuse whatever the Safe does
      *        - a timelock whose code is not the TimelockController phase 2 deploys. Its delay and its roles are
@@ -524,6 +527,9 @@ contract SplitAuthority is Script {
      *          still return the genuine code, so the state is only as trustworthy as whoever ran the constructor
      *        - a Safe that is an account which has delegated to a contract (EIP-7702): its own key can still act
      *          as itself, whatever threshold the contract it delegates to reports
+     *        - no reconciliation report from scripts/check-before-renounce.mjs, a failed one, one for another
+     *          chain, Safe, timelock or deployer, one over an hour old, or one the Safe or the deployer has made a
+     *          transaction since. What the Safe has done since it was made is in its log and nowhere else
      *
      *      All of them are checked against the chain, not against what the earlier
      *      phases in this file intended to do.
@@ -550,8 +556,7 @@ contract SplitAuthority is Script {
         if (_isOwner(safe, deployer) && _thresholdOf(safe) <= 1) revert DeployerCanActAlone(safe);
         // One owner who is not the deployer is a different key, but still one key. The Safe can raise its own
         // threshold later; until it does, that owner can use everything DEFAULT_ADMIN_ROLE administers with no
-        // delay, and propose any upgrade. A Safe that cannot answer is refused unless the operator vouches for it
-        // (see _thresholdOf).
+        // delay, and propose any upgrade.
         uint256 threshold = _thresholdOf(safe);
         if (threshold < MIN_SAFE_THRESHOLD) revert SafeThresholdTooLow(safe, threshold, MIN_SAFE_THRESHOLD);
 
@@ -573,6 +578,9 @@ contract SplitAuthority is Script {
             (bool open, bytes32 role) = _firstRoleTheAdminCanGrant(targets[i].name, targets[i].addr);
             if (open) revert RoleNotTimelocked(targets[i].name, role);
         }
+
+        // Last, and for nothing above: the histories the contracts cannot answer for.
+        _requireReconciliation(safe, timelock, deployer);
 
         vm.startBroadcast(vm.envUint("DEPLOYER_PRIVATE_KEY"));
         for (uint256 i = 0; i < targets.length; i++) {
@@ -720,33 +728,26 @@ contract SplitAuthority is Script {
         return false;
     }
 
-    /// @dev A SAFE that cannot say what its threshold is gets neither owner guard in `_renounce`. Only one the
-    ///      operator vouched for reaches this without an answer, because `_requireKnownSafe` runs first and Safe's
-    ///      own code always answers. Both reads are low-level, like the others that ask a contract this file does
-    ///      not control: a typed call cannot catch a contract whose fallback answers with nothing, and would end
-    ///      the script on a decoding error instead of reaching the refusal.
+    /// @dev The Safe's threshold, or zero if it does not answer, which the threshold guard then refuses. Safe's own
+    ///      code always answers, and `_requireKnownSafe` has refused anything else by now. The read is low-level,
+    ///      like the others that ask a contract this file does not control: a typed call cannot catch a contract
+    ///      whose fallback answers with nothing, and would end the script on a decoding error instead.
     function _thresholdOf(address safe) internal view returns (uint256) {
         (bool ok, bytes memory ret) = safe.staticcall(abi.encodeWithSelector(ISafe.getThreshold.selector));
         if (ok && ret.length == 32) return abi.decode(ret, (uint256));
-        return type(uint256).max; // unknown, on the operator's word: do not trip the owner guards
+        return 0;
     }
 
     /// @dev Phase 5's answer to "is this a Safe": a Safe proxy running code Safe published, created by Safe's
-    ///      factory as the operator shows, with no module and no guard. Anything else goes ahead only when the
-    ///      operator names it, and is then still asked for its owners and threshold, so an answer that fails the
-    ///      owner guards is refused even so.
+    ///      factory as the operator shows, with no module and no guard. Anything else is refused: the history
+    ///      phase 5 also needs (`_requireReconciliation`) is a Safe's history.
     function _requireKnownSafe(address safe, address deployer, address factory, bytes memory creation)
         internal
         view
     {
         (string memory proxy, string memory implementation) = _safeVersion(safe);
         if (bytes(proxy).length == 0 || bytes(implementation).length == 0) {
-            if (!_vouchedFor(safe)) revert SafeNotRecognized(safe, safe.codehash, _implementationOf(safe));
-            // Its own word, but a module it admits to is still one too many.
-            (, address[] memory admitted) = _modulesOf(safe);
-            if (admitted.length > 0) revert SafeHasModules(safe, admitted[0]);
-            console2.log("WARNING: SAFE is not code Safe published. You named it as checked; nothing here has.");
-            return;
+            revert SafeNotRecognized(safe, safe.codehash, _implementationOf(safe));
         }
         // Safe's code decides who may act from storage, and getOwners and getModulesPaginated list only the
         // entries linked into their lists. One written around them, by a delegatecall at setup or later or by a
@@ -767,15 +768,34 @@ contract SplitAuthority is Script {
         if (guard != address(0)) revert SafeHasGuard(safe, guard);
     }
 
-    /// @dev Whether CONFIRM_UNINSPECTABLE_SAFE names this SAFE. A sentence would carry over, in a .env file that
-    ///      forge reads by itself, to whatever SAFE a later run is given; an address vouches for one contract.
-    function _vouchedFor(address safe) internal view returns (bool) {
-        string memory said = vm.envOr("CONFIRM_UNINSPECTABLE_SAFE", string(""));
-        if (bytes(said).length == 0) return false;
-        try vm.parseAddress(said) returns (address named) {
-            return named == safe;
-        } catch {
-            return false;
+    /// @dev The report scripts/check-before-renounce.mjs writes when every role holder and the Safe's whole history
+    ///      reconcile. It counts only for this chain, Safe, timelock and deployer, for an hour, and while the Safe's
+    ///      nonce and the deployer's are what they were when it was written: a transaction by either since then may
+    ///      be one the report never saw.
+    function _requireReconciliation(address safe, address timelock, address deployer) internal view {
+        string memory path = string.concat("deployments/", vm.toString(block.chainid), ".renounce-check.json");
+        if (!vm.exists(path)) {
+            revert ReconciliationRefused(string.concat("no report at ", path, ": run scripts/check-before-renounce.mjs"));
+        }
+        string memory json = vm.readFile(path);
+        if (keccak256(bytes(vm.parseJsonString(json, ".schema"))) != keccak256(bytes(RECONCILIATION_SCHEMA))) {
+            revert ReconciliationRefused("the report is not a sigvara/renounce-check/v1");
+        }
+        if (!vm.parseJsonBool(json, ".passed")) revert ReconciliationRefused("the report did not pass");
+        if (vm.parseJsonUint(json, ".chain_id") != block.chainid) revert ReconciliationRefused("the report is for another chain");
+        if (vm.parseJsonAddress(json, ".safe") != safe) revert ReconciliationRefused("the report is for another Safe");
+        if (vm.parseJsonAddress(json, ".timelock") != timelock) revert ReconciliationRefused("the report is for another timelock");
+        if (vm.parseJsonAddress(json, ".deployer") != deployer) revert ReconciliationRefused("the report is for another deployer");
+        uint256 checkedAt = vm.parseJsonUint(json, ".checked_at");
+        if (checkedAt > block.timestamp + 5 minutes || block.timestamp > checkedAt + MAX_RECONCILIATION_AGE) {
+            revert ReconciliationRefused("the report is more than an hour old: run scripts/check-before-renounce.mjs again");
+        }
+        (bool ok, bytes memory ret) = safe.staticcall(abi.encodeWithSignature("nonce()"));
+        if (!ok || ret.length != 32 || abi.decode(ret, (uint256)) != vm.parseJsonUint(json, ".safe_nonce")) {
+            revert ReconciliationRefused("the Safe has made a transaction since the report: run it again");
+        }
+        if (vm.getNonce(deployer) != vm.parseJsonUint(json, ".deployer_nonce")) {
+            revert ReconciliationRefused("the deployer has made a transaction since the report: run it again");
         }
     }
 
