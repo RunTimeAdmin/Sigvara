@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://sigvara.xyz/</loc><lastmod>2026-11-01</lastmod></url>
+  <url><loc>https://sigvara.xyz/</loc><lastmod>2026-11-02</lastmod></url>
   <url><loc>https://sigvara.xyz/demo</loc><lastmod>2026-10-28</lastmod></url>
-  <url><loc>https://sigvara.xyz/testnet</loc><lastmod>2026-10-31</lastmod></url>
-  <url><loc>https://sigvara.xyz/check</loc><lastmod>2026-10-31</lastmod></url>
-  <url><loc>https://sigvara.xyz/epochs</loc><lastmod>2026-10-31</lastmod></url>
+  <url><loc>https://sigvara.xyz/testnet</loc><lastmod>2026-11-01</lastmod></url>
+  <url><loc>https://sigvara.xyz/check</loc><lastmod>2026-11-01</lastmod></url>
+  <url><loc>https://sigvara.xyz/epochs</loc><lastmod>2026-11-01</lastmod></url>
   <url><loc>https://sigvara.xyz/docs/quickstart</loc><lastmod>2026-11-01</lastmod></url>
-  <url><loc>https://sigvara.xyz/docs/reputation</loc><lastmod>2026-11-01</lastmod></url>
+  <url><loc>https://sigvara.xyz/docs/reputation</loc><lastmod>2026-11-02</lastmod></url>
   <url><loc>https://sigvara.xyz/docs/token</loc><lastmod>2026-10-27</lastmod></url>
-  <url><loc>https://sigvara.xyz/docs/counteraudit</loc><lastmod>2026-10-31</lastmod></url>
+  <url><loc>https://sigvara.xyz/docs/counteraudit</loc><lastmod>2026-11-01</lastmod></url>
   <url><loc>https://sigvara.xyz/docs/ai-frameworks</loc><lastmod>2026-10-27</lastmod></url>
   <url><loc>https://sigvara.xyz/docs/lineage</loc><lastmod>2026-10-27</lastmod></url>
 </urlset>
