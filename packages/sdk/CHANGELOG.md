@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.0.0-alpha.14
 
 ### Added: `profile: 'production'` on `SigvaraGate`
 
