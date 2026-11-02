@@ -1,0 +1,274 @@
+"use strict";
+// Agents: every agent registered on this deployment, its score and stake, and a check of the
+// evidence behind its score that runs in the visitor's browser. Sources are in explorer.js.
+
+const X = window.SigvaraExplorer;
+const $ = (id) => document.getElementById(id);
+
+// Agents the repository itself says are Sigvara's own, so the list does not pass them off as
+// outside demand. The demo agent is named in docs/slash-drill.md and docs/divergence-log.md.
+const KNOWN_AGENTS = {
+  "0x8414ce0bf4f1e1695193623e0a656a9439e356f8bed0b8bf249b179fe77c7e19": "Sigvara's demo agent",
+};
+// keccak256("Transfer(address,address,uint256)"), the ERC-20 event a payment settles with.
+const TRANSFER_TOPIC = window.SigvaraDid.keccak256(window.SigvaraDid.utf8("Transfer(address,address,uint256)"));
+// The newest payments checked against the chain in one go, so one click never sends the
+// public RPC more than a few small batches.
+const CHAIN_CHECK_LIMIT = 40;
+
+function setCard(id, html) {
+  $(id).querySelector(".card-body").innerHTML = html;
+  $(id).classList.remove("u-hidden");
+}
+const plural = (n, one, many = one + "s") => `${n} ${n === 1 ? one : many}`;
+
+// ---- the list ----
+let agents = [];
+
+async function loadAgents() {
+  setCard("agentsCard", X.READING_HISTORY);
+  let registrations;
+  try {
+    registrations = await X.contractLogs(X.IDENTITY, ["AgentRegistered"]);
+  } catch (e) {
+    return setCard("agentsCard", X.failed("the registrations from the explorer", e)
+      + `<p class="netnote">You can look an agent up by address on <a href="epochs">the epochs page</a>, which reads the chain directly.</p>`);
+  }
+  const seen = new Set();
+  agents = registrations.logs
+    .map((l) => ({ didHash: l.topics[1], address: X.topicAddr(l.topics[3]), time: l.time, tx: l.tx }))
+    .filter((a) => X.isHash(a.didHash) && X.isAddr(a.address) && !seen.has(a.didHash) && seen.add(a.didHash));
+  if (!agents.length) return setCard("agentsCard", "<p>No agent has registered on this deployment yet.</p>");
+
+  try {
+    const reads = await X.ethCalls(agents.flatMap((a) => [
+      { to: X.IDENTITY,   data: X.SEL.identities     + X.pad32(a.didHash) },
+      { to: X.REPUTATION, data: X.SEL.getTotalScore  + X.pad32(a.didHash) },
+      { to: X.REPUTATION, data: X.SEL.getEarnedScore + X.pad32(a.didHash) },
+      { to: X.REPUTATION, data: X.SEL.evidenceRoots  + X.pad32(a.didHash) },
+      { to: X.STAKING,    data: X.SEL.getStake       + X.pad32(a.didHash) },
+    ]));
+    agents.forEach((a, i) => {
+      const [ident, total, earned, root, stake] = reads.slice(i * 5, i * 5 + 5);
+      // The operator now, which a transfer can change since registration.
+      a.operator = X.wordAddr(ident, 0);
+      a.status = Number(BigInt(X.word(ident, 3)));
+      a.total = Number(BigInt(total));
+      a.earned = Number(BigInt(earned));
+      a.root = X.word(root, 0).toLowerCase();
+      a.stake = BigInt(stake);
+    });
+  } catch (e) {
+    return setCard("agentsCard", X.failed("the agents' scores from the chain", e));
+  }
+  renderAgents(registrations.truncated);
+}
+
+function renderAgents(truncated) {
+  const sorted = [...agents].sort((a, b) => b.total - a.total || b.earned - a.earned || a.time - b.time);
+  const active = agents.filter((a) => a.status === 0).length;
+  const scored = agents.filter((a) => a.earned > 0).length;
+  const ours = agents.filter((a) => KNOWN_AGENTS[a.didHash] || X.same(a.operator, X.DEPLOYER)).length;
+  let html = `<p><b>${plural(agents.length, "agent")}</b> registered on this deployment: ${active} active, ${scored} with a score above zero.`
+    + (ours ? ` ${ours === 1 ? "One is" : `${ours} are`} Sigvara's own, marked below.` : "")
+    + ` Both oracle operators are run by the Sigvara team too (see <a href="operators">Operators</a>), so read these scores as the protocol working, not as outside demand.</p>`;
+  html += `<div class="ex-scroll"><table class="ex-table">
+    <thead><tr><th>Agent</th><th>Operator</th><th>Status</th><th title="getTotalScore: the score other contracts read, which matures toward the earned score">Score</th><th title="getEarnedScore: the score as last finalized">Earned</th><th>Stake</th><th>Evidence root</th><th></th></tr></thead><tbody>`;
+  for (const a of sorted) {
+    const label = KNOWN_AGENTS[a.didHash] ? `<div class="ex-note">${X.esc(KNOWN_AGENTS[a.didHash])}</div>` : "";
+    html += `<tr>
+      <td><a href="epochs?a=${a.address}"><code>${X.short(a.address)}</code></a>${label}</td>
+      <td>${X.same(a.operator, X.DEPLOYER) ? `Sigvara deployer<div class="ex-note">${X.addrLink(a.operator)}</div>` : X.addrLink(a.operator)}</td>
+      <td>${X.esc(X.STATUS[a.status] ?? "?")}</td>
+      <td><b>${a.total}</b></td>
+      <td>${a.earned}</td>
+      <td class="num">${X.esc(X.fmtSvr(a.stake))}</td>
+      <td>${X.rootCode(a.root)}</td>
+      <td><button class="btn btn-secondary btn-sm" type="button" data-check="${a.didHash}">Check evidence</button></td>
+    </tr>`;
+  }
+  html += "</tbody></table></div>";
+  html += '<p class="netnote">Score is what other contracts read (<code>getTotalScore</code>); it matures toward the earned score over time. <a href="docs/reputation">How scores work</a>. The agent links open its score epochs.</p>';
+  if (truncated) html += '<p class="pill-warn">The explorer has more registrations than this page reads, so the newest may be missing.</p>';
+  setCard("agentsCard", html);
+  for (const btn of document.querySelectorAll("[data-check]")) {
+    btn.addEventListener("click", () => checkEvidence(btn.getAttribute("data-check")));
+  }
+}
+
+// ---- the evidence check ----
+let checkSeq = 0;
+
+async function checkEvidence(didHash) {
+  const seq = ++checkSeq;
+  const a = agents.find((x) => x.didHash === didHash);
+  if (!a) return;
+  setCard("checkCard", `<p class="netnote">Reading the payments behind <code>${X.short(a.address)}</code>…</p>`);
+  $("checkCard").scrollIntoView({ behavior: "smooth", block: "start" });
+  const [evidence, pending] = await Promise.allSettled([
+    X.getJson(`${X.PRIMARY}/evidence/${didHash}`),
+    X.ethCalls([{ to: X.REPUTATION, data: X.SEL.getPendingScore + X.pad32(didHash) }]),
+  ]);
+  if (seq !== checkSeq) return;
+  try {
+    await renderCheck(a, evidence, pending);
+  } catch (e) {
+    setCard("checkCard", X.failed("this check", e));
+  }
+}
+
+async function renderCheck(a, evidence, pendingRead) {
+  const seq = checkSeq;
+  const head = `<p>Agent ${KNOWN_AGENTS[a.didHash] ? `${X.esc(KNOWN_AGENTS[a.didHash])}, ` : ""}<a href="epochs?a=${a.address}"><code>${X.esc(a.address)}</code></a>.</p>`;
+  if (evidence.status === "rejected") return setCard("checkCard", head + X.failed("the primary oracle's evidence", evidence.reason));
+  const j = evidence.value;
+  const list = (Array.isArray(j?.evidence) ? j.evidence : []).filter((e) => e && typeof e === "object");
+  const served = X.isHash(j?.evidenceRoot) ? j.evidenceRoot.toLowerCase() : null;
+
+  // 1. Rebuild every leaf from its fields, never from the leaf the oracle served.
+  const rebuilt = [], bad = [];
+  list.forEach((e, i) => {
+    try { rebuilt.push(X.leafOf(e)); } catch (err) { bad.push(`payment ${i + 1}: ${err.message}`); rebuilt.push(null); }
+  });
+  const leafDiffs = list.filter((e, i) => rebuilt[i] && X.isHash(e.leaf) && !X.same(e.leaf, rebuilt[i])).length;
+  const rows = [];
+  rows.push(["Payments listed", `${list.length}, by the primary oracle's <a href="${X.PRIMARY}/evidence/${a.didHash}" target="_blank" rel="noopener">evidence endpoint</a>`]);
+  if (bad.length) {
+    rows.push(["Rebuilt", `<span class="pill-err">${plural(bad.length, "payment")} cannot be part of any root</span> ${X.esc(bad.slice(0, 3).join("; "))}`]);
+  } else {
+    const root = X.rootOf(rebuilt);
+    rows.push(["Root rebuilt here", `${X.rootCode(root)} ${served === null ? "" : X.same(root, served)
+      ? '<span class="pill-ok">matches the root the oracle serves</span>'
+      : `<span class="pill-err">differs from the root the oracle serves (${X.rootCode(served)})</span>`}`]);
+    if (leafDiffs) rows.push(["Served leaves", `<span class="pill-err">${plural(leafDiffs, "leaf", "leaves")} the oracle served ${leafDiffs === 1 ? "does" : "do"} not match the payment ${leafDiffs === 1 ? "it was" : "they were"} served with</span>`]);
+  }
+
+  // 2. The roots committed on chain: the finalized one, and a pending proposal's.
+  let finalHtml, pendingHtml = null, confirmJob = null;
+  if (bad.length) {
+    finalHtml = "not checked, because the list above has payments that cannot be rebuilt";
+  } else if (X.same(a.root, X.ZERO32)) {
+    finalHtml = "none yet: no score with an evidence root has been finalized for this agent";
+  } else {
+    const m = X.matchRoot(list, a.root);
+    if (!m) {
+      finalHtml = `${X.rootCode(a.root)} <span class="pill-err">no reading of these payments reproduces it</span>. The oracle no longer lists the set this score was made on, or lists it differently.`;
+    } else {
+      finalHtml = `${X.rootCode(a.root)} <span class="pill-ok">reproduced</span> from ${describeMatch(m, list.length)}`;
+      confirmJob = m;
+    }
+  }
+  rows.push(["Finalized root", finalHtml]);
+  if (pendingRead.status === "fulfilled") {
+    const raw = pendingRead.value[0];
+    if (BigInt(X.word(raw, 8)) === 1n) {
+      const proposedAt = Number(BigInt(X.word(raw, 7)));
+      const root = X.word(raw, 9).toLowerCase();
+      const m = bad.length ? null : X.matchRoot(list, root, { at: proposedAt });
+      pendingHtml = `${X.rootCode(root)}, proposed ${X.esc(X.fmtWhen(proposedAt))}: ` + (m
+        ? `<span class="pill-ok">reproduced</span> from ${describeMatch(m, list.length)}`
+        : '<span class="pill-err">not reproduced</span> from the payments settled by then');
+    }
+  } else {
+    pendingHtml = X.failed("the pending proposal", pendingRead.reason);
+  }
+  if (pendingHtml) rows.push(["Pending proposal", pendingHtml]);
+  rows.push(["Contract check", confirmJob ? '<span class="netnote">Asking the reputation contract…</span>' : "nothing to confirm"]);
+
+  const render = (contractHtml) => {
+    rows[rows.length - 1] = ["Contract check", contractHtml];
+    setCard("checkCard", head + `<dl class="kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd class="prose">${v}</dd>`).join("")}</dl>`
+      + (list.length ? `<p><button class="btn btn-secondary btn-sm" type="button" id="chainCheckBtn">Check the payments against the chain</button></p><div id="chainCheck"></div>` : "")
+      + '<p class="netnote">The leaf is <code>keccak256(keccak256(abi.encode(txHash, payer, amount, settledAt, outcome)))</code>, the tree hashes sorted pairs, and an odd node is promoted, as in <a href="https://github.com/RunTimeAdmin/Sigvara/blob/main/oracle/merkle.js" target="_blank" rel="noopener">oracle/merkle.js</a>. A test holds this page to it.</p>');
+    const btn = $("chainCheckBtn");
+    if (btn) btn.onclick = () => checkPayments(a, list);
+  };
+  render(rows[rows.length - 1][1]);
+
+  // 3. verifyEvidence(didHash, leaf, proof): the contract confirms each payment is in its root.
+  if (confirmJob) {
+    try {
+      const layers = X.layersOf(confirmJob.leaves);
+      const answers = await X.ethCalls(confirmJob.leaves.map((leaf, i) => ({
+        to: X.REPUTATION, data: X.verifyEvidenceCall(a.didHash, leaf, X.proofOf(layers, i)),
+      })), 20);
+      if (seq !== checkSeq) return;
+      const yes = answers.filter((r) => BigInt(X.word(r, 0)) === 1n).length;
+      render(yes === answers.length
+        ? `<span class="pill-ok">confirmed</span> <code>verifyEvidence</code> returns true for all ${plural(yes, "payment")} against the root the contract holds`
+        : `<span class="pill-err">${yes} of ${answers.length} confirmed</span> by <code>verifyEvidence</code>`);
+    } catch (e) {
+      if (seq === checkSeq) render(X.failed("the contract's answer", e));
+    }
+  }
+}
+
+function describeMatch(m, of) {
+  const what = m.events.length === of ? `all ${plural(of, "payment")} listed` : `${m.events.length} of the ${of} payments listed`;
+  const when = Number.isFinite(m.cut) && m.events.length !== of ? `, the ones settled by ${X.esc(X.fmtWhen(m.cut))}` : "";
+  const unset = m.unset ? ", reading each outcome the payer signed afterwards as not yet reported" : "";
+  return what + when + unset + ".";
+}
+
+// ---- each payment against its transaction ----
+async function checkPayments(a, list) {
+  const out = $("chainCheck");
+  const picked = [...list].sort((x, y) => Number(y.settledAt) - Number(x.settledAt)).slice(0, CHAIN_CHECK_LIMIT)
+    .filter((e) => X.isHash(e.txHash));
+  out.innerHTML = `<p class="netnote">Reading ${plural(picked.length, "transaction")} from the chain…</p>`;
+  try {
+    const receipts = [];
+    for (let i = 0; i < picked.length; i += 10) {
+      receipts.push(...await X.rpcMany(picked.slice(i, i + 10).map((e) => ["eth_getTransactionReceipt", [e.txHash]])));
+    }
+    const blocks = [...new Set(receipts.filter((r) => r && r.blockNumber).map((r) => r.blockNumber))];
+    const times = new Map();
+    for (let i = 0; i < blocks.length; i += 10) {
+      const got = await X.rpcMany(blocks.slice(i, i + 10).map((b) => ["eth_getBlockByNumber", [b, false]]));
+      got.forEach((b, k) => times.set(blocks[i + k], b ? Number(BigInt(b.timestamp)) : null));
+    }
+    const results = picked.map((e, i) => ({ e, problem: paymentProblem(a, e, receipts[i], times) }));
+    const ok = results.filter((r) => !r.problem).length;
+    out.innerHTML = `<p>${ok === results.length
+      ? `<span class="pill-ok">All ${plural(ok, "payment")} checked</span> match their transactions`
+      : `<span class="pill-err">${results.length - ok} of ${results.length} do not match</span> their transactions`}: a successful transfer of test SVR to the agent from the listed payer, for the listed amount, in a block with the listed time.`
+      + (list.length > picked.length ? ` The newest ${picked.length} of ${list.length} were checked.` : "") + "</p>"
+      + `<ul class="pay-list">${results.map(({ e, problem }) => `<li>
+          <span>${X.esc(X.fmtWhen(Number(e.settledAt)))}</span>
+          <span>${X.esc(X.fmtSvr(e.amount))} from ${X.addrLink(e.payer)}</span>
+          <span class="${problem ? "pill-err" : "pill-ok"}">${X.esc(problem || "matches")}</span>
+          <span>${X.txLink(e.txHash)}</span>
+        </li>`).join("")}</ul>`;
+  } catch (e) {
+    out.innerHTML = X.failed("the transactions", e);
+  }
+}
+
+// What the oracle checks when it takes a payment (oracle/payments.js), from the receipt alone.
+function paymentProblem(a, e, receipt, times) {
+  if (!receipt) return "no such transaction";
+  if (receipt.status !== "0x1") return "the transaction reverted";
+  const credits = new Map();
+  for (const log of Array.isArray(receipt.logs) ? receipt.logs : []) {
+    const t = log?.topics || [];
+    if (!X.same(log.address, X.SVR) || !X.same(t[0], TRANSFER_TOPIC) || t.length < 3) continue;
+    if (!X.same(X.topicAddr(t[2]), a.address)) continue;
+    const from = X.topicAddr(t[1]);
+    credits.set(from, (credits.get(from) ?? 0n) + BigInt(log.data));
+  }
+  if (!credits.size) return "no SVR transfer to the agent";
+  const fromPayer = credits.get(String(e.payer).toLowerCase()) ?? 0n;
+  if (fromPayer === 0n) return "the listed payer sent nothing";
+  const total = [...credits.values()].reduce((s, v) => s + v, 0n);
+  const amount = BigInt(e.amount);
+  // The oracle counts every sender that paid at least its minimum, so with several senders the
+  // listed amount sits between the payer's own transfer and the total.
+  if (amount !== fromPayer && amount !== total && !(credits.size > 1 && amount > fromPayer && amount <= total)) {
+    return "a different amount";
+  }
+  const at = times.get(receipt.blockNumber);
+  if (at !== Number(e.settledAt)) return "a different settlement time";
+  return null;
+}
+
+loadAgents();

@@ -32,7 +32,7 @@ const problems = [];
 const fail = (what, detail) => problems.push({ what, detail });
 const read = p => readFileSync(join(root, p), 'utf8');
 
-const sources = ['SigvaraIdentity', 'SigvaraReputation', 'SigvaraStaking', 'SigvaraEpochFees', 'SVRToken', 'InflowGuard']
+const sources = ['SigvaraIdentity', 'SigvaraReputation', 'SigvaraStaking', 'SigvaraEpochFees', 'SVRToken', 'InflowGuard', 'SigvaraOracleBond']
   .map(n => ({ name: n, text: read(`src/${n}.sol`) }));
 
 // An enum parameter is a uint8 in the ABI (updateStatus takes an AgentStatus).
@@ -80,7 +80,7 @@ const externalSelectors = new Set(['approve', 'allowance', 'balanceOf', 'symbol'
 // Every page that calls the contracts directly is checked. A page left off this list
 // keeps working until a signature changes and then reads zeros forever, so a new page
 // with its own SEL table belongs here on the day it is written.
-for (const file of ['site/assets/app.js', 'site/assets/testnet.js', 'site/assets/epochs.js']) {
+for (const file of ['site/assets/app.js', 'site/assets/testnet.js', 'site/assets/epochs.js', 'site/assets/explorer.js']) {
   const selBlock = read(file).match(/(?:const|var|let) SEL = \{([\s\S]*?)\};/);
   if (!selBlock) { fail(file, 'could not find the SEL selector table'); continue; }
   for (const [, name, sel] of selBlock[1].matchAll(/(\w+)\s*:\s*"(0x[0-9a-fA-F]{8})"/g)) {
@@ -108,7 +108,7 @@ const enumMatch = read('src/SigvaraIdentity.sol').match(/enum AgentStatus \{([^}
 if (!enumMatch) fail('src/SigvaraIdentity.sol', 'could not find the AgentStatus enum');
 else {
   const onchain = enumMatch[1].split(',').map(s => s.trim()).filter(Boolean).length;
-  for (const file of ['site/assets/app.js', 'site/assets/testnet.js', 'site/assets/epochs.js']) {
+  for (const file of ['site/assets/app.js', 'site/assets/testnet.js', 'site/assets/epochs.js', 'site/assets/explorer.js']) {
     const labels = read(file).match(/\[\s*"Active"[^\]]*\]/);
     if (!labels) { fail(file, 'could not find the status label list'); continue; }
     const shown = labels[0].split(',').length;
@@ -136,6 +136,30 @@ else {
     for (const [, sig, topic, rest] of rows) {
       if (ethers.id(sig) !== topic.toLowerCase()) fail(`${file} EVENTS`, `${sig}: table has ${topic}, the signature hashes to ${ethers.id(sig)}`);
       if (!/legacy:\s*true/.test(rest) && !emitted.has(sig)) fail(`${file} EVENTS`, `${sig} is not an event in src/SigvaraReputation.sol`);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 2c. The event topics the explorer pages read, from four contracts.
+//     Same rule as 2b: each topic must hash from its signature, and each signature not marked
+//     legacy must be an event the contract named beside it still emits.
+// ---------------------------------------------------------------------------
+{
+  const file = 'site/assets/explorer.js';
+  const contracts = { identity: 'SigvaraIdentity', reputation: 'SigvaraReputation', staking: 'SigvaraStaking', oracleBond: 'SigvaraOracleBond' };
+  const eventsOf = (name) => new Set([...read(`src/${name}.sol`).matchAll(/event\s+(\w+)\s*\(([^)]*)\)/g)]
+    .map(([, ev, params]) => `${ev}(${params.split(',').map(p => p.trim().split(/\s+/)[0]).filter(Boolean).join(',')})`));
+  const block = read(file).match(/const EVENTS = \[([\s\S]*?)\];/);
+  if (!block) fail(file, 'could not find the EVENTS table');
+  else {
+    const rows = [...block[1].matchAll(/sig:\s*"([^"]+)",\s*topic:\s*"(0x[0-9a-fA-F]{64})"([^}]*)\}/g)];
+    if (rows.length === 0) fail(file, 'the EVENTS table has no rows this check can read');
+    for (const [, sig, topic, rest] of rows) {
+      if (ethers.id(sig) !== topic.toLowerCase()) fail(`${file} EVENTS`, `${sig}: table has ${topic}, the signature hashes to ${ethers.id(sig)}`);
+      const contract = contracts[(rest.match(/contract:\s*"(\w+)"/) || [])[1]];
+      if (!contract) { fail(`${file} EVENTS`, `${sig}: no known contract named beside it`); continue; }
+      if (!/legacy:\s*true/.test(rest) && !eventsOf(contract).has(sig)) fail(`${file} EVENTS`, `${sig} is not an event in src/${contract}.sol`);
     }
   }
 }

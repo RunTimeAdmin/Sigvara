@@ -19,6 +19,7 @@
   <link rel="stylesheet" href="assets/style.css?v=4d3c26f" />
   <link rel="stylesheet" href="assets/app.css?v=ac69814" />
   <link rel="stylesheet" href="assets/epochs.css?v=6081b79" />
+  <link rel="stylesheet" href="assets/explorer.css?v=explorer1" />
 </head>
 <body>
 
@@ -28,6 +29,7 @@
     <ul class="nav-links">
       <li><a href="testnet">Run an agent</a></li>
       <li><a href="./#protocol">Protocol</a></li>
+      <li><a href="agents">Explorer</a></li>
       <li><a href="demo">Demo</a></li>
       <li><a href="docs/quickstart">Docs</a></li>
       <li><a href="https://github.com/RunTimeAdmin/Sigvara" rel="noopener">Source</a></li>
@@ -37,6 +39,12 @@
 </nav>
 
 <div class="app-wrap">
+  <ul class="ex-tabs">
+    <li><a href="agents">Agents</a></li>
+    <li><a href="operators">Operators</a></li>
+    <li><a href="slashes">Slashes</a></li>
+    <li><a href="epochs" aria-current="page">Score epochs</a></li>
+  </ul>
   <h1 class="u-h1-28">Score epochs</h1>
   <p class="ep-lede">A Sigvara score is never written in one step. Each epoch the oracle proposes a score, together with a Merkle root of the payments behind it. The proposal then sits in a challenge window: a second operator recomputes it, and the committee can reject it. Once the window closes, anyone can finalize it. This page shows each of those steps for one agent.</p>
   <p class="netnote">Arc testnet (5042002). Reads only: no wallet, and nothing is signed or sent.</p>

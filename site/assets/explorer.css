@@ -1,0 +1,24 @@
+/* Explorer pages (agents, operators, slashes). Builds on style.css, app.css and epochs.css. */
+.ex-tabs { display: flex; flex-wrap: wrap; gap: 6px; list-style: none; margin: 0 0 18px; padding: 0; }
+.ex-tabs a { display: inline-block; padding: 6px 12px; border: 1px solid var(--border); border-radius: 999px; font-size: 13px; color: var(--sig-text-soft); text-decoration: none; }
+.ex-tabs a:hover { border-color: var(--sig-line-strong); }
+.ex-tabs a[aria-current="page"] { border-color: var(--accent); color: var(--accent); }
+
+.ex-scroll { overflow-x: auto; margin: 12px 0; }
+.ex-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.ex-table th { text-align: left; font-weight: 600; color: var(--muted); padding: 6px 10px 6px 0; border-bottom: 1px solid var(--sig-line-strong); white-space: nowrap; }
+.ex-table td { padding: 8px 10px 8px 0; border-bottom: 1px solid var(--border); vertical-align: top; }
+.ex-table tr:last-child td { border-bottom: 0; }
+.ex-table .num, .ex-table .btn { white-space: nowrap; }
+.ex-note { color: var(--muted); font-size: 12px; margin-top: 2px; }
+#chainCheck { margin-top: 8px; }
+.pay-list.ex-history li { grid-template-columns: 140px 110px 1fr 100px; }
+.pay-list.ex-divergences li { grid-template-columns: 140px 110px 1fr 1fr; }
+.ex-proceeding { border-left: 3px solid var(--sig-line-strong); padding: 8px 0 10px 14px; margin: 0 0 12px; }
+.ex-proceeding.done { border-left-color: var(--sig-danger); }
+.ex-proceeding.dropped { border-left-color: var(--sig-mint); }
+.ex-proceeding.open { border-left-color: var(--sig-orange); }
+.ex-evidence { word-break: break-all; }
+@media (max-width: 640px) {
+  .pay-list.ex-history li, .pay-list.ex-divergences li { grid-template-columns: 1fr; }
+}
