@@ -5,6 +5,16 @@ import "forge-std/Test.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import "../src/SigvaraStaking.sol";
+// Named, because the script declares its own file-level ISafe and IAccessControl, which would clash with these.
+import {SplitAuthority} from "../script/SplitAuthority.s.sol";
+
+/// What phase 5 asks before it believes a Safe, callable from a test.
+contract SplitAuthority_SafeProbe is SplitAuthority {
+    function version(address safe) external view returns (string memory proxy, string memory implementation) {
+        return _safeVersion(safe);
+    }
+    function requireKnown(address safe) external view { _requireKnownSafe(safe); }
+}
 
 /**
  * Rehearsal for script/SplitAuthority.s.sol, against a fork of the live Arc testnet
@@ -49,6 +59,13 @@ contract SplitAuthorityForkTest is Test {
     /// Canonical Safe 1.4.1, confirmed deployed at these addresses on Arc testnet.
     address constant SAFE_SINGLETON = 0x41675C099F32341bf84BFc5382aF534df5C7461a;
     address constant SAFE_FACTORY = 0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67;
+    /// The other Safes Arc testnet has, at Safe's canonical addresses: the L2 implementations and the 1.3.0 and
+    /// 1.5.0 factories, so each proxy code hash and implementation the script lists is made here by Safe's own.
+    address constant SAFE_L2_SINGLETON = 0x29fcB43b46531BcA003ddC8FCB67FFE91900C762;
+    address constant SAFE_FACTORY_1_3_0 = 0xa6B71E26C5e0845f74c812102Ca7114b6a896AB2;
+    address constant SAFE_L2_SINGLETON_1_3_0 = 0x3E5c63644E683549055b9Be8653de26E0B4CD36E;
+    address constant SAFE_FACTORY_1_5_0 = 0x14F2982D601c9458F93bd70B218933A6f8165e7b;
+    address constant SAFE_SINGLETON_1_5_0 = 0xFf51A5898e281Db6DfC7855790607438dF2ca44b;
 
     bytes32 constant ADMIN_ROLE = 0x00;
     bytes32 constant UPGRADER_ROLE = keccak256("UPGRADER_ROLE");
@@ -277,6 +294,44 @@ contract SplitAuthorityForkTest is Test {
     }
 
     // -------------------------------------------------------------------------
+    // What phase 5 takes for a Safe
+    // -------------------------------------------------------------------------
+
+    /**
+     * Phase 5 believes a Safe's owners and threshold only from a proxy and an implementation whose code hashes
+     * the script lists. These are Safes made the way app.safe.global makes them, by Safe's own factories on Arc,
+     * one per version and with both kinds of implementation, so a wrong hash in the script fails here.
+     */
+    function test_theScriptKnowsASafeFromEachOfArcsFactories() public onlyArcFork {
+        SplitAuthority_SafeProbe probe = new SplitAuthority_SafeProbe();
+        address[4] memory factories = [SAFE_FACTORY, SAFE_FACTORY, SAFE_FACTORY_1_3_0, SAFE_FACTORY_1_5_0];
+        address[4] memory singletons = [SAFE_SINGLETON, SAFE_L2_SINGLETON, SAFE_L2_SINGLETON_1_3_0, SAFE_SINGLETON_1_5_0];
+        string[4] memory proxies = ["1.4.1", "1.4.1", "1.3.0", "1.5.0"];
+        string[4] memory implementations = ["Safe 1.4.1", "SafeL2 1.4.1", "SafeL2 1.3.0", "Safe 1.5.0"];
+        for (uint256 i = 0; i < factories.length; i++) {
+            address made = _deploySafe(factories[i], singletons[i], safeOwner, i + 1);
+            (string memory proxy, string memory implementation) = probe.version(made);
+            assertEq(proxy, proxies[i], implementations[i]);
+            assertEq(implementation, implementations[i], implementations[i]);
+            probe.requireKnown(made);
+        }
+    }
+
+    /**
+     * A module runs any call as the Safe without the owners, so a real Safe that has enabled one is refused, and
+     * the refusal names the module. Enabled the only way a Safe allows, by its owners through execTransaction.
+     */
+    function test_theScriptRefusesARealSafeWithAModule() public onlyArcFork {
+        SplitAuthority_SafeProbe probe = new SplitAuthority_SafeProbe();
+        probe.requireKnown(safe);
+
+        address module = address(0x0D01E);
+        _execFromSafe(safe, abi.encodeWithSignature("enableModule(address)", module));
+        vm.expectRevert(abi.encodeWithSelector(SplitAuthority.SafeHasModules.selector, safe, module));
+        probe.requireKnown(safe);
+    }
+
+    // -------------------------------------------------------------------------
     // The migration itself, in the order the script performs it
     // -------------------------------------------------------------------------
 
@@ -307,12 +362,19 @@ contract SplitAuthorityForkTest is Test {
     // -------------------------------------------------------------------------
 
     function _deployRealSafe(address owner) internal returns (address) {
+        return _deploySafe(SAFE_FACTORY, SAFE_SINGLETON, owner, 0);
+    }
+
+    function _deploySafe(address factory, address singleton, address owner, uint256 saltNonce)
+        internal
+        returns (address)
+    {
         address[] memory owners = new address[](1);
         owners[0] = owner;
         bytes memory initializer = abi.encodeCall(
             ISafe.setup, (owners, 1, address(0), "", address(0), address(0), 0, payable(address(0)))
         );
-        address proxy = ISafeProxyFactory(SAFE_FACTORY).createProxyWithNonce(SAFE_SINGLETON, initializer, 0);
+        address proxy = ISafeProxyFactory(factory).createProxyWithNonce(singleton, initializer, saltNonce);
         assertGt(proxy.code.length, 0, "Safe factory produced no code");
         assertEq(ISafe(proxy).getThreshold(), 1, "unexpected threshold");
         return proxy;
