@@ -129,9 +129,13 @@ filed it is still on the committee. On execution the stake is distributed:
 
 | Share | Destination | Why |
 |---|---|---|
-| 50% | burned to `0xdead` | Nobody profits from slashing volume. |
+| 75% | burned to `0xdead` | Nobody profits from slashing, the committee that files it included. |
 | 25% | the victim | The harmed counterparty is made partly whole. |
-| 25% | the reporter | Finding misbehaviour has to be worth doing. |
+
+The committee member who files a slash is paid nothing for it, and no committee member can be
+named as the victim. An enforcer paid from what it enforces has a reason to enforce more, so
+the committee's reward for finding misbehaviour is not a share of the stake. An outside
+victim named in bad faith is what the operator's dispute and the admin's ruling are for.
 
 Proceeds are credited and claimed, never pushed, so a recipient that cannot accept a
 transfer cannot brick the settlement.
@@ -628,7 +632,7 @@ roles, and administers `UPGRADER_ROLE`), and the timelocked role grants describe
 apply to a fresh deployment, not to the testnet.
 `node scripts/record-implementations.mjs --check` shows what is live.
 
-**Test coverage**, as of 1 November 2026: 711 contract tests across 31 Foundry test files
+**Test coverage**, as of 2 November 2026: 713 contract tests across 31 Foundry test files
 including fuzz and invariant tests (two fork suites need an RPC, and the twelve in
 `SplitAuthorityFork` skip without `--fork-url`), 844 oracle tests and 233 in the SDK (9 skip
 outside CI and without a live deployment; every test that runs passes). CI runs Foundry, the oracle and

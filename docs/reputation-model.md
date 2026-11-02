@@ -79,7 +79,8 @@ The consequence is that the factor measures rate *and* volume together:
 The full 15 is approached, never reached. These figures assume fresh evidence; decayed
 weights are fractional and pull every row down as the record ages.
 
-CounterAudit seals the agent's identity and score into every audited packet, live since
+CounterAudit seals the agent's identity and score into every audited packet that names the
+agent (`agent_did`), live since
 19 September. It can also relay an org's reported outcome back to the oracle; that went
 live the same day, but since 30 October 2026 the production deployment relays for no org.
 Since 1 November 2026 it carries payer-signed outcomes instead: it checks the payer's
@@ -332,7 +333,7 @@ When an agent is slashed:
    `SigvaraReputation.zeroReputation(didHash)`
 2. All six factor scores are set to zero
 3. The agent's status is set to `Slashed` (terminal — no further transitions)
-4. The stake is distributed: 50% burned, 25% to victim, 25% to reporter
+4. The stake is distributed: 75% burned, 25% to the victim. The committee, reporter included, gets nothing
 
 The slashed DID cannot be reactivated. The operator must register a new agent address with a new DID and start from zero. This economic finality is what makes the reputation meaningful — reputation can be destroyed, so it is worth protecting.
 
@@ -475,8 +476,8 @@ disagreement (see [Oracle Epochs](#oracle-epochs)).
 
 Slashes are on-chain records. `SigvaraStaking` stores each proposal (reporter, victim,
 evidence hash, challenge deadline, state), readable with `getSlashProposal`, and emits
-`SlashInitiated`, `SlashDisputed`, `SlashCancelled` and `SlashExecuted` (amounts burned,
-to the victim and to the reporter). An executed slash also marks the identity `Slashed`
+`SlashInitiated`, `SlashDisputed`, `SlashCancelled` and `SlashExecuted` (amounts burned
+and to the victim). An executed slash also marks the identity `Slashed`
 and zeroes its score, emitting `ReputationZeroed`. A slash of an oracle operator's bond
 emits `OperatorSlashed` from `SigvaraOracleBond`.
 

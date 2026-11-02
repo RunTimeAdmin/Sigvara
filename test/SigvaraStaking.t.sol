@@ -371,7 +371,7 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
         vm.warp(block.timestamp + CHALLENGE + 1);
         staking.executeSlash(didHash);
 
-        assertEq(svr.balanceOf(address(0xdead)), (MIN_STAKE * 2) / 2);
+        assertEq(svr.balanceOf(address(0xdead)), MIN_STAKE * 2 - (MIN_STAKE * 2) / 4);
         (uint256 pendingAmount,) = staking.getPendingWithdrawal(didHash);
         assertEq(pendingAmount, 0);
 
@@ -426,7 +426,7 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
         uint256 slashable = MIN_STAKE * 2; // active + queued combined
         staking.executeSlash(didHash);
 
-        assertEq(svr.balanceOf(address(0xdead)), slashable / 2);
+        assertEq(svr.balanceOf(address(0xdead)), slashable - slashable / 4);
         assertEq(staking.getStake(didHash), 0);
         (uint256 pendingAmount,) = staking.getPendingWithdrawal(didHash);
         assertEq(pendingAmount, 0);
@@ -565,19 +565,19 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
     function test_executeSlash_distributesCorrectly() public {
         _setupPendingSlash();
 
-        uint256 slashable       = MIN_STAKE * 2;
-        uint256 expectedBurned  = slashable / 2;
-        uint256 expectedVictim  = slashable / 4;
-        uint256 expectedReporter = slashable - expectedBurned - expectedVictim;
+        uint256 slashable      = MIN_STAKE * 2;
+        uint256 expectedVictim = slashable / 4;
+        uint256 expectedBurned = slashable - expectedVictim;
 
         vm.prank(stranger); // execution is permissionless
         staking.executeSlash(didHash);
 
-        // The burn goes out immediately; victim and reporter shares are credited and
-        // pulled, so a recipient that cannot receive the token cannot block settlement.
+        // The burn goes out immediately; the victim's share is credited and pulled, so a
+        // recipient that cannot receive the token cannot block settlement. The reporter,
+        // like the rest of the committee, gets nothing.
         assertEq(svr.balanceOf(address(0xdead)), expectedBurned);
         assertEq(staking.claimable(victim), expectedVictim);
-        assertEq(staking.claimable(committee), expectedReporter);
+        assertEq(staking.claimable(committee), 0);
         assertEq(staking.getStake(didHash), 0);
 
         vm.prank(victim);
@@ -587,17 +587,16 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
     }
 
     /// The event is how anyone watching the chain learns the split without replaying the
-    /// transfers, so the three amounts are part of the contract's interface.
+    /// transfers, so both amounts are part of the contract's interface.
     function test_executeSlash_emitsTheSplit() public {
         _setupPendingSlash();
 
-        uint256 slashable        = MIN_STAKE * 2;
-        uint256 expectedBurned   = slashable / 2;
-        uint256 expectedVictim   = slashable / 4;
-        uint256 expectedReporter = slashable - expectedBurned - expectedVictim;
+        uint256 slashable      = MIN_STAKE * 2;
+        uint256 expectedVictim = slashable / 4;
+        uint256 expectedBurned = slashable - expectedVictim;
 
         vm.expectEmit(address(staking));
-        emit SigvaraStaking.SlashExecuted(didHash, expectedBurned, expectedVictim, expectedReporter);
+        emit SigvaraStaking.SlashExecuted(didHash, expectedBurned, expectedVictim);
         vm.prank(stranger);
         staking.executeSlash(didHash);
     }
@@ -1866,13 +1865,13 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
         assertEq(staking.EXECUTION_PERIOD(), 14 days);
     }
 
-    function test_claimSlashProceeds_paysVictimAndReporter_once() public {
+    function test_claimSlashProceeds_paysVictimOnce_andNeverTheReporter() public {
         _setupPendingSlash();
         staking.executeSlash(didHash);
 
         uint256 total = MIN_STAKE * 2;
         assertEq(staking.claimable(victim), total / 4);
-        assertEq(staking.claimable(committee), total - total / 2 - total / 4);
+        assertEq(staking.claimable(committee), 0);
 
         vm.prank(victim);
         uint256 paid = staking.claimSlashProceeds();
@@ -1880,11 +1879,13 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
         assertEq(svr.balanceOf(victim), total / 4);
         assertEq(staking.claimable(victim), 0);
 
+        // The member who filed the slash has nothing to collect.
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.NothingClaimable.selector, committee));
         vm.prank(committee);
         staking.claimSlashProceeds();
-        assertEq(svr.balanceOf(committee), total - total / 2 - total / 4);
+        assertEq(svr.balanceOf(committee), 0);
 
-        // Everything the stake held has left the contract: burn plus both claims.
+        // Everything the stake held has left the contract: the burn plus the victim's claim.
         assertEq(svr.balanceOf(address(staking)), 0);
 
         vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.NothingClaimable.selector, victim));
@@ -1898,8 +1899,8 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
         staking.claimSlashProceeds();
     }
 
-    /// The three shares always add up to the whole slashed amount, with the reporter
-    /// absorbing the rounding dust.
+    /// The burn and the victim's share always add up to the whole slashed amount, with the
+    /// burn absorbing the rounding dust, and the reporter is credited nothing.
     function testFuzz_executeSlash_sharesSumToTotal(uint256 extra) public {
         extra = bound(extra, 0, 9_000e18);
         uint256 total = MIN_STAKE + extra;
@@ -1914,9 +1915,10 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
         staking.executeSlash(didHash);
 
         uint256 burned = svr.balanceOf(address(0xdead));
-        assertEq(burned, total / 2);
+        assertEq(burned, total - total / 4);
         assertEq(staking.claimable(victim), total / 4);
-        assertEq(burned + staking.claimable(victim) + staking.claimable(committee), total);
+        assertEq(staking.claimable(committee), 0);
+        assertEq(burned + staking.claimable(victim), total);
         assertEq(svr.balanceOf(address(staking)), total - burned);
     }
 

@@ -50,7 +50,7 @@ what is not yet true.
 | [Lineage](docs/lineage.md) | Everyone — the Robinhood Chain testnet run this protocol came from (addresses, oracle activity, what changed) |
 | [Security & Mainnet Readiness Review](docs/SECURITY_AND_MAINNET_READINESS_REVIEW.md) | Everyone — a point-in-time review dated 17 Sep 2026: conditional no-go for mainnet, with the blockers named |
 | [Governance and emergency powers](docs/adr/0005-governance-and-emergency-powers.md) | Everyone: who can do what in an emergency and who can stop whom, with the decisions behind the role split, the guardian pause and the launch floors |
-| [Architecture decision records](docs/adr) | Reviewers: why the ERC-8004 identity layer, accepted analyzer findings, evidence intake, operator custody, governance and payer-signed outcomes were decided the way they were |
+| [Architecture decision records](docs/adr) | Reviewers: why the ERC-8004 identity layer, accepted analyzer findings, evidence intake, operator custody, governance, payer-signed outcomes and the committee's share of a slash were decided the way they were |
 | [Oracle](oracle/README.md) | Operators: endpoints, settings, state file, monitoring and the production checklist |
 | [Second operator runbook](oracle/RUNBOOK-second-operator.md) | Operators: bond, admit and run a checking operator, step by step |
 | [If an operator's signing key may be stolen](docs/incident-operator-key.md) | Operators: what to do in the first half hour, what to keep and what to rotate |
@@ -299,9 +299,8 @@ sequenceDiagram
         Anyone->>ST: executeSlash(didHash)
         ST->>ID: updateStatus(didHash, Slashed)
         ST->>REP: zeroReputation(didHash)
-        ST-->>0xdead: 50% burned
+        ST-->>0xdead: 75% burned
         ST-->>V: 25% credited to victim (claimSlashProceeds)
-        ST-->>CM: 25% credited to reporter (claimSlashProceeds)
         Note over ST: Not executed within 14 days of the deadline,<br/>anyone may expireSlash()
     end
 ```
@@ -310,12 +309,16 @@ sequenceDiagram
 
 | Recipient | Share | Mechanism |
 |---|---|---|
-| `address(0xdead)` | 50% | Deflationary burn |
+| `address(0xdead)` | 75% | Burned, so nobody profits from slashing |
 | Victim | 25% | Recourse for the harmed party, credited and withdrawn with `claimSlashProceeds()` |
-| Committee reporter | 25% | Incentivizes accurate reporting, credited and withdrawn with `claimSlashProceeds()` |
 
-The committee files slashes, and a quarter of the bond goes to whoever filed it, so a second
-key keeps the check: the admin rules on every dispute and can `vetoSlash(didHash)` while the
+The committee that files a slash takes no share of it, and `initiateSlash` refuses a victim
+who is on the committee (`VictimIsReporter`, `VictimIsCommittee`). The Arc testnet staking
+proxy still runs the earlier split (50% burned, 25% victim, 25% reporter) until it is
+upgraded to this version.
+
+The committee files slashes and names the victim, so a second key keeps the check: the
+admin rules on every dispute and can `vetoSlash(didHash)` while the
 proposal is Pending, including after its challenge deadline and before anyone executes it, or
 Disputed. A proposal nobody executes or cancels lapses: 14 days after its deadline anyone can
 `expireSlash(didHash)`, so a bond is never frozen for good by silence.
@@ -589,7 +592,7 @@ Everything below runs offline, with no deployed contracts, except two fork suite
 
 | Suite | Count | Command |
 |---|---|---|
-| Contracts: unit, fuzz, E2E, upgrade, deploy-script, handover and 19 invariants | 711 | `forge test` |
+| Contracts: unit, fuzz, E2E, upgrade, deploy-script, handover and 19 invariants | 713 | `forge test` |
 | Oracle | 844 | `cd oracle && node --test` |
 | SDK | 233 | `cd packages/sdk && npx vitest run` |
 

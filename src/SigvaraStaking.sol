@@ -37,7 +37,7 @@ interface IReputationZero {
  *   - A CHALLENGE_PERIOD_SECONDS timelock begins. The agent operator may dispute.
  *   - If undisputed after the challenge period, anyone can call executeSlash, as long as the
  *     reporter still holds the committee role.
- *   - On execution: 50% burned, 25% to victim, 25% to the initiating reporter.
+ *   - On execution: 75% burned, 25% to the victim. The committee, reporter included, gets nothing.
  *   - The Identity registry marks the agent Slashed; Reputation zeroes out.
  *
  * Mainnet path: replace SLASHING_COMMITTEE_ROLE with UMA OptimisticOracleV3 or Kleros.
@@ -173,7 +173,7 @@ contract SigvaraStaking is
     event WithdrawalClaimed(bytes32 indexed didHash, address indexed operator, uint256 amount);
     event SlashInitiated(bytes32 indexed didHash, address indexed reporter, address indexed victim, uint256 initiatedAt);
     event SlashDisputed(bytes32 indexed didHash, address indexed operator);
-    event SlashExecuted(bytes32 indexed didHash, uint256 burned, uint256 toVictim, uint256 toReporter);
+    event SlashExecuted(bytes32 indexed didHash, uint256 burned, uint256 toVictim);
     event SlashCancelled(bytes32 indexed didHash, address indexed by);
     /// Emitted alongside SlashCancelled when the admin, not the committee, dropped the proposal.
     event SlashVetoed(bytes32 indexed didHash, address indexed by);
@@ -199,6 +199,7 @@ contract SigvaraStaking is
     error WithdrawalAlreadyPending(bytes32 didHash);
     error UnbondingPeriodActive(bytes32 didHash, uint256 claimableAt);
     error VictimIsReporter(address victim);
+    error VictimIsCommittee(address victim);
     error PeriodTooShort(uint256 provided, uint256 minimum);
     error PeriodTooLong(uint256 provided, uint256 maximum);
     error MinimumStakeZero();
@@ -476,10 +477,12 @@ contract SigvaraStaking is
         bytes calldata evidenceHash
     ) external nonReentrant onlyRole(SLASHING_COMMITTEE_ROLE) {
         if (victim == address(0)) revert ZeroAddress();
-        // The caller is recorded as the reporter and takes 25% of the bond. Letting
-        // it also name itself as the victim turns one committee signature into a 50%
-        // self-payment out of the accused party's stake.
+        // The victim takes 25% of the bond. The committee that files and enforces a slash
+        // must not profit from it, so neither the reporter nor any other member can be
+        // named as the victim. An outside address named in bad faith is what the operator's
+        // dispute and the admin's ruling are for.
         if (victim == msg.sender) revert VictimIsReporter(victim);
+        if (hasRole(SLASHING_COMMITTEE_ROLE, victim)) revert VictimIsCommittee(victim);
         // Slashable balance is the active stake PLUS anything queued for withdrawal.
         // Checking only the active stake let an operator drain everything into the
         // unbonding queue (which executeSlash still sweeps) and thereby block the slash
@@ -704,7 +707,7 @@ contract SigvaraStaking is
      * @notice Execute a slash after the challenge period has elapsed without dispute.
      * @dev    Anyone may call this once the window has closed — execution is permissionless
      *         to avoid committee liveness dependence. The distribution is fixed at init:
-     *         50% burned (sent to 0xdead), 25% to victim, 25% to reporter.
+     *         75% burned (sent to 0xdead), 25% to the victim.
      *
      *         Permissionless is not unconditional: the REPORTER must still hold
      *         SLASHING_COMMITTEE_ROLE. See the check below.
@@ -755,13 +758,12 @@ contract SigvaraStaking is
 
         proposal.state = SlashState.Executed;
 
-        // Distribution: 50% burn, 25% victim, 25% reporter.
-        uint256 burned = totalSlashed / 2;
+        // Distribution: 25% to the victim, the rest burned. The committee that filed the slash
+        // takes nothing, so no member profits from slashing.
         uint256 toVictim = totalSlashed / 4;
-        uint256 toReporter = totalSlashed - burned - toVictim; // absorbs any rounding dust
+        uint256 burned = totalSlashed - toVictim; // absorbs any rounding dust
 
         claimable[proposal.victim] += toVictim;
-        claimable[proposal.reporter] += toReporter;
 
         // Mark identity as permanently slashed and zero reputation.
         identityRegistry.updateStatus(didHash, SigvaraIdentity.AgentStatus.Slashed);
@@ -772,7 +774,7 @@ contract SigvaraStaking is
         // tokens in this contract, which is not a burn.
         svrToken.safeTransfer(address(0xdead), burned);
 
-        emit SlashExecuted(didHash, burned, toVictim, toReporter);
+        emit SlashExecuted(didHash, burned, toVictim);
     }
 
     /**

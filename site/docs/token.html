@@ -78,7 +78,7 @@
       <main class="docs-content">
         <div class="section-label">Token</div>
         <h1>SVR</h1>
-        <p class="lead">SVR is the bond and fee token of the Sigvara protocol. Operators bond it to activate agents, the slashing path burns it, oracle operators post it as a performance bond, and scoring epochs will be charged in it once the epoch-fee module is deployed.</p>
+        <p class="lead">SVR is the bond and fee token of the Sigvara protocol. Operators bond it to activate agents, and slashing an agent's bond burns most of it. Oracle operators post it as a performance bond, which a slash sends to the slash beneficiary rather than burning. Scoring epochs will be charged in it once the epoch-fee module is deployed.</p>
 
         <div class="callout">
           <p><strong>SVR has not launched.</strong> There is no contract address until this page publishes one. <strong>This page is the canonical description.</strong> Anything about SVR that does not appear here and on <a href="../">sigvara.xyz</a> first is not from this project. That includes anything posted by an account using this name, and it includes contract addresses.</p>
@@ -171,7 +171,7 @@
 
         <p>The operator bond is what a corrupt oracle loses. <code>slash()</code> can take up to the whole of it, so the deterrent is the full number rather than a fraction. The agent stake is a gate on who is worth scoring, which is a much smaller job than deterring an oracle, so it sits two orders of magnitude lower. On Arc testnet both were 1,000 until the bond was raised to 25,000 on 20 September 2026, and the match was coincidence rather than design.</p>
 
-        <p>Neither figure is the protocol's defence against a hostile operator set. <code>admit()</code> is governance-gated, so operators join by vote and nobody buys their way in. What the bond buys is something the slashing committee can take, and capital committed across the seven-day unbonding window.</p>
+        <p>Neither figure is the protocol's defence against a hostile operator set. <code>admit()</code> takes the admin role, so nobody buys their way in: an operator joins only when the admin admits it. There is no on-chain vote. On Arc testnet the admin is one key, and the handover plan moves it to a Safe. What the bond buys is something the slashing committee can take, and capital committed across the seven-day unbonding window.</p>
 
         <p><b>Why these are denominated in SVR, not dollars.</b> A bond fixed in SVR scales with the payoff from attacking the protocol, because both track the same thing. When Sigvara is worth more to corrupt, the bond costs more to post and more to lose. A dollar peg would sever that link and would need governance to chase it. The trade is that a price collapse makes the bond cheap, but it also makes corrupting the protocol worth less, so the two move together in both directions.</p>
 

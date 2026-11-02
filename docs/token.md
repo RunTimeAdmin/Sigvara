@@ -4,8 +4,9 @@
 > on Arc testnet carries the same name, but it is a faucet ERC-20 that anyone can mint.
 
 SVR is the bond and fee token of the Sigvara protocol. Operators bond it to
-activate agents, the slashing path burns it, oracle operators post it as a
-performance bond, and scoring epochs will be charged in it once the epoch-fee
+activate agents, and slashing an agent's bond burns most of it. Oracle operators
+post it as a performance bond, which a slash sends to the slash beneficiary
+rather than burning. Scoring epochs will be charged in it once the epoch-fee
 module is deployed.
 
 This page is the canonical description. Anything about SVR that does not
@@ -158,8 +159,10 @@ an oracle, which is why it sits two orders of magnitude lower. On Arc testnet bo
 1,000 until the bond was raised to 25,000 on 20 September 2026, and the match was
 coincidence rather than design.
 
-Neither figure is the protocol's defence against a hostile operator set. `admit()` is
-governance-gated, so operators join by vote and nobody buys their way in. What the bond
+Neither figure is the protocol's defence against a hostile operator set. `admit()` takes
+the admin role, so nobody buys their way in: an operator joins only when the admin
+admits it. There is no on-chain vote. On Arc testnet the admin is one key, and the
+handover plan moves it to a Safe. What the bond
 buys is something the slashing committee can take, and capital committed across the
 seven-day unbonding window.
 
