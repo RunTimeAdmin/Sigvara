@@ -300,3 +300,17 @@ describe('SigvaraVerifier reads for a trust check', () => {
     expect(call).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('SigvaraVerifier evidence reads', () => {
+  it('getEvidenceRoot and verifyEvidence ask the reputation contract about this agent', async () => {
+    const { v, repc } = verifierWith();
+    const root = '0x' + 'cd'.repeat(32);
+    const leaf = '0x' + 'ef'.repeat(32);
+    (repc as any).evidenceRoots = vi.fn(async () => root);
+    (repc as any).verifyEvidence = vi.fn(async () => true);
+    expect(await v.getEvidenceRoot(DID)).toBe(root);
+    expect((repc as any).evidenceRoots).toHaveBeenCalledWith(DID_HASH);
+    expect(await v.verifyEvidence(DID, leaf, [root])).toBe(true);
+    expect((repc as any).verifyEvidence).toHaveBeenCalledWith(DID_HASH, leaf, [root]);
+  });
+});
