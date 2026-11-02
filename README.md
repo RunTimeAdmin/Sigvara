@@ -104,6 +104,12 @@ convenience copy.
 | `SVRToken` (testnet faucet token, **not** the SVR of [docs/token.md](docs/token.md)) | `0x41De2D6D55318e197a00E8f5B496eA2790e23E6c` |
 | `SigvaraOracleBond` | `0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171` |
 
+Every contract above, and the implementation behind each proxy, is source-verified on the
+[Arc explorer](https://explorer.testnet.arc.io) and reproduced byte for byte by a build of the
+commit tagged `arc-testnet-2026-11-02`. To check it yourself: `git checkout arc-testnet-2026-11-02`,
+then `sh scripts/fetch-deps.sh && forge build && node scripts/check-bytecode.mjs`
+([how](docs/arc.md#verifying-the-deployed-code)).
+
 Testnet assets have no economic value. The bond token above is a faucet ERC-20 that
 exists so the staking path can be exercised; it is unrelated to the mainnet SVR.
 
@@ -675,6 +681,7 @@ The first five run in CI on every push, and so does `node scripts/check-before-r
 | `node scripts/check-secrets.mjs` | Fails when a tracked file holds a PEM private key block, 64 hex characters assigned to a key-like name, or a mnemonic phrase. A raw key matches no token format that GitHub's push protection knows, and one pushed to this public repository cannot be taken back. It prints the file and line, never the value. `--staged` scans only what is staged (for a pre-commit hook) and `--self-test` proves the scanner still catches what it should |
 | `node scripts/check-live.mjs` | Looks at the live deployment from outside, with GET requests only. `site` fails when a deployed file differs from `main`, when the security headers differ from `site/.htaccess`, or when a missing path does not get the site's own 404 page with the same policy. `services` fails when the oracle or the checker does not answer, has not finished an epoch in three hours or is not saving its state, when the checker records a divergence on a proposal that may still be rejected (one past its challenge window is settled history and does not fail it), or when a certificate is within 14 days of expiry. `outcomes` fails when the two operators hold different payer-signed outcomes for one payment, or one holds an outcome the other has not imported within two hours. The Live checks workflow runs `site` and `services` |
 | `node scripts/record-implementations.mjs` | Reads each proxy's implementation slot from the chain and records it in `deployments/<chainId>.json`. `--check` fails if the file and the chain disagree |
+| `node scripts/check-bytecode.mjs` | After `forge build`: checks that each deployed proxy, the implementation behind it and the SVR token are byte for byte what this checkout builds, immutables aside. CI runs it after every build |
 | `node scripts/check-role-holders.mjs` | Replays every role grant and revocation and fails unless each role is held by exactly the expected addresses. `scripts/check-before-renounce.mjs` runs it with `BEFORE_RENOUNCE=1`; run it again without that after the last, irreversible phase of `script/SplitAuthority.s.sol`. Needs `SAFE`, `TIMELOCK`, `COMMITTEE`, `ORACLE` and `GUARDIAN` in the environment |
 | `node scripts/check-before-renounce.mjs` | The gate the renounce phase of `script/SplitAuthority.s.sol` will not run without. It reconciles the role holders (above) and everything the Safe has done since it was made, from the Safe's own log (`scripts/safe-history.mjs`): no DelegateCall but to Safe's MultiSendCallOnly, no module ever enabled or acting, no implementation change after creation, owners and threshold as the log gives them, no on-chain approval waiting, and a transaction for every nonce. The Safe must be a SafeL2. Passing, it writes `deployments/<chain>.renounce-check.json`, which the renounce takes for an hour while neither the Safe nor the deployer makes a transaction. Also needs `SAFE_CREATION_BLOCK`; `--self-test` runs the history rules on made-up logs |
 | `source scripts/check-mainnet.sh` | Post-deploy assertions for the Arc mainnet deployment. Export the addresses its header lists, then call the checks that match the step just finished, such as `check_core` |
