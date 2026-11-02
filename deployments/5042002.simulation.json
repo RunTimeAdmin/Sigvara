@@ -1,0 +1,225 @@
+{
+  "note": "Every address Sigvara's testnet simulation controls. Activity from these is simulated, not outside demand. See docs/simulation.md.",
+  "chainId": 5042002,
+  "seed": "sigvara-testnet-sim-1",
+  "treasury": "0x27772010eeD857712d44305Ba2c3884dBf945102",
+  "operators": [
+    {
+      "name": "steady-a",
+      "address": "0xe1d0A86d96561c0E745B49dB3178aD5F29fec047"
+    },
+    {
+      "name": "steady-b",
+      "address": "0x921975C456aB55cAE09E10e998B9Ae752599f178"
+    },
+    {
+      "name": "mixed",
+      "address": "0xA6933d43932414567902bF492BF99E36c4056131"
+    },
+    {
+      "name": "late",
+      "address": "0x4Cc1Dc3cF3F9B11C0770465D2863C7BC5ad54BC2"
+    },
+    {
+      "name": "solo",
+      "address": "0x16d8be8a8785c6AaAea903064E637A74dba9BabC"
+    },
+    {
+      "name": "ring",
+      "address": "0x6651F74e4c3D18024c1f2830D51F183730af393B"
+    }
+  ],
+  "agents": [
+    {
+      "address": "0x27751d91B4c718046d954072a8B52b92b9D621b5",
+      "didHash": "0x4451fb6ca0c33aefaefc64c99a7aecb91b24dc7f72da3aecce6e37717c823cdd",
+      "profile": "steady",
+      "day": 0,
+      "operator": "steady-a"
+    },
+    {
+      "address": "0x63Ed853B55Ac325870598d29f95276194c3EE7C8",
+      "didHash": "0x04495dc61ccc6cb71f8abf44db5f68e95563c29c26578a07d10f4dfe127ecd8a",
+      "profile": "steady",
+      "day": 0,
+      "operator": "steady-a"
+    },
+    {
+      "address": "0xEEaE5a390EE60Caf24A4c649EC19b86A4f96fC93",
+      "didHash": "0x5e4c4f7bdeb6dc9107e3390b0b361eaa7b4f10d98fc3442cf3a3cebc6b061f62",
+      "profile": "steady",
+      "day": 0,
+      "operator": "steady-a"
+    },
+    {
+      "address": "0x540CB6bc038789F97789bdfD54f60DD7ADd202f9",
+      "didHash": "0xa289f01fd65c1afb4f402cb878074054383eee06558ee017aca8f72fcabfa389",
+      "profile": "steady",
+      "day": 0,
+      "operator": "steady-a"
+    },
+    {
+      "address": "0xa622d0f442Ce9fbBBdAc2DEfcB3D5b1b238E8c3e",
+      "didHash": "0x1963f5498a1bd1f17bacc4d4476e6b99a5edcd342d2a577811f97b18608be3ea",
+      "profile": "steady",
+      "day": 0,
+      "operator": "steady-b"
+    },
+    {
+      "address": "0x643A7f4CeD7bC6eB26950f0042f0FCf0CD6a1ff2",
+      "didHash": "0x5d38a69e43c370223498db68f96c6fb7f7a28d3ea97e2f477a21a981e916720e",
+      "profile": "steady",
+      "day": 0,
+      "operator": "steady-b"
+    },
+    {
+      "address": "0x62BdD04d9790A904c15c51336C2dB53f34ec5141",
+      "didHash": "0x90ad9ec481e13947af9bb571657acd8982db54b35f6004b083b567ef341d22af",
+      "profile": "steady",
+      "day": 0,
+      "operator": "steady-b"
+    },
+    {
+      "address": "0x740F6822e9B3701e11B3c0b9FE91D090996F6BAD",
+      "didHash": "0xd8f0b4d86d1ce067718b16bbe01f0f27e5bac5afd511886dac64bda028cc243b",
+      "profile": "steady",
+      "day": 0,
+      "operator": "steady-b"
+    },
+    {
+      "address": "0xa08AA6BCeC7953f5fBDa2CE7e4eC8167E0E5d8af",
+      "didHash": "0xe1e18543323d622e280c4452df8c0fcac92634bda7f0897aba835c2d9fc5c1c2",
+      "profile": "mediocre",
+      "day": 0,
+      "operator": "mixed"
+    },
+    {
+      "address": "0x8bbFB0Ff5B5D96f4Ac6dFC4963FD0F4B729Ad26C",
+      "didHash": "0x06c88408f52a862b046991bb4337271686c3a8d20287ad8ad762bf8dc09d2434",
+      "profile": "mediocre",
+      "day": 0,
+      "operator": "mixed"
+    },
+    {
+      "address": "0x037faB2528F51836ec67D518D39adD4F80bF0b6c",
+      "didHash": "0x5d250eb8dc40f329d4f1b9f12713bacd5f42845d9d07dfc1c2e006c07fea647a",
+      "profile": "failing",
+      "day": 0,
+      "operator": "mixed"
+    },
+    {
+      "address": "0x58D8c0824F1100a5ac3ED99a309988f334D2d118",
+      "didHash": "0x2829a556ede599baa8a604291188b6bf82305cda509871a3932228619d1acea7",
+      "profile": "failing",
+      "day": 0,
+      "operator": "mixed"
+    },
+    {
+      "address": "0x17e48cAcF2E5e84a835EB1cFC7BA7575C535D772",
+      "didHash": "0x52826a690a08777bf6564954438b23391fcf463a0f6b33c6f3123a41ad4318df",
+      "profile": "steady",
+      "day": 7,
+      "operator": "late"
+    },
+    {
+      "address": "0xf69E91B9DeC28772E1a3C5299E740b7E417346b1",
+      "didHash": "0x2a4f79267275ed560a0fd8d5b2bef66cd127aa87f36d354f5673e048c0387f42",
+      "profile": "mediocre",
+      "day": 10,
+      "operator": "late"
+    },
+    {
+      "address": "0xbE17Bdf7A7Dbc7afD3580841258F00164A0db474",
+      "didHash": "0x3b35489e1e2e7e0219173e335c26865512788d0b59a0e5bc77927f93b9232d05",
+      "profile": "steady",
+      "day": 14,
+      "operator": "late"
+    },
+    {
+      "address": "0xacBBA5F4e89e2eE2333A0b9A8930fed45193B033",
+      "didHash": "0x4ccb11589c6cf8e72f7bb44142c2c8a646c668f25b7a99bb94c18addeaeb6ecf",
+      "profile": "mediocre",
+      "day": 18,
+      "operator": "late"
+    },
+    {
+      "address": "0x9d7181C8676fd40E4B31510dC0E573A0C0C2fa11",
+      "didHash": "0xb015ce41101a978a5b5a87596092d006aa4714b64271e003d23bdba531a2f557",
+      "profile": "steady",
+      "day": 0,
+      "operator": "solo"
+    },
+    {
+      "address": "0x490BF18b02997073e89ed25c2745E8ac7c422B6B",
+      "didHash": "0x53d67429ba3e7cc324bb3e63e9b46baa1beaff283dd11f2ad0fe08b380464d3c",
+      "profile": "ring",
+      "day": 3,
+      "operator": "ring"
+    },
+    {
+      "address": "0x19798A904901639fE758Ea2a7cE5778E2131DE3c",
+      "didHash": "0x8d0ca2ab15f3c5bf564f790371ffe82d5ff68e39eed4c915a64095fb465b4c00",
+      "profile": "ring",
+      "day": 3,
+      "operator": "ring"
+    },
+    {
+      "address": "0x7521Fd8F43e823fF97Ef221eF4D0F9E8feD1fD74",
+      "didHash": "0x868efabc8f8816799736a3b8442941d9bf192331b050d23865f9e2e731b1005d",
+      "profile": "ring",
+      "day": 3,
+      "operator": "ring"
+    }
+  ],
+  "payers": [
+    "0x777Fb4d4Fa757FA0640bB92B8A10dd19B9301899",
+    "0xbCe74468C5E287638Dd224876ACD4833779530BF",
+    "0x676AD156515FA87a17aCaC34E7df7Ead99Fd9fd4",
+    "0x07017491b34b8471DEA454eFb060bb82450ABFdA",
+    "0x9098765C4777761E870E0f3817Cfe3C64c73FEF4",
+    "0x83812faCe49Cc3f7AFf99931Fdc2a12B24B52537",
+    "0x86A5eb38e282f0B856f89eF068B238067916AF84",
+    "0x6aE619C1e42544c18C33aB7A473cA4ad90e9a3da",
+    "0xE23DF2f9960Fce78C6ec3fa41B4E0d93FE34B790",
+    "0xa4BDd53d95a34186DC8Cf32f593F94828AA38097",
+    "0xD37BB0948F519826ad94519644b6b6872d43A77d",
+    "0x5691fFF8AF21d5F54CB620649e2c154c1Ef164F0",
+    "0xe99C108559eb7111e3Bf90945EE2Ffc47c6bDB97",
+    "0x15aD7492C2Ad104e7F8489790f295c6b1d7f4074",
+    "0xE9768013a3bCB8D7f68dC733d34C4459c0E2396F",
+    "0xb694E6fB68BD9D631EFBb63B00fE38CEB106DF84",
+    "0x2984d6089bD548C88ac7A5c3172baFb90f8Fd2E4",
+    "0xD8B5BDe8083443c0cd65D5fc6Ba0751405BB7119",
+    "0xE959C5147A11f70AEAd92c6F4e6D2ce972AC46C6",
+    "0xA2297e80f2eF8426C1A892231409B2d982711e4A",
+    "0xf9479792EF721C41db3D612a5C6B56C6a7D72E6C",
+    "0x62420efE555EF5e9330db5fB3e2a9DC35bb9b2b7",
+    "0x5223cA7aB762aCAFf9F47cB5646d04CaDaea0040",
+    "0x4BaD73Df0438dc122bB13e20a910F8F7cA81ab44",
+    "0x7f683c098e3f2b91De6fbA19d4C8866C55a43CA6",
+    "0xc01DE1D41314e8BFD5Be0630cC2475E49e125d69",
+    "0xa83512ddfF152dB053a19FCe33A4D376C8e084D2",
+    "0xfdb92d0bd3c68B1f8611464075763A63e751fB99",
+    "0x93D9A649EA5b80F13A178e6692489b910356DBf7",
+    "0x12B83Aaf816865C94A5CE729906A179Aa771804b",
+    "0x0172264d77EA696Da9A35e3B947D6e5423e39C6e",
+    "0xaebd6CB6a74fE0a4D4529549ec7CA3F5853F09d6",
+    "0xca7c6D8fD13826F094412b4910815BB1803200B6",
+    "0xe6C258909A263E4517b971decEC37440B711c18f",
+    "0xB8185292dBC19af43724551aC0573ce96Cd67CE4",
+    "0xe8778DE64F4D99FfA7B36dD9DA79D49aE8801F25",
+    "0xa5680D22074A9114c0ACDE36CF8C7e36e68CBD54",
+    "0x2A43174986b2dABAedeE5Cc0c7fFFe5A6b6E5658",
+    "0xd0c7562dAE0A6F67A11063B582cC0cf499D3C465",
+    "0x584538593760A0d29bCF5410fAF006d47Cdd4d2b"
+  ],
+  "ringPayers": [
+    "0x85A6A22230EBD11bb86F7F5F495F4Fb0453fa2d0",
+    "0xC3985C41F470eCA6b330b01485224Db6e5D15b82",
+    "0xDaB5dD9E4BBf2b5f1E6E109245b25392319B865b",
+    "0xe48D411188cd8e036E761a5dd06E19AE5585D018",
+    "0x14f775150D0E703057A2F3ee78Dd5D557028107A",
+    "0xDC225DD44a250713aD523d5a9E20B3C10f15FC79"
+  ],
+  "ringOperator": "0x6651F74e4c3D18024c1f2830D51F183730af393B"
+}
