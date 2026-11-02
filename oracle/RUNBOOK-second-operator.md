@@ -387,6 +387,9 @@ keeping. A checker whose RPC fails over onto another chain would audit the prima
 that chain's payments and report a divergence in the primary. With the id set, the process
 stops at startup if the RPC is on another chain, and skips an epoch if it moves there later.
 
+Set `PAYER_OUTCOMES`, `PAYER_OUTCOMES_PUBLISH` and `PAYER_OUTCOMES_PEERS` as the primary does
+(`.env.checker.example`:109-118).
+
 ## 7. Deploy
 
 **There are two compose files and they are not interchangeable.** Picking the wrong one
@@ -467,7 +470,8 @@ Add `"success":true` or `"success":false` to the body only where the primary's
 `/evidence/<DID>` shows that outcome for the hash, and leave it out where the primary shows
 none (a payment its scan found carries no outcome). The outcome is part of each Merkle
 leaf, so a checker that records a different one computes a different root and a different
-`successScore`.
+`successScore`. Skip payments whose `/evidence` outcome is `payer_signed`: the first epoch
+imports them.
 
 A `{"error":"transaction not found or not yet mined"}` here means the RPC cannot see
 historical transactions, not that the transaction is missing. Re-read the provider table
