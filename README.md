@@ -50,7 +50,7 @@ what is not yet true.
 | [Lineage](docs/lineage.md) | Everyone — the Robinhood Chain testnet run this protocol came from (addresses, oracle activity, what changed) |
 | [Security & Mainnet Readiness Review](docs/SECURITY_AND_MAINNET_READINESS_REVIEW.md) | Everyone — a point-in-time review dated 17 Sep 2026: conditional no-go for mainnet, with the blockers named |
 | [Governance and emergency powers](docs/adr/0005-governance-and-emergency-powers.md) | Everyone: who can do what in an emergency and who can stop whom, with the decisions behind the role split, the guardian pause and the launch floors |
-| [Architecture decision records](docs/adr) | Reviewers: why the ERC-8004 identity layer, accepted analyzer findings, evidence intake, operator custody and governance were decided the way they were |
+| [Architecture decision records](docs/adr) | Reviewers: why the ERC-8004 identity layer, accepted analyzer findings, evidence intake, operator custody, governance and payer-signed outcomes were decided the way they were |
 | [Oracle](oracle/README.md) | Operators: endpoints, settings, state file, monitoring and the production checklist |
 | [Second operator runbook](oracle/RUNBOOK-second-operator.md) | Operators: bond, admit and run a checking operator, step by step |
 | [If an operator's signing key may be stolen](docs/incident-operator-key.md) | Operators: what to do in the first half hour, what to keep and what to rotate |
@@ -59,7 +59,7 @@ what is not yet true.
 | [Slash drill](docs/slash-drill.md) and [its log](docs/slash-drill-log.md) | Reviewers: the procedure for a live slash and the record of the first one |
 | [Divergence log](docs/divergence-log.md) | Reviewers: every disagreement the checking operator recorded, and what it turned out to be |
 | [Launch checklist](docs/launch-checklist.md) | Everyone: the sequence from testnet proof to an Arc mainnet launch |
-| [x402 dispute bridge](docs/x402-dispute-bridge.md) | Everyone: a captured design for disputes over x402 payments, not yet implemented |
+| [x402 dispute bridge](docs/x402-dispute-bridge.md) | Everyone: a captured design for x402 disputes; the payer-signed outcome is built, the dispute path is not |
 | [Mutation testing](scripts/mutation/README.md) | Reviewers: how the strength of the contract tests was measured |
 | [Security policy](SECURITY.md) | Everyone: how to report a vulnerability |
 
@@ -117,7 +117,8 @@ for the full signal flow.
 ```mermaid
 graph TB
     subgraph sources["Signal sources"]
-        CA["CounterAudit<br/>work-outcome attestations"]
+        PY["Payers<br/>signed outcomes (delivered)"]
+        CA["CounterAudit<br/>seals packets, carries payer outcomes"]
         WD["Watchdog scanners<br/>rug / abuse flags"]
     end
 
@@ -134,13 +135,14 @@ graph TB
 
     CONS["SDK · consumers · on-chain readers"]
 
-    CA -->|"success / fail"| OR
+    PY -->|"payerOutcome"| OR
+    CA -->|"payer-signed outcomes"| OR
     WD -->|"flags"| OR
     EID -->|"ownership check"| OR
     EREP -->|"feedback to externalScore"| OR
     OR -->|"propose / finalize"| REP
     ST -->|"slash · zero score"| REP
-    CA -->|"giveFeedback"| EREP
+    CA -.->|"giveFeedback (off in production)"| EREP
     REP -->|"getTotalScore · meetsThreshold"| CONS
 ```
 
@@ -470,16 +472,20 @@ const challenge = gate.challenge(agentDid);
 
 const result = await gate.admit(agentDid, challenge, signature);
 if (!result.ok) {
-  // 'bad_proof' | 'replayed' | 'not_active' | 'below_threshold'
+  // 'bad_proof' | 'replayed' | 'not_active' | 'stale_score' | 'below_threshold'
+  // ('stale_score' only when maxScoreAgeSeconds is set)
   return refuse(result.reason);
 }
 ```
 
 Only `below_threshold` is about reputation. `not_active` is a real, proven agent that
 is unbonded, suspended or slashed, and sending that caller off to earn points would be
-the wrong instruction. The default nonce store is per process; behind a load balancer
-pass a `NonceStore` with an atomic `consume()`, of which the [SDK README](packages/sdk/README.md)
-shows a Redis one. Requires 1.0.0-alpha.9 or later. A worked example of the gate lives in
+the wrong instruction. The default nonce store is per process. In a deployment pass
+`profile: 'production'` (1.0.0-alpha.14): the gate then refuses to start until `instances`
+and `maxScoreAgeSeconds` are set, and `instances: 'multiple'` needs a shared `NonceStore`
+with an atomic `consume()`, such as `atomicNonceStore` over a Redis `SET NX` (the
+[SDK README](packages/sdk/README.md) shows one). The gate exists from 1.0.0-alpha.9; use
+1.0.0-alpha.14. A worked example of the gate lives in
 [examples/mcp-gated-tool](examples/mcp-gated-tool).
 
 ### Agent-to-Agent authentication
@@ -587,7 +593,7 @@ Everything below runs offline, with no deployed contracts, except two fork suite
 | Oracle | 844 | `cd oracle && node --test` |
 | SDK | 233 | `cd packages/sdk && npx vitest run` |
 
-Counts are individual tests as measured on 1 November 2026, so each of the 19 invariants counts once. Without a fork URL, 699 of the contract tests run and 12 skip. The SDK's 233 include 8 integration tests that skip without a live deployment. Vitest strips types without checking them, so `npm run typecheck` in `packages/sdk` checks the tests against the SDK's types as well as the sources. [`scripts/mutation`](scripts/mutation/README.md) holds the harnesses that measure whether these tests would catch a deliberate break in the contracts or deploy scripts.
+Counts are individual tests as measured on 1 November 2026, so each of the 19 invariants counts once. Without a fork URL, 699 of the contract tests run and 12 skip. Run after `npm run build`, 224 of the SDK's 233 pass and 9 skip: the 8 integration tests, which need a live deployment, and one check that runs only in CI. Without a build, the 8 built-package tests skip too. Vitest strips types without checking them, so `npm run typecheck` in `packages/sdk` checks the tests against the SDK's types as well as the sources. [`scripts/mutation`](scripts/mutation/README.md) holds the harnesses that measure whether these tests would catch a deliberate break in the contracts or deploy scripts.
 
 ### Unit Tests (default)
 
@@ -654,7 +660,7 @@ Key scenarios tested:
 
 ### Repository checks and tools
 
-The first five run in CI on every push. Run them from the repository root.
+The first five run in CI on every push, and so does `node scripts/check-before-renounce.mjs --self-test`. Run them from the repository root.
 
 | Script | What it does |
 |---|---|
@@ -674,7 +680,7 @@ The first five run in CI on every push. Run them from the repository root.
 | `node scripts/backfill-payment-blocks.mjs` | One-off repair for payment events saved before they carried a block number. Needs `--state`, `--rpc` and `--asset`, is a dry run until `--write` is given, and has to run with the oracle stopped |
 | `node scripts/fat-path.mjs` | Testnet only. Funds separate payer wallets that each pay a live agent and attest the settlements, so its fee factor rests on distinct counterparties (the attestations carry no outcome, so the success rate does not move). Needs `--agent` and `DEPLOYER_PRIVATE_KEY` |
 
-CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on every push to `main` and every pull request, with read-only repository permissions. It builds and tests the contracts (`forge build --sizes`, then `forge test` on the `ci` profile with 5,000 fuzz runs, including the testnet-forking `SlashDrillFork`), builds, typechecks and tests the SDK, runs the oracle tests and the first five scripts above, and runs Slither, which fails the build on High findings only. The Medium and Low findings that were reviewed and accepted are recorded in [ADR 0002](docs/adr/0002-analyzer-accepted-findings.md).
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on every push to `main` and every pull request, with read-only repository permissions. It builds and tests the contracts (`forge build --sizes`, then `forge test` on the `ci` profile with 5,000 fuzz runs, including the testnet-forking `SlashDrillFork`), builds, typechecks and tests the SDK, runs the oracle tests, the first five scripts above and the renounce check's `--self-test`, and runs Slither, which fails the build on High findings only. The Medium and Low findings that were reviewed and accepted are recorded in [ADR 0002](docs/adr/0002-analyzer-accepted-findings.md).
 
 A second workflow, [`live-checks.yml`](.github/workflows/live-checks.yml), runs `check-live.mjs` on a schedule (hourly in the file, though GitHub often runs it later) from a place that shares no account or host with what it watches. A failed run emails the repository owner. It also fails when a merged site change has not been uploaded yet, because the site is uploaded by hand. [Dependabot](.github/dependabot.yml) proposes dependency updates monthly, and each one is merged by hand.
 
@@ -699,7 +705,7 @@ and administers `UPGRADER_ROLE` (see [Deployed contracts](#deployed-contracts-ar
 
 Every privileged role on testnet is currently a single EOA, including the slashing
 committee — the 3-of-5 multisig is the mainnet target, not the present state. Moving
-admin and upgrade rights to a timelock or Safe is a named mainnet blocker; see the
+admin to a Safe and upgrade rights to a 48 hour timelock is a named mainnet blocker; see the
 [readiness review](docs/SECURITY_AND_MAINNET_READINESS_REVIEW.md).
 
 When `SigvaraReputation.operatorBond` is set, `proposeReputation` additionally requires
@@ -772,7 +778,7 @@ require(ISigvaraReader(READER).isTrusted(agent, 40), "agent not in good standing
 | External Trust | Q4 2026 | externalScore from ERC-8004 feedback — **built and tested**, reading the ERC-8004 registries on Arc testnet; it contributes **0 until an agent is linked** to an 8004 id whose NFT is held by the same wallet and which carries feedback in a tag the oracle normalizes. No agent is linked today, so this factor is 0 for everyone · agent-vouching graph (propagationScore) — **built and live**, computed every epoch; it inherits only a counterparty's *external* standing, so like externalScore it reads 0 network-wide until ERC-8004 standing exists. Reachable ceiling today is 70/100 · deeper ERC-8004 interop (publish CounterAudit validations to the Validation Registry) |
 | Sybil resistance | Q4 2026 | ~~payment-backed attestations~~ · ~~half-life decay + shrinkage prior~~ · ~~bond required before scoring~~ · ~~self-payment and per-payer diversity caps~~ · ~~tenure in place of calendar age~~ · ~~maturity time-lock~~ · ~~two-step operator transfer~~ · ~~on-chain evidence roots~~ — all **done**, see [payment-backed attestations](docs/payment-backed-attestations.md) |
 | Oracle decentralization | Q1 2027 | ~~oracle operator bonds deployed and wired~~ **done** · ~~a second bonded operator with challenge-based disagreement~~ **done** (checker mode, `activeCount` 2, separate host and RPC provider) · ~~public challenge watcher~~ **done** (third host, holds no key) · deterministic scoring off the chain clock · operators run by *independent parties*, which is the part that still matters |
-| Mainnet Registries | Q1 2027 | Tier-1 security audit · admin and upgrade roles onto a timelock or Safe (`script/SplitAuthority.s.sol`, rehearsed on a fork of the testnet, not yet run on a live deployment) · ~~one documented end-to-end testnet slash~~ **done** · registry deployment on Arc mainnet (`5042`) with bonds in SVR. The deploy scripts already refuse less than the [published launch amounts](docs/token.md#mainnet-parameters). The epoch-fee module is left out of launch and out of the first audit ([ADR 0005](docs/adr/0005-governance-and-emergency-powers.md)), so scoring fees follow later |
+| Mainnet Registries | Q1 2027 | Tier-1 security audit · admin to a Safe and upgrade rights to a 48 hour timelock (`script/SplitAuthority.s.sol`, rehearsed on a fork of the testnet, not yet run on a live deployment) · ~~one documented end-to-end testnet slash~~ **done** · registry deployment on Arc mainnet (`5042`) with bonds in SVR. The deploy scripts already refuse less than the [published launch amounts](docs/token.md#mainnet-parameters). The epoch-fee module is left out of launch and out of the first audit ([ADR 0005](docs/adr/0005-governance-and-emergency-powers.md)), so scoring fees follow later |
 | Delivery and disputes | After the first audit | ~~outcomes bound to a settled payment by a payer signature (EIP-712), in place of a trusted attester~~ **done** ([ADR 0006](docs/adr/0006-payer-signed-outcomes.md)), live on Arc testnet for positive outcomes since 31 October 2026 · not built: a payer-initiated challenge against the agent's bond · an arbiter path beyond the committee · built to plug into x402's escrow and delivery-receipt work, so Sigvara supplies the bonded verifier and the seller's standing rather than a payment scheme |
 | Cross-Chain | Q2 2027 | Solana + Base state mirroring via LayerZero |
 

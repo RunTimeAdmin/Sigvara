@@ -30,7 +30,8 @@ node examples/mcp-gated-tool/server.mjs
 ```
 
 `SigvaraGate` ships in `@sigvara/protocol-sdk` from 1.0.0-alpha.9. Earlier versions do
-not contain it, so an older install fails on the import rather than at runtime.
+not contain it, so an older install fails on the import rather than at runtime. Use
+1.0.0-alpha.12 or later (current: 1.0.0-alpha.14).
 
 From a checkout of this repo the install is optional: the import falls back to
 `packages/sdk/dist` when the package is not present, so `npm run build` in
@@ -67,6 +68,9 @@ part worth understanding before you set a threshold.
    this only makes one count sooner. `POST /attest` with the settlement hash and `"success": true` needs no token:
    the oracle reads the payer off the transfer log and re-verifies the transaction, so the
    payment is the credential for the payment. Without a token it carries no outcome.
+   To record an outcome, the payer signs that the work was delivered with
+   `signPaymentOutcome` (SDK 1.0.0-alpha.13 or later) and posts it as `payerOutcome` in
+   place of `success`. No token is needed. Only "delivered" is taken.
    Self-payments are refused.
 
 4. **Wait for an epoch.** The oracle proposes hourly, and a proposal sits in a challenge
@@ -81,7 +85,7 @@ Read this before picking a number, because the scale is not what it looks like.
 |---|---|
 | 0 | nothing; use `isActive` instead if you only want a bonded agent |
 | ~20 | bonded, and paid by at least four independent counterparties |
-| ~35–40 | the above, plus outcomes reported with a token (CounterAudit's) and a few days of trading |
+| ~35 to 40 | the above, plus "delivered" outcomes signed by the payers, and a few days of trading |
 | 60+ | **not currently reachable** — see below |
 
 **Thirty of the hundred points are out of reach today.** `externalScore` (25) needs an
@@ -103,7 +107,7 @@ Four reasons, because they need four different responses:
 | `bad_proof` | check you signed the challenge this server issued, with the key registered for that DID |
 | `replayed` | ask for a fresh challenge; each one is single-use |
 | `not_active` | deposit the minimum stake — or the agent was slashed, in which case it cannot recover |
-| `below_threshold` | earn score: get paid by independent counterparties and attest it |
+| `below_threshold` | earn score: get paid by independent counterparties and have each payer sign the outcome |
 
 Only the last is about reputation. A gate that returns `false` for all four is impossible
 to act on from the outside, which is why this one does not.

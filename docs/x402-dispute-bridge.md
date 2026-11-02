@@ -1,8 +1,10 @@
 # Sigvara x402 Dispute Bridge
 
-**Status:** Captured design — not yet implemented  
+**Status:** Captured design, partly built: payer-signed outcomes ([ADR 0006](adr/0006-payer-signed-outcomes.md)) are live on Arc testnet; the buyer challenge, evaluators and refunds are not.  
 **Date:** 2026-10-22  
 **Context:** x402 Foundation (Linux Foundation) has no dispute or refund scheme in the base protocol. Payments are final once settled; refunds require a seller-sent transfer or third-party escrow. This is the single largest acknowledged gap in the agent-payments stack as of October 2026.
+
+**Update, 1 November 2026:** x402 v2 lists a refundable `auth-capture` scheme and x402r adds a per-payment arbiter; delivery receipts are still proposals ([ADR 0006](adr/0006-payer-signed-outcomes.md#where-x402-stands)).
 
 ## The Problem
 

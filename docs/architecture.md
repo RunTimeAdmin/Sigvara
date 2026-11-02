@@ -12,7 +12,8 @@ Every path a trust signal takes:
 ```mermaid
 graph TB
     subgraph sources["Signal sources"]
-        CA["CounterAudit<br/>work-outcome attestations"]
+        PY["Payers<br/>signed outcomes (delivered)"]
+        CA["CounterAudit<br/>seals packets, carries payer outcomes"]
         WD["Watchdog scanners<br/>rug / abuse flags"]
     end
 
@@ -29,13 +30,14 @@ graph TB
 
     CONS["SDK · consumers · on-chain readers"]
 
-    CA -->|"success / fail"| OR
+    PY -->|"payerOutcome"| OR
+    CA -->|"payer-signed outcomes"| OR
     WD -->|"flags"| OR
     EID -->|"ownership check"| OR
     EREP -->|"feedback to externalScore"| OR
     OR -->|"propose / finalize"| REP
     ST -->|"slash · zero score"| REP
-    CA -->|"giveFeedback"| EREP
+    CA -.->|"giveFeedback (off in production)"| EREP
     REP -->|"getTotalScore · meetsThreshold"| CONS
 ```
 

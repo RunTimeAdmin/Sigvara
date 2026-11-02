@@ -47,7 +47,8 @@ nothing on a compromised admin.
 4. **`UPGRADER_ROLE` administers itself.** The handover has the deployer grant admin to the Safe and
    upgrader to the timelock, the Safe revoke the deployer's admin, and only then the deployer
    renounce upgrader. The script will not renounce until it finds the revocation on chain, which is
-   the evidence that the Safe can execute against these contracts.
+   the evidence that the Safe can execute against these contracts, and a passing report from
+   scripts/check-before-renounce.mjs (the owner's decision of 2026-11-02).
 
 ## Consequences
 

@@ -101,7 +101,8 @@ import {TimelockController} from "@openzeppelin/contracts/governance/TimelockCon
  *   #     shown, and only the history shows a holder nobody expected, or a Safe that once let other code
  *   #     act for it. The report it writes is what phase 5 asks for, and it holds for an hour, while
  *   #     neither the Safe nor the deployer makes a transaction. Run scripts/check-role-holders.mjs
- *   #     without BEFORE_RENOUNCE after phase 5.
+ *   #     without BEFORE_RENOUNCE after phase 5. For a testnet rehearsal add CHAIN_ID=5042002
+ *   #     RPC_URL=https://rpc.testnet.arc.io.
  *   SAFE=0x... TIMELOCK=0x... COMMITTEE=0x... ORACLE=0x... GUARDIAN=0x... SAFE_CREATION_BLOCK=n \
  *     node scripts/check-before-renounce.mjs
  *
