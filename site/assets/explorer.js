@@ -133,9 +133,12 @@
     try {
       const res = await fetch(url, { ...init, signal: ctl.signal });
       if (res.status === 429) {
-        // The explorer says, in milliseconds, when its hourly window resets.
+        // The explorer says, in milliseconds, when its hourly window resets. Compared by origin,
+        // since a prefix test would also match a host that merely starts with its name.
         const reset = Number(res.headers.get("x-ratelimit-reset"));
-        throw new Error(url.startsWith(EXPLORER) && reset > 0
+        let fromExplorer = false;
+        try { fromExplorer = new URL(url).origin === EXPLORER; } catch (_) { /* not a URL */ }
+        throw new Error(fromExplorer && reset > 0
           ? `the explorer limits how often one address can ask, and this one has reached it. It resets in about ${Math.ceil(reset / 60000)} min`
           : "too many requests from this address. Try again later");
       }
