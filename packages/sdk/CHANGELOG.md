@@ -7,10 +7,12 @@
 `npx -p @sigvara/protocol-sdk sigvara-mcp` serves six tools over stdio for an agent's MCP host:
 `sigvara_check_agent`, `sigvara_score`, `sigvara_stake`, `sigvara_identity`, `sigvara_challenge` and
 `sigvara_verify_proof`. They read standing, score, stake, pending slashes, queued withdrawals and pending
-scores, and the last two check that a counterparty holds the agent's key. None signs or sends anything.
-With a threshold, `sigvara_check_agent` answers as `SigvaraGate` does without the proof, and a test holds
-the two to the same answer. It reads Arc testnet unless `SIGVARA_*` variables say otherwise, and refuses to
-read if the RPC serves another chain. `createTrustServer` and `serveStdio` are in
+scores, and the last two check that the agent's key signed a challenge naming you. None signs or sends
+anything. With a threshold, `sigvara_check_agent` answers as `SigvaraGate` does without the proof, and a test
+holds the two to the same answer. It reads Arc testnet unless `SIGVARA_*` variables say otherwise, and refuses
+to read if the RPC serves another chain. The proof tools are offered only with `SIGVARA_AUDIENCE`, a name the
+agent can check about you, because a proof is relay-resistant only when the agent checks the audience
+before it signs. A failed read reaches the model without the RPC URL. `createTrustServer` and `serveStdio` are in
 `@sigvara/protocol-sdk/dist/mcp`, kept out of the main entry because they use Node's `readline`. No new
 dependency.
 

@@ -7,14 +7,14 @@
  *   SIGVARA_IDENTITY, SIGVARA_REPUTATION, SIGVARA_STAKING
  *                        the registries; default to the Arc testnet deployment on chain 5042002, and
  *                        required on any other chain
- *   SIGVARA_AUDIENCE     who signs for this server in sigvara_challenge; default unique to the process
+ *   SIGVARA_AUDIENCE     who the agents you check sign for: your own did:sigvara DID, or the origin they
+ *                        reach you at. Without it, sigvara_challenge and sigvara_verify_proof are off.
  *   SIGVARA_TIMEOUT_MS   per-read timeout, default 30000
  *
  * Logs go to stderr. stdout carries the protocol and nothing else.
  */
 
-import { FetchRequest } from 'ethers';
-import { ARC_TESTNET, createTrustServer, serveStdio } from './mcp';
+import { ARC_TESTNET, createTrustServer, describeError, serveStdio } from './mcp';
 import type { TrustServer } from './mcp';
 
 function fail(message: string): never {
@@ -37,27 +37,21 @@ const addresses = {
 };
 const timeoutMs = env.SIGVARA_TIMEOUT_MS === undefined ? undefined : Number(env.SIGVARA_TIMEOUT_MS);
 
-async function readChainId(): Promise<number> {
-  const req = new FetchRequest(rpcUrl);
-  req.timeout = timeoutMs ?? 30_000;
-  req.body = { jsonrpc: '2.0', id: 1, method: 'eth_chainId', params: [] };
-  const res = await req.send();
-  res.assertOk();
-  const body = res.bodyJson as { result?: string; error?: { message?: string } };
-  if (typeof body?.result !== 'string') throw new Error(`eth_chainId failed: ${body?.error?.message ?? 'no result'}`);
-  return Number(BigInt(body.result));
-}
-
 let server: TrustServer;
 try {
   server = createTrustServer({
-    chainId, addresses, rpcUrl, readChainId,
+    chainId, addresses, rpcUrl,
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
     ...(env.SIGVARA_AUDIENCE ? { audience: env.SIGVARA_AUDIENCE } : {}),
+    // The RPC URL can hold a provider key, so it is redacted here as in what the model sees.
+    onError: (err) => process.stderr.write(`[sigvara-mcp] read failed: ${describeError(err, [rpcUrl])}\n`),
   });
 } catch (err) {
   fail((err as Error).message);
 }
 
-process.stderr.write(`[sigvara-mcp] chain ${chainId} via ${new URL(rpcUrl).host}, audience ${server.audience}\n`);
+let host = '<rpc>';
+try { host = new URL(rpcUrl).host; } catch { /* reported by the first read */ }
+process.stderr.write(`[sigvara-mcp] chain ${chainId} via ${host}, `
+  + (server.audience === null ? 'proof tools off (no SIGVARA_AUDIENCE)\n' : `audience ${server.audience}\n`));
 serveStdio(server).then(() => process.exit(0));
