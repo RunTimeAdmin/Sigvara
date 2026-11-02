@@ -120,6 +120,12 @@ jobs:
         working-directory: .
         run: node scripts/check-secrets.mjs --self-test && node scripts/check-secrets.mjs
 
+      # The renounce in script/SplitAuthority.s.sol refuses to run without the report this script
+      # writes, so its rules on a Safe's history are checked here, on made-up logs.
+      - name: Safe-history rules before the renounce
+        working-directory: .
+        run: node scripts/check-before-renounce.mjs --self-test
+
   slither:
     name: Static analysis (slither)
     runs-on: ubuntu-latest

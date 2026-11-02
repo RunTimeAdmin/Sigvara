@@ -1,8 +1,8 @@
 #!/bin/bash
 # Deliberate breaks of the fail-closed renounce, the timelock and Safe policy it enforces, what it will not take on
 # trust (a Safe that is not Safe's code, has a module or a guard, keeps the deployer as a module, or is a delegated
-# account, a timelock whose code it does not know or that the deployer did not create), the recorded deploy block,
-# and the upgrade shape check. Each must fail a test. Run only against a committed tree.
+# account, a timelock whose code it does not know or that the deployer did not create), the reconciliation report it
+# will not renounce without, the recorded deploy block, and the upgrade shape check. Each must fail a test. Run only against a committed tree.
 REPO_DEFAULT="$(cd "$(dirname "$0")/../.." && pwd)"
 REPO=${REPO:-$REPO_DEFAULT}
 cd "$REPO" || exit 1
@@ -59,21 +59,28 @@ runl F28 $S 'function _requireTimelockPhase2Made(' '_withoutMetadata(timelock.co
 runl F29 $S 'function _withoutMetadata(' 'if (n < 2)' 'n < 2' 'false' 'code too short to end in a length is not hashed whole'
 runl F30 $S 'function _withoutMetadata(' 'if (cut > n)' 'cut > n' 'false' 'a length longer than the code is not hashed whole'
 runl F31 $S 'function _withoutMetadata(' 'uint256 cut' '<< 8' '<< 7' 'the high byte of the metadata length is shifted wrong'
-runl F32 $S 'function _requireKnownSafe(' 'if (!_vouchedFor(safe))' '!_vouchedFor(safe)' 'false' 'a Safe that is not Safe'"'"'s code is accepted without the confirmation'
-runl F33 $S 'function _vouchedFor(' 'return named == safe;' 'named == safe' 'true' 'a confirmation naming another address is accepted'
-runl F34 $S 'function _thresholdOf(' 'return type(uint256).max;' 'type(uint256).max' '0' 'a Safe the operator vouched for is held to a threshold of zero'
-runl F35 $S 'function _thresholdOf(' 'ret.length == 32' 'ret.length == 32' 'ret.length >= 0' 'an empty answer is read as a threshold'
-runl F36 $S 'function _isOwner(' 'ret.length < 64' 'ret.length < 64' 'ret.length < 0' 'an empty answer is read as a list of owners'
 runl F37 $S 'function _requireTimelockPhase2Made(' 'vm.computeCreateAddress(deployer, n) == timelock' 'vm.computeCreateAddress(deployer, n) == timelock' 'true' 'a timelock with the right code is accepted whoever created it'
 runl F38 $S 'function _requireTimelockPhase2Made(' 'for (uint256 n = 0;' 'n < nonce' 'n + 1 < nonce' 'the search for the creation misses the deployer'"'"'s latest one'
 runl F39 $S 'function _requireTimelock()' '_requireTimelockPhase2Made(timelock);' '_requireTimelockPhase2Made(timelock);' '' 'no phase looks at what the timelock is or who created it'
 runl F40 $S 'function _requireSafe()' 'revert SafeIsADelegatedAccount(safe)' 'c.length == 23 && c\[0\] == 0xef && c\[1\] == 0x01 && c\[2\] == 0x00' 'false' 'an EIP-7702 delegated account is accepted as the Safe'
 runl F41 $S 'function _requireSafe()' 'revert SafeIsADelegatedAccount(safe)' 'c\[0\] == 0xef && c\[1\] == 0x01 && c\[2\] == 0x00' 'true' 'any 23 bytes of code are taken for a delegation'
-runl F42 $S 'function _requireKnownSafe(' 'revert SafeHasModules(safe, admitted' 'admitted.length > 0' 'false' 'a multisig the operator named is accepted with a module it lists'
 runl F43 $S 'function _requireKnownSafe(' 'if (!answered) revert SafeModulesUnreadable' '!answered' 'false' 'a Safe that will not list its modules is taken to have none'
 runl F44 $S 'function _requireKnownSafe(' 'bytes(proxy).length == 0 ||' 'bytes(proxy).length == 0 || bytes(implementation).length == 0' 'false' 'anything that answers like a Safe is taken for Safe'"'"'s code'
 runl F45 $S 'function _renounce()' '_requireKnownSafe(' '_requireKnownSafe(' 'if (false) _requireKnownSafe(' 'phase 5 never asks whether the Safe is Safe'"'"'s code'
 runl F46 $S 'function _requireKnownSafe(' 'revert SafeHasModules(safe, modules' 'modules.length > 0' 'false' 'a Safe with a module enabled is accepted'
 runl F47 $S 'function _requireKnownSafe(' 'revert SafeHasGuard(' 'guard != address(0)' 'false' 'a Safe with a guard is accepted'
 runl F48 $S 'function _requireKnownSafe(' 'revert DeployerIsAModule(' 'abi.decode(ret, (bool))' 'false' 'the deployer as a module outside the list is not found'
+runl F49 $S 'function _renounce()' '_requireReconciliation(safe, timelock, deployer);' '_requireReconciliation(' 'if (false) _requireReconciliation(' 'phase 5 renounces without a reconciliation report'
+runl F50 $S 'function _requireReconciliation(' 'if (!vm.exists(path))' '!vm.exists(path)' 'false' 'a missing report is not named as missing'
+runl F51 $S 'function _requireReconciliation(' 'RECONCILIATION_SCHEMA))) {' 'if (keccak256' 'if (false \&\& keccak256' 'a report of another schema is taken'
+runl F52 $S 'function _requireReconciliation(' 'parseJsonBool(json, ".passed")' '!vm.parseJsonBool' 'false \&\& !vm.parseJsonBool' 'a report that did not pass is taken'
+runl F53 $S 'function _requireReconciliation(' '".chain_id")' 'vm.parseJsonUint(json, ".chain_id") != block.chainid' 'false' 'a report for another chain is taken'
+runl F54 $S 'function _requireReconciliation(' '".safe")' 'vm.parseJsonAddress(json, ".safe") != safe' 'false' 'a report for another Safe is taken'
+runl F55 $S 'function _requireReconciliation(' '".timelock")' 'vm.parseJsonAddress(json, ".timelock") != timelock' 'false' 'a report for another timelock is taken'
+runl F56 $S 'function _requireReconciliation(' '".deployer")' 'vm.parseJsonAddress(json, ".deployer") != deployer' 'false' 'a report for another deployer is taken'
+runl F57 $S 'function _requireReconciliation(' 'block.timestamp > checkedAt' 'block.timestamp > checkedAt + MAX_RECONCILIATION_AGE' 'false' 'a report over an hour old is taken'
+runl F58 $S 'function _requireReconciliation(' 'checkedAt > block.timestamp' 'checkedAt > block.timestamp + 5 minutes' 'false' 'a report dated in the future is taken'
+runl F59 $S 'function _requireReconciliation(' 'block.timestamp > checkedAt' 'checkedAt + MAX_RECONCILIATION_AGE' 'checkedAt + MAX_RECONCILIATION_AGE - 1' 'a report exactly an hour old is refused'
+runl F60 $S 'function _requireReconciliation(' '".safe_nonce")' 'abi.decode(ret, (uint256)) != vm.parseJsonUint(json, ".safe_nonce")' 'false' 'a Safe transaction since the report goes unnoticed'
+runl F61 $S 'function _requireReconciliation(' '".deployer_nonce")' 'vm.getNonce(deployer) != vm.parseJsonUint(json, ".deployer_nonce")' 'false' 'a deployer transaction since the report goes unnoticed'
 echo "DONE" >> "$OUT"
