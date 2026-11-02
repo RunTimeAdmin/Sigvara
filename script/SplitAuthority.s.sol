@@ -148,10 +148,12 @@ contract SplitAuthority is Script {
 
     /// What a Safe is, as code. A Safe address holds a short proxy that runs, for every call, the implementation
     /// whose address it keeps in storage slot 0, so `getOwners` and `getThreshold` are whatever that code says.
-    /// The proxy hashes are the runtime each version's SafeProxyFactory deploys. The implementation hashes are
-    /// the ones safe-global/safe-deployments publishes (its L2 variants included), and all of them were checked
-    /// against the code at Safe's own addresses on Arc testnet. Hashes and not addresses, so the check does not
-    /// depend on which chain the Safe is on.
+    /// The proxy hashes are the runtime each version's SafeProxyFactory deploys. The implementations, factories and
+    /// SafeToL2Setups are known by address and code hash together: the addresses safe-global/safe-deployments lists,
+    /// the same on every chain because Safe deploys them through its singleton factory, and the hashes it lists for
+    /// them, all checked on Arc testnet. A hash alone says only what code is at an address now, and a contract that
+    /// can be destroyed and redeployed could have run other code when the Safe was made; none of Safe's contracts
+    /// can be destroyed, so at Safe's own addresses the code now is the code then.
     bytes32 internal constant SAFE_PROXY_1_3_0 = 0xb89c1b3bdf2cf8827818646bce9a8f6e372885f8c55e5c07acbd307cb133b000;
     bytes32 internal constant SAFE_PROXY_1_4_1 = 0xd7d408ebcd99b2b70be43e20253d6d92a8ea8fab29bd3be7f55b10032331fb4c;
     bytes32 internal constant SAFE_PROXY_1_5_0 = 0x4e381985ca68b3e5d27b4425fa581c19cf33146d3f887a3cfca96f55528ea46f;
@@ -161,6 +163,14 @@ contract SplitAuthority is Script {
     bytes32 internal constant SAFE_L2_1_4_1 = 0xb1f926978a0f44a2c0ec8fe822418ae969bd8c3f18d61e5103100339894f81ff;
     bytes32 internal constant SAFE_1_5_0 = 0xdda019cbd7c867a533a2a86e5c53434fdc50b13122b5a5ddb4a8df61b31c20f2;
     bytes32 internal constant SAFE_L2_1_5_0 = 0x180193227186ccb85316c94db1f0d156ed932b14712cfaac78901899178572dc;
+    address internal constant SAFE_1_3_0_AT = 0xd9Db270c1B5E3Bd161E8c8503c55cEABeE709552;
+    address internal constant SAFE_1_3_0_EIP155_AT = 0x69f4D1788e39c87893C980c06EdF4b7f686e2938;
+    address internal constant SAFE_L2_1_3_0_AT = 0x3E5c63644E683549055b9Be8653de26E0B4CD36E;
+    address internal constant SAFE_L2_1_3_0_EIP155_AT = 0xfb1bffC9d739B8D520DaF37dF666da4C687191EA;
+    address internal constant SAFE_1_4_1_AT = 0x41675C099F32341bf84BFc5382aF534df5C7461a;
+    address internal constant SAFE_L2_1_4_1_AT = 0x29fcB43b46531BcA003ddC8FCB67FFE91900C762;
+    address internal constant SAFE_1_5_0_AT = 0xFf51A5898e281Db6DfC7855790607438dF2ca44b;
+    address internal constant SAFE_L2_1_5_0_AT = 0xEdd160fEBBD92E350D4D398fb636302fccd67C7e;
     /// The runtime of each version's SafeProxyFactory, and of the SafeToL2Setup a Safe made for an L2 delegates to
     /// in its setup, from safe-deployments as well and checked on Arc testnet.
     bytes32 internal constant SAFE_FACTORY_1_3_0 = 0x337d7f54be11b6ed55fef7b667ea5488db53db8320a05d1146aa4bd169a39a9b;
@@ -168,6 +178,12 @@ contract SplitAuthority is Script {
     bytes32 internal constant SAFE_FACTORY_1_5_0 = 0x967dae4cda22b0c9ef7f31b010bdc1ceb0af9904b0c3dc060b5302e4c18a4529;
     bytes32 internal constant SAFE_TO_L2_SETUP_1_4_1 = 0x2f25df28caf984366ee584e13241707e85dcd5a6ea0c14267928dafc1fd6274b;
     bytes32 internal constant SAFE_TO_L2_SETUP_1_5_0 = 0xf6034d841bcbff8912aa55526b0f1609212536aaf60bb16f5e8a269a4ab38f18;
+    address internal constant SAFE_FACTORY_1_3_0_AT = 0xa6B71E26C5e0845f74c812102Ca7114b6a896AB2;
+    address internal constant SAFE_FACTORY_1_3_0_EIP155_AT = 0xC22834581EbC8527d974F8a1c97E1bEA4EF910BC;
+    address internal constant SAFE_FACTORY_1_4_1_AT = 0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67;
+    address internal constant SAFE_FACTORY_1_5_0_AT = 0x14F2982D601c9458F93bd70B218933A6f8165e7b;
+    address internal constant SAFE_TO_L2_SETUP_1_4_1_AT = 0xBD89A1CE4DDe368FFAB0eC35506eEcE0b1fFdc54;
+    address internal constant SAFE_TO_L2_SETUP_1_5_0_AT = 0x900C7589200010D6C6eCaaE5B06EBe653bc2D82a;
     /// Where a Safe keeps its guard and its fallback handler, which the plan prints.
     bytes32 internal constant SAFE_GUARD_SLOT = keccak256("guard_manager.guard.address");
     bytes32 internal constant SAFE_FALLBACK_HANDLER_SLOT = keccak256("fallback_manager.handler.address");
@@ -775,10 +791,7 @@ contract SplitAuthority is Script {
         virtual
     {
         if (factory == address(0) || creation.length < 4) revert SafeCreationNotShown(safe);
-        bytes32 factoryCode = factory.codehash;
-        if (factoryCode != SAFE_FACTORY_1_3_0 && factoryCode != SAFE_FACTORY_1_4_1 && factoryCode != SAFE_FACTORY_1_5_0) {
-            revert SafeFactoryNotRecognized(factory, factoryCode);
-        }
+        if (!_isSafeFactory(factory)) revert SafeFactoryNotRecognized(factory, factory.codehash);
         (address singleton, bytes memory initializer, uint256 saltNonce) =
             abi.decode(_afterSelector(creation), (address, bytes, uint256));
         // forge-lint: disable-next-line(unsafe-typecast)
@@ -813,9 +826,7 @@ contract SplitAuthority is Script {
             _afterSelector(initializer), (address[], uint256, address, bytes, address, address, uint256, address)
         );
         if (to == address(0)) return;
-        if (to.codehash != SAFE_TO_L2_SETUP_1_4_1 && to.codehash != SAFE_TO_L2_SETUP_1_5_0) {
-            revert SafeSetupDelegatedTo(safe, to);
-        }
+        if (!_isSafeToL2Setup(to)) revert SafeSetupDelegatedTo(safe, to);
         if (data.length < 36) revert SafeSetupDelegatedTo(safe, to);
         // forge-lint: disable-next-line(unsafe-typecast)
         if (bytes4(data) != ISafeToL2Setup.setupToL2.selector) revert SafeSetupDelegatedTo(safe, to);
@@ -824,7 +835,7 @@ contract SplitAuthority is Script {
     }
 
     function _isSafeImplementation(address code) internal view returns (bool) {
-        return bytes(_safeImplementationName(code.codehash)).length > 0;
+        return bytes(_safeImplementationName(code)).length > 0;
     }
 
     function _afterSelector(bytes memory data) internal pure returns (bytes memory rest) {
@@ -844,7 +855,7 @@ contract SplitAuthority is Script {
         returns (string memory proxy, string memory implementation)
     {
         proxy = _safeProxyVersion(safe.codehash);
-        implementation = _safeImplementationName(_implementationOf(safe).codehash);
+        implementation = _safeImplementationName(_implementationOf(safe));
     }
 
     /// @dev The address a Safe proxy runs, from its storage slot 0 rather than from anything the code reports.
@@ -859,14 +870,29 @@ contract SplitAuthority is Script {
         return "";
     }
 
-    function _safeImplementationName(bytes32 codeHash) internal pure returns (string memory) {
-        if (codeHash == SAFE_1_3_0) return "Safe 1.3.0";
-        if (codeHash == SAFE_L2_1_3_0) return "SafeL2 1.3.0";
-        if (codeHash == SAFE_1_4_1) return "Safe 1.4.1";
-        if (codeHash == SAFE_L2_1_4_1) return "SafeL2 1.4.1";
-        if (codeHash == SAFE_1_5_0) return "Safe 1.5.0";
-        if (codeHash == SAFE_L2_1_5_0) return "SafeL2 1.5.0";
+    /// @dev The Safe implementation at `code`: one of Safe's own addresses, holding the code Safe lists for it.
+    function _safeImplementationName(address code) internal view returns (string memory) {
+        bytes32 h = code.codehash;
+        if ((code == SAFE_1_3_0_AT || code == SAFE_1_3_0_EIP155_AT) && h == SAFE_1_3_0) return "Safe 1.3.0";
+        if ((code == SAFE_L2_1_3_0_AT || code == SAFE_L2_1_3_0_EIP155_AT) && h == SAFE_L2_1_3_0) return "SafeL2 1.3.0";
+        if (code == SAFE_1_4_1_AT && h == SAFE_1_4_1) return "Safe 1.4.1";
+        if (code == SAFE_L2_1_4_1_AT && h == SAFE_L2_1_4_1) return "SafeL2 1.4.1";
+        if (code == SAFE_1_5_0_AT && h == SAFE_1_5_0) return "Safe 1.5.0";
+        if (code == SAFE_L2_1_5_0_AT && h == SAFE_L2_1_5_0) return "SafeL2 1.5.0";
         return "";
+    }
+
+    function _isSafeFactory(address factory) internal view returns (bool) {
+        bytes32 h = factory.codehash;
+        return ((factory == SAFE_FACTORY_1_3_0_AT || factory == SAFE_FACTORY_1_3_0_EIP155_AT) && h == SAFE_FACTORY_1_3_0)
+            || (factory == SAFE_FACTORY_1_4_1_AT && h == SAFE_FACTORY_1_4_1)
+            || (factory == SAFE_FACTORY_1_5_0_AT && h == SAFE_FACTORY_1_5_0);
+    }
+
+    function _isSafeToL2Setup(address to) internal view returns (bool) {
+        bytes32 h = to.codehash;
+        return (to == SAFE_TO_L2_SETUP_1_4_1_AT && h == SAFE_TO_L2_SETUP_1_4_1)
+            || (to == SAFE_TO_L2_SETUP_1_5_0_AT && h == SAFE_TO_L2_SETUP_1_5_0);
     }
 
     /// @dev Up to ten of SAFE's enabled modules, and whether it answered at all. One is already too many.

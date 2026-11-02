@@ -440,6 +440,35 @@ contract SplitAuthorityForkTest is Test {
     }
 
     /**
+     * Safe's code counts only at Safe's own addresses. A hash says what code is at an address now, and a contract
+     * that can be destroyed and redeployed may have run other code when the Safe was made, so a copy of Safe's
+     * implementation or factory elsewhere is refused, as the code a creation ran and as the proxy's implementation.
+     */
+    function test_theScriptKnowsSafesCodeOnlyAtSafesAddresses() public onlyArcFork {
+        SplitAuthority_SafeProbe probe = new SplitAuthority_SafeProbe();
+        bytes memory creation = _creation(SAFE_SINGLETON, _plainSetup(), 0);
+        address elsewhere = address(0x5AFE);
+        vm.etch(elsewhere, SAFE_SINGLETON.code);
+        assertEq(elsewhere.codehash, SAFE_SINGLETON.codehash, "the same code");
+        (address fromCopy, bytes memory fromCopyCreation) = _makeSafe(SAFE_FACTORY, elsewhere, _plainSetup(), 12);
+        // As the proxy's implementation it is not taken for Safe's code.
+        (, string memory elsewhereName) = probe.version(fromCopy);
+        assertEq(elsewhereName, "", "Safe's code at another address");
+        // Nor as the code that ran the setup, once the proxy points at Safe's own, as a redeployed copy could leave it.
+        vm.store(fromCopy, bytes32(0), bytes32(uint256(uint160(SAFE_SINGLETON))));
+        vm.expectRevert(abi.encodeWithSelector(SplitAuthority.SafeSetupRanOtherCode.selector, fromCopy, elsewhere));
+        probe.requireKnown(fromCopy, DEPLOYER, SAFE_FACTORY, fromCopyCreation);
+
+        // The same for the factory: a copy of Safe's at another address could have called the proxy with anything.
+        address factoryCopy = address(0xFAC7);
+        vm.etch(factoryCopy, SAFE_FACTORY.code);
+        vm.expectRevert(
+            abi.encodeWithSelector(SplitAuthority.SafeFactoryNotRecognized.selector, factoryCopy, factoryCopy.codehash)
+        );
+        probe.requireKnown(safe, DEPLOYER, factoryCopy, creation);
+    }
+
+    /**
      * Safe's own factory, Safe's own code in the proxy afterwards, a plain setup, an empty module list and no guard,
      * and still a module that acts: the setup ran as code that is not Safe's, which wrote one around the list and
      * then pointed the proxy at Safe's SafeL2. Only the code the creation call names gives it away.
