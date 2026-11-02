@@ -1,5 +1,5 @@
 import { ethers, FetchRequest } from 'ethers';
-import { IDENTITY_ABI, REPUTATION_ABI, STAKING_ABI } from './abis';
+import { IDENTITY_ABI, REPUTATION_ABI, STAKING_ABI, ERC20_ABI } from './abis';
 import { parseDid, computeDidHash } from './did';
 import { verifyChallenge, parseChallengePayload, isChallengeExpired } from './challenge';
 import { bytes32ToPubKey, pubKeyToMultibase } from './keys';
@@ -10,6 +10,10 @@ import type {
   ReputationData,
   DidDocument,
   ContractAddresses,
+  PendingScore,
+  PendingWithdrawal,
+  SlashProposal,
+  SlashState,
 } from './types';
 
 /**
@@ -28,6 +32,7 @@ export class SigvaraVerifier {
   private _identity?: ethers.Contract;
   private _reputation?: ethers.Contract;
   private _staking?: ethers.Contract;
+  private _stakeTokenDecimals?: Promise<number>;
 
   constructor(config: VerifierConfig) {
     const timeoutMs = config.timeoutMs ?? DEFAULT_RPC_TIMEOUT_MS;
@@ -139,6 +144,77 @@ export class SigvaraVerifier {
   async hasMinimumStake(did: string): Promise<boolean> {
     const didHash = await this.didHashFromDid(did);
     return this.staking().hasMinimumStake(didHash) as Promise<boolean>;
+  }
+
+  /**
+   * The score the agent has earned: its factors summed and capped, before maturity releases it.
+   * getTotalScore is the matured part, which is what a threshold is checked against, so the two differ
+   * while a rise is still maturing or after a handover restarted maturity.
+   */
+  async getEarnedScore(did: string): Promise<number> {
+    const didHash = await this.didHashFromDid(did);
+    return Number(await this.reputation().getEarnedScore(didHash));
+  }
+
+  /** The proposal waiting out its challenge window for this agent. `exists` is false when there is none. */
+  async getPendingScore(did: string): Promise<PendingScore> {
+    const didHash = await this.didHashFromDid(did);
+    const raw = await this.reputation().getPendingScore(didHash);
+    return {
+      exists: Boolean(raw.exists),
+      data: {
+        feeScore: Number(raw.data.feeScore),
+        successScore: Number(raw.data.successScore),
+        ageScore: Number(raw.data.ageScore),
+        externalScore: Number(raw.data.externalScore),
+        communityScore: Number(raw.data.communityScore),
+        propagationScore: Number(raw.data.propagationScore),
+        lastUpdated: BigInt(raw.data.lastUpdated),
+      },
+      proposedAt: BigInt(raw.proposedAt),
+      finalizableAt: BigInt(raw.finalizableAt),
+      evidenceRoot: raw.evidenceRoot,
+      proposer: raw.proposer,
+    };
+  }
+
+  /** The stake an agent must hold to be Active, as the staking contract asks it now. */
+  async getMinimumStake(): Promise<bigint> {
+    return BigInt(await this.staking().minimumStake());
+  }
+
+  /** Stake queued for withdrawal. It stays slashable until claimed; `claimableAt` is fixed when it is queued. */
+  async getPendingWithdrawal(did: string): Promise<PendingWithdrawal> {
+    const didHash = await this.didHashFromDid(did);
+    const [amount, claimableAt] = await this.staking().getPendingWithdrawal(didHash);
+    return { amount: BigInt(amount), claimableAt: BigInt(claimableAt) };
+  }
+
+  /** The agent's most recent slash proposal. State None means it has never had one. */
+  async getSlashProposal(did: string): Promise<SlashProposal> {
+    const didHash = await this.didHashFromDid(did);
+    const raw = await this.staking().getSlashProposal(didHash);
+    return {
+      state: Number(raw.state) as SlashState,
+      reporter: raw.reporter,
+      victim: raw.victim,
+      initiatedAt: BigInt(raw.initiatedAt),
+      challengeDeadline: BigInt(raw.challengeDeadline),
+      disputedAt: BigInt(raw.disputedAt),
+      evidenceHash: raw.evidenceHash,
+    };
+  }
+
+  /** Decimals of the token stakes are held in. Read once: the staking contract's token is set at initialize. */
+  getStakeTokenDecimals(): Promise<number> {
+    return (this._stakeTokenDecimals ??= (async () => {
+      const token = new ethers.Contract(await this.staking().svrToken(), ERC20_ABI, this.provider);
+      return Number(await token.decimals());
+    })().catch((err) => {
+      // A failed read is not cached, so the next call asks again.
+      this._stakeTokenDecimals = undefined;
+      throw err;
+    }));
   }
 
   // Resolve the agent's Ed25519 public key from chain and verify the signature.

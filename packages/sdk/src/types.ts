@@ -35,6 +35,47 @@ export interface ReputationData {
   total: number;
 }
 
+/** A score proposed by an oracle and not yet finalized. `exists` is false when none is pending. */
+export interface PendingScore {
+  exists: boolean;
+  /** The proposed factors. `lastUpdated` inside is not meaningful until the score is finalized. */
+  data: Omit<ReputationData, 'total'>;
+  proposedAt: bigint;
+  /** First moment it can be finalized, and the last it can be rejected. Zero for a proposal older than the field. */
+  finalizableAt: bigint;
+  evidenceRoot: string;
+  /** The oracle that proposed it. The zero address for a proposal older than the field. */
+  proposer: string;
+}
+
+/** Matches SigvaraStaking.SlashState. */
+export enum SlashState {
+  None = 0,
+  Pending = 1,
+  Executed = 2,
+  Cancelled = 3,
+  Disputed = 4,
+}
+
+/** The agent's most recent slash proposal, as SigvaraStaking keeps it. State None means there has been none. */
+export interface SlashProposal {
+  state: SlashState;
+  reporter: string;
+  victim: string;
+  initiatedAt: bigint;
+  challengeDeadline: bigint;
+  /** Zero if the operator never disputed. */
+  disputedAt: bigint;
+  evidenceHash: string;
+}
+
+/** Stake queued for withdrawal. Still slashable until it is claimed. */
+export interface PendingWithdrawal {
+  amount: bigint;
+  /** Zero when nothing is queued. */
+  claimableAt: bigint;
+}
+
 export interface Challenge {
   payload: string;
   nonce: string;

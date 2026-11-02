@@ -314,6 +314,64 @@ timing and its own records, and takes only "delivered" until negatives are switc
 `test/vectors/payment-outcome.json` in the repository holds the cases both functions are
 tested against, and the same cases are checked on chain with OpenZeppelin's own code.
 
+## Trust lookups for agents: `sigvara-mcp`
+
+**Status:** in the repository, not yet in a published release. Until it is, build the package and run
+`node packages/sdk/dist/mcp-cli.js` from a checkout.
+
+An MCP server that lets any agent with an MCP host (Claude, Cursor, ElizaOS through its MCP plugin, and
+others) check another agent on chain before paying or relying on it. Every tool reads. None signs or
+sends a transaction, and the server holds no key. It speaks MCP over stdio with no dependency beyond this
+package's own.
+
+```bash
+claude mcp add sigvara -- npx -y -p @sigvara/protocol-sdk sigvara-mcp
+```
+
+or, in a host's JSON config:
+
+```json
+{ "mcpServers": { "sigvara": { "command": "npx", "args": ["-y", "-p", "@sigvara/protocol-sdk", "sigvara-mcp"] } } }
+```
+
+It reads the Arc testnet deployment unless told otherwise. On another chain, set `SIGVARA_RPC_URL`,
+`SIGVARA_CHAIN_ID` and the three registries (`SIGVARA_IDENTITY`, `SIGVARA_REPUTATION`, `SIGVARA_STAKING`);
+there are no defaults off Arc testnet. Before its first read it asks the RPC which chain it serves, and
+refuses every tool if that is not the configured chain.
+
+| Tool | What it answers |
+|---|---|
+| `sigvara_check_agent` | Registered, Active, holding the minimum stake now; matured score and when it was written; the stake a slash could take; and what is pending: a slash, a queued withdrawal, a new score. With `threshold` (and optionally `maxScoreAgeSeconds`), a yes or no. |
+| `sigvara_score` | The six factors, the earned total, the matured total a threshold is checked against, and a proposal waiting out its challenge window. |
+| `sigvara_stake` | Stake held, queued for withdrawal and when it can leave, the minimum, and the most recent slash proposal. |
+| `sigvara_identity` | Operator, status, registration time, the Ed25519 key and the DID document. |
+| `sigvara_challenge` | A single-use challenge to send to the party claiming to be the agent. |
+| `sigvara_verify_proof` | Checks its signature against the key on chain, spends the challenge, and reports standing as `sigvara_check_agent` does. |
+
+The yes or no is `SigvaraGate`'s rule without the proof: Active with the minimum stake now, then a score
+written recently enough if you set a limit, then a matured score at or above the threshold, refused in that
+order with the gate's reasons (`not_active`, `stale_score`, `below_threshold`). `test/mcp.test.ts` runs both
+over 96 combinations of chain state and requires the same answer from each. A lookup says what an agent's
+record is. It does not say that whoever you are talking to is that agent; `sigvara_challenge` and
+`sigvara_verify_proof` do. A challenge names this server as its audience (`SIGVARA_AUDIENCE`, or a name
+unique to the process), so a proof given here cannot be replayed to another verifier. A bad signature does
+not spend it.
+
+"Slashable" is the stake held plus what is queued for withdrawal, because a slash takes both, and the
+share for the victim is a quarter of that (`SigvaraStaking.executeSlash`). It is what a slash could take, not a
+promise that one will be filed: the slashing committee files slashes and names the victim. Amounts are in the
+staking token's own decimals, read from the chain. The tools read the current state only. They do not check
+an agent's evidence against its on-chain root; sigvara.xyz/agents does that in the browser.
+
+The server is also a module, for a host that runs its own transport:
+
+```typescript
+import { createTrustServer, ARC_TESTNET } from '@sigvara/protocol-sdk/dist/mcp';
+
+const server = createTrustServer({ ...ARC_TESTNET });
+const reply = await server.handle({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
+```
+
 ## Links
 
 - Repository: https://github.com/RunTimeAdmin/sigvara (this package is `packages/sdk`)

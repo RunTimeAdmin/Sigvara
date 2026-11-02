@@ -13,7 +13,9 @@ export const IDENTITY_ABI = [
 export const REPUTATION_ABI = [
   'function getReputation(bytes32 didHash) view returns (tuple(uint8 feeScore, uint8 successScore, uint8 ageScore, uint8 externalScore, uint8 communityScore, uint8 propagationScore, uint256 lastUpdated))',
   'function getTotalScore(bytes32 didHash) view returns (uint8)',
+  'function getEarnedScore(bytes32 didHash) view returns (uint8)',
   'function meetsThreshold(bytes32 didHash, uint8 threshold) view returns (bool)',
+  'function getPendingScore(bytes32 didHash) view returns (tuple(tuple(uint8 feeScore, uint8 successScore, uint8 ageScore, uint8 externalScore, uint8 communityScore, uint8 propagationScore, uint256 lastUpdated) data, uint256 proposedAt, bool exists, bytes32 evidenceRoot, address proposer, uint256 finalizableAt))',
 ] as const;
 
 export const STAKING_ABI = [
@@ -25,6 +27,7 @@ export const STAKING_ABI = [
   'function minimumStake() view returns (uint256)',
   'function unbondingPeriod() view returns (uint256)',
   'function getPendingWithdrawal(bytes32 didHash) view returns (uint256 amount, uint256 claimableAt)',
+  'function getSlashProposal(bytes32 didHash) view returns (tuple(bytes32 didHash, address reporter, address victim, uint256 initiatedAt, uint8 state, bytes evidenceHash, uint256 challengeDeadline, uint256 disputedAt))',
   'function svrToken() view returns (address)',
 ] as const;
 
