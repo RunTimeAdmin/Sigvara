@@ -93,14 +93,17 @@ This ADR records what was decided about each, and what was left as a stated trus
    7 days, 21 days, 7 days); raising one is a contract upgrade, which takes the timelock. The deploy
    scripts check them first on mainnet and name the variable.
 
-   Staking's unbonding period is also the one period fixed per request. `initiateWithdrawal` records when
+   Staking's unbonding period is also fixed per request. `initiateWithdrawal` records when
    the withdrawal becomes claimable (`unbondingClaimableAt`) and `claimWithdrawal` honours that, so a later
    change moves only the withdrawals queued after it. Before, the period was read at claim time, and the
    admin could release every waiting exit early by lowering it to its floor, or hold exits back by raising
    it, the way the challenge deadline of a slash and the review window of a score had already been fixed
    when they start. A withdrawal queued before the field existed has no record and keeps the old rule,
-   its queue time plus the period in force when it is claimed. `SigvaraOracleBond` still reads its
-   period when a withdrawal is claimed.
+   its queue time plus the period in force when it is claimed. `SigvaraOracleBond` does the same for an
+   operator's exit: `initiateUnbond` and `removeOperator` record when the bond may be withdrawn
+   (`unbondingClaimableAt`) and `withdrawBond` honours that, with the same rule for an operator that
+   started to leave before the record existed. Until then a lowered period could release a bond before
+   the committee had slashed it.
 5. **A guardian can stop new inflows, and nothing else.** `GUARDIAN_ROLE` may call `pauseInflows()` on
    identity, staking, reputation and the bond registry. It closes only the ways something new enters:
    `registerAgent`, `depositStake`, `proposeReputation` and `proposeIfEmpty`, `depositBond`. It never

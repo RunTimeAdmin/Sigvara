@@ -66,8 +66,8 @@ contract SigvaraOracleBond is
     /// it did.
     uint256 public constant MIN_UNBONDING_PERIOD = 1 days;
 
-    /// Longest unbonding cooldown the contract will hold. It is read when a bond is withdrawn, so a value
-    /// far above any sane one locks every operator that is leaving.
+    /// Longest unbonding cooldown the contract will hold. It is fixed for an operator when it starts
+    /// to leave, so a value far above any sane one locks every operator that leaves while it is set.
     uint256 public constant MAX_UNBONDING_PERIOD = 90 days;
 
     // -------------------------------------------------------------------------
@@ -102,6 +102,15 @@ contract SigvaraOracleBond is
     /// operator -> signer. A zero value means no signer.
     mapping(address => address) public operatorOfSigner; // slot 6: signer => the operator it speaks for
     mapping(address => address) public signerOf;         // slot 7: operator => its signer
+
+    /// When an Exiting operator may withdraw, fixed when it started to leave. Appended after
+    /// `signerOf`. withdrawBond used to read `unbondingPeriod` at withdrawal, so an admin change
+    /// moved the exit of every operator already leaving, in either direction: lowering the period
+    /// to its one day floor released a bond before a slash could be filed, and raising it held
+    /// back exits that had been promised sooner. SigvaraStaking fixes a withdrawal's claim time
+    /// the same way. Zero for an operator that is not leaving, and for one that started to leave
+    /// before this existed (see _claimableAt).
+    mapping(address => uint256) public unbondingClaimableAt; // slot 8: operator => when it may withdraw
 
     // -------------------------------------------------------------------------
     // Events
@@ -246,8 +255,10 @@ contract SigvaraOracleBond is
 
         op.status = Status.Exiting;
         op.unbondingAt = block.timestamp;
+        uint256 claimableAt = block.timestamp + unbondingPeriod;
+        unbondingClaimableAt[msg.sender] = claimableAt;
 
-        emit UnbondInitiated(msg.sender, block.timestamp + unbondingPeriod);
+        emit UnbondInitiated(msg.sender, claimableAt);
     }
 
     /// @notice Withdraw the remaining bond once the unbonding cooldown has elapsed.
@@ -255,7 +266,7 @@ contract SigvaraOracleBond is
         Operator storage op = operators[msg.sender];
         if (op.status != Status.Exiting) revert WrongStatus(msg.sender, op.status);
 
-        uint256 claimableAt = op.unbondingAt + unbondingPeriod;
+        uint256 claimableAt = _claimableAt(msg.sender, op);
         if (block.timestamp < claimableAt) revert UnbondingActive(msg.sender, claimableAt);
 
         uint256 amount = op.bond;
@@ -264,6 +275,7 @@ contract SigvaraOracleBond is
         op.bond = 0;
         op.status = Status.None;
         op.unbondingAt = 0;
+        delete unbondingClaimableAt[msg.sender];
         _clearSigner(msg.sender);
 
         svr.safeTransfer(msg.sender, amount);
@@ -340,6 +352,7 @@ contract SigvaraOracleBond is
 
         op.status = Status.Exiting;
         op.unbondingAt = block.timestamp;
+        unbondingClaimableAt[operator] = block.timestamp + unbondingPeriod;
         emit OperatorRemoved(operator);
     }
 
@@ -370,6 +383,7 @@ contract SigvaraOracleBond is
         if (op.bond == 0) {
             op.status = Status.None;
             op.unbondingAt = 0;
+            delete unbondingClaimableAt[operator];
             _clearSigner(operator);
         }
 
@@ -401,6 +415,9 @@ contract SigvaraOracleBond is
         emit BondAmountUpdated(newBondAmount);
     }
 
+    /// @notice Set the cooldown for operators that start to leave from now on. One already Exiting
+    ///         keeps the time fixed when it started (unbondingClaimableAt), unless it started
+    ///         before that was recorded.
     function setUnbondingPeriod(uint256 newPeriod) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (newPeriod < MIN_UNBONDING_PERIOD) revert PeriodTooShort(newPeriod, MIN_UNBONDING_PERIOD);
         if (newPeriod > MAX_UNBONDING_PERIOD) revert PeriodTooLong(newPeriod, MAX_UNBONDING_PERIOD);
@@ -459,6 +476,14 @@ contract SigvaraOracleBond is
         delete signerOf[operator];
         delete operatorOfSigner[signer];
         emit SignerCleared(operator, signer);
+    }
+
+    /// @dev The time fixed when the operator started to leave. An operator that started before
+    ///      that was recorded has none, and keeps the rule it started under: the time it started
+    ///      plus the period in force now.
+    function _claimableAt(address operator, Operator storage op) internal view returns (uint256) {
+        uint256 fixedAt = unbondingClaimableAt[operator];
+        return fixedAt != 0 ? fixedAt : op.unbondingAt + unbondingPeriod;
     }
 
     /// @dev An address no part of this registry refers to yet.

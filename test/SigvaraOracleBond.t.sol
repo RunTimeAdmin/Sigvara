@@ -1100,6 +1100,17 @@ contract SigvaraOracleBondTest is Test {
         );
     }
 
+    /// Appended after the signer mappings. OracleBondExitSnapshot.t.sol writes this slot by hand
+    /// to stand in for an operator that started to leave before it existed.
+    function test_storageLayout_unbondingClaimableAtPinnedToSlot8() public {
+        _bondAndAdmit(op1, BOND);
+        vm.prank(op1);
+        bond.initiateUnbond();
+        assertGt(bond.unbondingClaimableAt(op1), 0);
+        assertEq(uint256(vm.load(address(bond), keccak256(abi.encode(op1, uint256(8))))),
+            bond.unbondingClaimableAt(op1), "slot 8 is unbondingClaimableAt");
+    }
+
     /// An operator written the way a proxy that predates signers wrote it has empty signer
     /// mappings and must read as active exactly as before.
     function test_legacyOperator_withNoSignerMappingsStillReadsActive() public {
