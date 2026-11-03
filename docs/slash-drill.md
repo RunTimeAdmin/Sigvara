@@ -360,18 +360,20 @@ forge test --match-contract SlashDrillAdversarialFork -vv
 
 The explorer marks the drill operator and its agents as Sigvara's own. Each signer runs its part with
 [`scripts/slash-drill-adversarial.sh`](../scripts/slash-drill-adversarial.sh), which reads the key
-from the terminal and checks the chain before it sends anything:
+from the terminal and checks the chain before it sends anything. It needs bash: in Windows that is
+Git Bash, not PowerShell, whose `bash` is WSL's. From PowerShell, the same steps are single
+`cast send` calls with the same evidence text, encoded with `cast from-utf8`.
 
 ```bash
-sh scripts/slash-drill-adversarial.sh status            # any time, no key
-sh scripts/slash-drill-adversarial.sh operator-setup    # faucet 3,000 SVR, register and bond A, B, C
-sh scripts/slash-drill-adversarial.sh committee-day0    # file A, B, C
-sh scripts/slash-drill-adversarial.sh operator-dispute  # dispute A, with the guards either side
-sh scripts/slash-drill-adversarial.sh admin-day0        # veto B, then drop A once it is disputed
-sh scripts/slash-drill-adversarial.sh guards-day0       # the cooldowns, C too early; no key
-sh scripts/slash-drill-adversarial.sh guards-day7       # before refiling: rejected evidence, C late; no key
-sh scripts/slash-drill-adversarial.sh committee-day7    # A again with new evidence, then withdraw
-sh scripts/slash-drill-adversarial.sh anyone-day21      # expire C, with the guards after it
+bash scripts/slash-drill-adversarial.sh status            # any time, no key
+bash scripts/slash-drill-adversarial.sh operator-setup    # faucet 3,000 SVR, register and bond A, B, C
+bash scripts/slash-drill-adversarial.sh committee-day0    # file A, B, C
+bash scripts/slash-drill-adversarial.sh operator-dispute  # dispute A, with the guards either side
+bash scripts/slash-drill-adversarial.sh admin-day0        # veto B, then drop A once it is disputed
+bash scripts/slash-drill-adversarial.sh guards-day0       # the cooldowns, C too early; no key
+bash scripts/slash-drill-adversarial.sh guards-day7       # before refiling: rejected evidence, C late; no key
+bash scripts/slash-drill-adversarial.sh committee-day7    # A again with new evidence, then withdraw
+bash scripts/slash-drill-adversarial.sh anyone-day21      # expire C, with the guards after it
 ```
 
 ### Predictions
