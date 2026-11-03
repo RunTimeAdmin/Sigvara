@@ -67,9 +67,15 @@ read_key() {
   [[ "$k" =~ ^(0x)?[0-9a-fA-F]{64}$ ]] || die "that is not a private key (it is not shown)"
   printf '%s' "$k"
 }
-send() {  # send <key> <to> <sig> [args...]; prints the transaction hash
-  local key=$1; shift
-  cast send "$@" --rpc-url "$RPC" --private-key "$key" --json | sed -n 's/.*"transactionHash":"\(0x[0-9a-f]*\)".*/\1/p'
+tx() {  # tx <label> <key> <to> <sig> [args...]: send, wait for the receipt, print its hash.
+  # Stops the whole run unless the transaction was mined and succeeded, so a failed step is
+  # never followed by the next one.
+  local label=$1 key=$2 out hash; shift 2
+  out=$(cast send "$@" --rpc-url "$RPC" --private-key "$key" --json 2>&1) || die "$label: not sent: $(echo "$out" | tail -1)"
+  hash=$(echo "$out" | grep -o '"transactionHash":"0x[0-9a-f]*"' | head -1 | cut -d'"' -f4)
+  [ -n "$hash" ] || die "$label: no transaction hash in the answer"
+  echo "$out" | grep -q '"status":"0x1"' || die "$label: $hash did not succeed"
+  echo "$label: $hash"
 }
 slash_state() {  # the proposal's state, by name
   local t; t=$(cast call "$STAKING" "getSlashProposal(bytes32)((bytes32,address,address,uint256,uint8,bytes,uint256,uint256))" "$1" --rpc-url "$RPC")
@@ -95,8 +101,8 @@ case "${1:-}" in
   operator-setup)
     OK=$(read_key "operator")
     [ "$(cast wallet address --private-key "$OK")" = "$OPERATOR" ] || die "that key is not the drill operator"
-    echo "faucet:   $(send "$OK" "$SVR" "faucet(uint256)" 3000000000000000000000)"
-    echo "approve:  $(send "$OK" "$SVR" "approve(address,uint256)" "$STAKING" 3000000000000000000000)"
+    tx "faucet" "$OK" "$SVR" "faucet(uint256)" 3000000000000000000000
+    tx "approve" "$OK" "$SVR" "approve(address,uint256)" "$STAKING" 3000000000000000000000
     for n in A B C; do
       AK=$(read_key "agent $n"); agent_var=AGENT_$n
       [ "$(cast wallet address --private-key "$AK")" = "${!agent_var}" ] || die "that key is not agent $n"
@@ -105,8 +111,8 @@ case "${1:-}" in
       # Bare form: hex-decoded and given the Ethereum Signed Message prefix, as verifyRegistration
       # expects (see "Step 0" above in the drill doc).
       SIG=$(cast wallet sign "$DIGEST" --private-key "$AK"); unset AK
-      echo "register $n: $(send "$OK" "$IDENTITY" "registerAgent(address,bytes32,bytes)" "${!agent_var}" "$PUB" "$SIG")"
-      echo "bond $n:     $(send "$OK" "$STAKING" "depositStake(bytes32,uint256)" "${!n}" "$BOND")"
+      tx "register $n" "$OK" "$IDENTITY" "registerAgent(address,bytes32,bytes)" "${!agent_var}" "$PUB" "$SIG"
+      tx "bond $n" "$OK" "$STAKING" "depositStake(bytes32,uint256)" "${!n}" "$BOND"
       [ "$(agent_status "${!n}")" = Active ] || die "agent $n is not Active after bonding"
     done
     ;;
@@ -119,7 +125,7 @@ case "${1:-}" in
     K=$(read_key "committee")
     for n in A B C; do
       ev=EVIDENCE_$n
-      echo "file $n: $(send "$K" "$STAKING" "initiateSlash(bytes32,address,bytes)" "${!n}" "$OPERATOR" "$(hex "${!ev}")")"
+      tx "file $n" "$K" "$STAKING" "initiateSlash(bytes32,address,bytes)" "${!n}" "$OPERATOR" "$(hex "${!ev}")"
     done
     ;;
 
@@ -128,7 +134,7 @@ case "${1:-}" in
     OK=$(read_key "operator")
     guard "committee names itself the victim" "$COMMITTEE" "$STAKING" "initiateSlash(bytes32,address,bytes)" "$A" "$COMMITTEE" 0x00
     guard "anyone but A's operator disputes A" "$PASSERBY" "$STAKING" "disputeSlash(bytes32)" "$A"
-    echo "dispute A: $(send "$OK" "$STAKING" "disputeSlash(bytes32)" "$A")"
+    tx "dispute A" "$OK" "$STAKING" "disputeSlash(bytes32)" "$A"
     # Straight after the dispute, while admin-day0 is still waiting to see it.
     guard "admin upholds A inside the window" "$ADMIN" "$STAKING" "resolveDispute(bytes32,bool)" "$A" true
     ;;
@@ -151,24 +157,24 @@ case "${1:-}" in
   admin-day0)
     expect_state "$B" Pending B
     K=$(read_key "admin")
-    echo "veto B: $(send "$K" "$STAKING" "vetoSlash(bytes32)" "$B")"
+    tx "veto B" "$K" "$STAKING" "vetoSlash(bytes32)" "$B"
     # A is dropped only once its operator has disputed it, so the ruling is on a real dispute.
     for _ in $(seq 1 180); do [ "$(slash_state "$A")" = Disputed ] && break; echo "waiting for A's dispute..." >&2; sleep 10; done
     expect_state "$A" Disputed A
-    echo "drop A (resolveDispute false): $(send "$K" "$STAKING" "resolveDispute(bytes32,bool)" "$A" false)"
+    tx "drop A (resolveDispute false)" "$K" "$STAKING" "resolveDispute(bytes32,bool)" "$A" false
     ;;
 
   committee-day7)
     expect_state "$A" Cancelled A
     K=$(read_key "committee")
-    echo "file A again: $(send "$K" "$STAKING" "initiateSlash(bytes32,address,bytes)" "$A" "$OPERATOR" "$(hex "$EVIDENCE_A2")")"
-    echo "withdraw A:   $(send "$K" "$STAKING" "cancelSlash(bytes32)" "$A")"
+    tx "file A again" "$K" "$STAKING" "initiateSlash(bytes32,address,bytes)" "$A" "$OPERATOR" "$(hex "$EVIDENCE_A2")"
+    tx "withdraw A" "$K" "$STAKING" "cancelSlash(bytes32)" "$A"
     ;;
 
   anyone-day21)
     expect_state "$C" Pending C
     K=$(read_key "any funded")
-    echo "expire C: $(send "$K" "$STAKING" "expireSlash(bytes32)" "$C")"
+    tx "expire C" "$K" "$STAKING" "expireSlash(bytes32)" "$C"
     guard "committee files C again at once" "$COMMITTEE" "$STAKING" "initiateSlash(bytes32,address,bytes)" "$C" "$OPERATOR" 0x01
     guard "anyone executes the lapsed C" "$PASSERBY" "$STAKING" "executeSlash(bytes32)" "$C"
     ;;
