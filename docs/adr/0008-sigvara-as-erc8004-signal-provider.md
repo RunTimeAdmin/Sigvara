@@ -1,6 +1,7 @@
 # ADR 0008: Publish finalized scores to ERC-8004 as feedback
 
-**Status:** Proposed · 2026-11-03. Nothing here is built. David decides.
+**Status:** Accepted · 2026-11-03, with David's decisions below. To be built in shadow mode first;
+nothing posts until the rollout gates are met.
 
 ## Context
 
@@ -28,7 +29,7 @@ Four facts constrain how:
   feedback that is not revoked, so a provider that posts daily without revoking publishes the
   mean of its history, not the current score.
 
-## Decision (proposed)
+## Decision
 
 ### What is posted
 
@@ -37,7 +38,7 @@ One feedback per linked agent per finalized score, from the publisher (below):
 | Field | Value |
 |---|---|
 | `agentId` | the ERC-8004 agent the Sigvara agent is linked to |
-| `value`, `valueDecimals` | the spendable score, `getTotalScore(didHash)`, read at the block of the `ReputationUpdated` event; 0 to 100 with 0 decimals |
+| `value`, `valueDecimals` | the spendable score, `getTotalScore(didHash)`, as of the block it is read at; 0 to 100 with 0 decimals |
 | `tag1`, `tag2` | `sigvara`, `score` |
 | `endpoint` | empty |
 | `feedbackURI` | a `data:application/json;base64,` URI holding the spec's off-chain feedback file |
@@ -47,8 +48,9 @@ The spendable score is the one integrators are told to gate on
 ([integration.md, "Spendable and earned score"](../integration.md#spendable-and-earned-score)). The
 feedback file carries the spec's required fields (`agentRegistry`, `agentId`, `clientAddress`,
 `createdAt`, `value`, `valueDecimals`) and a `sigvara` object with the didHash, the
-`SigvaraReputation` address, the block and transaction of the `ReputationUpdated` event, its
-evidence root and the earned score. Anyone can check a post against that event. A `data:` URI
+`SigvaraReputation` address, the block and time the score was read at, the earned score, and,
+for a post that follows an event, that event's transaction, block and evidence root. Anyone can
+check a post against `SigvaraReputation` at that block. A `data:` URI
 needs no hosting and cannot change after the fact, which an `https` URL to
 `/evidence/:didHash` could. The spec stores only `value`, `valueDecimals`, `tag1`, `tag2` and
 the revoked flag; the URI and hash go in the event, so the file costs calldata and no storage.
@@ -85,20 +87,23 @@ mean "this is Sigvara's".
 A dedicated EOA, used for nothing else. It is not the oracle's signing key, the deployer or any
 operator wallet.
 
-- **Named on chain.** It is set as the `agentWallet` of Sigvara's own ERC-8004 registration with
-  `setAgentWallet` (an EIP-712 signature from the publisher key, sent by the registration's
-  owner). The spec asks an agent that gives feedback to use its `agentWallet` as the client
+- **Named on chain.** It is set as the `agentWallet` of Sigvara's own ERC-8004 registration
+  (Arc testnet agent 897764, registered on 3 November 2026 by
+  [pull request #172](https://github.com/RunTimeAdmin/Sigvara/pull/172)'s script) with
+  `setAgentWallet`: an EIP-712 signature from the publisher key, sent by the registration's
+  owner. The spec asks an agent that gives feedback to use its `agentWallet` as the client
   address, and a consumer can then find the trusted address from the registration alone:
-  `getAgentWallet(sigvaraAgentId)`. This depends on Sigvara being registered, which pull
-  request [#172](https://github.com/RunTimeAdmin/Sigvara/pull/172) prepares.
+  `getAgentWallet(897764)`.
 - **Not the owner of what it rates.** It owns no ERC-8004 agent and is approved for none, so the
   spec's self-rating rule never applies. The publisher skips Sigvara's own registration.
-- **Custody.** The key holds only gas. It lives on the primary's host, like the signer key in
-  [ADR 0004](0004-operator-custody.md), and like that key it can be replaced without touching
-  anything of value: the registration's owner calls `setAgentWallet` with a new key, and
-  consumers that resolve the address through `getAgentWallet` follow. A stolen key can post false
-  Sigvara scores until it is replaced. Every post names its `ReputationUpdated` event, so a false
-  one is detectable by anyone, but not prevented.
+- **Custody.** The key holds only gas, and it is not on the publisher's host. The publisher asks
+  an isolated remote signer on a separate host, backed by a KMS or HSM, to sign each transaction,
+  so a compromised publisher host can ask for signatures while it is compromised but cannot take
+  the key away. The gas it may spend is capped. It is replaced like the signer key in
+  [ADR 0004](0004-operator-custody.md), without touching anything of value: the registration's
+  owner calls `setAgentWallet` with a new key, and consumers that resolve the address through
+  `getAgentWallet` follow. Every post names the block its score was read at, so a false one is
+  detectable by anyone, but not prevented.
 - **On rotation**, the new publisher reposts the current score of every linked agent, since
   consumers that follow `getAgentWallet` stop reading the old address.
 
@@ -114,9 +119,11 @@ operator wallet.
   is confirmed. Before posting, it reads its own latest feedback for the agent
   (`getLastIndex`, `readFeedback`) and skips the post when that already holds the same value and is
   live. A restart, or a second copy started by mistake, then repeats nothing.
-- **At most one post per agent per UTC day, and only on a change.** Scores finalize once per
-  epoch per agent. If the spendable score has not moved since the last post, nothing is sent.
-  A backlog collapses to the newest event per agent.
+- **On a change, at most once per agent per UTC day, and refreshed daily.** A finalized score
+  is a reason to look. The spendable score also changes with time alone, as a rise is released
+  over days, and no event announces that, so once per UTC day the publisher reads the spendable
+  score of every linked agent again. If it has not moved since the last post, nothing is sent. A
+  backlog collapses to the newest reading per agent.
 
 ### Gas and failures
 
@@ -128,7 +135,9 @@ decimals). 100 linked agents updating every day would cost under a dollar a day.
 
 - A failed or unconfirmed transaction leaves the checkpoint where it was, and the next run tries
   again. The revoke and the post are two transactions: if the revoke lands and the post does not,
-  the agent shows no Sigvara feedback until the retry, which is the safe direction.
+  the agent shows no Sigvara feedback until the retry, which is the safe direction. The retry
+  reads the publisher's own feedback first, so it posts without revoking twice.
+- History is kept: revoked feedback stays readable, and the publisher never deletes anything.
 - The publisher refuses to send when its balance is below a floor, caps the fee as the oracle does
   (`MAX_FEE_GWEI`), and caps the posts per run.
 - Publishing is outside scoring. If the publisher stops, scores are still proposed, checked and
@@ -137,11 +146,22 @@ decimals). 100 linked agents updating every day would cost under a dollar a day.
 ### Who it applies to
 
 Only Sigvara agents linked to an ERC-8004 agent with a link made on chain (the `sigvara` metadata
-key of [pull request #173](https://github.com/RunTimeAdmin/Sigvara/pull/173)), resolved as of the `ReputationUpdated` block with the same rules the
-oracle uses there. A link made with `POST /link` lives only in an
+key of [pull request #173](https://github.com/RunTimeAdmin/Sigvara/pull/173), live on both
+operators since 3 November 2026), resolved as of the block the score is read at, with the same
+rules and the same code the oracle uses. A link made with `POST /link` lives only in an
 oracle's state file, and the publisher does not read oracle state, so those agents get no
 feedback. On 3 November 2026 no agent was linked either way (0 links on both operators' state
 files), so the publisher would post nothing today.
+
+### Rollout
+
+1. **Shadow mode now, on testnet.** The publisher runs, reads everything it would read, and logs
+   and records each post it would make, with no key and no transaction.
+2. **Posting, once three gates are met:** Sigvara's registration is on chain (done: agent 897764);
+   `getAgentWallet(897764)` is the publisher's address, which the publisher checks before every
+   run; and one successful end-to-end cycle on testnet, a revoke and a post on one agent, read
+   back with `getSummary`.
+3. **Mainnet** stays behind the audit and the launch gates, like the rest of the protocol.
 
 ## Options considered
 
@@ -161,10 +181,19 @@ files), so the publisher would post nothing today.
 - The loop-break becomes a rule the code enforces with a test, not a convention.
 - The on-chain link becomes the only way to be published, which is one more reason for an
   integrator to use it.
+- It makes Sigvara's score readable where Arc's ERC-8004 tools already look, which is a concrete
+  integration for agent commerce on Arc. It does not by itself bring catalogs or buyers, and the
+  x402 dispute bridge it would pair with is designed but not built
+  ([x402-dispute-bridge.md](../x402-dispute-bridge.md)).
 
-## Questions for David
+## Decisions (David, 3 November 2026)
 
-1. Build it now, or after Sigvara's own registration is on chain and has run for a while?
-2. The spendable score (`getTotalScore`), as proposed, or the earned score from the event?
-3. Revoke-and-post (C), or post only and let consumers read the newest index?
-4. Publisher key on the primary's host, as proposed, or somewhere else?
+1. **Build now, in testnet shadow mode.** Posting is enabled after the registration, the wallet
+   verification and one successful end-to-end cycle. Mainnet stays behind the audit and launch
+   gates.
+2. **The spendable score** (`getTotalScore`) is the public value. The earned score and the block
+   and time it was read at go in the feedback file, and a daily refresh catches maturity, which
+   changes without an event.
+3. **Revoke-and-post**, keeping history and retrying after a partial failure.
+4. **A dedicated publisher EOA** whose key is held by an isolated remote signer, backed by a KMS or
+   HSM, on a separate host, with capped gas and rotation through `setAgentWallet`.
