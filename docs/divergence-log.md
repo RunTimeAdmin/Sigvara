@@ -386,5 +386,7 @@ less than one epoch (`decideCheckerAction` and `checkerGraceMs` in `oracle/epoch
 running the primary now finalizes and proposes every score, and the checker compares each one. The
 checker proposes only for a primary that has gone quiet, which is the failover it was meant to be.
 `sigvara_oracle_checker_deferred_total{action}` counts what it left to the primary. Five end-to-end tests
-in `oracle/robustness.test.js` fail on the code before this change. When the change is deployed on both
-operators, this entry records the date, and the checker's count should stay at 35 while the primary runs.
+in `oracle/robustness.test.js` fail on the code before this change. Deployed on both operators on
+3 November 2026 at about 15:45 UTC (`0483a3c`); from then the checker's count should stay at 35 while
+the primary runs. In its first epoch the checker agreed with all 7 proposals it compared, left 2
+finalizes and 11 empty slots to the primary, and proposed and finalized nothing.
