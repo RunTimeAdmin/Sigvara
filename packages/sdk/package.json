@@ -4,6 +4,9 @@
   "description": "TypeScript SDK for Sigvara. On-chain agent identity, reputation, and A2A challenge-response authentication.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "bin": {
+    "sigvara-mcp": "dist/mcp-cli.js"
+  },
   "files": [
     "dist",
     "CHANGELOG.md"

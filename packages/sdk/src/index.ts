@@ -51,5 +51,8 @@ export type {
   VerifierConfig,
   DidDocument,
   VerificationMethod,
+  PendingScore,
+  PendingWithdrawal,
+  SlashProposal,
 } from './types';
-export { AgentStatus } from './types';
+export { AgentStatus, SlashState } from './types';

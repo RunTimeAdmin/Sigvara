@@ -4,7 +4,7 @@ import { SigvaraVerifier } from '../src/verifier';
 import { generateChallenge, signChallenge } from '../src/challenge';
 import { computeDidHash } from '../src/did';
 import { seedToKeyPair, pubKeyToBytes32, pubKeyToMultibase } from '../src/keys';
-import { AgentStatus } from '../src/types';
+import { AgentStatus, SlashState } from '../src/types';
 
 /**
  * The contract handles are stubbed on the verifier rather than at the RPC layer. What is
@@ -245,5 +245,58 @@ describe('SigvaraVerifier.buildDidDocument', () => {
     expect(a.controller).toBe(`did:pkh:eip155:42:${OPERATOR}`);
     expect(b.controller).toBe(a.controller);
     expect(getNetwork).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('SigvaraVerifier reads for a trust check', () => {
+  it('getEarnedScore and getMinimumStake read what the contracts hold', async () => {
+    const { v, repc, stc } = verifierWith();
+    (repc as any).getEarnedScore = vi.fn(async () => 47n);
+    (stc as any).minimumStake = vi.fn(async () => 1000n * 10n ** 18n);
+    expect(await v.getEarnedScore(DID)).toBe(47);
+    expect((repc as any).getEarnedScore).toHaveBeenCalledWith(DID_HASH);
+    expect(await v.getMinimumStake()).toBe(1000n * 10n ** 18n);
+  });
+
+  it('getPendingScore converts the nested tuple', async () => {
+    const { v, repc } = verifierWith();
+    (repc as any).getPendingScore = vi.fn(async () => ({
+      data: { feeScore: 3n, successScore: 2n, ageScore: 1n, externalScore: 0n, communityScore: 5n, propagationScore: 0n, lastUpdated: 0n },
+      proposedAt: 1_700_000_500n, exists: true, evidenceRoot: '0x' + 'ab'.repeat(32), proposer: OPERATOR, finalizableAt: 1_700_022_100n,
+    }));
+    expect(await v.getPendingScore(DID)).toEqual({
+      exists: true,
+      data: { feeScore: 3, successScore: 2, ageScore: 1, externalScore: 0, communityScore: 5, propagationScore: 0, lastUpdated: 0n },
+      proposedAt: 1_700_000_500n, finalizableAt: 1_700_022_100n, evidenceRoot: '0x' + 'ab'.repeat(32), proposer: OPERATOR,
+    });
+    expect((repc as any).getPendingScore).toHaveBeenCalledWith(DID_HASH);
+  });
+
+  it('getPendingWithdrawal and getSlashProposal convert the staking answers', async () => {
+    const { v, stc } = verifierWith();
+    (stc as any).getPendingWithdrawal = vi.fn(async () => [5n, 1_700_100_000n]);
+    (stc as any).getSlashProposal = vi.fn(async () => ({
+      didHash: DID_HASH, reporter: OPERATOR, victim: AGENT, initiatedAt: 1_700_000_000n, state: 4n,
+      evidenceHash: '0x1234', challengeDeadline: 1_700_604_800n, disputedAt: 1_700_000_100n,
+    }));
+    expect(await v.getPendingWithdrawal(DID)).toEqual({ amount: 5n, claimableAt: 1_700_100_000n });
+    expect(await v.getSlashProposal(DID)).toEqual({
+      state: SlashState.Disputed, reporter: OPERATOR, victim: AGENT, initiatedAt: 1_700_000_000n,
+      challengeDeadline: 1_700_604_800n, disputedAt: 1_700_000_100n, evidenceHash: '0x1234',
+    });
+    expect((stc as any).getSlashProposal).toHaveBeenCalledWith(DID_HASH);
+  });
+
+  it('getStakeTokenDecimals reads the staking token once, and asks again after a failure', async () => {
+    const { v, stc } = verifierWith();
+    (stc as any).svrToken = vi.fn(async () => '0x0000000000000000000000000000000000000004');
+    const call = vi.fn()
+      .mockRejectedValueOnce(new Error('rpc down'))
+      .mockResolvedValue(ethers.AbiCoder.defaultAbiCoder().encode(['uint8'], [6]));
+    (v as any).provider.call = call;
+    await expect(v.getStakeTokenDecimals()).rejects.toThrow(/rpc down/);
+    expect(await v.getStakeTokenDecimals()).toBe(6);
+    expect(await v.getStakeTokenDecimals()).toBe(6);
+    expect(call).toHaveBeenCalledTimes(2);
   });
 });
