@@ -24,7 +24,11 @@
 const { ethers } = require('ethers');
 const { CAPS } = require('./score-caps');
 
-const ID_ABI = ['function ownerOf(uint256) view returns (address)'];
+const ID_ABI = [
+  'function ownerOf(uint256) view returns (address)',
+  'function getMetadata(uint256 agentId, string metadataKey) view returns (bytes)',
+  'event MetadataSet(uint256 indexed agentId, string indexed indexedMetadataKey, string metadataKey, bytes metadataValue)',
+];
 const REP_ABI = [
   'function getClients(uint256 agentId) view returns (address[])',
   'function getLastIndex(uint256 agentId, address clientAddress) view returns (uint64)',
@@ -196,6 +200,40 @@ async function verifyOwnership(agentId, expectedOwner, blockTag) {
   } catch { return false; }
 }
 
+// ---- links made on chain (link-claims.js) -----------------------------------
+
+async function latestBlock() {
+  return Number(await withTimeout(provider.getBlockNumber()));
+}
+
+// The MetadataSet logs for `key` in blocks [fromBlock, toBlock], oldest first. The key is an
+// indexed string, so the node filters on its hash and returns only these.
+async function readLinkLogs(key, fromBlock, toBlock) {
+  const logs = await withTimeout(idContract.queryFilter(idContract.filters.MetadataSet(null, key), fromBlock, toBlock));
+  return logs
+    .filter((e) => e.args.metadataKey === key)
+    .map((e) => ({ agentId: e.args.agentId, value: e.args.metadataValue, blockNumber: e.blockNumber, logIndex: e.index }));
+}
+
+// Whether 8004 agent `agentId` still names `didHash` under `key` and is owned by `operator`, as
+// of `blockTag` when given. Errors are the caller's to judge: a node that could not answer is not
+// an agent that said no.
+async function claimHolds(agentId, key, didHash, operator, blockTag) {
+  const at = blockTag === undefined ? [] : [{ blockTag }];
+  const [value, owner] = await Promise.all([
+    withTimeout(idContract.getMetadata(agentId, key, ...at)),
+    withTimeout(idContract.ownerOf(agentId, ...at)),
+  ]);
+  return String(value).toLowerCase() === String(didHash).toLowerCase()
+    && String(owner).toLowerCase() === String(operator).toLowerCase();
+}
+
+// The owner of 8004 agent `agentId` as of `blockTag`. Throws when it has none, as the registry
+// does for an agent not yet minted.
+async function ownerAt(agentId, blockTag) {
+  return String(await withTimeout(idContract.ownerOf(agentId, { blockTag })));
+}
+
 // externalScore for a linked agent. Re-verifies ownership every call (the NFT is
 // transferable), then reads the feedback and returns what `judge` makes of it
 // (reviewers.scoreFeedback, through index.js), both as of `blockTag` when given.
@@ -217,5 +255,5 @@ async function externalScoreFor(agentId, expectedOwner, judge, blockTag) {
 module.exports = {
   init, configured, meanRating, computeExternalScore, readFeedbackRows,
   verifyOwnership, externalScoreFor, TAG_NORMALIZERS, MAX_EXTERNAL_SCORE,
-  refreshChainId, chainState,
+  refreshChainId, chainState, latestBlock, readLinkLogs, claimHolds, ownerAt,
 };

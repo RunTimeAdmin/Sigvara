@@ -20,6 +20,20 @@
 //                its Sigvara operator (true) or not (false); left out, the registry is not configured
 //     externalFeedback: [{ client, value, tag }] the feedback a linked agent's ERC-8004 identity holds, judged
 //                by the real reviewers.js when externalOwns is true
+//     linkLogs:  [{ agentId, value, blockNumber, logIndex }] the registry's MetadataSet logs for the `sigvara`
+//                key, read by the link scan when the oracle is given EXTERNAL_LINK_FROM_BLOCK
+//     externalChainId: the chain the ERC-8004 registry reports; the same as chainId puts it on this chain, so its
+//                reads are pinned to the snapshot block (default: not reported)
+//     linkHistory: { "<8004 agent id>": [{ fromBlock, owner, value }] } who owns an 8004 agent and what its
+//                `sigvara` key holds, from each block on (default: the agent does not exist); "throw" when the
+//                node cannot say
+//     linkSpanLimit: the most blocks one read of those logs may span; a wider one is refused with
+//                linkSpanError (default: as returning too many logs)
+//     linkLogsFail: an error every read of those logs fails with, such as a rate limit
+//     registryScannedTo: how far the registry scan has read (default: not reported, which reads as the head)
+//     snapshotBlock: the block the snapshot falls in (default `head`)
+//     agents[didHash].operators: [{ fromBlock, operator }] the agent's operator from each block on, for a
+//                read at a block (default: `operator`, at every block)
 //     reviewers: { "<address>": { registered, operator, status, registeredAt, matured, bonded } } what the
 //                identity registry says of a reviewer (default not an agent); "throw" when the node cannot say
 //     funders:   { "<address>": "<address>" } who first funded an address (default none found); the
@@ -79,6 +93,15 @@ const record = (name, ...args) => {
 };
 const fakeHash = (tag) => `0x${tag.repeat(32)}`;
 
+// The entry of a [{ fromBlock, ... }] history in force at `block` (the latest when undefined).
+const asOf = (history, block) => [...history].reverse().find((h) => block === undefined || h.fromBlock <= block);
+// An 8004 agent's owner and `sigvara` value at `block`, from world.linkHistory.
+function linkAt(agentId, block) {
+  const history = world().linkHistory?.[String(agentId)];
+  if (history === 'throw') throw Object.assign(new Error('429 too many requests'), { code: 'SERVER_ERROR' });
+  return history ? asOf(history, block) : undefined;
+}
+
 const provider = {
   getTransactionReceipt: async (hash) => world().receipts[String(hash).toLowerCase()] ?? null,
   getBlockNumber: async () => world().head,
@@ -114,8 +137,12 @@ const chain = {
   },
   STATUS_SLASHED: 2,
   getProvider: () => provider,
-  getAgentInfo: async (didHash) => world().agents[String(didHash).toLowerCase()]
-    ?? { operator: ZERO, agentAddress: ZERO, registeredAt: 0, status: 0 },
+  getAgentInfo: async (didHash, blockTag) => {
+    const agent = world().agents[String(didHash).toLowerCase()];
+    if (!agent) return { operator: ZERO, agentAddress: ZERO, registeredAt: 0, status: 0 };
+    const changed = agent.operators && asOf(agent.operators, blockTag);
+    return changed ? { ...agent, operator: changed.operator } : agent;
+  },
   getRegisteredAgents: async () => {
     const w = world();
     if (!w.registered) throw new Error('stub: epochs are off in end-to-end tests');
@@ -123,7 +150,7 @@ const chain = {
       didHash, agentAddress: w.agents[didHash]?.agentAddress ?? null, blockNumber: 1,
     }));
   },
-  getScanState: () => null,
+  getScanState: () => (world().registryScannedTo === undefined ? null : { lastScannedBlock: world().registryScannedTo, agents: [] }),
   restoreScanState: () => false,
   verifyDidHashDerivation: async () => false,
   operatorStanding: async () => world().operatorStanding ?? ({ enforced: false }),
@@ -174,7 +201,7 @@ const chain = {
     return funder === undefined ? null : { funder: funder.toLowerCase(), block: world().head ?? 1 };
   },
   paymentBlock: async (event) => event.blockNumber ?? world().head ?? 1,
-  blockAtOrBefore: async () => world().head ?? 1,
+  blockAtOrBefore: async () => world().snapshotBlock ?? world().head ?? 1,
   pruneAgent() {},
   isSlotTaken: () => false,
   isRateLimited: () => false,
@@ -225,14 +252,43 @@ const external = {
   // handler error costs one request and not the process.
   chainState: () => {
     if (world().explodeHealth) throw new Error('stub: the health route was told to fail');
-    return { status: 'disabled', chainId: null };
+    const chainId = world().externalChainId;
+    return chainId === undefined ? { status: 'disabled', chainId: null } : { status: 'configured', chainId };
   },
   // The ownership check and the read are faked; what is made of the rows is the real judgment.
-  externalScoreFor: async (agentId, owner, judge) => {
+  externalScoreFor: async (agentId, owner, judge, blockTag) => {
     if (world().externalOwns !== true || !world().externalFeedback) return 0;
+    // With a linkHistory for the agent, ownership is judged from it, as of the block asked.
+    if (world().linkHistory?.[String(agentId)]) {
+      const now = linkAt(agentId, blockTag);
+      if (!now || now.owner.toLowerCase() !== String(owner).toLowerCase()) return 0;
+    }
     return judge(world().externalFeedback);
   },
   verifyOwnership: async () => world().externalOwns === true,
+  latestBlock: async () => world().head,
+  readLinkLogs: async (_key, from, to) => {
+    const w = world();
+    if (w.linkLogsFail) { record('readLinkLogsRefused', from, to); throw new Error(w.linkLogsFail); }
+    if (w.linkSpanLimit && to - from + 1 > w.linkSpanLimit) {
+      record('readLinkLogsRefused', from, to);
+      throw new Error(w.linkSpanError ?? 'query returned more than 10000 results');
+    }
+    record('readLinkLogs', from, to);
+    return (world().linkLogs ?? []).filter((l) => l.blockNumber >= from && l.blockNumber <= to);
+  },
+  claimHolds: async (agentId, _key, didHash, operator, blockTag) => {
+    record('claimHolds', String(agentId), blockTag);
+    const now = linkAt(agentId, blockTag);
+    return !!now && now.value.toLowerCase() === String(didHash).toLowerCase()
+      && now.owner.toLowerCase() === String(operator).toLowerCase();
+  },
+  ownerAt: async (agentId, blockTag) => {
+    record('ownerAt', String(agentId), blockTag);
+    const now = linkAt(agentId, blockTag);
+    if (!now) throw Object.assign(new Error('execution reverted: ERC721NonexistentToken'), { code: 'CALL_EXCEPTION', data: '0x7e273289' });
+    return now.owner;
+  },
 };
 
 for (const [file, fake] of [['chain.js', chain], ['external.js', external]]) {

@@ -35,6 +35,7 @@ const NUMERIC = [
   ['PAYMENT_SCAN_CONFIRMATIONS', 'int', 0],
   ['PAYMENT_SCAN_PACE_MS', 'int', 0],
   ['JOBS_FROM_BLOCK', 'int', 0],
+  ['EXTERNAL_LINK_FROM_BLOCK', 'int', 0],
   ['JOBS_MAX_SPAN', 'int', 1],
   ['EXPECTED_CHAIN_ID', 'int', 1],
   ['TX_WAIT_SECONDS', 'num', 5, 3600],

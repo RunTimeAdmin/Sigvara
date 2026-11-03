@@ -143,9 +143,11 @@ distinguishes nobody.
 ### External Trust (25 pts)
 
 Carries in reputation the agent already has under [ERC-8004](https://eips.ethereum.org/EIPS/eip-8004).
-An operator links its Sigvara agent to an ERC-8004 identity it owns (`POST /link`), and
-the oracle reads that agent's on-chain feedback from the ERC-8004 Reputation Registry,
-normalizes the rating dimensions it recognizes, and scales the mean to 25 points.
+An operator links its Sigvara agent to an ERC-8004 identity it owns, on chain by setting
+that identity's `sigvara` metadata key to the agent's didHash ([step 1 below](#recomputing-a-score)),
+or through an oracle operator with `POST /link`. The oracle reads that agent's on-chain
+feedback from the ERC-8004 Reputation Registry, normalizes the rating dimensions it
+recognizes, and scales the mean to 25 points.
 
 This factor grew from 15 points to 25 on 20 September 2026, taking the other half of the
 weight released by cutting fee and success.
@@ -476,15 +478,31 @@ five factors are computed from inputs ERC-8004 does not hold:
 | Fee Activity (20) | ERC-20 payments to the agent's address, decayed and capped per payer | On chain. The payments the oracle counted are listed at `GET /evidence/:didHash` and committed to by the on-chain evidence root (`verifyEvidence`). |
 | Tenure (30) | First and last paid activity in the same payment log | Same as above: `settledAt` is a committed field. |
 | Success Rate (15) | Outcomes reported with `POST /attest` | Oracle state. The `success` field is committed in each evidence leaf, so it cannot be changed after the root is on chain, but the outcome itself is not on chain anywhere. A payment found by the chain scan carries `null` and is kept out of the ratio. |
-| External Trust (25) | ERC-8004 feedback for the linked agent | The feedback is on chain. The link from Sigvara agent to ERC-8004 agent id is oracle state, set with `POST /link` and returned as `erc8004AgentId` by `GET /score/:didHash`. |
+| External Trust (25) | ERC-8004 feedback for the linked agent | The feedback is on chain. A link made with the ERC-8004 agent's `sigvara` metadata key is on chain too; one made with `POST /link` is oracle state. `GET /score/:didHash` returns the one it used as `erc8004AgentId`. |
 | Community (5) | Flags raised with `POST /flag`, decayed | Oracle state only. |
 | Trust Propagation (5) | Payers' own external standing, capped by their matured totals | On chain, through `SigvaraReputation`, for payers that are Sigvara agents. |
 
 The External Trust factor on its own is recomputable from public reads, given the linked
 agent id. `oracle/external.js` does exactly this:
 
-1. Score 0 unless `ownerOf(agentId)` on the ERC-8004 Identity Registry is the Sigvara
-   agent's operator. Ownership is re-checked every time the score is computed.
+1. Find the linked agent id. The owner of an ERC-8004 agent links it by calling
+   `setMetadata(agentId, "sigvara", didHash)` on the Identity Registry, with the 32-byte
+   didHash as the value. An oracle with `EXTERNAL_LINK_FROM_BLOCK` set, whose ERC-8004
+   registry is on the chain it scores, reads the registry's `MetadataSet` logs for that key
+   from that block on (`runLinkScan` in `oracle/index.js`, `oracle/link-claims.js`). It keeps
+   a claim only if the didHash is a registered Sigvara agent and, as of the log's block, the
+   8004 agent names it and is owned by that agent's operator, as it was in the block before
+   (`claimMadeByOperator`). The link that applies is the newest claim made at or before the
+   snapshot block (step 4) that still holds there, against the operator at that block:
+   `getMetadata(agentId, "sigvara")` still returns the didHash, and `ownerOf(agentId)` is
+   that operator (`linkedAgentId`). So a link made on chain applies from the next UTC day,
+   and clearing the key or transferring the NFT undoes it. With no such claim, a link made
+   with `POST /link` applies. Either way, score 0 unless `ownerOf(agentId)` is the Sigvara
+   agent's operator. Ownership is re-checked every time the score is computed. An epoch
+   whose scan has not reached the snapshot block skips the agents named by the logs it has not
+   checked, because it could be missing a link the other operator holds; one that cannot list
+   those logs, or read the registry's chain, scores nothing
+   ([operations runbook](operations-runbook.md#erc-8004-links-made-on-chain)).
 2. For each client in `getClients(agentId)`, read feedback indexes 1 to
    `getLastIndex(agentId, client)` with `readFeedback`, skipping revoked entries.
 3. Take `value / 10^valueDecimals` and the lowercased `tag1`. Keep only recognized tags:

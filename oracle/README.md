@@ -417,7 +417,7 @@ not resend it: the flags are already cleared in memory, and a second call would 
 
 ### `POST /link` (auth required)
 
-Link a Sigvara agent to its ERC-8004 identity for cross-protocol scoring.
+Link a Sigvara agent to its ERC-8004 identity for cross-protocol scoring. An agent can also link itself on chain, with no credential, by setting its ERC-8004 `sigvara` metadata key to the didHash ([integration guide](../docs/integration.md#linking-an-erc-8004-identity)); that link takes precedence over this one.
 
 **Request:**
 ```json
@@ -964,7 +964,7 @@ and then its silence means nothing.
 | `LOG_CHUNK_SIZE` | `2000` | Max blocks per eth_getLogs call |
 | `FEE_REGISTRY_ADDRESS` | (empty) | SigvaraEpochFees address for fee-gated scoring |
 | `EXTERNAL_RPC` | (empty) | RPC for ERC-8004 external score lookups |
-| `EXTERNAL_IDENTITY_ADDRESS` | (empty) | ERC-8004 Identity contract |
+| `EXTERNAL_IDENTITY_ADDRESS` | (empty) | ERC-8004 Identity contract. `EXTERNAL_LINK_FROM_BLOCK` (empty: off) is the block its scan for links made on chain, under the `sigvara` metadata key, starts from; every operator must set the same block, the registry must be on this chain, and the RPC must serve state at blocks back to it |
 | `EXTERNAL_REPUTATION_ADDRESS` | (empty) | ERC-8004 Reputation contract. Its feedback counts only from reviewers `reviewers.js` accepts; `EXTERNAL_PUBLIC_FUNDERS` lists wallets that fund everyone (a faucet, an exchange), which end a funding trace instead of joining every reviewer they funded |
 
 ### Transactions and the clock
@@ -1170,7 +1170,7 @@ The oracle persists the following to `ORACLE_STATE_PATH`:
 
 - **attestations**: Per-agent attestation counts (successful/total)
 - **flags**: Per-agent unresolved flag counts
-- **links**: Agent-to-ERC-8004 identity links
+- **links**: Agent-to-ERC-8004 identity links made with `POST /link`. Links made on chain are in **linkScanState**, with that scan's checkpoint, and come back from the chain if lost
 - **attestCooldowns**: Per-(attester, didHash) last-attestation timestamps
 - **paymentEvents**: Per-agent verified payments, one record each (`txHash`, settlement time, amount, payer, outcome, and `blockNumber` for anything credited since 3 Oct 2026). Stored individually rather than as a running total, because a total cannot be decayed. Records whose weight falls below a thousandth are pruned once per epoch
 - **usedPaymentTxs**: Settlements already credited, as `txHash|didHash|payer`, so the same receipt cannot be counted twice for the same agent from the same sender. Keyed by all three because one transaction can pay several agents and can carry several senders, and collapsing either loses what the per-payer cap and the distinct counterparty count read. Shorter keys from before each change are still honoured and block everything below them, since what they omit is not recoverable: pruning drops old payment records and deliberately leaves this list alone
@@ -1219,7 +1219,7 @@ cd oracle
 node --test
 ```
 
-906 tests (as of 3 November 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
+934 tests (as of 3 November 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
 the trust weighting, Merkle evidence trees, HTTP helpers, store persistence and recovery,
 the streamed state file, chain access with backoff, scan checkpointing, fee caps and transaction replacement,
 metrics, and cooldown logic. Several of the files run the real `index.js` and `watcher.js`

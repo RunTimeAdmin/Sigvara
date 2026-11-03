@@ -26,7 +26,7 @@ Each runs the commit named by `SIGVARA_COMMIT` in its `.env`, and `/health` repo
 `/data/oracle-state.json` on the state volume, with `oracle-state.json.bak` beside it, which is
 the save before. It holds every credited payment with its outcome, including each payer-signed
 outcome and when this oracle took it (`acceptedAt`); the settlements already credited; flags,
-links and attestation cooldowns; the registry and payment scan checkpoints; and on the checker,
+links and attestation cooldowns; the registry, payment and ERC-8004 link scan checkpoints; and on the checker,
 its divergence records. The full list is in
 [oracle/README.md, State Persistence](../oracle/README.md#state-persistence).
 
@@ -38,8 +38,9 @@ What a restore from an older copy loses, and what comes back:
   except any whose deadline passed more than `PAYER_OUTCOMES_IMPORT_GRACE_HOURS` (6) before it
   runs (section 2).
 - **The rest is on chain nowhere**: a token holder's outcomes, payer-signed outcomes the other
-  operator does not hold, flags and resolves, links, cooldowns and divergence records. Only what
-  someone sends again comes back.
+  operator does not hold, flags and resolves, links made with `POST /link`, cooldowns and
+  divergence records. Only what someone sends again comes back. Links made on chain come back
+  by the link scan, which a restored file resumes from its own checkpoint.
 
 The provider's weekly disk backups are whole-machine, old, and in the same account as the
 server, so they are not a substitute.
@@ -330,6 +331,27 @@ the commits, the record, whether the proposal is still live, then the evidence d
 it. An outcome one operator holds and the other refused or has not imported yet (section 2), or
 a restore (section 1), shows there as different evidence roots. Write every verdict in
 [divergence-log.md](divergence-log.md).
+
+### ERC-8004 links made on chain
+
+With `EXTERNAL_LINK_FROM_BLOCK` set, each epoch scans the ERC-8004 registry for agents that linked
+themselves (the `sigvara` metadata key). The two operators agree on a link only once both have
+scanned past the day's snapshot block, so a scan that falls behind costs scoring, on purpose:
+
+- **The scan stopped before the snapshot.** The agents named by logs it has not checked yet are
+  skipped, and the log says `skipping the N agent(s) its unchecked logs name`. The rest are scored.
+  The scan resumes at the log it stopped on.
+- **The logs cannot even be listed, or the registry's chain cannot be read.** Nothing is scored,
+  and the epoch counts as failed (`sigvara_oracle_epochs_total{status="failed"}`). While that
+  lasts, the checker audits nothing either. With the setting unset, the same outage only sets the
+  external factor to 0.
+
+The scan's position is `linkScanState.cursor` in the state file, and should be the same on both
+operators after an epoch each. Two cases score in a way that looks wrong but is the same on both:
+an agent registered after the day's snapshot has no operator at that block, so its external factor
+is 0 until the next day; and an operator that makes more than 64 claims for one agent within a day
+can push out the one that applied at the snapshot on the operator that has scanned further, which
+then disagrees about that agent only.
 
 ## 4. Event index
 
