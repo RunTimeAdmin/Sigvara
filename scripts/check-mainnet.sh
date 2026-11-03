@@ -17,7 +17,7 @@
 #   GUARDIAN   the pause guardian    (check_core, check_bond_and_fees, check_holders)
 #   TREASURY   the slash beneficiary and reward pool    (check_bond_and_fees, check_safes)
 #   SAFE       the admin Safe        (check_authority, check_timelock, check_safes, check_holders)
-#   TIMELOCK   the timelock          (check_authority, check_timelock, check_holders)
+#   TIMELOCK   the timelock          (check_authority, check_timelock, check_holders, check_timelock_queue)
 # check_safes also reads SAFE_OWNERS, COMMITTEE_OWNERS and SAFE_THRESHOLD, which must be
 # copied from what the signers see on their own devices (see that function).
 # RPC defaults to the arc_mainnet alias in foundry.toml.
@@ -290,3 +290,10 @@ check_safes() {
 # nobody expected is seen. Needs SAFE, TIMELOCK, COMMITTEE, ORACLE and GUARDIAN exported. Run
 # it after the handover. RPC_URL (not RPC) picks the endpoint for the replay.
 check_holders() { node scripts/check-role-holders.mjs; }
+
+# check_timelock_queue: every operation the timelock has had scheduled, from its own log, and its
+# state at the finalized block. One still waiting or ready fails unless its id is in
+# REVIEWED_TIMELOCK_OPERATIONS (comma-separated): anyone may execute it once its delay has run.
+# Needs TIMELOCK exported, and reads the log from the artifact's deployBlock unless TIMELOCK_FROM_BLOCK
+# names another start. RPC_URL (not RPC) picks the endpoint, as for check_holders.
+check_timelock_queue() { node scripts/timelock-operations.mjs; }

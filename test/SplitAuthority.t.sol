@@ -238,12 +238,13 @@ contract SplitAuthorityTest is Test {
         return string.concat("deployments/", vm.toString(block.chainid), ".renounce-check.json");
     }
 
-    /// What scripts/check-before-renounce.mjs writes when it passes, for the Safe and timelock as they stand now.
+    /// What scripts/check-before-renounce.mjs writes when it passes, for the Safe and timelock as they stand now and
+    /// an empty timelock queue.
     function _reconciled(address safe, address timelock) internal {
         // With a gas limit: the delegated account in _anAccountThatHasDelegatedIsNotASafe runs an invalid opcode.
         (bool ok, bytes memory ret) = safe.staticcall{gas: 100_000}(abi.encodeWithSignature("nonce()"));
-        _report(Report({
-            schema: "sigvara/renounce-check/v1",
+        _report(_withQueue(Report({
+            schema: "sigvara/renounce-check/v2",
             passed: true,
             chainId: block.chainid,
             safe: safe,
@@ -251,8 +252,13 @@ contract SplitAuthorityTest is Test {
             deployer: deployer,
             checkedAt: block.timestamp,
             safeNonce: ok && ret.length == 32 ? abi.decode(ret, (uint256)) : 0,
-            deployerNonce: vm.getNonce(deployer)
-        }));
+            deployerNonce: vm.getNonce(deployer),
+            artifactKeccak: vm.exists(_artifactPath()) ? keccak256(bytes(vm.readFile(_artifactPath()))) : bytes32(0),
+            ids: new bytes32[](0),
+            states: new uint256[](0),
+            reviewed: new bytes32[](0),
+            digest: bytes32(0)
+        }), new bytes32[](0), new uint256[](0)));
     }
 
     struct Report {
@@ -265,6 +271,23 @@ contract SplitAuthorityTest is Test {
         uint256 checkedAt;
         uint256 safeNonce;
         uint256 deployerNonce;
+        bytes32 artifactKeccak;
+        bytes32[] ids;
+        uint256[] states;
+        bytes32[] reviewed;
+        bytes32 digest;
+    }
+
+    /// The report with this queue in it, and the digest the gate would compute for it.
+    function _withQueue(Report memory r, bytes32[] memory ids, uint256[] memory states)
+        internal
+        pure
+        returns (Report memory)
+    {
+        r.ids = ids;
+        r.states = states;
+        r.digest = keccak256(abi.encode(ids, states));
+        return r;
     }
 
     function _report(Report memory r) internal {
@@ -277,21 +300,40 @@ contract SplitAuthorityTest is Test {
             '","checked_at":', vm.toString(r.checkedAt)
         );
         json = string.concat(
-            json, ',"safe_nonce":', vm.toString(r.safeNonce), ',"deployer_nonce":', vm.toString(r.deployerNonce), "}"
+            json, ',"safe_nonce":', vm.toString(r.safeNonce), ',"deployer_nonce":', vm.toString(r.deployerNonce),
+            ',"artifact_keccak":"', vm.toString(r.artifactKeccak), '"'
+        );
+        json = string.concat(
+            json, ',"timelock_operation_ids":', _jsonIds(r.ids), ',"timelock_operation_states":', _jsonUints(r.states),
+            ',"timelock_operations_digest":"', vm.toString(r.digest), '","reviewed_timelock_operations":',
+            _jsonIds(r.reviewed), "}"
         );
         vm.createDir("deployments", true);
         vm.writeFile(_reportPath(), json);
     }
 
+    function _jsonIds(bytes32[] memory ids) internal pure returns (string memory s) {
+        s = "[";
+        for (uint256 i = 0; i < ids.length; i++) s = string.concat(s, i == 0 ? '"' : ',"', vm.toString(ids[i]), '"');
+        s = string.concat(s, "]");
+    }
+
+    function _jsonUints(uint256[] memory xs) internal pure returns (string memory s) {
+        s = "[";
+        for (uint256 i = 0; i < xs.length; i++) s = string.concat(s, i == 0 ? "" : ",", vm.toString(xs[i]));
+        s = string.concat(s, "]");
+    }
+
     /// DEPLOYER_PRIVATE_KEY is not cleared. test/DeployScripts.t.sol sets the same public key,
     /// and forge runs test contracts in parallel threads of one process, so clearing it here could
     /// land in the middle of that test and make its script fail to parse an empty key. The other
-    /// five names are used by this file alone.
+    /// six names are used by this file alone.
     function _clearEnv() internal {
         vm.setEnv("PHASE", "");
         vm.setEnv("SAFE", "");
         vm.setEnv("TIMELOCK", "");
         vm.setEnv("CONFIRM", "");
+        vm.setEnv("REVIEWED_TIMELOCK_OPERATIONS", "");
         if (vm.exists(_reportPath())) vm.removeFile(_reportPath());
     }
 
@@ -909,8 +951,8 @@ contract SplitAuthorityTest is Test {
         address safe = address(mSafe);
         address timelock = address(mTimelock);
         vm.warp(1_800_000_000);
-        Report memory good = Report({
-            schema: "sigvara/renounce-check/v1",
+        Report memory good = _withQueue(Report({
+            schema: "sigvara/renounce-check/v2",
             passed: true,
             chainId: block.chainid,
             safe: safe,
@@ -918,17 +960,22 @@ contract SplitAuthorityTest is Test {
             deployer: deployer,
             checkedAt: block.timestamp,
             safeNonce: 0,
-            deployerNonce: vm.getNonce(deployer)
-        });
+            deployerNonce: vm.getNonce(deployer),
+            artifactKeccak: keccak256(bytes(vm.readFile(_artifactPath()))),
+            ids: new bytes32[](0),
+            states: new uint256[](0),
+            reviewed: new bytes32[](0),
+            digest: bytes32(0)
+        }), new bytes32[](0), new uint256[](0));
 
         _env("renounce", safe, timelock, "yes-drop-the-deployer");
         vm.removeFile(_reportPath());
         _refusedFor(string.concat("no report at ", _reportPath(), ": run scripts/check-before-renounce.mjs"));
 
         Report memory r = _copy(good);
-        r.schema = "sigvara/renounce-check/v0";
+        r.schema = "sigvara/renounce-check/v1";
         _report(r);
-        _refusedFor("the report is not a sigvara/renounce-check/v1");
+        _refusedFor("the report is not a sigvara/renounce-check/v2");
         r = _copy(good);
         r.passed = false;
         _report(r);
@@ -970,9 +1017,32 @@ contract SplitAuthorityTest is Test {
         _refusedFor("the deployer has made a transaction since the report: run it again");
         vm.revertToState(start);
 
-        // None of that dropped anything; an hour to the second after it, the same report goes through.
+        // The report is for the artifact this phase reads; one made against other addresses is not.
+        r = _copy(good);
+        r.artifactKeccak = keccak256("another artifact");
+        _report(r);
+        _refusedFor("the report was made against another deployment artifact: run it again");
+        // A digest that is not the one of its own lists: the lists were edited after the gate wrote them.
+        r = _copy(good);
+        r.digest = keccak256("edited by hand");
+        _report(r);
+        _refusedFor("the report's timelock digest does not match its operations");
+
+        _theTimelockQueueIsReadAgainBeforeTheRenounce(good);
+
+        // None of that dropped anything. With an upgrade still queued that the operators reviewed and listed, an hour
+        // to the second after the report, it goes through: a pending operation is allowed, an unreviewed one is not.
         _assertDeployerHolds();
-        _report(good);
+        bytes memory upgrade = abi.encodeWithSignature("upgradeToAndCall(address,bytes)", makeAddr("new code"), "");
+        mSafe.exec(timelock, abi.encodeCall(TimelockController.schedule, (targets[1], 0, upgrade, bytes32(0), keccak256("up"), 48 hours)));
+        bytes32 upgradeId = mTimelock.hashOperation(targets[1], 0, upgrade, bytes32(0), keccak256("up"));
+        r = _withQueue(_copy(good), _one(upgradeId), _oneUint(uint256(TimelockController.OperationState.Waiting)));
+        _report(r);
+        // A pending upgrade nobody reviewed is refused, whatever else the report says.
+        _refusedFor("the report passes a pending timelock operation nobody reviewed");
+        r.reviewed = _one(upgradeId);
+        _report(r);
+        vm.setEnv("REVIEWED_TIMELOCK_OPERATIONS", vm.toString(upgradeId));
         vm.warp(good.checkedAt + 1 hours);
         mScript.run();
         _assertDeployerDropped();
@@ -981,13 +1051,129 @@ contract SplitAuthorityTest is Test {
         vm.removeFile(_artifactPath());
     }
 
+    /// The timelock's queue is in no nonce: anyone may execute a ready operation, and doing so moves neither the
+    /// Safe's nonce nor the deployer's. So the renounce reads every operation's state again and compares it with
+    /// the report. The case the review found: a role grant scheduled before the report, executed after it.
+    function _theTimelockQueueIsReadAgainBeforeTheRenounce(Report memory good) internal {
+        uint256 start = vm.snapshotState();
+        address identity = targets[0];
+        address intruder = makeAddr("intruder");
+        bytes memory grant = abi.encodeCall(IAccessControl.grantRole, (UPGRADER_ROLE, intruder));
+        // UPGRADER_ROLE administers itself, so the timelock, holding it, can grant it: the Safe schedules that.
+        mSafe.exec(address(mTimelock), abi.encodeCall(TimelockController.schedule, (identity, 0, grant, bytes32(0), keccak256("grant"), 48 hours)));
+        bytes32 grantId = mTimelock.hashOperation(identity, 0, grant, bytes32(0), keccak256("grant"));
+
+        // A pending role grant the report shows but nobody reviewed.
+        Report memory r = _withQueue(_copy(good), _one(grantId), _oneUint(uint256(TimelockController.OperationState.Waiting)));
+        _report(r);
+        _refusedFor("the report passes a pending timelock operation nobody reviewed");
+
+        // Listed as reviewed in the report, but the operator does not give the same list at the renounce.
+        r.reviewed = _one(grantId);
+        _report(r);
+        _refusedFor("REVIEWED_TIMELOCK_OPERATIONS is not the list the report was made with");
+        vm.setEnv("REVIEWED_TIMELOCK_OPERATIONS", vm.toString(keccak256("some other operation")));
+        _refusedFor("REVIEWED_TIMELOCK_OPERATIONS is not the list the report was made with");
+        vm.setEnv("REVIEWED_TIMELOCK_OPERATIONS", vm.toString(grantId));
+
+        // Ready when the report was written, and executed by anyone after it. No nonce moved.
+        vm.warp(good.checkedAt + 48 hours);
+        r = _withQueue(r, _one(grantId), _oneUint(uint256(TimelockController.OperationState.Ready)));
+        r.checkedAt = block.timestamp;
+        _report(r);
+        vm.prank(makeAddr("anyone"));
+        mTimelock.execute(identity, 0, grant, bytes32(0), keccak256("grant"));
+        assertTrue(IAccessControl(identity).hasRole(UPGRADER_ROLE, intruder), "the grant ran, which is what the check is for");
+        _refusedFor("a timelock operation has changed state since the report: run it again");
+
+        // The same holds for an operation the Safe cancelled after the report.
+        vm.revertToState(start);
+        mSafe.exec(address(mTimelock), abi.encodeCall(TimelockController.schedule, (identity, 0, grant, bytes32(0), keccak256("grant"), 48 hours)));
+        r = _withQueue(_copy(good), _one(grantId), _oneUint(uint256(TimelockController.OperationState.Waiting)));
+        r.reviewed = _one(grantId);
+        r.checkedAt = block.timestamp;
+        _report(r);
+        mSafe.exec(address(mTimelock), abi.encodeCall(TimelockController.cancel, (grantId)));
+        _refusedFor("a timelock operation has changed state since the report: run it again");
+
+        // Lists that do not line up are refused before anything is read from them.
+        vm.revertToState(start);
+        vm.warp(good.checkedAt);
+        r = _copy(good);
+        r.ids = _one(grantId);
+        _report(r);
+        _refusedFor("the report's timelock operations do not line up");
+
+        // A deployer with code, such as an EIP-7702 delegation, acts through it without moving its nonce.
+        _report(good);
+        vm.etch(deployer, abi.encodePacked(hex"ef0100", makeAddr("delegate")));
+        _refusedFor("the deployer has code (an EIP-7702 delegation?), so its nonce does not show what it has done");
+        vm.etch(deployer, "");
+
+        // Waiting when the report was written and Ready by itself before the renounce: no one did anything, so it
+        // is no change, and the renounce goes through.
+        vm.revertToState(start);
+        mSafe.exec(address(mTimelock), abi.encodeCall(TimelockController.schedule, (identity, 0, grant, bytes32(0), keccak256("grant"), 48 hours)));
+        vm.warp(good.checkedAt + 48 hours - 30 minutes);
+        r = _withQueue(_copy(good), _one(grantId), _oneUint(uint256(TimelockController.OperationState.Waiting)));
+        r.reviewed = _one(grantId);
+        r.checkedAt = block.timestamp;
+        _report(r);
+        vm.warp(block.timestamp + 31 minutes);
+        assertEq(uint256(mTimelock.getOperationState(grantId)), uint256(TimelockController.OperationState.Ready));
+        mScript.run();
+        _assertDeployerDropped();
+
+        vm.revertToState(start);
+        vm.setEnv("REVIEWED_TIMELOCK_OPERATIONS", "");
+        _assertDeployerHolds();
+    }
+
+    /// The report scripts/check-before-renounce.mjs writes (its self-test writes this fixture with the same code),
+    /// read with the keys the renounce reads, and the digest the gate computed is the one this contract computes.
+    /// A key renamed on one side, or a digest encoded differently in JavaScript, fails here.
+    function test_theGatesReportIsReadTheWayTheRenounceReadsIt() public {
+        string memory json = vm.readFile("test/fixtures/renounce-check-v2.json");
+        assertEq(vm.parseJsonString(json, ".schema"), "sigvara/renounce-check/v2");
+        assertTrue(vm.parseJsonBool(json, ".passed"));
+        assertEq(vm.parseJsonUint(json, ".chain_id"), 7777010);
+        assertEq(vm.parseJsonAddress(json, ".safe"), address(0x11));
+        assertEq(vm.parseJsonAddress(json, ".timelock"), address(0x12));
+        assertEq(vm.parseJsonAddress(json, ".deployer"), address(0x13));
+        assertEq(vm.parseJsonUint(json, ".checked_at"), 1_800_000_000);
+        assertEq(vm.parseJsonUint(json, ".safe_nonce"), 3);
+        assertEq(vm.parseJsonUint(json, ".deployer_nonce"), 7);
+        assertEq(vm.parseJsonBytes32(json, ".artifact_keccak"), keccak256(bytes('{"deployer":"fixture"}\n')));
+        bytes32[] memory ids = vm.parseJsonBytes32Array(json, ".timelock_operation_ids");
+        uint256[] memory states = vm.parseJsonUintArray(json, ".timelock_operation_states");
+        assertEq(ids.length, 2);
+        assertEq(states.length, 2);
+        assertEq(keccak256(abi.encode(ids, states)), vm.parseJsonBytes32(json, ".timelock_operations_digest"));
+        bytes32[] memory reviewed = vm.parseJsonBytes32Array(json, ".reviewed_timelock_operations");
+        assertEq(reviewed.length, 1);
+        assertEq(reviewed[0], ids[0]);
+    }
+
+    function _one(bytes32 id) internal pure returns (bytes32[] memory a) {
+        a = new bytes32[](1);
+        a[0] = id;
+    }
+
+    function _oneUint(uint256 x) internal pure returns (uint256[] memory a) {
+        a = new uint256[](1);
+        a[0] = x;
+    }
+
     function _refusedFor(string memory reason) internal {
         vm.expectRevert(abi.encodeWithSelector(SplitAuthority.ReconciliationRefused.selector, reason));
         mScript.run();
     }
 
     function _copy(Report memory r) internal pure returns (Report memory) {
-        return Report(r.schema, r.passed, r.chainId, r.safe, r.timelock, r.deployer, r.checkedAt, r.safeNonce, r.deployerNonce);
+        return Report(
+            r.schema, r.passed, r.chainId, r.safe, r.timelock, r.deployer, r.checkedAt, r.safeNonce, r.deployerNonce,
+            r.artifactKeccak, r.ids, r.states, r.reviewed, r.digest
+        );
     }
 
     function _assertDeployerHolds() internal view {

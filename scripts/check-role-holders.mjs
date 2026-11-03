@@ -30,12 +30,18 @@
  * RPC_URL overrides the default endpoint. The public endpoint caps eth_getLogs at 10,000
  * blocks and throttles bursts, so the scan is chunked and paced (PACE_MS, default 500).
  * A provider with a larger range makes a late run faster.
+ *
+ * The replay ends at one block: AT_BLOCK, with its hash in AT_BLOCK_HASH, when
+ * scripts/check-before-renounce.mjs names it, so the holders are the ones at the moment it also
+ * reads the Safe and the timelock at; otherwise the chain's finalized block. A different hash at
+ * that number, at the start or at the end of the replay, stops it (scripts/renounce-snapshot.mjs).
  */
 
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import { snapshotBlock, holdersAt } from './renounce-snapshot.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(join(root, 'oracle', 'index.js'));
@@ -136,7 +142,8 @@ const expected = {
   },
 };
 
-const provider = new ethers.JsonRpcProvider(RPC);
+// No cached answers: the block and its hash must be the chain's, not a remembered one.
+const provider = new ethers.JsonRpcProvider(RPC, undefined, { cacheTimeout: -1 });
 const reported = Number((await provider.getNetwork()).chainId);
 if (reported !== CHAIN_ID) {
   console.error(`${RPC} reports chain ${reported}, but this check is for chain ${CHAIN_ID}`);
@@ -145,24 +152,30 @@ if (reported !== CHAIN_ID) {
 
 const GRANTED = ethers.id('RoleGranted(bytes32,address,address)');
 const REVOKED = ethers.id('RoleRevoked(bytes32,address,address)');
-const head = await provider.getBlockNumber();
+let snap;
+try {
+  snap = await snapshotBlock(provider, process.env.AT_BLOCK, process.env.AT_BLOCK_HASH);
+} catch (e) {
+  console.log(`FAIL  ${e.message}`);
+  process.exit(1);
+}
+const head = snap.number;
+console.log(`at    block ${head} (${snap.hash})`);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 async function holdersOf(address) {
-  const members = new Map(); // role hash -> Set of lowercase addresses
+  const logs = [];
   for (let from = artifact.deployBlock; from <= head; from += RANGE) {
     const to = Math.min(from + RANGE - 1, head);
-    const logs = await provider.getLogs({ address, fromBlock: from, toBlock: to, topics: [[GRANTED, REVOKED]] });
-    logs.sort((a, b) => a.blockNumber - b.blockNumber || a.index - b.index);
-    for (const l of logs) {
-      const role = l.topics[1];
-      const account = ethers.getAddress('0x' + l.topics[2].slice(26)).toLowerCase();
-      if (!members.has(role)) members.set(role, new Set());
-      if (l.topics[0] === GRANTED) members.get(role).add(account); else members.get(role).delete(account);
+    for (const l of await provider.getLogs({ address, fromBlock: from, toBlock: to, topics: [[GRANTED, REVOKED]] })) {
+      logs.push({
+        blockNumber: l.blockNumber, index: l.index, granted: l.topics[0] === GRANTED, role: l.topics[1],
+        account: ethers.getAddress('0x' + l.topics[2].slice(26)),
+      });
     }
     if (to < head) await sleep(PACE_MS);
   }
-  return members;
+  return holdersAt(logs, head); // role hash -> Set of lowercase addresses
 }
 
 const hashOf = {
@@ -189,6 +202,13 @@ for (const [name, spec] of Object.entries(expected)) {
       fail(`${name}: unexpected role ${nameOf[role] ?? role} held by [${[...set].join(', ')}]`);
     }
   }
+}
+
+// The same block at the end as at the start, or the replay may have read two different chains.
+try {
+  await snapshotBlock(provider, head, snap.hash);
+} catch (e) {
+  fail(e.message);
 }
 
 console.log(failed ? 'role holders: STOP, something above failed' : 'role holders: all checks passed');
