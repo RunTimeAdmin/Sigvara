@@ -1,7 +1,8 @@
 # Operations runbook
 
 For the two oracle operators on the Arc testnet: keeping and restoring state, payer-signed
-outcomes that are slow to reach the other operator, and the two operators disagreeing. A stolen
+outcomes that are slow to reach the other operator, the two operators disagreeing, and the event
+index the explorer pages read (section 4). A stolen
 key is [incident-operator-key.md](incident-operator-key.md); bringing up an operator is
 [oracle/RUNBOOK-second-operator.md](../oracle/RUNBOOK-second-operator.md).
 
@@ -329,3 +330,47 @@ the commits, the record, whether the proposal is still live, then the evidence d
 it. An outcome one operator holds and the other refused or has not imported yet (section 2), or
 a restore (section 1), shows there as different evidence roots. Write every verdict in
 [divergence-log.md](divergence-log.md).
+
+## 4. Event index
+
+The explorer pages on sigvara.xyz read the contracts' history from the event index
+([event-index.md](event-index.md)): every log of identity, reputation, staking and the oracle bond,
+read through Alchemy's Arc testnet RPC and served at `https://index.sigvara.xyz`. It holds no key
+that signs. If it stops, the pages fall back to the Arc explorer and say so, which is slower and
+limited to ten history requests an hour per visitor.
+
+| | |
+|---|---|
+| Public URL | `https://index.sigvara.xyz` (`/events`, `/health`) |
+| Host and directory | `archipelago-standby`, `/docker/sigvara-index` |
+| Files there | `docker-compose.yml` (the repository's `docker-compose.indexer.vps.yml`, unchanged), `docker-compose.override.yml` (joins the `sigvara-web` network), `.env` (`SIGVARA_COMMIT` only), `rpc_url` (the RPC URL with its key, root, mode 600) |
+| Container | `sigvara-index`, listening on `127.0.0.1:3040` |
+| State volume | `sigvara-index_index_data` (the index; a restart resumes from it) |
+| Proxy | the `index.sigvara.xyz` block in `/opt/countersig/Caddyfile`, which passes only `GET`, `HEAD` and `OPTIONS` on `/events` and `/health` to `sigvara-index:3040` |
+| DNS | `index` A record to the host's address, in the sigvara.xyz zone |
+| Watched by | `scripts/check-live.mjs services` (its `/health` and certificate), on the live-checks schedule |
+
+**Checking it.** `curl -s https://index.sigvara.xyz/health` reports `ok`, `toBlock`, `behind` (20 in
+steady state: it stays that far behind the finalized head), `logs`, `lastError` with any URL
+removed, and `commit`. On the box, `docker logs sigvara-index` shows `[deploy] running <commit>` and
+`[indexer] caught up`.
+
+**Redeploying.** Copy `docker-compose.indexer.vps.yml` from the commit being deployed over
+`docker-compose.yml`, checking its sha256 against git; leave the override in place. Set
+`SIGVARA_COMMIT` in `.env` to that commit and run `docker compose up -d`. A plain restart does not
+read `.env` again.
+
+**When `/health` fails.**
+- A `lastError` from the RPC that says the request was refused or unauthorised means the Alchemy
+  key has been revoked or the app has run out of credits.
+  - Put a working URL in `rpc_url` and run `docker compose up -d --force-recreate`.
+  - Any provider for chain 5042002 works. On Arc's public RPC, also set `INDEX_BATCH=1`, since it
+    refuses a batch of four.
+- `behind` growing with no error means the poll is slow or the RPC is lagging. Read the log.
+- A container that restarts in a loop: read `docker logs`. The launcher refuses a `SIGVARA_COMMIT`
+  that is not 40 hex characters, and a commit it cannot fetch.
+
+**When the Arc explorer recovers.** The pages' fallback still treats the Arc explorer's index as
+stopped at block 70,337,205 (`INDEX_STALLED_AT` in `site/assets/explorer.js`). Once its v2 API
+shows the identity contract's `AgentRegistered` logs in blocks 70,385,000 to 70,388,999, that line
+can go, and the fallback goes back to reading only the newest blocks from the chain.
