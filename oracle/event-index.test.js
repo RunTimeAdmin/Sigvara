@@ -62,12 +62,14 @@ test('normalizeLog: refuses an answer that is not what was asked', () => {
   for (const r of bad) assert.ok(ix.normalizeLog(r, ctx) instanceof Error, JSON.stringify(r));
 });
 
-test('normalizeLog: a log without blockTimestamp is kept, for the indexer to time', () => {
+test('normalizeLog: a log without blockTimestamp, or with null, is kept for the indexer to time', () => {
   const r = raw(150);
   delete r.blockTimestamp;
-  const l = ix.normalizeLog(r, ctx);
-  assert.ok(!(l instanceof Error));
-  assert.equal(l.blockTimestamp, undefined);
+  for (const x of [r, raw(150, 0, { blockTimestamp: null })]) {
+    const l = ix.normalizeLog(x, ctx);
+    assert.ok(!(l instanceof Error));
+    assert.equal(l.blockTimestamp, undefined);
+  }
 });
 
 // --- appendLogs ---------------------------------------------------------------------

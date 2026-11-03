@@ -44,7 +44,9 @@ function normalizeLog(raw, { addresses, from, to }) {
   if (!Array.isArray(raw.topics) || raw.topics.length > 4 || !raw.topics.every((t) => WORD.test(t))) return new Error('a log with malformed topics');
   if (typeof raw.data !== 'string' || !HEX.test(raw.data) || raw.data.length % 2) return new Error('a log with malformed data');
   if (!WORD.test(raw.transactionHash || '')) return new Error('a log without a transaction hash');
-  if (raw.blockTimestamp !== undefined && !QUANTITY.test(raw.blockTimestamp)) return new Error('a log with a malformed block time');
+  // null is read as absent: the indexer then asks for the block's time.
+  const ts = raw.blockTimestamp ?? undefined;
+  if (ts !== undefined && !QUANTITY.test(ts)) return new Error('a log with a malformed block time');
   return {
     address,
     topics: raw.topics.map((t) => t.toLowerCase()),
@@ -52,7 +54,7 @@ function normalizeLog(raw, { addresses, from, to }) {
     blockNumber: '0x' + block.toString(16),
     logIndex: '0x' + parseInt(raw.logIndex, 16).toString(16),
     transactionHash: raw.transactionHash.toLowerCase(),
-    ...(raw.blockTimestamp !== undefined ? { blockTimestamp: '0x' + parseInt(raw.blockTimestamp, 16).toString(16) } : {}),
+    ...(ts !== undefined ? { blockTimestamp: '0x' + parseInt(ts, 16).toString(16) } : {}),
   };
 }
 

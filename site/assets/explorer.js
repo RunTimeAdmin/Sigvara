@@ -102,6 +102,9 @@
   const INDEX_STALLED_AT = 70337205;
   // Reading more than this many blocks (about an hour) from the chain is worth a note on the page.
   const LAG_NOTED = 7200;
+  // An event index answering for blocks this far past the RPC's newest (about a minute) is not
+  // answering for this chain as the page sees it, so its answer is not used.
+  const INDEX_AHEAD = 100;
   // What a card says while it waits on the explorer.
   const READING_HISTORY = '<p class="netnote">Reading the contract\'s history from Sigvara\'s event index and the chain.</p>';
 
@@ -369,20 +372,26 @@
     if (topic0) q.set("topic0", topic0.join(","));
     if (topic1) q.set("topic1", topic1);
     if (fromBlock !== null) q.set("fromBlock", String(fromBlock));
-    const [j, latest] = await Promise.all([getJson(`${INDEX}/events?${q}`), blockNumber()]);
+    const [answer, head] = await Promise.allSettled([getJson(`${INDEX}/events?${q}`), blockNumber()]);
+    if (answer.status === "rejected") throw answer.reason;
+    const j = answer.value;
     const toBlock = Number(j?.toBlock);
     if (j?.chainId !== CHAIN_ID || !Array.isArray(j?.logs) || !Number.isSafeInteger(toBlock)) {
       throw new Error("the event index gave an answer for something else");
     }
+    const indexHead = { block: toBlock, time: Number(j.toBlockTime) > 0 ? Number(j.toBlockTime) : null };
+    // The index answered; a chain that does not is the chain's problem, said as such.
+    if (head.status === "rejected") {
+      return { rows: j.logs, tail: { source: "index", from: toBlock + 1, to: toBlock, missed: null, indexHead, error: String(head.reason?.message ?? head.reason) } };
+    }
+    const latest = head.value;
+    if (toBlock > latest + INDEX_AHEAD) throw new Error(`the event index claims block ${toBlock}, past the chain's newest, ${latest}`);
     // From just past the index, or from where the caller starts if that is later, but no
     // further back than TAIL_BLOCKS. `missed` is what that leaves out.
     const want = Math.max(toBlock + 1, fromBlock ?? 0);
     const from = Math.max(want, latest - TAIL_BLOCKS + 1);
     const topics = topic0 || topic1 ? [topic0, ...(topic1 ? [topic1] : [])] : null;
-    const tail = {
-      source: "index", from, to: latest, missed: from > want ? [want, from - 1] : null,
-      indexHead: { block: toBlock, time: Number(j.toBlockTime) > 0 ? Number(j.toBlockTime) : null },
-    };
+    const tail = { source: "index", from, to: latest, missed: from > want ? [want, from - 1] : null, indexHead };
     let rows = [];
     try {
       if (from <= latest) rows = await chainLogs(addresses, topics, from, latest);

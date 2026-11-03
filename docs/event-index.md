@@ -23,8 +23,9 @@ It is a cache of public chain data, run by the Sigvara team:
 
 How it keeps the history complete (`oracle/indexer.js`, `poll`):
 
-- It reads only blocks the RPC calls `finalized`. Arc finalizes each block as it is made, so a block read once does not change.
-- It reads in order, and moves on only when a whole batch of spans has been read and checked. A refused or malformed answer fails the whole batch (`readSpans`), and the next poll reads it again. So the index never has a hole.
+- It reads only blocks the RPC calls `finalized`, less 20 (`HEAD_MARGIN`, about ten seconds). Arc finalizes each block as it is made, so a block read once does not change.
+- The margin is there because a provider spreads requests over several nodes. A node a block or two behind the one that named the head can answer a log read for blocks it does not have yet with what it has, and say nothing. So each batch also asks for its own last block, and a batch whose node does not have it is refused (`readSpans`).
+- It reads in order, and moves on only when a whole batch of spans has been read and checked. A refused or malformed answer fails the whole batch, and the next poll reads it again. So the index never has a hole.
 - A log outside the span asked for, from another contract, or with a malformed field fails the read rather than being stored (`normalizeLog`).
 
 ## What it answers
@@ -44,7 +45,9 @@ Optional filters, all checked before use (`parseQuery`):
 | `topic1` | one 32-byte value, such as an agent's didHash |
 | `fromBlock` | leave out older blocks |
 
-A reader takes the blocks after `toBlock` from the chain itself, which is what the pages do (`indexLogs` in `site/assets/explorer.js`). A request never reaches the RPC: the index answers from memory, so traffic to the pages cannot spend the provider's credits.
+A reader takes the blocks after `toBlock` from the chain itself, which is what the pages do (`indexLogs` in `site/assets/explorer.js`). A page that gets a `toBlock` more than 100 blocks past the chain's newest does not use the answer.
+
+A request never reaches the RPC. The index answers from memory, so traffic to the pages cannot spend the provider's credits. Each query's answer is encoded once and kept until the index moves on (`eventsAnswer`), so many requests for the same query share one copy.
 
 `GET /health` answers 200 while the index has polled in the last few minutes and is at most 3,600 blocks (about half an hour) behind the finalized head, and 503 otherwise. It reports `toBlock`, `head`, `behind`, the number of logs, the last error with any URL removed, and the commit it runs.
 

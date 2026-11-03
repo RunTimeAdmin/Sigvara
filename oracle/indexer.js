@@ -12,8 +12,9 @@
  * RPC_URL_FILE is set and is never logged or served. A request to it never reaches the RPC: it
  * answers from memory, so a busy page cannot spend the provider's credits.
  *
- * It reads only blocks the RPC calls finalized, in order, and moves forward only when a whole
- * span has been read, so the index never has a hole. Arc finalizes each block as it is made.
+ * It reads only blocks the RPC calls finalized, less a margin, in order, and moves forward only
+ * when a whole batch has been read and the node that answered it has the batch's last block, so
+ * the index never has a hole. Arc finalizes each block as it is made.
  *
  *   RPC_URL_FILE=/run/secrets/rpc_url EXPECTED_CHAIN_ID=5042002 \
  *   INDEX_ADDRESSES=0x...,0x... INDEX_FROM_BLOCK=62662196 node indexer.js
@@ -26,14 +27,14 @@ const ix = require('./event-index');
 const { runningCommit } = require('./http-helpers');
 
 const fail = (message) => { console.error(`[indexer] ${message}`); process.exit(1); };
-const intSetting = (name, fallback, min) => {
+const intSetting = (name, fallback, min, max = Number.MAX_SAFE_INTEGER) => {
   const raw = process.env[name];
   if (raw === undefined || raw === '') {
     if (fallback === undefined) fail(`need ${name}`);
     return fallback;
   }
   const n = Number(raw);
-  if (!/^\d+$/.test(raw) || !Number.isSafeInteger(n) || n < min) fail(`${name} is ${raw}; must be a whole number of at least ${min}`);
+  if (!/^\d+$/.test(raw) || !Number.isSafeInteger(n) || n < min || n > max) fail(`${name} is ${raw}; must be a whole number from ${min} to ${max}`);
   return n;
 };
 
@@ -69,7 +70,7 @@ const cfg = {
   chainId: intSetting('EXPECTED_CHAIN_ID', undefined, 1),
   fromBlock: intSetting('INDEX_FROM_BLOCK', undefined, 0),
   addresses: new Set(addressList),
-  port: intSetting('PORT', 3040, 1),
+  port: intSetting('PORT', 3040, 1, 65535),
   host: process.env.INDEX_HOST || '127.0.0.1',
   pollSeconds: intSetting('POLL_SECONDS', 30, 1),
   // Spans per JSON-RPC batch. Alchemy takes 25 at once; Arc's public RPC refuses four, so a
@@ -82,6 +83,11 @@ const cfg = {
 const SPANS_PER_POLL = 100;
 // /health fails once the index is this far behind the chain: about half an hour of Arc blocks.
 const MAX_BEHIND = 3600;
+// How far behind the finalized head the index stays: about ten seconds of Arc blocks. A provider
+// spreads requests over several nodes, and a node that is a block behind the one that named the
+// head can answer a log read for the newest blocks with what it has. The pages read the blocks
+// after the index from the chain, so the margin costs them one small read.
+const HEAD_MARGIN = 20;
 
 // ---- state ----
 function load() {
@@ -139,15 +145,25 @@ async function call(method, params) {
   return j.result;
 }
 
-// Every log of the indexed contracts in `spans`, in one batch. Any refused or malformed answer
-// fails the whole batch, so nothing from it is kept.
+// Every log of the indexed contracts in `spans`, in one batch, and the time of the batch's last
+// block. The batch asks for that block too: a node that does not have it yet may still answer the
+// log reads, with what it has, and the missing block is how that shows. Any refused, malformed or
+// missing answer fails the whole batch, so nothing from it is kept.
 async function readSpans(spans) {
   const hex = (n) => '0x' + n.toString(16);
-  const answer = await rpc(spans.map(([a, b], id) => ({
-    jsonrpc: '2.0', id, method: 'eth_getLogs', params: [{ address: [...cfg.addresses], fromBlock: hex(a), toBlock: hex(b) }],
-  })));
+  const last = spans[spans.length - 1][1];
+  const answer = await rpc([
+    ...spans.map(([a, b], id) => ({
+      jsonrpc: '2.0', id, method: 'eth_getLogs', params: [{ address: [...cfg.addresses], fromBlock: hex(a), toBlock: hex(b) }],
+    })),
+    { jsonrpc: '2.0', id: spans.length, method: 'eth_getBlockByNumber', params: [hex(last), false] },
+  ]);
   if (!Array.isArray(answer)) throw new Error(`eth_getLogs: ${answer && answer.error ? answer.error.message : 'not a batch answer'}`);
   const byId = new Map(answer.map((r) => [r && r.id, r]));
+  const end = byId.get(spans.length);
+  const block = end && !end.error ? end.result : null;
+  if (!block || parseInt(block.number, 16) !== last) throw new Error(`the RPC does not have block ${last} yet`);
+  const time = parseInt(block.timestamp, 16);
   const logs = [];
   spans.forEach(([a, b], id) => {
     const r = byId.get(id);
@@ -158,7 +174,7 @@ async function readSpans(spans) {
       logs.push(l);
     }
   });
-  return logs;
+  return { logs, time: Number.isSafeInteger(time) && time > 0 ? time : null };
 }
 
 // An RPC that leaves blockTimestamp out of its logs gets each block's time asked for.
@@ -183,24 +199,21 @@ async function poll() {
   let more = false;
   try {
     const fin = await call('eth_getBlockByNumber', ['finalized', false]);
-    const head = parseInt(fin.number, 16), headTime = parseInt(fin.timestamp, 16);
+    const head = parseInt(fin.number, 16);
     if (!Number.isSafeInteger(head)) throw new Error('the finalized block has no number');
     status.head = head;
-    const spans = ix.planSpans(index.toBlock + 1, head);
-    more = spans.length > SPANS_PER_POLL;
-    const work = spans.slice(0, SPANS_PER_POLL);
+    const target = head - HEAD_MARGIN;
+    const end = Math.min(target, index.toBlock + SPANS_PER_POLL * ix.LOG_SPAN);
+    more = end < target;
+    const work = ix.planSpans(index.toBlock + 1, end);
     const before = index.toBlock;
     for (let i = 0; i < work.length; i += cfg.batch) {
       const group = work.slice(i, i + cfg.batch);
-      const logs = await readSpans(group);
+      const { logs, time } = await readSpans(group);
       await addTimes(logs);
-      const through = group[group.length - 1][1];
-      ix.appendLogs(index, logs, through, through === head ? headTime : null);
+      ix.appendLogs(index, logs, group[group.length - 1][1], time);
     }
-    if (index.toBlock !== before) {
-      if (index.toBlockTime === null) index.toBlockTime = parseInt((await call('eth_getBlockByNumber', ['0x' + index.toBlock.toString(16), false])).timestamp, 16);
-      save();
-    }
+    if (index.toBlock !== before) save();
     if (!more && !caughtUp) {
       caughtUp = true;
       console.log(`[indexer] caught up: ${index.logs.length} logs through block ${index.toBlock}`);
@@ -246,10 +259,31 @@ const COMMON = {
   'Cross-Origin-Resource-Policy': 'cross-origin',
 };
 
-function send(req, res, status, body, cache = 'no-store') {
+// A body as sent: the JSON, and its gzip when it is worth compressing.
+function encode(body) {
   const json = Buffer.from(JSON.stringify(body));
-  const gzip = /\bgzip\b/.test(req.headers['accept-encoding'] || '') && json.length > 1024;
-  const out = gzip ? zlib.gzipSync(json) : json;
+  return { json, gzip: json.length > 1024 ? zlib.gzipSync(json) : null };
+}
+
+// Each recent /events answer, kept until the index moves, so a burst of requests costs one
+// encoding per query rather than one per request, and slow readers share one buffer.
+const answers = new Map();
+let answersAt = null;
+function eventsAnswer(q) {
+  if (answersAt !== index.toBlock) { answers.clear(); answersAt = index.toBlock; }
+  const key = JSON.stringify([q.address && [...q.address].sort(), q.topic0 && [...q.topic0].sort(), q.topic1, q.fromBlock]);
+  let a = answers.get(key);
+  if (!a) {
+    a = encode(ix.eventsBody(index, q));
+    if (answers.size >= 64) answers.delete(answers.keys().next().value);
+    answers.set(key, a);
+  }
+  return a;
+}
+
+function send(req, res, status, encoded, cache = 'no-store') {
+  const gzip = encoded.gzip !== null && /\bgzip\b/.test(req.headers['accept-encoding'] || '');
+  const out = gzip ? encoded.gzip : encoded.json;
   res.writeHead(status, {
     ...COMMON,
     'Content-Type': 'application/json',
@@ -266,20 +300,20 @@ const server = http.createServer((req, res) => {
     res.writeHead(204, { ...COMMON, 'Access-Control-Allow-Methods': 'GET, HEAD', 'Access-Control-Max-Age': '86400' });
     return res.end();
   }
-  if (req.method !== 'GET' && req.method !== 'HEAD') return send(req, res, 405, { error: 'GET only' });
+  if (req.method !== 'GET' && req.method !== 'HEAD') return send(req, res, 405, encode({ error: 'GET only' }));
   let url;
-  try { url = new URL(req.url, 'http://index.invalid'); } catch { return send(req, res, 400, { error: 'bad request' }); }
+  try { url = new URL(req.url, 'http://index.invalid'); } catch { return send(req, res, 400, encode({ error: 'bad request' })); }
   if (url.pathname === '/health') {
     const h = health();
-    return send(req, res, h.ok ? 200 : 503, h);
+    return send(req, res, h.ok ? 200 : 503, encode(h));
   }
   if (url.pathname === '/events') {
     const q = ix.parseQuery(url.searchParams, cfg.addresses);
-    if (q instanceof Error) return send(req, res, 400, { error: q.message });
-    if (index.toBlock < index.fromBlock) return send(req, res, 503, { error: 'nothing indexed yet' });
-    return send(req, res, 200, ix.eventsBody(index, q), 'public, max-age=10');
+    if (q instanceof Error) return send(req, res, 400, encode({ error: q.message }));
+    if (index.toBlock < index.fromBlock) return send(req, res, 503, encode({ error: 'nothing indexed yet' }));
+    return send(req, res, 200, eventsAnswer(q), 'public, max-age=10');
   }
-  return send(req, res, 404, { error: 'not found' });
+  return send(req, res, 404, encode({ error: 'not found' }));
 });
 
 async function start() {

@@ -82,7 +82,7 @@ async function renderOperators(history, health) {
     </tr>`;
   }
   html += "</tbody></table></div>";
-  html += '<p class="netnote">Last proposal is the newest score proposal sent by the operator or a signing key it has set, with the sender of each proposal read from its transaction on the chain. A checker proposes only into a slot the primary has left empty, so it usually has none.</p>';
+  html += '<p class="netnote">Last proposal is the newest score proposal sent by the operator or a signing key it has set, with the sender of each proposal read from its transaction on the chain. A checker proposes only into a slot the primary has left empty, so it usually has none.</p><div id="proposalNote"></div>';
   html += X.historyNote(history.value);
   html += `<p class="netnote">A slashed operator bond goes to the slash beneficiary, ${X.addrLink(beneficiary)}, not to a burn. The bond contract's slash takes no evidence and has no appeal window; see <a href="slashes">Slashes</a>.</p>`;
   html += healthList(health);
@@ -95,15 +95,18 @@ async function renderOperators(history, health) {
         ? `${X.esc(X.fmtWhen(p.at))}<div class="ex-note">${X.txLink(p.tx)}</div>`
         : `<span class="ex-note">${found.since === null ? "none on record" : `none since ${X.esc(X.fmtWhen(found.since))}`}</span>`;
     }
+    // What the index and the chain could not cover, since the bond history's note is about another read.
+    const note = $("proposalNote");
+    if (note && found.tail) note.innerHTML = X.historyNote({ tail: found.tail });
   }).catch((e) => { for (const td of cells) td.innerHTML = X.failed("the proposals", e); });
 }
 
 // The newest proposal each operator sent, as { at, tx }, and how far back the search reached:
-// `since` is null when every proposal on record was checked.
+// `since` is null when every proposal on record was checked. `tail` is how the index's read went.
 async function lastProposals(ops) {
-  let found, from = null;
+  let found, from = null, tail = null;
   try {
-    ({ rows: found } = await X.indexLogs([X.REPUTATION], { topic0: [PROPOSED] }));
+    ({ rows: found, tail } = await X.indexLogs([X.REPUTATION], { topic0: [PROPOSED] }));
   } catch (_) {
     const to = await X.blockNumber();
     from = Math.max(0, to - PROPOSAL_BLOCKS + 1);
@@ -132,7 +135,7 @@ async function lastProposals(ops) {
     const op = ops.find((o) => o.keys.has(by));
     if (op && !newest.has(op.address)) newest.set(op.address, { at, tx });
   }
-  return { newest, since };
+  return { newest, since, tail };
 }
 
 function healthList(health) {

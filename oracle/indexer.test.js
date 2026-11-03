@@ -1,8 +1,9 @@
 'use strict';
 
 // indexer.js end to end: the real process against a fake RPC. Backfill in batches, a refused span
-// that must not leave a hole, new blocks after it, filters and gzip on /events, a restart that
-// resumes from the saved index, and an RPC key that never reaches a log line or an answer.
+// that must not leave a hole, new blocks after it, a node behind the head that answers log reads
+// with what it has, filters and gzip on /events, a restart that resumes from the saved index, and
+// an RPC key that never reaches a log line or an answer.
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -20,6 +21,7 @@ const B = '0x' + 'bb'.repeat(20);
 const T0 = '0x' + '01'.repeat(32);
 const DID = '0x' + 'cd'.repeat(32);
 const FROM = 1000;
+const MARGIN = 20; // HEAD_MARGIN in indexer.js
 const hex = (n) => '0x' + n.toString(16);
 
 function fakeRpc() {
@@ -29,6 +31,7 @@ function fakeRpc() {
     refuseOnce: new Set(), // fromBlock values whose first eth_getLogs is refused
     getLogsFrom: [],       // every fromBlock asked for, in order
     noTimestamp: true,     // leave blockTimestamp off the first log, for the indexer to ask
+    lagTo: null,           // a node that has blocks only up to here, though it names a later head
   };
   const add = (block, address = A, topics = [T0, DID]) => chain.logs.push({
     address, topics, data: '0x', blockNumber: hex(block), logIndex: '0x0',
@@ -39,12 +42,16 @@ function fakeRpc() {
     if (r.method === 'eth_chainId') return ok('0x4cef52');
     if (r.method === 'eth_getBlockByNumber') {
       const n = r.params[0] === 'finalized' ? chain.head : parseInt(r.params[0], 16);
+      // The head is named by a node that has it; the lagging one answers the block reads.
+      if (chain.lagTo !== null && r.params[0] !== 'finalized' && n > chain.lagTo) return ok(null);
       return ok({ number: hex(n), timestamp: hex(5000 + n) });
     }
     if (r.method === 'eth_getLogs') {
-      const f = r.params[0], from = parseInt(f.fromBlock, 16), to = parseInt(f.toBlock, 16);
+      const f = r.params[0], from = parseInt(f.fromBlock, 16);
+      // As a node behind the head does: it answers for the blocks it has, and says nothing.
+      const to = chain.lagTo === null ? parseInt(f.toBlock, 16) : Math.min(parseInt(f.toBlock, 16), chain.lagTo);
       chain.getLogsFrom.push(from);
-      if (to - from + 1 > 10000) return { jsonrpc: '2.0', id: r.id, error: { code: -32600, message: 'range too large' } };
+      if (parseInt(f.toBlock, 16) - from + 1 > 10000) return { jsonrpc: '2.0', id: r.id, error: { code: -32600, message: 'range too large' } };
       if (chain.refuseOnce.delete(from)) return { jsonrpc: '2.0', id: r.id, error: { code: 429, message: `rate limited at https://rpc.invalid/v2/${KEY}` } };
       const want = new Set(f.address.map((a) => a.toLowerCase()));
       return ok(chain.logs.filter((l) => {
@@ -130,12 +137,13 @@ test('indexer: backfills without holes, follows new blocks, filters, resumes, an
   };
   let child = startIndexer(env);
   try {
-    // Caught up to the head, through the refused span.
-    const h = await until(async () => { const r = await get(port, '/health'); return r.body.toBlock === rpc.chain.head && r; });
+    // Caught up to the margin behind the head, through the refused span.
+    const h = await until(async () => { const r = await get(port, '/health'); return r.body.toBlock === rpc.chain.head - MARGIN && r; });
     assert.equal(h.status, 200);
     assert.equal(h.body.ok, true);
     assert.equal(h.body.fromBlock, FROM);
-    assert.equal(h.body.toBlockTime, 5000 + rpc.chain.head);
+    assert.equal(h.body.behind, MARGIN);
+    assert.equal(h.body.toBlockTime, 5000 + rpc.chain.head - MARGIN);
 
     const all = await get(port, '/events');
     assert.equal(all.status, 200);
@@ -156,8 +164,20 @@ test('indexer: backfills without holes, follows new blocks, filters, resumes, an
     // New blocks after the head are picked up on the next poll.
     rpc.add(rpc.chain.head + 500);
     rpc.chain.head += 1000;
-    await until(async () => (await get(port, '/events')).body.toBlock === rpc.chain.head);
+    await until(async () => (await get(port, '/events')).body.toBlock === rpc.chain.head - MARGIN);
     assert.equal((await get(port, '/events')).body.logs.length, 5);
+
+    // A node that names a head it does not have answers the log reads with what it has. The index
+    // must not take that as the whole span: it waits, then reads the span again.
+    const stuckAt = rpc.chain.head - MARGIN;
+    rpc.chain.lagTo = rpc.chain.head;
+    rpc.add(rpc.chain.head + 300);
+    rpc.chain.head += 1000;
+    const refused = await until(async () => { const r = (await get(port, '/health')).body; return /does not have block/.test(r.lastError || '') && r; });
+    assert.equal(refused.toBlock, stuckAt, 'nothing past what the lagging node has is marked as read');
+    rpc.chain.lagTo = null;
+    await until(async () => (await get(port, '/events')).body.toBlock === rpc.chain.head - MARGIN);
+    assert.equal((await get(port, '/events')).body.logs.length, 6, 'the log the lagging node left out is in the index');
 
     // The key reached neither the log nor any answer, although an RPC error quoted it.
     assert.match(child.output, /poll failed/);
@@ -171,8 +191,8 @@ test('indexer: backfills without holes, follows new blocks, filters, resumes, an
     child = startIndexer(env);
     await until(async () => (await get(port, '/health')).body.ok);
     assert.match(child.output, /resuming at block/);
-    assert.ok(rpc.chain.getLogsFrom.slice(asked).every((f) => f > FROM + 25_000), 'nothing already indexed is read again');
-    assert.equal((await get(port, '/events')).body.logs.length, 5);
+    assert.ok(rpc.chain.getLogsFrom.slice(asked).every((f) => f > rpc.chain.head - MARGIN - 1000), 'nothing already indexed is read again');
+    assert.equal((await get(port, '/events')).body.logs.length, 6);
   } finally {
     child.kill();
     await child.exited;
