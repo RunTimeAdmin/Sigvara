@@ -488,15 +488,20 @@ agent id. `oracle/external.js` does exactly this:
 2. For each client in `getClients(agentId)`, read feedback indexes 1 to
    `getLastIndex(agentId, client)` with `readFeedback`, skipping revoked entries.
 3. Take `value / 10^valueDecimals` and the lowercased `tag1`. Keep only recognized tags:
+   `starred`, `successrate` and `uptime` (examples in the ERC-8004 spec and its guide),
    `quality`, `trustscore`, `reliability`, `accuracy` and `credit` are divided by 100,
-   `win-rate` is used as is, and `rating`, `e2e-test` and `stars` are divided by 5. Each
-   is clamped to 0..1. Every other tag is ignored.
+   `reachable` and `win-rate` are used as is, and `rating`, `e2e-test` and `stars` are
+   divided by 5. Each is clamped to 0..1. Every other tag is ignored, including the guide's
+   `ownerVerified`, `responseTime`, `blocktimeFreshness`, `revenues` and `tradingYield`.
 4. Each client with a kept rating is one reviewer, rated by the mean of its kept ratings.
-   `oracle/reviewers.js` drops the reviewers that fail the rules above. Everything in this
-   step and steps 1 to 3 is read as of the last block at or before the start of the UTC
-   day: the payment evidence settled by then, the reviewer's Sigvara identity, bond and
-   matured score at that block, and its funders, searched up to its first payment to the
-   agent (and its operator's, up to that block), two hops each.
+   A client is matched to a Sigvara agent by its address, so a reviewer must post from its
+   Sigvara agent address. The ERC-8004 guide asks an agent to post from its `agentWallet`;
+   a reviewer that does should make that wallet its Sigvara agent address, or its feedback
+   is not matched to it. `oracle/reviewers.js` drops the reviewers that fail the rules
+   above. Everything in this step and steps 1 to 3 is read as of the last block at or
+   before the start of the UTC day: the payment evidence settled by then, the reviewer's
+   Sigvara identity, bond and matured score at that block, and its funders, searched up to
+   its first payment to the agent (and its operator's, up to that block), two hops each.
 5. Reviewers sharing an operator or a funder are one cluster, rated by its members' mean
    weighted by `0.5^(days since the reviewer last paid / 90)` and weighted by its most
    recent member. The factor is the weighted mean over clusters, times
