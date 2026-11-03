@@ -97,6 +97,9 @@ const counters = {
   // and its disagreement counter read zero.
   checkerDivergences: 0,
   checkerAgreed: 0,
+  // What a checker left to the primary because the primary was not yet late.
+  checkerDeferredFinalize: 0,
+  checkerDeferredPropose: 0,
 
   // Write outcomes that are neither success nor error and were likewise undeclared.
   // proposeSlotTaken is the ordinary result of proposeIfEmpty losing a race, and
@@ -222,6 +225,12 @@ function toPrometheusText(extra = {}) {
   lines.push('# TYPE sigvara_oracle_checker_comparisons_total counter');
   lines.push(`sigvara_oracle_checker_comparisons_total{verdict="diverged"} ${counters.checkerDivergences}`);
   lines.push(`sigvara_oracle_checker_comparisons_total{verdict="agreed"} ${counters.checkerAgreed}`);
+
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_checker_deferred_total Finalizes and empty slots this checker left to the primary, inside CHECKER_GRACE_MINUTES');
+  lines.push('# TYPE sigvara_oracle_checker_deferred_total counter');
+  lines.push(`sigvara_oracle_checker_deferred_total{action="finalize"} ${counters.checkerDeferredFinalize}`);
+  lines.push(`sigvara_oracle_checker_deferred_total{action="propose"} ${counters.checkerDeferredPropose}`);
 
   lines.push('');
   lines.push('# HELP sigvara_oracle_proposals_rejected_total Proposals rejected by the slashing committee');

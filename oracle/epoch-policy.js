@@ -145,17 +145,37 @@ function divergenceToleranceError(tolerance) {
 // when to look. That signal is the whole point of this mode.
 //
 // So a checker never writes over a live proposal:
-//   nothing pending               -> 'propose'   the primary is silent; cover for it
-//   pending, diverged             -> 'diverged'  alert, and touch nothing
-//   pending, agrees, window open  -> 'skip'
-//   pending, agrees, window past  -> 'finalize'  permissionless, and we agree with it
+//   nothing pending, for the grace or more   -> 'propose'         the primary is silent; cover for it
+//   nothing pending, for less than the grace -> 'defer-propose'   leave the slot to the primary
+//   pending, diverged                        -> 'diverged'        alert, and touch nothing
+//   pending, agrees, window open             -> 'skip'
+//   pending, agrees, window past the grace   -> 'finalize'        permissionless, and we agree with it
+//   pending, agrees, window past, in grace   -> 'defer-finalize'  leave it to the primary
 //
 // Finalising a score it disagrees with is the one thing a checker must never do: that
 // would launder the number it was run to question into the live value. Overwriting one
 // is the second, because that restarts the window and buys the bad proposal another six
 // hours out of the committee's reach.
-function decideCheckerAction(pending, own, challengeWindowSeconds, nowSeconds, tolerance = DEFAULT_DIVERGENCE_TOLERANCE) {
-  if (!pending || !pending.exists) return 'propose';
+//
+// The grace is how long the checker leaves the primary to act before acting itself. Without
+// it the checker finalized whatever it reached first, which left the slot empty, and then
+// often proposed into that slot before the primary did: 35 of the first 262 proposals on Arc
+// testnet were the checker's, and nothing recomputes a checker's proposal, since a primary
+// never compares (docs/divergence-log.md, 2026-11-03). The primary finalizes and proposes
+// again in one epoch, so in normal running a slot is never empty for long. A slot empty for
+// the whole grace, or a proposal unfinalized that long past its window, means the primary is
+// late, and covering for it is what a second operator is for.
+//
+// `emptySince` is when the slot became empty, in seconds: the last finalized score, or the
+// agent's registration if it was never scored. 0 means at once, which is how a slot held by a
+// proposer that lost its authority is treated: its primary was removed, not delayed.
+function decideCheckerAction(
+  pending, own, challengeWindowSeconds, nowSeconds, tolerance = DEFAULT_DIVERGENCE_TOLERANCE,
+  { graceSeconds = 0, emptySince = 0 } = {},
+) {
+  if (!pending || !pending.exists) {
+    return nowSeconds >= emptySince + graceSeconds ? 'propose' : 'defer-propose';
+  }
 
   // Both halves matter. The total is what consumers of the score actually read, but two
   // factors disagreeing in opposite directions cancel in the sum while still meaning the
@@ -171,7 +191,33 @@ function decideCheckerAction(pending, own, challengeWindowSeconds, nowSeconds, t
 
   if (divergence.total > tolerance || divergence.maxFactor > tolerance) return 'diverged';
 
-  return nowSeconds >= finalizableAtOf(pending, challengeWindowSeconds) ? 'finalize' : 'skip';
+  const finalizableAt = finalizableAtOf(pending, challengeWindowSeconds);
+  if (nowSeconds < finalizableAt) return 'skip';
+  return nowSeconds >= finalizableAt + graceSeconds ? 'finalize' : 'defer-finalize';
+}
+
+/**
+ * How long a checker leaves the primary to act, in milliseconds, or an error to stop on.
+ *
+ * Unset, twice this checker's own epoch. It is the primary's epoch it has to outlast, which a
+ * checker cannot see: on Arc testnet both run hourly, so the default fits; where the primary runs
+ * daily and the checker hourly, set it above a day. Shorter than the checker's own epoch would
+ * bring the race back, since the checker would act at the first epoch it found the slot empty.
+ */
+function checkerGraceMs(raw, epochMs) {
+  if (raw === undefined || raw === '') return { ms: 2 * epochMs };
+  const minutes = Number(raw);
+  if (!Number.isFinite(minutes) || minutes < 0) {
+    return { error: `CHECKER_GRACE_MINUTES is ${raw}; it must be a number of minutes, at least 0.` };
+  }
+  if (minutes * 60_000 < epochMs) {
+    return {
+      error: `CHECKER_GRACE_MINUTES is ${raw}, shorter than this checker's epoch of ${epochMs / 60_000} minutes. ` +
+        'The checker would act at the first epoch it found a slot empty or a proposal ready, ahead of the primary, ' +
+        'and propose scores nothing recomputes. Set it above the primary\'s epoch.',
+    };
+  }
+  return { ms: minutes * 60_000 };
 }
 
 /**
@@ -243,7 +289,7 @@ function scoringIsStale({ lastEpochMs, nowMs, uptimeMs, epochMs }) {
 }
 
 module.exports = {
-  decideAction, decideCheckerAction, finalizableAtOf, scoreDivergence, mapChunked, scoringIsStale,
+  decideAction, decideCheckerAction, checkerGraceMs, finalizableAtOf, scoreDivergence, mapChunked, scoringIsStale,
   epochIntervalError, divergenceToleranceError, clockSkewError, MAX_TIMER_MS, MIN_EPOCH_MS,
   SCORE_FACTORS, DEFAULT_DIVERGENCE_TOLERANCE, MAX_DIVERGENCE_TOLERANCE,
 };

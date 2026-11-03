@@ -206,7 +206,7 @@ Also exposed, and worth knowing about:
 
 | series | what it answers |
 |---|---|
-| `sigvara_oracle_checker_comparisons_total{verdict}` | how many pending scores this checker re-measured, and how many it disagreed with. Zero on a primary, which never compares. |
+| `sigvara_oracle_checker_comparisons_total{verdict}` | how many pending scores this checker re-measured, and how many it disagreed with. Zero on a primary, which never compares. Beside it, `sigvara_oracle_checker_deferred_total{action}` counts the finalizes and empty slots it left to the primary inside `CHECKER_GRACE_MINUTES`. |
 | `sigvara_oracle_propose_total{result="slot_taken"}` | `proposeIfEmpty` declining to overwrite a pending score. A normal race outcome, not a failure. |
 | `sigvara_oracle_propose_attempts_total`, `..._finalize_attempts_total` | attempts, so success + error + slot_taken can be reconciled rather than assumed to account for everything. |
 | `sigvara_oracle_proposals_rejected_total` | scores the slashing committee rejected. |
@@ -792,9 +792,9 @@ So the second operator runs with `ORACLE_MODE=checker` and never competes for th
 
 | pending proposal | checker does |
 |---|---|
-| none | proposes: covers for a silent primary, and in practice for the hour after a finalization before the primary proposes again (35 of 262 proposals to 3 November 2026, none of them recomputed, since a primary never compares) |
+| none, for `CHECKER_GRACE_MINUTES` or longer | proposes: covers for a silent primary. A slot empty for less is left to the primary, since nothing recomputes a checker's proposal (until 3 November 2026 the checker did not wait, and proposed 35 of the first 262 scores, none of them recomputed) |
 | agrees, window open | nothing |
-| agrees, window elapsed | finalizes |
+| agrees, window elapsed by `CHECKER_GRACE_MINUTES` or more | finalizes. Sooner, it leaves the finalize to the primary, which finalizes and proposes again in one epoch, so the slot is never left empty |
 | **disagrees** | **records a divergence and touches nothing** |
 
 The last row is the one that matters. Overwriting a disputed proposal would restart the
@@ -1112,7 +1112,7 @@ See [Running a second operator](#running-a-second-operator).
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `ORACLE_MODE` | `primary` | `checker` scores every agent, compares with the pending proposal, records divergences and proposes only into an empty slot. Refused together with `FEE_REGISTRY_ADDRESS`. Any value other than `primary` or `checker`, including `Checker`, stops the process |
+| `ORACLE_MODE` | `primary` | `checker` scores every agent, compares with the pending proposal, records divergences, and finalizes or fills an empty slot only once the primary is `CHECKER_GRACE_MINUTES` late (default twice `EPOCH_HOURS`; refused below one epoch; set it above the primary's epoch). Refused together with `FEE_REGISTRY_ADDRESS`. Any value other than `primary` or `checker`, including `Checker`, stops the process |
 | `DIVERGENCE_TOLERANCE` | `3` | Points of difference, in the total or in any one factor, that count as benign skew between two honest operators (`decideCheckerAction` in `epoch-policy.js`). A non-number, a negative value or one above `10` stops the process at startup, since each would make the checker agree with everything |
 | `PRIMARY_EVIDENCE_URL` | `https://oracle.sigvara.xyz` | The primary's public base URL. Named in each divergence record as `compareWith`, so a reader is told where the other side's evidence lives |
 

@@ -53,9 +53,9 @@
 > - Both oracle operators are run by the same party. A second bonded operator has run in
 >   checker mode since 20 September on separate hardware and a separate RPC provider, and
 >   `activeCount` is 2, but two independent recomputations agreeing is not two independent
->   parties agreeing. The primary proposes most scores; the checker finalizes what it agrees
->   with, proposes into any slot it finds empty (35 of 262 proposals to 3 November 2026, none
->   of them recomputed), and makes a disagreement legible, and a committee must
+>   parties agreeing. The primary proposes and finalizes the scores; the checker does either
+>   only once the primary is late (until 3 November 2026 it did not wait, and proposed 35 of
+>   262 scores, none recomputed), and makes a disagreement legible, and a committee must
 >   still act on it.
 > - ~~Scoring reads the wall clock rather than the chain clock.~~ Closed 20 September.
 >   The epoch scores against the block timestamp, and the checker rescores a pending

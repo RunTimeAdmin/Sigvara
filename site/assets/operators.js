@@ -82,7 +82,7 @@ async function renderOperators(history, health) {
     </tr>`;
   }
   html += "</tbody></table></div>";
-  html += '<p class="netnote">Last proposal is the newest score proposal sent by the operator or a signing key it has set, with the sender of each proposal read from its transaction on the chain. A checker proposes only into a slot it finds empty, usually in the hour after a score is finalized, and nothing recomputes those proposals.</p><div id="proposalNote"></div>';
+  html += '<p class="netnote">Last proposal is the newest score proposal sent by the operator or a signing key it has set, with the sender of each proposal read from its transaction on the chain. A checker proposes only when the primary has left a slot empty for its grace period, so a healthy primary leaves it none to make.</p><div id="proposalNote"></div>';
   html += X.historyNote(history.value);
   html += `<p class="netnote">A slashed operator bond goes to the slash beneficiary, ${X.addrLink(beneficiary)}, not to a burn. The bond contract's slash takes no evidence and has no appeal window; see <a href="slashes">Slashes</a>.</p>`;
   html += healthList(health);
