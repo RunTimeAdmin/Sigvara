@@ -36,6 +36,13 @@ const NUMERIC = [
   ['PAYMENT_SCAN_PACE_MS', 'int', 0],
   ['JOBS_FROM_BLOCK', 'int', 0],
   ['EXTERNAL_LINK_FROM_BLOCK', 'int', 0],
+  // The ERC-8004 publisher's (publisher.js).
+  ['PUBLISH_FROM_BLOCK', 'int', 0],
+  ['SIGVARA_ERC8004_AGENT_ID', 'int', 1],
+  ['PUBLISH_MAX_TXS_PER_RUN', 'int', 1],
+  ['PUBLISH_MAX_GAS', 'int', 21000],
+  ['PUBLISH_MAX_FEE_GWEI', 'num', 0.000001],
+  ['PUBLISH_MIN_BALANCE', 'num', 0],
   ['JOBS_MAX_SPAN', 'int', 1],
   ['EXPECTED_CHAIN_ID', 'int', 1],
   ['TX_WAIT_SECONDS', 'num', 5, 3600],
