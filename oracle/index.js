@@ -17,6 +17,7 @@ require('./config').requireValidNumericConfig('oracle');
 const http = require('http');
 const chain = require('./chain');
 const external = require('./external');
+const reviewers = require('./reviewers');
 const { computeScore } = require('./scoring');
 const {
   decideAction, decideCheckerAction, checkerGraceMs, finalizableAtOf, scoreDivergence,
@@ -111,6 +112,9 @@ const cfg = {
   externalRpc:        process.env.EXTERNAL_RPC || '',
   externalIdentity:   process.env.EXTERNAL_IDENTITY_ADDRESS || '',
   externalReputation: process.env.EXTERNAL_REPUTATION_ADDRESS || '',
+  // Wallets that fund everyone, such as a faucet or an exchange, so a reviewer funded by one
+  // is not clustered with every other (reviewers.js). Checked at startup.
+  publicFunders:      reviewers.parsePublicFunders(process.env.EXTERNAL_PUBLIC_FUNDERS),
   // Checker mode: a second bonded operator that audits the primary's proposals rather
   // than racing them. It scores every agent independently and compares; it proposes only
   // when nothing is pending, and never finalizes or overwrites a score it disputes.
@@ -211,6 +215,11 @@ try {
   cfg.scopes = readScopes(process.env, cfg.credentials);
 } catch (err) {
   console.error(`[oracle] ${err.message}`);
+  process.exit(1);
+}
+
+if (cfg.publicFunders.error) {
+  console.error(`[oracle] ${cfg.publicFunders.error}`);
   process.exit(1);
 }
 
@@ -357,6 +366,47 @@ async function payerScoresFor(didHash) {
   const out = {};
   for (const [key] of unique) out[key] = payerScoreCache.get(key);
   return out;
+}
+
+/**
+ * The external factor for one agent: the feedback on its linked ERC-8004 identity, counted
+ * only from the reviewers reviewers.js accepts. 0 when nothing is linked, the feed is off, or
+ * the registry cannot be read (externalScoreFor). Throws when the snapshot or a reviewer
+ * cannot be read, and the agent is skipped this epoch. `nowMs` is the chain's clock, as for scoreAt, and
+ * `events` the payment evidence to judge reviewers by: the checker passes the evidence as it
+ * stood at the proposal it audits.
+ *
+ * Everything is read as of the snapshot, the start of the UTC day containing `nowMs`
+ * (reviewers.snapshotOf): the registry and each reviewer's standing at the snapshot's block,
+ * and only evidence settled by then. A checker auditing a proposal made the same day reads
+ * exactly what its primary read. The feedback itself is read at that block only when the
+ * ERC-8004 registry is on this chain; on another chain it is read at its latest block.
+ */
+async function externalScoreOf(didHash, { operator, agentAddress }, nowMs, events = getPaymentEvents(didHash)) {
+  const linkedId = links.get(didHash);
+  if (!external.configured() || linkedId === undefined) return 0;
+  const snapshotSec = reviewers.snapshotOf(Math.floor(nowMs / 1000));
+  const snapshotBlock = await chain.blockAtOrBefore(snapshotSec);
+  const sameChain = verifiedChainId !== null && external.chainState().chainId === verifiedChainId;
+  return external.externalScoreFor(linkedId, operator, async (rows) => {
+    const result = await reviewers.scoreFeedback(
+      rows,
+      {
+        agent: { operator, agentAddress },
+        events: events.filter((e) => e.ts <= snapshotSec * 1000),
+        nowMs: snapshotSec * 1000,
+      },
+      {
+        standingOf: (address) => chain.getReviewerStanding(address, snapshotBlock),
+        funderOf: chain.firstFunder,
+        paymentBlock: chain.paymentBlock,
+        snapshotBlock,
+        publicFunders: cfg.publicFunders.set,
+      },
+    );
+    if (rows.length) console.log(`[oracle]   ${didHash.slice(0, 10)}… external: ${reviewers.describe(result)}`);
+    return result.score;
+  }, sameChain ? snapshotBlock : undefined);
 }
 
 /**
@@ -812,7 +862,7 @@ async function runEpochInner() {
     }));
 
     for (let k = 0; k < chunk.length; k++) {
-      const { didHash, operator, registeredAt, pending } = chunk[k];
+      const { didHash, operator, agentAddress, registeredAt, pending } = chunk[k];
       const { fresh, bonded, guardError } = guards[k];
       if (guardError) {
         console.error(`[oracle]   ${didHash.slice(0, 10)}… error: ${guardError.message}`);
@@ -876,12 +926,6 @@ async function runEpochInner() {
         // Age-weighted, not the raw count: a flag decays out of the penalty rather than
         // costing two points forever. See store.decayedFlagCount.
         const flagWeight = decayedFlagCount(didHash);
-        // externalScore: only for agents linked to an ERC-8004 identity they own.
-        // Ownership is re-verified inside externalScoreFor; any failure yields 0.
-        const linkedId  = links.get(didHash);
-        const externalScore = (external.configured() && linkedId !== undefined)
-          ? await external.externalScoreFor(linkedId, operator)
-          : 0;
         // The chain's clock, not this host's. chainNow is a block timestamp in seconds;
         // every scoring function below measures in milliseconds, and getting that
         // conversion wrong would date every payment to 1970 and decay the lot to zero.
@@ -892,6 +936,10 @@ async function runEpochInner() {
         // enough to move no integer factor, large enough that the two were not computing
         // the same function. A divergence tolerance hid it rather than fixing it.
         const scoringNowMs = chainNow * 1000;
+        // externalScore: only for agents linked to an ERC-8004 identity they own, and only from
+        // the reviewers reviewers.js accepts. Ownership is re-verified inside externalScoreFor;
+        // any failure yields 0.
+        const externalScore = await externalScoreOf(didHash, { operator, agentAddress }, scoringNowMs);
         const inputs = { registeredAt, att, flagWeight, externalScore };
         const { measured, scores } = await scoreAt(didHash, inputs, scoringNowMs);
 
@@ -966,7 +1014,18 @@ async function runEpochInner() {
             asOf = payments.required(paymentCfg)
               ? evidenceAsOf(getPaymentEvents(didHash), atProposalMs, freshPending.evidenceRoot ?? null)
               : null;
-            auditScores = (await scoreAt(didHash, inputs, atProposalMs, asOf?.events)).scores;
+            // The external factor too, as the primary would have read it at its proposal: same
+            // snapshot, same evidence. Computed at this epoch's clock instead, a reviewer that
+            // changed in the hours between made an honest proposal look wrong.
+            const auditInputs = links.has(didHash)
+              ? {
+                ...inputs,
+                externalScore: await externalScoreOf(
+                  didHash, { operator, agentAddress }, atProposalMs, asOf?.events ?? getPaymentEvents(didHash),
+                ),
+              }
+              : inputs;
+            auditScores = (await scoreAt(didHash, auditInputs, atProposalMs, asOf?.events)).scores;
           }
 
           // auditScores for every comparison; `scores` stays as-is for the propose path
@@ -2548,13 +2607,10 @@ async function handleRequest(req, res) {
         console.warn(`[oracle] /score chain read failed for ${didHash}: ${err.message}`);
         return json(res, 502, { error: 'could not read the chain', code: 'rpc_error' });
       }
-      const { operator, registeredAt, status } = info;
+      const { operator, agentAddress, registeredAt, status } = info;
       const att       = attestations.get(didHash) ?? { successful: 0, total: 0 };
       const flagWeight = decayedFlagCount(didHash);
       const linkedId  = links.get(didHash);
-      const externalScore = (external.configured() && linkedId !== undefined)
-        ? await external.externalScoreFor(linkedId, operator)
-        : 0;
       // Same inputs as the epoch, including counterparty standing AND the chain clock,
       // or this endpoint would serve a number the oracle never proposes. Two operators'
       // /score are compared against each other by hand when a divergence is investigated,
@@ -2563,6 +2619,7 @@ async function handleRequest(req, res) {
       //
       // One extra chain read per request, on an endpoint that already makes several.
       const scoringNowMs = (await chain.getLatestBlockTimestamp()) * 1000;
+      const externalScore = await externalScoreOf(didHash, { operator, agentAddress }, scoringNowMs);
       const { measured, scores } = await scoreAt(didHash, { registeredAt, att, flagWeight, externalScore }, scoringNowMs);
       return json(res, 200, {
         didHash,

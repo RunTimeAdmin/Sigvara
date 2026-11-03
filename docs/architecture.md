@@ -67,8 +67,8 @@ The oracle recomputes every factor each epoch from observable data:
 - **Flags** — watchdog scanners (e.g. rug detectors on the same chain) report
   misbehaving agents. Flags subtract from the community factor.
 - **ERC-8004 feedback** — for an agent linked to an ERC-8004 identity it owns,
-  the oracle reads that agent's on-chain feedback and normalizes the rating
-  dimensions it recognizes into the external-trust factor (`externalScore`).
+  the oracle reads that agent's on-chain feedback, counts only reviewers that are bonded Sigvara
+  agents and paid it (`reviewers.js`), and normalizes them into the external-trust factor.
 - **Counterparty standing** — a payer's own `externalScore`, capped by its matured
   total, which raises how much that payer's evidence is worth and feeds the
   propagation factor. The external part only, not the total: everything else in a

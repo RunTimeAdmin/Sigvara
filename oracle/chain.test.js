@@ -697,8 +697,8 @@ test('the three named refusals do not overlap', () => {
 // else's: a sybil that wash-traded to 100 would raise its target's per-payer cap and
 // count as a fully trusted voucher. The code comment records that measured as scored
 // sybils maxing the fee factor with four payers instead of six. So it returns the
-// HARD part only, externalScore, which is standing in a registry this protocol does
-// not control and a single party cannot manufacture.
+// HARD part only, externalScore, which counts only feedback from reviewers reviewers.js
+// accepts, so a single party cannot fill it from fresh wallets.
 //
 // The consequence is worth stating plainly, because it is not obvious from either
 // call site: propagationScore is gated on counterparties having ERC-8004 standing.

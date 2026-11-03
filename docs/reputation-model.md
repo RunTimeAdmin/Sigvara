@@ -11,7 +11,7 @@ Sigvara reputation is a deterministic 6-factor score between 0 and 100. It is co
 | Fee Activity | 20 | Settled payments to the agent, verified on chain | `min(20, decayedVolume / PAYMENT_FEE_UNIT)`, capped per payer |
 | Success Rate | 15 | Outcome signed by the payer (positive only for now), or reported by a credentialed service | `floor(successful / (total + 5) × 15)`, on decayed weights |
 | Tenure | 30 | Span of verified trading, faded by how long since the last of it | `min(30, floor(log₂(spanDays+1) × 3)) × recency` |
-| External Trust | 25 | Normalized ERC-8004 feedback for a linked agent | mean of recognized rating tags × 25 |
+| External Trust | 25 | Normalized ERC-8004 feedback for a linked agent, from reviewers that are bonded Sigvara agents and paid it | mean rating × 25, in full only with five independent reviewers |
 | Community | 5 | Unresolved flags | `max(0, 5 − flags × 2)` |
 | Trust Propagation | 5 | Standing of the counterparties that paid the agent | 1 pt per fully-trusted counterparty, pro-rated by its external standing |
 
@@ -132,8 +132,8 @@ cost, but it is weeks of cost for a factor that claims to represent years.
 
 The factor grew from 20 points to 30 on the same day, taking half the weight released by
 cutting fee and success. The amplitude tracks the cap, so the shape did not change: full
-marks still arrive at day 1023, they are simply worth more. Elapsed paid activity is one
-of only two inputs in the score that cannot be bought at any price, and it was carrying
+marks still arrive at day 1023, they are simply worth more. Elapsed paid activity is an
+input in the score that cannot be bought at any price, and it was carrying
 less weight than the volume figure an attacker can manufacture for the cost of gas.
 
 The trade is a slower ramp for honest agents. Six months of trading is 22 of 30 rather
@@ -148,11 +148,42 @@ the oracle reads that agent's on-chain feedback from the ERC-8004 Reputation Reg
 normalizes the rating dimensions it recognizes, and scales the mean to 25 points.
 
 This factor grew from 15 points to 25 on 20 September 2026, taking the other half of the
-weight released by cutting fee and success. It is the only factor in the score that an
-attacker cannot manufacture from wallets it controls, because the standing lives in a
-registry this protocol does not operate. It is not, however, unbuyable: an attacker
-willing to build genuine ERC-8004 reputation can carry it here, and the measurements in
-the whitepaper's section 5.3 say what that costs.
+weight released by cutting fee and success.
+
+**Which feedback counts.** The ERC-8004 registry accepts feedback from any address, so its
+raw feedback is no harder to make than a wallet: until 3 November 2026 the oracle averaged
+all of it, and one fresh wallet posting `quality=100` would have carried a linked agent to
+25. Feedback now counts only from a reviewer that ([`oracle/reviewers.js`](../oracle/reviewers.js)):
+
+- is not the agent or its operator, and was not funded by either;
+- paid the agent, in a payment the oracle verified on chain, and counts for half once the
+  latest such payment is 90 days old;
+- is a Sigvara agent that is Active, holds the minimum bond, has been registered for 30
+  days and has a matured score of at least 40.
+
+One rating per reviewer, however many reviews it posts. Reviewers count as one when they
+share an operator, or when their funding, or their operator's, traces to a shared wallet within
+two hops. A wallet's funder is the largest native transfer into it in the first block where it
+held 1 USDC or had sent a transaction, so dust from a stranger does not make the stranger its
+funder. Wallets that fund everyone end a trace: the zero address a mint comes from always, and
+a faucet or an exchange when `EXTERNAL_PUBLIC_FUNDERS` lists it. The factor is the
+recency-weighted mean of those independent ratings, scaled down below five of them, so one
+reviewer who paid recently is worth at most 5 of the 25.
+
+Everything is read as of the start of the current UTC day: the feedback, each reviewer's
+standing, the funding and the payment evidence. A primary and a checker scoring the same agent
+hours apart then read the same chain state, and the checker re-runs the filter for the day of
+the proposal it audits. The cost is that a payment or a review made today counts from tomorrow.
+
+Reviewers count only through the oracle's payment evidence, so the factor is 0 on an operator
+that verifies no payments (`PAYMENT_VERIFICATION` off and the pull scanner off).
+
+That makes the factor harder to farm, not unbuyable. Each reviewer it counts costs a bond, a
+month, an earned score of 40, separately funded wallets and a payment of at least
+`PAYMENT_MIN_AMOUNT`. What it does not stop: a party that builds five such reviewers once can
+point them at any number of its own agents, and money laundered through a public source or
+more than two wallets is not traced. The measurements in the whitepaper's section 5.3 say
+what genuine standing costs.
 
 This is 0 unless the link is configured and the linked agent has feedback. Feedback
 CounterAudit wrote is deliberately excluded from the normalizer, because CounterAudit
@@ -215,8 +246,8 @@ The reason is that everything except `externalScore` can be manufactured by the 
 being scored. Inheriting a total let a farmed score launder into someone else's: a
 Sybil that wash-traded its way to 100 both raised its target's per-payer cap and
 counted as a fully trusted voucher, measured as scored Sybils maxing the fee factor
-with four payers instead of six. `externalScore` is the one factor a single party
-cannot mint, because it is standing in a registry this protocol does not control.
+with four payers instead of six. `externalScore` is the one factor a single party cannot
+fill from its own fresh wallets, because only reviewers that pass `oracle/reviewers.js` count.
 
 **The network-level consequence.** Propagation is therefore gated on ERC-8004 adoption,
 not on Sigvara activity. Until counterparties hold external standing, this factor is 0
@@ -460,8 +491,16 @@ agent id. `oracle/external.js` does exactly this:
    `quality`, `trustscore`, `reliability`, `accuracy` and `credit` are divided by 100,
    `win-rate` is used as is, and `rating`, `e2e-test` and `stars` are divided by 5. Each
    is clamped to 0..1. Every other tag is ignored.
-4. The factor is the mean of the kept ratings times 25, rounded. No recognized feedback
-   gives 0.
+4. Each client with a kept rating is one reviewer, rated by the mean of its kept ratings.
+   `oracle/reviewers.js` drops the reviewers that fail the rules above. Everything in this
+   step and steps 1 to 3 is read as of the last block at or before the start of the UTC
+   day: the payment evidence settled by then, the reviewer's Sigvara identity, bond and
+   matured score at that block, and its funders, searched up to its first payment to the
+   agent (and its operator's, up to that block), two hops each.
+5. Reviewers sharing an operator or a funder are one cluster, rated by its members' mean
+   weighted by `0.5^(days since the reviewer last paid / 90)` and weighted by its most
+   recent member. The factor is the weighted mean over clusters, times
+   `min(1, total weight / 5)`, times 25, rounded. No counted reviewer gives 0.
 
 The factor caps are in `oracle/score-caps.js`, the curves in `oracle/scoring.js` and the
 decay parameters in `oracle/payments.js`. When
