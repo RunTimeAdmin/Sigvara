@@ -59,7 +59,7 @@
       "reproducedAt": "53d3a89"
     },
     "oracleBond": {
-      "current": "0x3C06A98bA5137E967AF182e91F88729ca1880e83",
+      "current": "0x722AbaA614Edd77Cb5b31655eb1bfdb18e823A51",
       "history": [
         {
           "implementation": "0xf8464144726850d222a06b85a230c8030673b933",
@@ -76,16 +76,22 @@
           "replacedAt": "2026-11-02T21:36:44.000Z",
           "reproducedAt": "53d3a89",
           "note": "replaced by the upgrade of the oracle bond proxy to 76bbc97 (an operator's exit time is fixed when it starts to leave, pull request 151): upgradeToAndCall in block 70413542, tx 0xe03948094b8b0405c0055c408946ee02d0ea64f32f8a1c4e841c03de2a05f9f2"
+        },
+        {
+          "implementation": "0x3C06A98bA5137E967AF182e91F88729ca1880e83",
+          "replacedAt": "2026-11-03T15:58:54.000Z",
+          "reproducedAt": "76bbc97",
+          "note": "replaced by the upgrade of the oracle bond proxy to 0483a3c (a signer key stays bound to the operator that named it, pull request 167): upgradeToAndCall in block 70543553, tx 0xf95adf655b15050910d338cd01683d4218e073892db8eddf5bc1540ddfa55be6"
         }
       ],
-      "recordedAt": "2026-11-02T21:38:11.233Z",
-      "reproducedAt": "76bbc97"
+      "recordedAt": "2026-11-03T15:59:30.548Z",
+      "reproducedAt": "0483a3c"
     }
   },
   "bytecode": {
     "note": "Every contract here, each implementation, each proxy and the SVR token, is reproduced byte for byte (immutables aside) by building reproducedAt; scripts/check-bytecode.mjs checks it. The tag marks the commit that records this, whose contract sources are those of reproducedAt. All are verified on the Arc explorer.",
-    "reproducedAt": "76bbc97",
-    "tag": "arc-testnet-2026-11-02b",
-    "checkedAt": "2026-11-02"
+    "reproducedAt": "0483a3c",
+    "tag": "arc-testnet-2026-11-03",
+    "checkedAt": "2026-11-03"
   }
 }
