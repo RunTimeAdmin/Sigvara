@@ -61,7 +61,7 @@ async function loadAgents() {
   } catch (e) {
     return setCard("agentsCard", X.failed("the agents' scores from the chain", e));
   }
-  renderAgents(registrations.truncated);
+  renderAgents(registrations);
 }
 
 // Which group an agent is in, for the badge and the filter.
@@ -73,10 +73,15 @@ function groupOf(a) {
   return { key: "outside", label: "Outside" };
 }
 let filter = "all";
-let lastTruncated = false;
+let lastHistory = null;
 
-function renderAgents(truncated = lastTruncated) {
-  lastTruncated = truncated;
+// The committed root, linked to the payments it is over as the primary oracle serves them, which
+// "Check evidence" rebuilds it from.
+const rootLink = (a) => (X.same(a.root, X.ZERO32) ? X.rootCode(a.root)
+  : `<a href="${X.PRIMARY}/evidence/${a.didHash}" target="_blank" rel="noopener" title="${X.esc(a.root)}: the payments behind it, from the primary oracle"><code>${X.esc(X.short(a.root))}</code></a>`);
+
+function renderAgents(history = lastHistory) {
+  lastHistory = history;
   const sorted = [...agents].sort((a, b) => b.total - a.total || b.earned - a.earned || a.time - b.time);
   const count = (key) => agents.filter((a) => groupOf(a).key === key).length;
   const n = { all: agents.length, outside: count("outside"), sim: count("sim"), own: count("own") };
@@ -89,7 +94,7 @@ function renderAgents(truncated = lastTruncated) {
     `<button type="button" data-filter="${k}" aria-pressed="${filter === k}">${X.esc(label)} (${n[k]})</button>`).join("")}</div>`;
   const shown = sorted.filter((a) => filter === "all" || groupOf(a).key === filter);
   html += `<div class="ex-scroll"><table class="ex-table">
-    <thead><tr><th>Agent</th><th>Who</th><th>Status</th><th title="getTotalScore: the score other contracts read, which matures toward the earned score">Score</th><th title="getEarnedScore: the score as last finalized">Earned</th><th>Stake</th><th>Evidence root</th><th></th></tr></thead><tbody>`;
+    <thead><tr><th>Agent</th><th>Who</th><th>Status</th><th title="getTotalScore: the score other contracts read, which matures toward the earned score">Matured score</th><th title="getEarnedScore: the score as last finalized">Earned</th><th>Stake</th><th>Evidence root</th><th></th></tr></thead><tbody>`;
   for (const a of shown) {
     const g = groupOf(a);
     const pillClass = g.key === "sim" ? g.profile : g.key;
@@ -100,13 +105,14 @@ function renderAgents(truncated = lastTruncated) {
       <td><b>${a.total}</b></td>
       <td>${a.earned}</td>
       <td class="num">${X.esc(X.fmtSvr(a.stake))}</td>
-      <td>${X.rootCode(a.root)}</td>
+      <td>${rootLink(a)}</td>
       <td><button class="btn btn-secondary btn-sm" type="button" data-check="${a.didHash}">Check evidence</button></td>
     </tr>`;
   }
   html += "</tbody></table></div>";
-  html += '<p class="netnote">Score is what other contracts read (<code>getTotalScore</code>); it matures toward the earned score over time. <a href="docs/reputation">How scores work</a>. The agent links open its score epochs.</p>';
-  if (truncated) html += '<p class="pill-warn">The explorer has more registrations than this page reads, so the newest may be missing.</p>';
+  html += '<p class="netnote">The matured score is the total other contracts read (<code>getTotalScore</code>). It climbs toward the earned score, the one last finalized (<code>getEarnedScore</code>), at a bounded rate a day, and falls at once. <a href="docs/reputation">How scores work</a>. The agent links open its score epochs, and each evidence root links to the payments it commits to.</p>';
+  if (history?.truncated) html += '<p class="pill-warn">The explorer has more registrations than this page reads, so the newest may be missing.</p>';
+  html += X.historyNote(history);
   setCard("agentsCard", html);
   for (const btn of document.querySelectorAll("[data-check]")) {
     btn.addEventListener("click", () => checkEvidence(btn.getAttribute("data-check")));
