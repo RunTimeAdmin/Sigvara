@@ -67,15 +67,23 @@ function trackedSiteFiles() {
     .sort();
 }
 
-/** Header values the policy file promises, parsed from the file that is deployed. */
+/**
+ * Header values the policy file promises, parsed from the file that is deployed: the site-wide
+ * ones, and for each <FilesMatch> block its pattern and the headers it sets on those files only.
+ */
 function promisedHeaders() {
   const text = readFileSync('site/.htaccess', 'utf8');
-  const map = new Map();
+  const siteWide = new Map();
+  const scoped = [];
+  let scope = null;
   for (const line of text.split('\n')) {
+    const open = /^\s*<FilesMatch\s+"([^"]*)"\s*>\s*$/i.exec(line);
+    if (open) { scope = { pattern: new RegExp(open[1]), headers: new Map() }; scoped.push(scope); continue; }
+    if (/^\s*<\/FilesMatch>\s*$/i.test(line)) { scope = null; continue; }
     const m = /^\s*Header\s+always\s+set\s+(\S+)\s+"([^"]*)"\s*$/i.exec(line);
-    if (m) map.set(m[1].toLowerCase(), m[2]);
+    if (m) (scope ? scope.headers : siteWide).set(m[1].toLowerCase(), m[2]);
   }
-  return map;
+  return { siteWide, scoped };
 }
 
 async function checkSite() {
@@ -99,14 +107,26 @@ async function checkSite() {
   }
 
   // The headers are defined by .htaccess, which is not served, so compare what arrives with
-  // what the file promises, on the pages that matter most.
-  const promised = promisedHeaders();
-  for (const path of ['/', '/app', '/assets/app.js']) {
+  // what the file promises, on the pages that matter most. A file a <FilesMatch> block names
+  // gets the site-wide headers with the block's on top; a page it does not name must not carry
+  // the headers only the block sets.
+  const { siteWide, scoped } = promisedHeaders();
+  const onlyScoped = new Set(scoped.flatMap((s) => [...s.headers.keys()]).filter((name) => !siteWide.has(name)));
+  const targets = ['/', '/app', '/assets/app.js'].map((path) => ({ path, promised: siteWide, absent: onlyScoped }));
+  for (const { pattern, headers } of scoped) {
+    for (const rel of files.filter((f) => pattern.test(f.split('/').pop()))) {
+      targets.push({ path: urlPathFor(rel), promised: new Map([...siteWide, ...headers]), absent: new Set() });
+    }
+  }
+  for (const { path, promised, absent } of targets) {
     try {
       const { res } = await get(SITE + path + `?cb=${Date.now()}`);
       for (const [name, value] of promised) {
         const got = res.headers.get(name);
         if (got !== value) fail(`${path}: header ${name} is ${got === null ? 'missing' : `"${got.slice(0, 80)}"`}, .htaccess promises "${value.slice(0, 80)}"`);
+      }
+      for (const name of absent) {
+        if (res.headers.get(name) !== null) fail(`${path}: header ${name} is set, but .htaccess sets it only on the files a <FilesMatch> block names`);
       }
     } catch (e) {
       fail(`${path} headers: ${e.message}`);
