@@ -1,7 +1,7 @@
 # ADR 0008: Publish finalized scores to ERC-8004 as feedback
 
-**Status:** Accepted · 2026-11-03, with David's decisions below. To be built in shadow mode first;
-nothing posts until the rollout gates are met.
+**Status:** Accepted · 2026-11-03, with David's decisions below. Built in `oracle/publisher.js`,
+running in shadow mode first; nothing posts until the rollout gates are met.
 
 ## Context
 
