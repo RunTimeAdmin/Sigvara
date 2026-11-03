@@ -178,6 +178,18 @@ export class SigvaraVerifier {
     };
   }
 
+  /** The evidence root of the agent's finalized score. The zero hash when none has been finalized with one. */
+  async getEvidenceRoot(did: string): Promise<string> {
+    const didHash = await this.didHashFromDid(did);
+    return this.reputation().evidenceRoots(didHash) as Promise<string>;
+  }
+
+  /** Whether `leaf` is in the agent's finalized evidence root, by the contract's own MerkleProof check. */
+  async verifyEvidence(did: string, leaf: string, proof: string[]): Promise<boolean> {
+    const didHash = await this.didHashFromDid(did);
+    return this.reputation().verifyEvidence(didHash, leaf, proof) as Promise<boolean>;
+  }
+
   /** The stake an agent must hold to be Active, as the staking contract asks it now. */
   async getMinimumStake(): Promise<bigint> {
     return BigInt(await this.staking().minimumStake());

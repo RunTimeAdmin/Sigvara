@@ -2,6 +2,15 @@ export { SigvaraAgent } from './agent';
 export { SigvaraVerifier, registerAgent } from './verifier';
 export { depositStake } from './stake';
 export { SigvaraGate, atomicNonceStore } from './gate';
+export {
+  evidenceLeaf,
+  evidenceLayers,
+  evidenceRoot,
+  evidenceProof,
+  matchEvidenceRoot,
+  outcomeCode,
+} from './evidence';
+export type { EvidenceRecord, RootMatch } from './evidence';
 export type { GateConfig, AdmitResult, AdmitReason, NonceStore } from './gate';
 export type { DepositStakeResult } from './stake';
 export {

@@ -25,6 +25,8 @@ import { SigvaraVerifier } from './verifier';
 import { computeDidHash, formatDid, parseDid } from './did';
 import { generateChallenge } from './challenge';
 import { bytes32ToPubKey, pubKeyToMultibase } from './keys';
+import { evidenceLayers, evidenceLeaf, evidenceProof, evidenceRoot, matchEvidenceRoot, ZERO_ROOT } from './evidence';
+import type { EvidenceRecord } from './evidence';
 import { AgentStatus, SlashState } from './types';
 import type { ContractAddresses } from './types';
 
@@ -36,6 +38,8 @@ const VERSION: string = require('../package.json').version;
 export const ARC_TESTNET = {
   chainId: 5042002,
   rpcUrl: 'https://rpc.testnet.arc.io',
+  /** The primary operator, whose /evidence lists the payments behind each score. */
+  evidenceUrl: 'https://oracle.sigvara.xyz',
   addresses: {
     identity: '0x7e3aFC532eE5d922ab3cc3FFb510c7C8151477Dd',
     reputation: '0x6603C96275e85F724Cdf74666b399365e4cA29ed',
@@ -82,6 +86,67 @@ export interface TrustServerOptions {
   now?: () => number;
   /** Told about every failed read, for logs. The caller sees a short message with URLs removed. */
   onError?: (err: unknown) => void;
+  /**
+   * An oracle serving GET /evidence/:didHash, for sigvara_verify_evidence. Without it (or fetchEvidence) that
+   * tool is not offered. What it serves is checked, never trusted: every leaf is rebuilt here.
+   */
+  evidenceUrl?: string;
+  /** Fetches an agent's evidence list. Injected in tests; a bounded GET on evidenceUrl otherwise. */
+  fetchEvidence?: (didHash: string) => Promise<unknown>;
+}
+
+/** Largest /evidence body read, and most payments taken from it. */
+const MAX_EVIDENCE_BYTES = 4 * 1024 * 1024;
+const MAX_EVIDENCE_RECORDS = 2_000;
+/**
+ * Leaves hashed into trees while matching a root, at most. Each cut-off tried rebuilds a tree over the list, so an
+ * oracle serving a long list that matches nothing could otherwise hold the server's only thread for close to a
+ * minute. A long list gets fewer cut-offs, the newest first, where a finalized root usually sits.
+ */
+const MATCH_BUDGET = 20_000;
+/** Payments confirmed one by one with verifyEvidence, the last listed. The root match covers the rest. */
+const MAX_CONFIRMED = 100;
+/** Payments shown in the result, the last listed. Counts cover them all. */
+const MAX_LISTED = 50;
+/** The latest settlement time accepted, the end of the year 9999, so a date can always be written. */
+const MAX_SETTLED_AT = 253_402_300_799;
+
+/** How many cut-offs to try for a list of `n`, within MATCH_BUDGET. */
+function cutsFor(n: number): number {
+  return Math.max(1, Math.min(64, Math.floor(MATCH_BUDGET / (2 * Math.max(1, n)))));
+}
+
+/** GET a JSON body, giving up after `timeoutMs` and refusing one larger than `maxBytes`. */
+export async function fetchJsonBounded(url: string, timeoutMs: number, maxBytes: number): Promise<unknown> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    // No redirects: the oracle answers at the URL it was given, or not at all. Following one would let whoever
+    // controls it point this host at an address of their choosing, internal ones included.
+    const res = await fetch(url, { signal: controller.signal, redirect: 'error', headers: { accept: 'application/json' } });
+    if (!res.ok) throw new Error(`the oracle answered HTTP ${res.status}`);
+    const reader = res.body?.getReader();
+    if (!reader) throw new Error('the oracle sent no body');
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maxBytes) {
+        controller.abort();
+        throw new Error(`the oracle's answer is larger than ${maxBytes} bytes`);
+      }
+      chunks.push(value);
+    }
+    const text = new TextDecoder().decode(Buffer.concat(chunks));
+    try { return JSON.parse(text); } catch { throw new Error('the oracle did not answer with JSON'); }
+  } catch (err) {
+    if ((err as Error)?.name === 'AbortError') throw new Error(`the oracle did not answer within ${timeoutMs} ms`);
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Asks an RPC endpoint which chain it serves, with one eth_chainId call. */
@@ -176,6 +241,17 @@ export const TRUST_TOOLS: Tool[] = [
     annotations: { readOnlyHint: true, openWorldHint: true },
   },
   {
+    name: 'sigvara_verify_evidence',
+    description:
+      'Check the payments behind an agent\'s score against what the chain committed to. Fetches the payments the '
+      + 'oracle lists, rebuilds their Merkle root here (never trusting the oracle\'s own leaves), finds which of them '
+      + 'the finalized root on chain covers, and asks the reputation contract to confirm them with verifyEvidence. Also '
+      + 'says whether a pending proposal\'s root is reproduced. It shows the oracle scored on the set it published; it '
+      + 'does not check each transaction itself.',
+    inputSchema: { type: 'object', properties: { agent: AGENT_PROP }, required: ['agent'], additionalProperties: false },
+    annotations: { readOnlyHint: true, openWorldHint: true },
+  },
+  {
     name: 'sigvara_challenge',
     description:
       'Step 1 of checking that the party you are dealing with is an agent. Returns a challenge to send it, naming you '
@@ -255,7 +331,10 @@ const REASON_DETAIL: Record<StandingReason, string> = {
 
 function iso(seconds: bigint | number): string | null {
   const n = Number(seconds);
-  return n === 0 ? null : new Date(n * 1000).toISOString();
+  if (n === 0) return null;
+  const d = new Date(n * 1000);
+  // A time no calendar can write (a contract value past the year 275760) is reported as unknown, not thrown.
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
 
 type Factors = { feeScore: number; successScore: number; ageScore: number; externalScore: number; communityScore: number; propagationScore: number };
@@ -268,6 +347,59 @@ function factorsOf(f: Factors): Factors {
 }
 
 const FOURTEEN_DAYS = 14n * 24n * 3600n;
+
+const OUTCOME_SOURCES = new Set(['payer_signed', 'credentialed']);
+
+/**
+ * The payments in an oracle's /evidence answer, keeping only the fields a leaf commits to, each checked. The
+ * answer is text from outside, so nothing else in it reaches the result. A payment that cannot be a leaf is
+ * reported by position, in this code's own words.
+ */
+function readEvidence(body: unknown, didHash: string) {
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+    throw new ToolError('The oracle\'s answer is not an evidence list.');
+  }
+  const b = body as { didHash?: unknown; evidence?: unknown; evidenceRoot?: unknown };
+  if (typeof b.didHash !== 'string' || b.didHash.toLowerCase() !== didHash.toLowerCase()) {
+    throw new ToolError('The oracle\'s answer does not name this agent, so it is not checked.');
+  }
+  if (!Array.isArray(b.evidence)) throw new ToolError('The oracle\'s answer has no list of payments.');
+  if (b.evidence.length > MAX_EVIDENCE_RECORDS) {
+    throw new ToolError(`The oracle lists more than ${MAX_EVIDENCE_RECORDS} payments, more than this tool checks.`);
+  }
+  const isHash = (v: unknown): v is string => typeof v === 'string' && /^0x[0-9a-fA-F]{64}$/.test(v);
+  const records: EvidenceRecord[] = [];
+  const leaves: string[] = [];
+  const servedLeaves: (string | null)[] = [];
+  const problems: string[] = [];
+  b.evidence.forEach((item: unknown, i: number) => {
+    const e = (item && typeof item === 'object' ? item : {}) as Record<string, unknown>;
+    // Only plain 0x addresses, as the explorer takes them: ethers also accepts ICAP spellings, which
+    // getAddress then refuses in lower case, and that error would read as a failed chain read.
+    const payer = typeof e.payer === 'string' && /^0x[0-9a-fA-F]{40}$/.test(e.payer) ? e.payer.toLowerCase() : '';
+    const record: EvidenceRecord = {
+      txHash: isHash(e.txHash) ? e.txHash.toLowerCase() : '',
+      payer,
+      amount: typeof e.amount === 'string' && /^\d{1,78}$/.test(e.amount) ? e.amount : '',
+      settledAt: typeof e.settledAt === 'number' && Number.isSafeInteger(e.settledAt)
+        && e.settledAt >= 0 && e.settledAt <= MAX_SETTLED_AT ? e.settledAt : -1,
+      success: e.success === true ? true : e.success === false ? false : null,
+      outcomeSource: typeof e.outcomeSource === 'string' && OUTCOME_SOURCES.has(e.outcomeSource) ? e.outcomeSource : null,
+    };
+    try {
+      if (record.amount === '') throw new Error('a payment amount that is not a whole number');
+      if (record.settledAt === -1) throw new Error('a payment time that is not a whole number of seconds before the year 10000');
+      if (payer) record.payer = ethers.getAddress(payer);
+      leaves.push(evidenceLeaf(record));
+    } catch (err) {
+      problems.push(`payment ${i + 1}: ${(err as Error).message}`);
+      leaves.push(ZERO_ROOT);
+    }
+    records.push(record);
+    servedLeaves.push(isHash(e.leaf) ? e.leaf.toLowerCase() : null);
+  });
+  return { records, leaves, servedLeaves, problems, servedRoot: isHash(b.evidenceRoot) ? b.evidenceRoot.toLowerCase() : null };
+}
 
 function sumFactors(f: Factors): number {
   return f.feeScore + f.successScore + f.ageScore + f.externalScore + f.communityScore + f.propagationScore;
@@ -308,9 +440,18 @@ export function createTrustServer(options: TrustServerOptions): TrustServer {
   if (!(ttl > 0) || !Number.isFinite(ttl)) throw new Error(`createTrustServer: challengeTtlSeconds must be positive, got ${ttl}`);
   const now = options.now ?? (() => Math.floor(Date.now() / 1000));
   const outstanding = new Map<string, { did: string; expiresAt: number }>();
-  const secrets = options.rpcUrl ? [options.rpcUrl] : [];
+  const secrets = [options.rpcUrl, options.evidenceUrl].filter((s): s is string => !!s);
   const fail = (err: unknown) => { options.onError?.(err); return describeError(err, secrets); };
-  const listed = audience === null ? TRUST_TOOLS.filter((t) => !PROOF_TOOLS.has(t.name)) : TRUST_TOOLS;
+  const evidenceBase = options.evidenceUrl?.replace(/\/+$/, '');
+  if (evidenceBase !== undefined && !/^https?:\/\/[^\s]+$/i.test(evidenceBase)) {
+    throw new Error('createTrustServer: evidenceUrl must be an http(s) URL');
+  }
+  const fetchEvidence = options.fetchEvidence ?? (evidenceBase
+    ? (didHash: string) => fetchJsonBounded(`${evidenceBase}/evidence/${didHash}`, options.timeoutMs ?? 30_000, MAX_EVIDENCE_BYTES)
+    : undefined);
+  const offered = (name: string) => !(audience === null && PROOF_TOOLS.has(name))
+    && !(fetchEvidence === undefined && name === 'sigvara_verify_evidence');
+  const listed = TRUST_TOOLS.filter((t) => offered(t.name));
 
   let chainChecked: Promise<void> | undefined;
   function ensureChain(): Promise<void> {
@@ -547,6 +688,128 @@ export function createTrustServer(options: TrustServerOptions): TrustServer {
       };
     },
 
+    async sigvara_verify_evidence(args) {
+      const { did, didHash } = agentArg(args.agent);
+      await ensureChain();
+      const [finalRoot, pending, fetched] = await Promise.all([
+        verifier.getEvidenceRoot(did),
+        verifier.getPendingScore(did),
+        (fetchEvidence as (h: string) => Promise<unknown>)(didHash).then(
+          (body) => ({ body, err: undefined as unknown }),
+          (err) => ({ body: undefined as unknown, err }),
+        ),
+      ]);
+      if (fetched.err !== undefined) throw new ToolError(`Could not fetch the oracle's evidence: ${fail(fetched.err)}`);
+      const { records, leaves, servedRoot, servedLeaves, problems } = readEvidence(fetched.body, didHash);
+
+      const rebuiltRoot = problems.length ? null : evidenceRoot(leaves);
+      const servedLeavesDiffering = problems.length ? null
+        : servedLeaves.filter((l, i) => l !== null && l !== leaves[i].toLowerCase()).length;
+
+      let finalized: Record<string, unknown>;
+      const covered = new Set<number>();
+      const confirmed = new Map<number, boolean>();
+      // Payments whose outcome the root covers as not reported, though the oracle now lists one the payer signed.
+      const readAsUnreported = new Set<number>();
+      const maxCuts = cutsFor(records.length);
+      if (problems.length) {
+        finalized = { root: finalRoot === ZERO_ROOT ? null : finalRoot, reproduced: null,
+          detail: 'Not checked: some payments listed cannot be part of any root.' };
+      } else if (finalRoot === ZERO_ROOT) {
+        finalized = { root: null, reproduced: null, detail: 'No score with an evidence root has been finalized for this agent.' };
+      } else {
+        const m = matchEvidenceRoot(records, finalRoot, { leaves, maxCuts });
+        if (!m) {
+          finalized = { root: finalRoot, reproduced: false,
+            detail: 'No reading of the payments listed reproduces the finalized root. The oracle no longer lists the set '
+              + 'this score was made on, or lists it differently.'
+              + (maxCuts < 64 ? ` With ${records.length} payments listed, only the ${maxCuts} latest settlement cut-offs were tried.` : '') };
+        } else {
+          m.indexes.forEach((i) => covered.add(i));
+          if (m.unset) m.indexes.forEach((i) => { if (records[i].outcomeSource === 'payer_signed') readAsUnreported.add(i); });
+          const layers = evidenceLayers(m.leaves);
+          // The last listed, in waves of eight: the public Arc RPC refuses a batch of more than about ten.
+          const positions = m.indexes.map((_, p) => p).slice(-MAX_CONFIRMED);
+          for (let w = 0; w < positions.length; w += 8) {
+            const wave = positions.slice(w, w + 8);
+            const answers = await Promise.all(wave.map((p) => verifier.verifyEvidence(did, m.leaves[p], evidenceProof(layers, p))));
+            wave.forEach((p, k) => confirmed.set(m.indexes[p], answers[k]));
+          }
+          const yes = [...confirmed.values()].filter(Boolean).length;
+          // A payment in the committed set twice was counted twice. Legs of one transaction share a txHash with
+          // different payers, so it is identical leaves that are flagged, not shared hashes.
+          const duplicated = m.leaves.length - new Set(m.leaves.map((l) => l.toLowerCase())).size;
+          finalized = {
+            root: finalRoot,
+            reproduced: true,
+            covers: m.indexes.length,
+            settledBy: m.cut === Infinity ? null : iso(m.cut),
+            outcomesReadAsUnreported: readAsUnreported.size,
+            duplicatedPayments: duplicated,
+            checkedWithContract: confirmed.size,
+            confirmedByContract: yes,
+            detail: `Reproduced from ${m.indexes.length === records.length ? `all ${records.length}` : `${m.indexes.length} of the ${records.length}`} `
+              + 'payments listed'
+              + (m.cut === Infinity || m.indexes.length === records.length ? '' : `, those settled by ${iso(m.cut)}`)
+              + (readAsUnreported.size ? `, reading ${readAsUnreported.size} outcome(s) the payer signed afterwards as not yet reported, as the root does` : '')
+              + `. verifyEvidence confirmed ${yes} of the ${confirmed.size} checked`
+              + (confirmed.size < m.indexes.length ? ', the last listed; the root match covers the rest' : '') + '.'
+              + (duplicated ? ` ${duplicated} payment(s) appear more than once in the committed set, so the score counted them more than once.` : '')
+              // The proofs come from a tree whose root was just read, so the two disagree only if the root
+              // changed between the reads: a finalize or a zeroing landed in between.
+              + (yes < confirmed.size ? ' The contract refused some: its root may have changed since it was read, so run this again.' : ''),
+          };
+        }
+      }
+
+      let pendingResult: Record<string, unknown> | null = null;
+      if (pending.exists && pending.evidenceRoot === ZERO_ROOT) {
+        pendingResult = { root: null, proposedAt: iso(pending.proposedAt), reproduced: null,
+          detail: 'Proposed with no evidence root, so it commits to no payments.' };
+      } else if (pending.exists) {
+        const m = problems.length ? null
+          : matchEvidenceRoot(records, pending.evidenceRoot, { at: Number(pending.proposedAt), leaves });
+        pendingResult = { root: pending.evidenceRoot, proposedAt: iso(pending.proposedAt), reproduced: problems.length ? null : !!m };
+      }
+      const notYetFinalized = problems.length ? null
+        : finalRoot === ZERO_ROOT ? records.length
+        : covered.size ? records.length - covered.size : null;
+
+      const first = Math.max(0, records.length - MAX_LISTED);
+      return {
+        agent: { did, didHash, chainId },
+        listed: records.length,
+        cannotRebuild: problems.slice(0, 5),
+        rebuiltRoot,
+        servedRootMatches: servedRoot === null || rebuiltRoot === null ? null : servedRoot === rebuiltRoot.toLowerCase(),
+        servedLeavesDiffering,
+        finalized,
+        notYetFinalized,
+        pending: pendingResult,
+        payments: records.slice(first).map((r, k) => {
+          const i = first + k;
+          const label = (s: boolean | null) => (s === true ? 'delivered' : s === false ? 'failed' : 'not reported');
+          return {
+            txHash: r.txHash, payer: r.payer, amount: String(r.amount),
+            settledAt: iso(BigInt(r.settledAt)),
+            // What the oracle lists now. A payer-signed outcome added after the root is the oracle's word here.
+            outcome: label(r.success),
+            outcomeSource: r.outcomeSource ?? null,
+            inFinalizedRoot: covered.has(i),
+            // What the finalized root, and so the contract's confirmation, covers.
+            committedOutcome: covered.has(i) ? label(readAsUnreported.has(i) ? null : r.success) : null,
+            confirmedByContract: confirmed.has(i) ? confirmed.get(i) : null,
+          };
+        }),
+        paymentsShown: `${records.length - first} of ${records.length}, the last listed`,
+        meaning: 'A reproduced finalized root shows the oracle scored on exactly the payments it lists, with the outcomes in '
+          + 'committedOutcome; verifyEvidence is the contract agreeing, payment by payment. An outcome that differs from '
+          + 'committedOutcome was added afterwards and is the oracle\'s word. Neither shows a transaction happened as '
+          + 'listed: read a payment\'s txHash on chain for that.',
+        source: source(),
+      };
+    },
+
     async sigvara_challenge(args) {
       const { did } = agentArg(args.agent);
       const t = now();
@@ -609,6 +872,11 @@ export function createTrustServer(options: TrustServerOptions): TrustServer {
     const fn = Object.prototype.hasOwnProperty.call(tools, name) ? tools[name] : undefined;
     if (!fn) return { error: { code: -32602, message: `Unknown tool: ${name || '(none)'}` } };
     const args = (p.arguments && typeof p.arguments === 'object' && !Array.isArray(p.arguments) ? p.arguments : {}) as Record<string, unknown>;
+    if (name === 'sigvara_verify_evidence' && !offered(name)) {
+      return { result: { content: [{ type: 'text', text:
+        'sigvara_verify_evidence needs an oracle that serves /evidence. Set SIGVARA_EVIDENCE_URL (or the evidenceUrl '
+        + 'option) and restart.' }], isError: true } };
+    }
     if (audience === null && PROOF_TOOLS.has(name)) {
       return { result: { content: [{ type: 'text', text:
         `${name} needs an audience: a name the agents you check can verify is you, such as your own did:sigvara DID or `

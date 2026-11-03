@@ -16,6 +16,17 @@ before it signs. A failed read reaches the model without the RPC URL. `createTru
 `@sigvara/protocol-sdk/dist/mcp`, kept out of the main entry because they use Node's `readline`. No new
 dependency.
 
+### Added: `sigvara_verify_evidence`, and evidence roots in the SDK
+
+The trust server's seventh tool checks the payments behind an agent's score. It rebuilds their Merkle root
+from the oracle's `/evidence` list, matches it with the finalized root on chain (and a pending proposal's),
+and has the contract confirm up to the last 100 covered payments listed with `verifyEvidence`. Each payment
+row gives the outcome the root committed beside the one the oracle lists now. Offered when an evidence source is
+set (`SIGVARA_EVIDENCE_URL`; the primary operator by default on Arc testnet). The tree rules are exported
+from the main entry: `evidenceLeaf`, `evidenceLayers`, `evidenceRoot`, `evidenceProof`, `matchEvidenceRoot`
+and `outcomeCode`. They are held to the fixture the contract tests use. `SigvaraVerifier` gains
+`getEvidenceRoot` and `verifyEvidence`.
+
 ### Added: reads for a trust check on `SigvaraVerifier`
 
 `getEarnedScore`, `getPendingScore`, `getMinimumStake`, `getPendingWithdrawal`, `getSlashProposal` and

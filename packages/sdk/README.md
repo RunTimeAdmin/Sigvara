@@ -347,6 +347,7 @@ redacted the same way.
 | `sigvara_score` | The six factors, the earned total, the matured total a threshold is checked against, and a proposal waiting out its challenge window. |
 | `sigvara_stake` | Stake held, queued for withdrawal and when it can leave, the minimum, and the most recent slash proposal. |
 | `sigvara_identity` | Operator, status, registration time, the Ed25519 key and the DID document. |
+| `sigvara_verify_evidence` | Whether the payments the oracle lists are the ones its score committed to: the finalized root on chain rebuilt from them, each confirmed by the contract's `verifyEvidence`, and a pending proposal's root checked too. Only with an evidence source (`SIGVARA_EVIDENCE_URL`, the primary operator by default on Arc testnet). |
 | `sigvara_challenge` | A single-use challenge, naming you, to send to the party claiming to be the agent. Only with `SIGVARA_AUDIENCE`. |
 | `sigvara_verify_proof` | Checks its signature against the key on chain, spends the challenge, and reports standing as `sigvara_check_agent` does. Only with `SIGVARA_AUDIENCE`. |
 
@@ -370,8 +371,29 @@ that shares one server among several users should give each its own, so one cann
 "Slashable" is the stake held plus what is queued for withdrawal, because a slash takes both, and the
 share for the victim is a quarter of that (`SigvaraStaking.executeSlash`). It is what a slash could take, not a
 promise that one will be filed: the slashing committee files slashes and names the victim. Amounts are in the
-staking token's own decimals, read from the chain. The tools read the current state only. They do not check
-an agent's evidence against its on-chain root; sigvara.xyz/agents does that in the browser.
+staking token's own decimals, read from the chain. The tools read the current state only.
+
+`sigvara_verify_evidence` makes a score checkable without trusting the oracle. It fetches the payments the
+oracle's `/evidence` lists and rebuilds every leaf from its fields, never from the leaf the oracle serves. It
+then finds which of them the finalized root on chain covers: all of them, those settled by a cut-off when more
+came later, or with an outcome the payer signed afterwards read as not yet reported. The same readings are
+tried by sigvara.xyz/agents. Up to the last 100 covered payments listed are confirmed with the contract's
+`verifyEvidence`, and the root match covers the rest. The contract's answer is a consistency check: the proofs
+come from a tree whose root was just read from it, so a refusal means the root changed in between.
+
+A reproduced root shows the oracle scored on exactly the payments it lists, with the outcome each row gives as
+`committedOutcome`. An `outcome` that differs from it is one the payer signed after the root was made, and is the
+oracle's word until its signature is checked. Neither shows that a transaction happened as listed; read a
+payment's `txHash` on chain for that. A payment committed twice is flagged as `duplicatedPayments`.
+
+The leaf and tree rules are in `evidenceLeaf`, `evidenceRoot` and `matchEvidenceRoot`, exported from the main
+entry, and `test/evidence.test.ts` holds them to the fixture that CI holds to both `oracle/merkle.js` and the
+contract. The oracle's answer is untrusted:
+- It is read to at most 4 MB, with no redirects followed.
+- It is refused unless it names the agent asked about, or if it lists more than 2,000 payments.
+- Only the fields a leaf commits to, and the oracle's `outcomeSource` label from two fixed values, are returned.
+- Matching a long list tries fewer settlement cut-offs, newest first, so a hostile list costs about a second,
+  not a minute.
 
 The server is also a module, for a host that runs its own transport:
 

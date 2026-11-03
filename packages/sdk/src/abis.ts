@@ -15,6 +15,8 @@ export const REPUTATION_ABI = [
   'function getTotalScore(bytes32 didHash) view returns (uint8)',
   'function getEarnedScore(bytes32 didHash) view returns (uint8)',
   'function meetsThreshold(bytes32 didHash, uint8 threshold) view returns (bool)',
+  'function evidenceRoots(bytes32 didHash) view returns (bytes32)',
+  'function verifyEvidence(bytes32 didHash, bytes32 leaf, bytes32[] proof) view returns (bool)',
   'function getPendingScore(bytes32 didHash) view returns (tuple(tuple(uint8 feeScore, uint8 successScore, uint8 ageScore, uint8 externalScore, uint8 communityScore, uint8 propagationScore, uint256 lastUpdated) data, uint256 proposedAt, bool exists, bytes32 evidenceRoot, address proposer, uint256 finalizableAt))',
 ] as const;
 

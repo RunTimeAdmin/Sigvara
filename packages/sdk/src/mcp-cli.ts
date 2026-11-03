@@ -9,6 +9,8 @@
  *                        required on any other chain
  *   SIGVARA_AUDIENCE     who the agents you check sign for: your own did:sigvara DID, or the origin they
  *                        reach you at. Without it, sigvara_challenge and sigvara_verify_proof are off.
+ *   SIGVARA_EVIDENCE_URL an oracle serving GET /evidence/:didHash, for sigvara_verify_evidence; defaults to
+ *                        the primary operator on chain 5042002. Without one, that tool is off.
  *   SIGVARA_TIMEOUT_MS   per-read timeout, default 30000
  *
  * Logs go to stderr. stdout carries the protocol and nothing else.
@@ -36,6 +38,7 @@ const addresses = {
   staking: address('STAKING', ARC_TESTNET.addresses.staking),
 };
 const timeoutMs = env.SIGVARA_TIMEOUT_MS === undefined ? undefined : Number(env.SIGVARA_TIMEOUT_MS);
+const evidenceUrl = env.SIGVARA_EVIDENCE_URL ?? (onArcTestnet ? ARC_TESTNET.evidenceUrl : undefined);
 
 let server: TrustServer;
 try {
@@ -43,8 +46,9 @@ try {
     chainId, addresses, rpcUrl,
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
     ...(env.SIGVARA_AUDIENCE ? { audience: env.SIGVARA_AUDIENCE } : {}),
+    ...(evidenceUrl ? { evidenceUrl } : {}),
     // The RPC URL can hold a provider key, so it is redacted here as in what the model sees.
-    onError: (err) => process.stderr.write(`[sigvara-mcp] read failed: ${describeError(err, [rpcUrl])}\n`),
+    onError: (err) => process.stderr.write(`[sigvara-mcp] read failed: ${describeError(err, [rpcUrl, evidenceUrl ?? ''])}\n`),
   });
 } catch (err) {
   fail((err as Error).message);
