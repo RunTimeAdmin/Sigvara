@@ -80,6 +80,7 @@ services:
         [ "$$(git rev-parse HEAD)" = "$$SIGVARA_COMMIT" ] || { echo "[deploy] checkout is not $$SIGVARA_COMMIT, refusing to start" >&2; exit 1; }
         rm -rf /app/*.js
         cp /src/oracle/indexer.js /src/oracle/event-index.js /src/oracle/http-helpers.js /app/
+        cd /app
         echo "[deploy] running $$SIGVARA_COMMIT"
         exec node indexer.js
     volumes:

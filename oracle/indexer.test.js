@@ -217,3 +217,25 @@ test('indexer: refuses an RPC on another chain, and a bad URL without printing i
   assert.equal(plainHttp.output.includes(KEY), false);
   rpc.server.close();
 });
+
+// The VPS compose file copies the indexer out of a checkout and starts it. It started node in the
+// checkout's directory, where the copied files are not, and the container restarted in a loop on
+// MODULE_NOT_FOUND: the tests above run indexer.js directly and never saw it.
+test('docker-compose.indexer.vps.yml copies every file the indexer loads, and starts it where they are', () => {
+  const yml = fs.readFileSync(path.join(__dirname, '..', 'docker-compose.indexer.vps.yml'), 'utf8');
+  const cp = yml.match(/cp ((?:\/src\/oracle\/[\w.-]+\.js )+)\/app\//);
+  assert.ok(cp, 'the compose file copies the indexer into /app');
+  const copied = new Set(cp[1].trim().split(/\s+/).map((p) => path.basename(p)));
+  const loads = new Set(), queue = ['indexer.js'];
+  while (queue.length) {
+    const f = queue.pop();
+    if (loads.has(f)) continue;
+    loads.add(f);
+    for (const m of fs.readFileSync(path.join(__dirname, f), 'utf8').matchAll(/require\('\.\/([\w.-]+)'\)/g)) {
+      queue.push(m[1].endsWith('.js') ? m[1] : `${m[1]}.js`);
+    }
+  }
+  for (const f of loads) assert.ok(copied.has(f), `indexer.js loads ${f}, which the compose file does not copy`);
+  const after = yml.slice(yml.indexOf(cp[0]) + cp[0].length);
+  assert.match(after, /^\s*cd \/app\n[\s\S]*?exec node indexer\.js/, 'node starts in /app, where the files were copied');
+});
