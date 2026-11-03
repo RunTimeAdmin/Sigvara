@@ -366,5 +366,25 @@ not every score.
 wrongly. The README, the whitepaper, the security review, oracle/README.md and the epochs and
 operators pages now say what happens.
 
-Closing the gap would mean either the primary comparing what the checker proposes, or the checker
-leaving an empty slot to the primary for an epoch before it proposes. Neither has been decided.
+**Why the slot was empty.** The checker finalized it. Of the 35 checker proposals, 33 came right
+after the checker had finalized that agent's previous score itself, and the checker made 167 of the
+257 finalizations on record against the primary's 90. Both operators run hourly within a minute of
+each other. The primary finalizes and proposes again in the same epoch, but when its epoch fell just
+before a window closed it skipped, the checker's fell just after and finalized, and the next epoch
+was a race to the empty slot that the checker sometimes won.
+
+**Closed in code.** The checker now leaves both to the primary until the primary is late:
+- It finalizes only a proposal still unfinalized `CHECKER_GRACE_MINUTES` after its window.
+- It proposes only into a slot empty for that long, counted from the last finalized score,
+  registration for an agent never scored, or the first epoch the checker found the slot empty,
+  whichever is latest. The last matters because a committee rejection deletes a proposal without
+  moving the other two. A slot held by a proposer that lost its authority is covered at once, and
+  so is one the checker emptied by finalizing for a primary already a grace late.
+
+The default is twice the checker's epoch, two hours on testnet, and the checker refuses to start with
+less than one epoch (`decideCheckerAction` and `checkerGraceMs` in `oracle/epoch-policy.js`). In normal
+running the primary now finalizes and proposes every score, and the checker compares each one. The
+checker proposes only for a primary that has gone quiet, which is the failover it was meant to be.
+`sigvara_oracle_checker_deferred_total{action}` counts what it left to the primary. Five end-to-end tests
+in `oracle/robustness.test.js` fail on the code before this change. When the change is deployed on both
+operators, this entry records the date, and the checker's count should stay at 35 while the primary runs.

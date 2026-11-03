@@ -42,6 +42,7 @@
 //     challengeWindow: seconds (default 21600)
 //     feeGating:       true to configure the epoch fee; epochFee: its size, as a decimal string
 //     pending:         { "<didhash>": { exists, proposedAt, finalizableAt, data, evidenceRoot, proposerDead } }  (default none)
+//     reputation:      { "<didhash>": { lastUpdated } } when the agent's score was last finalized (default never)
 //                      finalizableAt: the deadline the contract fixed when the proposal was made; leave it out (or 0)
 //                      for a proposal judged against the live challengeWindow
 //                      proposerDead: the proposer has lost its authority, so finalize reverts with
@@ -156,6 +157,11 @@ const chain = {
   feeGatingConfigured: () => !!world().feeGating,
   getEpochFee: async () => BigInt(world().epochFee ?? 0),
   getPendingScore: async (didHash) => world().pending?.[didHash] ?? { exists: false },
+  // The finalized score; lastUpdated is 0 until one is finalized, as on chain.
+  getReputationData: async (didHash) => {
+    if (world().reputation?.[didHash] === 'throw') throw new Error('stub: reputation read failed');
+    return { lastUpdated: 0, ...(world().reputation?.[didHash] ?? {}) };
+  },
   isCovered: async (didHash) => world().covered?.[didHash] ?? true,
   isBonded: async (didHash) => world().bonded?.[didHash] ?? true,
   getReviewerStanding: async (address) => {

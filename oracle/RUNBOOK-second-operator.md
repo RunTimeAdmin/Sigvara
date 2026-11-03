@@ -354,6 +354,7 @@ wrong:
 ORACLE_MODE=checker
 DIVERGENCE_TOLERANCE=3          # validated at startup; max 10
 EPOCH_HOURS=1                   # MUST be below half the challenge window (6h)
+CHECKER_GRACE_MINUTES=120       # above the PRIMARY's epoch; default twice EPOCH_HOURS, refused below one epoch
 FEE_REGISTRY_ADDRESS=           # MUST be empty
 RPC_URL=https://rpc.quicknode.testnet.arc.io     # NOT the primary's provider
 ORACLE_PRIVATE_KEY=<CHECKER_KEY>
@@ -488,10 +489,14 @@ curl -s http://127.0.0.1:3031/divergence
 `seesProposals` is `false`, `EPOCH_HOURS` is too long and this checker is not actually
 auditing anything, whatever the empty divergence list suggests.
 
-Then leave it for one challenge window plus one epoch (about 7 hours on Arc testnet: the checker only
-finalizes at an epoch that starts after the window has run out) and check that
-`sigvara_oracle_finalize_total{result="success"}` on `/metrics` is climbing. A checker that agrees with everything and finalizes
-nothing is not reaching the finalize branch at all.
+Then leave it for one challenge window plus one epoch (about 7 hours on Arc testnet) and check that
+`sigvara_oracle_checker_comparisons_total{verdict="agreed"}` on `/metrics` is climbing while
+`sigvara_oracle_finalize_total{result="success"}` and `sigvara_oracle_propose_total{result="success"}` stay
+flat: the checker compares each proposal and leaves the finalize and the next proposal to the primary.
+`sigvara_oracle_checker_deferred_total{action="finalize"}` climbs only when a checker epoch lands between a
+window closing and the primary's finalize, so a healthy checker can hold it at zero. The finalize and propose
+counts climb only when the primary is `CHECKER_GRACE_MINUTES` late. A checker whose agreed count stays at
+zero is not comparing anything.
 
 ## 9. When a divergence fires
 
