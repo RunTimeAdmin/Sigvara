@@ -429,7 +429,7 @@ below are done is `the registration's agentWallet is 0x18CB...4811, not the publ
      `docker compose run --rm -e SIGNER_ARGS="new-keystore /secrets-rw/keystore.json" -v "$PWD/secrets:/secrets-rw" signer`.
      It prints only the new address, writes the file 0400, and refuses to overwrite one.
    - Let only the publisher's host reach the port: `ufw allow from 72.62.41.138 to any port 28600 proto tcp`,
-     with nothing else allowing it. The signer also drops any other connection itself.
+     with nothing else allowing it. A provider firewall in front of the host must allow it too: Hostinger's VPS firewall (hPanel, Security, Firewall) drops what its group does not list before ufw sees it, so add an accept rule for TCP 28600 from `72.62.41.138` to the group `packrai-vps` is in, which `mcpshield-vps` shares (nothing listens on 28600 there). The signer also drops any other connection itself.
    - Start it, and check its log names that address and `72.62.41.138` as the only caller. It
      signs nothing in its first minute.
    - On the publisher's host, set `PUBLISHER_ADDRESS` to that address, `PUBLISH_SIGNER_URL` to
@@ -515,3 +515,21 @@ if docker volume inspect "$pvol" >/dev/null 2>&1; then
   find "$out" -name 'publisher-*' -mtime +14 -delete
 fi
 ```
+
+**Where the rollout stands**, on Arc testnet as of 3 November 2026 (each step David's go):
+
+- The backup above is in the primary's script, and a test run passed at 21:14 UTC.
+- Step 1: the signer runs on `packrai-vps` from `bef1068`, as `0x787f30E64d212A1d90174A832a79489dca44FE92`,
+  funded with 20 testnet USDC. The publisher reached it by 22:07 UTC, once both firewalls allowed the port.
+- Step 2: `setAgentWallet(897764)` went out in transaction
+  `0xa5364cc4a18474cfade47120813a3c0c2be8cc694fe821ceaeb9e9b88ad22311` (block 70587267), after a simulation
+  of the same call with a real signature from the signer. `getAgentWallet(897764)` returns the publisher.
+- Step 3, begun: the simulation's solo agent (`0x9d7181C8676fd40E4B31510dC0E573A0C0C2fa11`) registered ERC-8004
+  agent 897766 and set its `sigvara` key in its own transaction,
+  `0xd0a909563bac76257223209a89a760510f78b64ac8f77707f79b1f036706941d` (block 70588560). Both operators stored
+  the claim at their 23:06 UTC epoch. The publisher has run with `PUBLISH_MODE=live` and
+  `PUBLISH_ALLOW_AGENT_IDS=897766` since 22:26 UTC, and its first run posted the agent's spendable score of 3 in
+  `0xcb1fe00347d1fc852340744d4628e7dff7def6dc7f54d8b478cd209c793f7c0c` (block 70589310). `getSummary` returns a
+  count of 1 and 3. The revoke half comes when that agent's score next changes; step 4 waits for it.
+- An agent linked during the day is first posted at the next daily refresh, a switch of mode, or its next score
+  event: finding a link does not queue the agent. The switch to live mode is what posted this one at once.

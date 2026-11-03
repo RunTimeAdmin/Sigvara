@@ -508,7 +508,7 @@ agent id. `oracle/external.js` does exactly this:
 3. Take `value / 10^valueDecimals` and the lowercased `tag1`. Keep only recognized tags:
    `starred`, `successrate` and `uptime` (examples in the ERC-8004 spec and its guide),
    `quality`, `trustscore`, `reliability`, `accuracy` and `credit` are divided by 100,
-   `reachable` and `win-rate` are used as is, and `rating`, `e2e-test` and `stars` are
+   `reachable` (also an example in the spec and its guide) and `win-rate` are used as is, and `rating`, `e2e-test` and `stars` are
    divided by 5. Each is clamped to 0..1. Every other tag is ignored, including the guide's
    `ownerVerified`, `responseTime`, `blocktimeFreshness`, `revenues` and `tradingYield`.
 4. Each client with a kept rating is one reviewer, rated by the mean of its kept ratings.
