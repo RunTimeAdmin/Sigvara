@@ -1,7 +1,7 @@
 # ADR 0008: Publish finalized scores to ERC-8004 as feedback
 
 **Status:** Accepted · 2026-11-03, with David's decisions below. Built in `oracle/publisher.js`,
-running in shadow mode first; nothing posts until the rollout gates are met.
+which ran in shadow mode first and since 3 November 2026 posts on testnet for one agent, as the end-to-end check ([Rollout](#rollout)).
 
 ## Context
 
@@ -78,7 +78,7 @@ The tag is `sigvara`. It is safe for two independent reasons, and both must stay
    Sigvara agent, paid the rated agent and passes the bond, tenure and score rules. The publisher
    is none of these, and must never be registered as a Sigvara agent.
 
-The `sigvara` metadata key that [pull request #173](https://github.com/RunTimeAdmin/Sigvara/pull/173) proposes for links is a different namespace, in
+The `sigvara` metadata key that [pull request #173](https://github.com/RunTimeAdmin/Sigvara/pull/173) added for links is a different namespace, in
 the Identity Registry rather than the Reputation Registry. Reusing the word is deliberate: both
 mean "this is Sigvara's".
 
@@ -97,7 +97,7 @@ operator wallet.
 - **Not the owner of what it rates.** It owns no ERC-8004 agent and is approved for none, so the
   spec's self-rating rule never applies. The publisher skips Sigvara's own registration.
 - **Custody.** The key holds only gas, and it is not on the publisher's host. The publisher asks
-  an isolated remote signer on a separate host, backed by a KMS or HSM, to sign each transaction,
+  an isolated remote signer on a separate host to sign each transaction (backed by a KMS or HSM on mainnet; on testnet `oracle/signer.js` with an encrypted keystore, decision 4),
   so a compromised publisher host can ask for signatures while it is compromised but cannot take
   the key away. The gas it may spend is capped. It is replaced like the signer key in
   [ADR 0004](0004-operator-custody.md), without touching anything of value: the registration's
@@ -139,7 +139,7 @@ decimals). 100 linked agents updating every day would cost under a dollar a day.
   reads the publisher's own feedback first, so it posts without revoking twice.
 - History is kept: revoked feedback stays readable, and the publisher never deletes anything.
 - The publisher refuses to send when its balance is below a floor, caps the fee as the oracle does
-  (`MAX_FEE_GWEI`), and caps the posts per run.
+  (`PUBLISH_MAX_FEE_GWEI`), and caps the posts per run.
 - Publishing is outside scoring. If the publisher stops, scores are still proposed, checked and
   finalized; catalogs just see stale Sigvara feedback.
 
@@ -150,17 +150,17 @@ key of [pull request #173](https://github.com/RunTimeAdmin/Sigvara/pull/173), li
 operators since 3 November 2026), resolved as of the block the score is read at, with the same
 rules and the same code the oracle uses. A link made with `POST /link` lives only in an
 oracle's state file, and the publisher does not read oracle state, so those agents get no
-feedback. On 3 November 2026 no agent was linked either way (0 links on both operators' state
-files), so the publisher would post nothing today.
+feedback. When this was written on 3 November 2026 no agent was linked either way (0 links on both
+operators' state files). Later that day the simulation's solo agent linked itself as ERC-8004 agent 897766, the first link made on chain.
 
 ### Rollout
 
 1. **Shadow mode now, on testnet.** The publisher runs, reads everything it would read, and logs
    and records each post it would make, with no key and no transaction.
 2. **Posting, once three gates are met:** Sigvara's registration is on chain (done: agent 897764);
-   `getAgentWallet(897764)` is the publisher's address, which the publisher checks before every
+   `getAgentWallet(897764)` is the publisher's address (done: block 70587267, 3 November 2026), which the publisher checks before every
    run; and one successful end-to-end cycle on testnet, a revoke and a post on one agent, read
-   back with `getSummary`.
+   back with `getSummary` (begun on 3 November 2026: the first post, to agent 897766 in block 70589310; the revoke comes when its score next changes).
 3. **Mainnet** stays behind the audit and the launch gates, like the rest of the protocol.
 
 ## Options considered
@@ -196,4 +196,4 @@ files), so the publisher would post nothing today.
    changes without an event.
 3. **Revoke-and-post**, keeping history and retrying after a partial failure.
 4. **A dedicated publisher EOA** whose key is held by an isolated remote signer, backed by a KMS or
-   HSM, on a separate host, with capped gas and rotation through `setAgentWallet`.
+   HSM, on a separate host, with capped gas and rotation through `setAgentWallet`. For testnet, David then chose a software key in `oracle/signer.js`, an encrypted keystore on `packrai-vps` (3 November 2026); mainnet still needs the KMS or HSM.

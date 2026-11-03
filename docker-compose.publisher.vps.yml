@@ -12,8 +12,8 @@
 # same key races the first for nonces, and one with another key is a second, unnamed provider.
 #
 # It holds no private key. In shadow mode (the default) it signs nothing at all; in live mode it
-# asks the remote signer at PUBLISH_SIGNER_URL, on another host, which keeps the key in a KMS or
-# HSM. A compromised publisher host can ask for signatures while it is compromised but cannot
+# asks the remote signer at PUBLISH_SIGNER_URL, on another host (oracle/signer.js; on testnet an
+# encrypted keystore, on mainnet a KMS or HSM). A compromised publisher host can ask for signatures while it is compromised but cannot
 # take the key away. The state volume holds what it has read and posted. Its scan positions can
 # be rebuilt from the chain; its record of which 8004 agent each score went to cannot, and without
 # it a score left on an 8004 agent that is no longer linked stays there. Back the volume up.
