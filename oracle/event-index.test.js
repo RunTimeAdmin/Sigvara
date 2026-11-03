@@ -144,7 +144,5 @@ test('selectLogs and eventsBody: every filter applies, and the body says the blo
 test('redact: the RPC URL, its key and any other URL are cut out', () => {
   const url = 'https://arc-testnet.g.alchemy.com/v2/abcdefghijklmnopqrstu';
   const out = ix.redact(`fetch ${url} failed; key abcdefghijklmnopqrstu; see https://example.com/x`, [url, 'abcdefghijklmnopqrstu']);
-  assert.equal(out.includes('abcdefghijklmnopqrstu'), false);
-  assert.equal(out.includes('example.com'), false);
-  assert.match(out, /<secret>/);
+  assert.equal(out, 'fetch <secret> failed; key <secret>; see <url>');
 });
