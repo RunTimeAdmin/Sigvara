@@ -3,10 +3,12 @@
 // externalScore — the ERC-8004 cross-protocol trust factor (max 25).
 //
 // ERC-8004's Reputation Registry stores only raw, signed client feedback
-// (int128 value + free-text tag) and leaves scoring off-chain. In the wild
-// every client invents its own tag and scale (quality=85 on 0-100, win-rate=0.5
-// on 0-1, glicko2-mu=1500, e2e-test=4.5 on 0-5), so the registry's own average
-// is meaningless. This module reads an agent's 8004 feedback and normalizes the
+// (int128 value + free-text tag) and leaves scoring off-chain. The spec and its
+// best-practices guide suggest tags (starred on 0-100, uptime and successRate as
+// percentages, reachable as 0 or 1), but nothing enforces them, and in the wild
+// clients also invent their own (quality=85 on 0-100, win-rate=0.5 on 0-1,
+// glicko2-mu=1500, e2e-test=4.5 on 0-5), so the registry's own average is
+// meaningless. This module reads an agent's 8004 feedback and normalizes the
 // dimensions it recognizes into a single 0-25 factor — the opinionated judgment
 // the standard deliberately omits.
 //
@@ -40,8 +42,19 @@ const READ_TIMEOUT_MS = 8000;
 // Map a recognized feedback tag to a 0..1 rating. Unrecognized tags (bespoke
 // rating systems, raw counts) are excluded rather than guessed, so the score
 // stays meaningful. Extend this map on purpose, never blindly.
+//
+// The first four are the tags the ERC-8004 spec and erc-8004/best-practices
+// (Reputation.md) give as examples, lowercased as every tag is here. `value` has
+// already been divided by 10^valueDecimals, so uptime 9977 with 2 decimals
+// arrives as 99.77. The guide's other examples are left out: ownerVerified says
+// whether the agent's owner controls an endpoint, not how good the agent is, and
+// responseTime, blocktimeFreshness, revenues and tradingYield have no fixed scale.
 const clamp01 = (x) => Math.max(0, Math.min(1, x));
 const TAG_NORMALIZERS = {
+  starred:     (v) => clamp01(v / 100),
+  successrate: (v) => clamp01(v / 100),
+  uptime:      (v) => clamp01(v / 100),
+  reachable:   (v) => clamp01(v),
   quality:     (v) => clamp01(v / 100),
   trustscore:  (v) => clamp01(v / 100),
   reliability: (v) => clamp01(v / 100),
