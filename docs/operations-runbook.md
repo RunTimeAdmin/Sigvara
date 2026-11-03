@@ -421,9 +421,10 @@ below are done is `the registration's agentWallet is 0x18CB...4811, not the publ
 
 1. Set up the signer on `packrai-vps`, in `/docker/sigvara-signer`, from
    `docker-compose.signer.vps.yml` and `oracle/.env.signer.example`:
-   - Make `secrets/` with `umask 077`, owned by uid 1000 (the container's `node` user) with mode
-     0700, and in it `password` and `hmac-secret` (each `openssl rand -hex 32`), owned by uid 1000
-     with mode 0400. The signer refuses a secret anyone else can read.
+   - Make `secrets/` with `umask 077`, owned by uid 10001 (the user the signer runs as; no account
+     on the host has it, where uid 1000 is `ubuntu`) with mode 0700, and in it `password` and
+     `hmac-secret` (each `openssl rand -hex 32`), owned by uid 10001 with mode 0400. The signer
+     refuses a secret anyone else can read.
    - Write `keystore.json` once with
      `docker compose run --rm -e SIGNER_ARGS="new-keystore /secrets-rw/keystore.json" -v "$PWD/secrets:/secrets-rw" signer`.
      It prints only the new address, writes the file 0400, and refuses to overwrite one.
