@@ -331,8 +331,10 @@ function pruneAgent(didHash) {
   knownAgents.delete(didHash);
 }
 
-async function getAgentInfo(didHash) {
-  const id = await readWithBackoff('getIdentity', () => identityContract.getIdentity(didHash));
+// As of `blockTag` when given, else the latest block.
+async function getAgentInfo(didHash, blockTag) {
+  const at = blockTag === undefined ? [] : [{ blockTag }];
+  const id = await readWithBackoff('getIdentity', () => identityContract.getIdentity(didHash, ...at));
   return {
     operator: id.operator,
     // The address payments must be made to for an attestation to count. It is

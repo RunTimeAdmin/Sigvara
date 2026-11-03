@@ -87,6 +87,9 @@ let scanState = null;
 // Where the ERC-20 Transfer scan got to. Persisted for the same reason: a restart that
 // replayed from FROM_BLOCK would grow with the chain and eventually never finish.
 let paymentScanState = null;
+// Where the ERC-8004 link scan got to, and the links it found (link-claims.js). These are
+// read from chain, but a restart that lost them would rescan from EXTERNAL_LINK_FROM_BLOCK.
+let linkScanState = null;
 
 /**
  * Clear `count` flags from an agent, and report what actually changed.
@@ -246,6 +249,7 @@ function parseState(parsed) {
     divergences: new Map(),
     scanState: parsed.scanState || null,
     paymentScanState: parsed.paymentScanState || null,
+    linkScanState: parsed.linkScanState || null,
     chainId: parsed.chainId ?? null,
   };
 
@@ -344,6 +348,7 @@ function applyState(next) {
   for (const [k, v] of next.divergences) divergences.set(k, v);
   scanState = next.scanState;
   paymentScanState = next.paymentScanState;
+  linkScanState = next.linkScanState;
   stateChainId = next.chainId;
 }
 
@@ -519,6 +524,7 @@ function persist() {
         divergences: Object.fromEntries(divergences),
         scanState,
         paymentScanState,
+        linkScanState,
         savedAt: new Date().toISOString(),
       })) writeAll(fd, piece);
       // Flush before the rename. The rename is atomic, so a crash can never leave a
@@ -909,6 +915,9 @@ function setScanState(state) { scanState = state; }
 function getPaymentScanState() { return paymentScanState; }
 function setPaymentScanState(state) { paymentScanState = state; }
 
+function getLinkScanState() { return linkScanState; }
+function setLinkScanState(state) { linkScanState = state; }
+
 function isStatePathWritable() {
   try {
     fs.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
@@ -960,6 +969,8 @@ module.exports = {
   setScanState,
   getPaymentScanState,
   setPaymentScanState,
+  getLinkScanState,
+  setLinkScanState,
   getPaymentEvents,
   allPaymentEvents,
   paymentVolume,

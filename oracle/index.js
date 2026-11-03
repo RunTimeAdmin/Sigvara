@@ -17,6 +17,7 @@ require('./config').requireValidNumericConfig('oracle');
 const http = require('http');
 const chain = require('./chain');
 const external = require('./external');
+const linkClaims = require('./link-claims');
 const reviewers = require('./reviewers');
 const { computeScore } = require('./scoring');
 const {
@@ -112,6 +113,11 @@ const cfg = {
   externalRpc:        process.env.EXTERNAL_RPC || '',
   externalIdentity:   process.env.EXTERNAL_IDENTITY_ADDRESS || '',
   externalReputation: process.env.EXTERNAL_REPUTATION_ADDRESS || '',
+  // Where the scan for links made on chain starts (link-claims.js). Unset leaves POST /link as
+  // the only way to link. Every operator must use the same block, or one finds a link the
+  // other never sees.
+  externalLinkFromBlock: String(process.env.EXTERNAL_LINK_FROM_BLOCK ?? '').trim() === ''
+    ? null : Number(process.env.EXTERNAL_LINK_FROM_BLOCK),
   // Wallets that fund everyone, such as a faucet or an exchange, so a reviewer funded by one
   // is not clustered with every other (reviewers.js). Checked at startup.
   publicFunders:      reviewers.parsePublicFunders(process.env.EXTERNAL_PUBLIC_FUNDERS),
@@ -264,6 +270,8 @@ const {
   setScanState,
   getPaymentScanState,
   setPaymentScanState,
+  getLinkScanState,
+  setLinkScanState,
   isCredited,
   getLastPersist,
   getPaymentEvents,
@@ -381,18 +389,25 @@ async function payerScoresFor(didHash) {
  * and only evidence settled by then. A checker auditing a proposal made the same day reads
  * exactly what its primary read. The feedback itself is read at that block only when the
  * ERC-8004 registry is on this chain; on another chain it is read at its latest block.
+ *
+ * Returns { score, agentId }: the factor, and the ERC-8004 agent it was read from (null when none).
  */
 async function externalScoreOf(didHash, { operator, agentAddress }, nowMs, events = getPaymentEvents(didHash)) {
-  const linkedId = links.get(didHash);
-  if (!external.configured() || linkedId === undefined) return 0;
+  if (!external.configured() || !hasLink(didHash)) return { score: 0, agentId: null };
   const snapshotSec = reviewers.snapshotOf(Math.floor(nowMs / 1000));
   const snapshotBlock = await chain.blockAtOrBefore(snapshotSec);
-  const sameChain = verifiedChainId !== null && external.chainState().chainId === verifiedChainId;
-  return external.externalScoreFor(linkedId, operator, async (rows) => {
+  const sameChain = externalOnThisChain();
+  // The operator as of the snapshot as well, when the registry's blocks are this chain's. An agent
+  // that changed operator since would otherwise have its 8004 agent's owner tested against one
+  // wallet by the primary and another by a checker that audits after the change.
+  const snapshotOperator = sameChain ? (await chain.getAgentInfo(didHash, snapshotBlock)).operator : operator;
+  const linkedId = await linkedAgentId(didHash, snapshotOperator, sameChain ? snapshotBlock : undefined);
+  if (linkedId === undefined) return { score: 0, agentId: null };
+  const score = await external.externalScoreFor(linkedId, snapshotOperator, async (rows) => {
     const result = await reviewers.scoreFeedback(
       rows,
       {
-        agent: { operator, agentAddress },
+        agent: { operator: snapshotOperator, agentAddress },
         events: events.filter((e) => e.ts <= snapshotSec * 1000),
         nowMs: snapshotSec * 1000,
       },
@@ -407,6 +422,178 @@ async function externalScoreOf(didHash, { operator, agentAddress }, nowMs, event
     if (rows.length) console.log(`[oracle]   ${didHash.slice(0, 10)}… external: ${reviewers.describe(result)}`);
     return result.score;
   }, sameChain ? snapshotBlock : undefined);
+  return { score, agentId: linkedId };
+}
+
+// ---- Links made on chain (link-claims.js) ------------------------------------
+
+// Whether the ERC-8004 registry is on the chain this oracle scores, so that its reads can be
+// pinned to this chain's snapshot block.
+function externalOnThisChain() {
+  return verifiedChainId !== null && external.chainState().chainId === verifiedChainId;
+}
+
+// Whether EXTERNAL_LINK_FROM_BLOCK asks for links made on chain to be read.
+function linksOnChain() {
+  return external.configured() && cfg.externalLinkFromBlock !== null;
+}
+
+// Whether they are read. Only when the registry is on this chain: there every read is pinned to a
+// block both operators share, which is what makes them agree. Elsewhere POST /link is the only way.
+function onChainLinks() {
+  return linksOnChain() && externalOnThisChain();
+}
+
+function hasLink(didHash) {
+  return links.has(didHash)
+    || (onChainLinks() && linkClaims.candidatesAt(getLinkScanState()?.claims, didHash).length > 0);
+}
+
+/**
+ * The ERC-8004 agent `didHash` is linked to, as of `blockTag` when given: the newest claim made on
+ * chain that still holds, or else the link made with POST /link, or undefined. A claim holds while
+ * the 8004 agent still names this didHash and is owned by its operator, so clearing the key or
+ * moving the NFT undoes the link, with nothing to tell the oracle.
+ */
+async function linkedAgentId(didHash, operator, blockTag) {
+  if (onChainLinks()) {
+    for (const agentId of linkClaims.candidatesAt(getLinkScanState()?.claims, didHash, blockTag)) {
+      try {
+        const holds = await chain.readWithBackoff('link claim', () => external.claimHolds(agentId, linkClaims.LINK_KEY, didHash, operator, blockTag));
+        if (holds) return agentId;
+      } catch (err) {
+        // A node that could not answer: the agent is skipped this epoch. Anything else, such as an
+        // agent id the registry does not have, is a claim that does not hold.
+        if (chain.isTransientReadError(err)) throw err;
+      }
+    }
+  }
+  return links.get(didHash);
+}
+
+/**
+ * Whether a claim was made by the operator of the Sigvara agent it names: as of the log's block,
+ * the 8004 agent still names the didHash and is owned by that operator, and it was owned by the
+ * same operator in the block before. Without the second test, a contract could mint an 8004 agent,
+ * set the key to someone else's didHash and give the NFT to that agent's operator, all in one
+ * transaction, and the claim would hold.
+ *
+ * The reads stop at the first one that fails, and `cache` keeps them for one scan, so a burst of
+ * claims from one 8004 agent in one block costs one ownership read, not one each.
+ */
+async function claimMadeByOperator({ didHash, agentId, block }, cache) {
+  const once = (key, fn) => {
+    if (!cache.has(key)) cache.set(key, fn());
+    return cache.get(key);
+  };
+  try {
+    const { operator } = await once(`operator ${didHash} ${block}`, () => chain.getAgentInfo(didHash, block));
+    if (/^0x0{40}$/i.test(String(operator))) return false;
+    const before = await once(`owner ${agentId} ${block - 1}`,
+      () => chain.readWithBackoff('link owner', () => external.ownerAt(agentId, block - 1)));
+    if (before.toLowerCase() !== String(operator).toLowerCase()) return false;
+    return await chain.readWithBackoff('link claim', () => external.claimHolds(agentId, linkClaims.LINK_KEY, didHash, operator, block));
+  } catch (err) {
+    // A node that could not answer stops the scan, which resumes at this log next epoch. Anything
+    // else, such as an 8004 agent that did not exist in the block before, is not the operator's claim.
+    if (chain.isTransientReadError(err)) throw err;
+    return false;
+  }
+}
+
+// A span the node refuses for its size or does not answer in time is halved. A rate limit is
+// not: a smaller span would only be throttled the same way.
+const spanTooBig = (err) => {
+  const msg = String((err && err.message) || err);
+  return !/rate limit|429|too many requests/i.test(msg) && /more than \d+|too many results|response size|block range|timeout/i.test(msg);
+};
+// Retried in place, like any read, except a timeout, which halving the span answers better.
+const retryLinkRead = (err) => chain.isTransientReadError(err) && !/timeout/i.test(String((err && err.message) || err));
+
+/**
+ * Reads the `sigvara` MetadataSet logs in blocks [from, to] a span at a time, oldest first, and
+ * hands each span's logs to `onLogs(logs, end)`. Paced like the registry scan, so a long catch-up
+ * is not a burst.
+ */
+async function eachLinkSpan(from, to, onLogs) {
+  let start = from;
+  let span = cfg.logChunkSize;
+  while (start <= to) {
+    const end = Math.min(start + span - 1, to);
+    let logs;
+    try {
+      logs = await chain.readWithBackoff('link logs', () => external.readLinkLogs(linkClaims.LINK_KEY, start, end), 4, retryLinkRead);
+    } catch (err) {
+      if (end > start && spanTooBig(err)) { span = Math.ceil((end - start + 1) / 2); continue; }
+      throw err;
+    }
+    await onLogs(logs, end);
+    start = end + 1;
+    span = cfg.logChunkSize;
+    if (start <= to) await new Promise((r) => setTimeout(r, 400));
+  }
+}
+
+/**
+ * Reads the MetadataSet logs for the `sigvara` key since the last scan, and keeps the claims
+ * made by the operator of the Sigvara agent they name (claimMadeByOperator).
+ *
+ * The operator test is made here, as of the log's block, and not only at scoring: anyone can set
+ * `sigvara` on an 8004 agent of their own, and enough such claims on one didHash would push its
+ * operator's out of the list. Read as of the log's block, every operator decides it the same way.
+ *
+ * Anyone can also post such logs in bulk to slow the scan. One costs no read unless it names a
+ * registered agent, and the checkpoint moves after every log, so a scan cut short resumes where it
+ * stopped. What a scan that falls behind costs is decided in the epoch (uncheckedLinkAgents).
+ *
+ * `agents` is what the registry scan found. This scan reads no further than that one did, so an
+ * agent registered after it is never mistaken for one that does not exist.
+ */
+async function runLinkScan(agents) {
+  const known = new Set(agents.map((a) => String(a.didHash).toLowerCase()));
+  const state = getLinkScanState() ?? { cursor: null, claims: {} };
+  if (!state.cursor) state.cursor = { block: cfg.externalLinkFromBlock, logIndex: 0 };
+  const head = await chain.readWithBackoff('head', () => external.latestBlock());
+  const to = Math.min(head, chain.getScanState()?.lastScannedBlock ?? head);
+  const cache = new Map();
+  let found = 0;
+  try {
+    await eachLinkSpan(state.cursor.block, to, async (logs, end) => {
+      for (const log of logs) {
+        if (linkClaims.isBefore(log, state.cursor)) continue;
+        const claim = linkClaims.claimFromLog(log);
+        if (claim && known.has(claim.didHash) && await claimMadeByOperator(claim, cache)) {
+          linkClaims.addClaim(state.claims, claim);
+          found++;
+        }
+        state.cursor = { block: log.blockNumber, logIndex: log.logIndex + 1 };
+      }
+      state.cursor = { block: end + 1, logIndex: 0 };
+    });
+  } finally {
+    setLinkScanState(state);
+    persistState();
+  }
+  if (found) console.log(`[oracle] ERC-8004 link scan: ${found} link(s) made on chain`);
+}
+
+/**
+ * The didHashes named by `sigvara` logs that the scan has not checked yet, up to `block`. Listing
+ * them takes the logs alone and no read per log, so it answers when the checks cannot keep up.
+ * Only these agents can hold a link this oracle has not found and the other operator has; every
+ * other agent's links up to `block` are all known. Throws when the logs cannot be read.
+ */
+async function uncheckedLinkAgents(block) {
+  const cursor = getLinkScanState()?.cursor ?? { block: cfg.externalLinkFromBlock, logIndex: 0 };
+  const named = new Set();
+  await eachLinkSpan(cursor.block, block, async (logs) => {
+    for (const log of logs) {
+      if (linkClaims.isBefore(log, cursor)) continue;
+      const claim = linkClaims.claimFromLog(log);
+      if (claim) named.add(claim.didHash);
+    }
+  });
+  return named;
 }
 
 /**
@@ -749,6 +936,20 @@ async function runEpochInner() {
     metrics.inc('paymentScanErrors');
     console.error('[oracle] payment scan failed:', err.message);
   }
+  // Likewise the links made on chain since the last scan. A failure is logged here; what it
+  // costs is decided once the chain's clock is known, below.
+  if (linksOnChain()) {
+    if (external.chainState().chainId === null) await external.refreshChainId();
+    if (onChainLinks()) {
+      try {
+        await runLinkScan(agents);
+      } catch (err) {
+        console.error('[oracle] ERC-8004 link scan failed:', err.message);
+      }
+    } else if (external.chainState().chainId !== null) {
+      console.error('[oracle] EXTERNAL_LINK_FROM_BLOCK is set, but the ERC-8004 registry is on another chain; links made on chain are read only from a registry on this one');
+    }
+  }
   let proposed = 0;
   let finalized = 0;
   let diverged = 0;
@@ -770,6 +971,34 @@ async function runEpochInner() {
   // stale during a long epoch only errs toward 'skip', never toward a
   // premature finalize that would revert.
   const chainNow = await chain.getLatestBlockTimestamp();
+
+  // A link made on chain applies from the first snapshot after it, so two operators agree about
+  // it once both have scanned past that snapshot. One that has not may be missing a link the
+  // other holds, and would score that agent differently: it scores nothing this epoch rather
+  // than propose or dispute on a number it may have wrong.
+  // The same when the registry's chain cannot be read at all: this oracle cannot tell whether it
+  // is this one, and so whether the other operator is reading links it is not.
+  let linksUnchecked = new Set();
+  if (linksOnChain() && external.chainState().chainId === null) {
+    console.error("[oracle] the ERC-8004 registry's chain could not be read, so neither could its links; scoring nothing this epoch");
+    metrics.inc('epochsFailed');
+    return;
+  }
+  if (onChainLinks()) {
+    const snapshotBlock = await chain.blockAtOrBefore(reviewers.snapshotOf(chainNow));
+    if (!linkClaims.scanCovers(getLinkScanState()?.cursor ?? null, cfg.externalLinkFromBlock, snapshotBlock)) {
+      // Behind. Only the agents its unchecked logs name are at risk, so those are skipped and the
+      // rest are scored. If even the logs cannot be listed, any agent could be, and none is scored.
+      try {
+        linksUnchecked = await uncheckedLinkAgents(snapshotBlock);
+      } catch (err) {
+        console.error(`[oracle] the ERC-8004 link scan has not reached block ${snapshotBlock}, today's snapshot, and its logs could not be listed (${err.message}); scoring nothing this epoch`);
+        metrics.inc('epochsFailed');
+        return;
+      }
+      console.warn(`[oracle] the ERC-8004 link scan has not reached block ${snapshotBlock}, today's snapshot; skipping the ${linksUnchecked.size} agent(s) its unchecked logs name`);
+    }
+  }
 
   // Epoch-fee gating (opt-in via FEE_REGISTRY_ADDRESS). Active only when a fee
   // registry is configured AND the on-chain epochFee is non-zero. When inactive,
@@ -922,6 +1151,12 @@ async function runEpochInner() {
           }
         }
 
+        // A link made on chain may name this agent and is not checked yet (the snapshot check above).
+        if (linksUnchecked.has(String(didHash).toLowerCase())) {
+          console.log(`[oracle]   ${didHash.slice(0, 10)}… a link made on chain for it is not checked yet, skipping`);
+          continue;
+        }
+
         const att       = attestations.get(didHash) ?? { successful: 0, total: 0 };
         // Age-weighted, not the raw count: a flag decays out of the penalty rather than
         // costing two points forever. See store.decayedFlagCount.
@@ -939,7 +1174,7 @@ async function runEpochInner() {
         // externalScore: only for agents linked to an ERC-8004 identity they own, and only from
         // the reviewers reviewers.js accepts. Ownership is re-verified inside externalScoreFor;
         // any failure yields 0.
-        const externalScore = await externalScoreOf(didHash, { operator, agentAddress }, scoringNowMs);
+        const { score: externalScore } = await externalScoreOf(didHash, { operator, agentAddress }, scoringNowMs);
         const inputs = { registeredAt, att, flagWeight, externalScore };
         const { measured, scores } = await scoreAt(didHash, inputs, scoringNowMs);
 
@@ -1017,12 +1252,12 @@ async function runEpochInner() {
             // The external factor too, as the primary would have read it at its proposal: same
             // snapshot, same evidence. Computed at this epoch's clock instead, a reviewer that
             // changed in the hours between made an honest proposal look wrong.
-            const auditInputs = links.has(didHash)
+            const auditInputs = hasLink(didHash)
               ? {
                 ...inputs,
-                externalScore: await externalScoreOf(
+                externalScore: (await externalScoreOf(
                   didHash, { operator, agentAddress }, atProposalMs, asOf?.events ?? getPaymentEvents(didHash),
-                ),
+                )).score,
               }
               : inputs;
             auditScores = (await scoreAt(didHash, auditInputs, atProposalMs, asOf?.events)).scores;
@@ -2610,7 +2845,6 @@ async function handleRequest(req, res) {
       const { operator, agentAddress, registeredAt, status } = info;
       const att       = attestations.get(didHash) ?? { successful: 0, total: 0 };
       const flagWeight = decayedFlagCount(didHash);
-      const linkedId  = links.get(didHash);
       // Same inputs as the epoch, including counterparty standing AND the chain clock,
       // or this endpoint would serve a number the oracle never proposes. Two operators'
       // /score are compared against each other by hand when a divergence is investigated,
@@ -2619,7 +2853,8 @@ async function handleRequest(req, res) {
       //
       // One extra chain read per request, on an endpoint that already makes several.
       const scoringNowMs = (await chain.getLatestBlockTimestamp()) * 1000;
-      const externalScore = await externalScoreOf(didHash, { operator, agentAddress }, scoringNowMs);
+      const { score: externalScore, agentId: linkedId } =
+        await externalScoreOf(didHash, { operator, agentAddress }, scoringNowMs);
       const { measured, scores } = await scoreAt(didHash, { registeredAt, att, flagWeight, externalScore }, scoringNowMs);
       return json(res, 200, {
         didHash,
@@ -2641,7 +2876,7 @@ async function handleRequest(req, res) {
         // score actually charged for it.
         flags: flagCount(didHash),
         flagWeight: Number(flagWeight.toFixed(4)),
-        erc8004AgentId: linkedId ?? null,
+        erc8004AgentId: linkedId,
       });
     } catch (err) {
       // The node could not answer for a payer, after retries. An upstream failure like the one above,

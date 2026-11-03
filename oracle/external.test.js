@@ -193,3 +193,60 @@ test('externalScore: a tag that names an Object.prototype member is just an unre
   // On their own they carry no evidence at all.
   assert.equal(computeExternalScore([{ value: 100, tag: 'constructor' }, { value: 100, tag: '__proto__' }]), 0);
 });
+
+// ---- links made on chain (link-claims.js) ------------------------------------
+
+const DID = `0x${'ab'.repeat(32)}`;
+const OPERATOR = `0x${'a0'.repeat(20)}`;
+
+/** An identity registry whose metadata and owner are given per block; `calls` records each read. */
+function registry({ value = DID, owner = OPERATOR, logs = [] } = {}) {
+  const calls = [];
+  const idContract = {
+    getMetadata: async (agentId, key, at) => { calls.push(['getMetadata', String(agentId), key, at?.blockTag]); return value; },
+    ownerOf: async (agentId, at) => { calls.push(['ownerOf', String(agentId), at?.blockTag]); return owner; },
+    filters: { MetadataSet: (agentId, key) => ({ agentId, key }) },
+    queryFilter: async (filter, from, to) => { calls.push(['queryFilter', filter.key, from, to]); return logs; },
+  };
+  external.init(CFG, { provider: {}, idContract, repContract: {} });
+  return calls;
+}
+
+test('claimHolds: the 8004 agent still names the didHash and its owner is the operator, as of the block asked', async () => {
+  const calls = registry({ value: DID.toUpperCase().replace('0X', '0x'), owner: OPERATOR.toUpperCase().replace('0X', '0x') });
+  assert.equal(await external.claimHolds('7', 'sigvara', DID, OPERATOR, 120), true);
+  assert.deepEqual(calls, [['getMetadata', '7', 'sigvara', 120], ['ownerOf', '7', 120]]);
+  external.init({ externalRpc: '', externalIdentity: '', externalReputation: '' });
+});
+
+test('claimHolds: a cleared or changed key, or an NFT that moved, does not hold', async () => {
+  registry({ value: '0x' });
+  assert.equal(await external.claimHolds('7', 'sigvara', DID, OPERATOR), false, 'the key was cleared');
+  registry({ value: `0x${'cd'.repeat(32)}` });
+  assert.equal(await external.claimHolds('7', 'sigvara', DID, OPERATOR), false, 'it names another agent now');
+  registry({ owner: `0x${'b0'.repeat(20)}` });
+  assert.equal(await external.claimHolds('7', 'sigvara', DID, OPERATOR), false, 'the NFT moved to another wallet');
+  external.init({ externalRpc: '', externalIdentity: '', externalReputation: '' });
+});
+
+test('claimHolds: a failed read is thrown, not taken as a no', async () => {
+  external.init(CFG, {
+    provider: {},
+    idContract: { getMetadata: async () => { throw new Error('429 too many requests'); }, ownerOf: async () => OPERATOR },
+    repContract: {},
+  });
+  await assert.rejects(external.claimHolds('7', 'sigvara', DID, OPERATOR), /429/);
+  external.init({ externalRpc: '', externalIdentity: '', externalReputation: '' });
+});
+
+test('readLinkLogs: filters on the key, and returns each log\'s agent, value and position', async () => {
+  const log = (metadataKey, agentId, blockNumber, index) => ({
+    args: { agentId: BigInt(agentId), metadataKey, metadataValue: DID }, blockNumber, index,
+  });
+  const calls = registry({ logs: [log('sigvara', 7, 120, 3), log('agentWallet', 8, 121, 0)] });
+  assert.deepEqual(await external.readLinkLogs('sigvara', 100, 199), [
+    { agentId: 7n, value: DID, blockNumber: 120, logIndex: 3 },
+  ], 'a log for another key is dropped, though the node should not have sent it');
+  assert.deepEqual(calls, [['queryFilter', 'sigvara', 100, 199]]);
+  external.init({ externalRpc: '', externalIdentity: '', externalReputation: '' });
+});

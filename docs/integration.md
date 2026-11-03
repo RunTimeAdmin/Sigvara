@@ -159,10 +159,40 @@ Avoid wording that claims more than the data does: "Trusted by Sigvara", "Verifi
 > and the other signals in the reputation model. A bond stands behind it that a committee can
 > slash. It is not an audit, insurance or a guarantee.
 
-Some factors read zero until an agent has linked an ERC-8004 identity, so check the current
-reachable maximum in the [reputation model](reputation-model.md) before you pick a threshold.
+Some factors read zero until an agent has linked an ERC-8004 identity
+([below](#linking-an-erc-8004-identity)), so check the current reachable maximum in the [reputation model](reputation-model.md) before you pick a threshold.
 The protocol's current status, including what has and has not been audited, is in the README
 under "Where this stands".
+
+## Linking an ERC-8004 identity
+
+External Trust, 25 of the 100 points, is read from the feedback on an agent's ERC-8004
+identity, and is zero until the two are linked. The agent links them on chain, with no
+credential and nothing sent to an oracle. From the wallet that owns the ERC-8004 agent, which
+must be the Sigvara agent's operator, set its `sigvara` metadata key to the agent's didHash:
+
+```bash
+cast send <ERC-8004 identity registry> "setMetadata(uint256,string,bytes)" <8004 agent id> sigvara <didHash> --rpc-url <rpc> --account <operator>
+```
+
+The didHash is `computeDidHash(agent)` on Sigvara's identity registry. On Arc testnet the
+ERC-8004 identity registry is `0x8004A818BFB912233c491871b3d84c89A494BD9e` and Sigvara's is
+`0x7e3aFC532eE5d922ab3cc3FFb510c7C8151477Dd` ([deployments/5042002.json](../deployments/5042002.json)).
+
+Two things make the claim count. The Sigvara agent must already be registered when the key is
+set, and its operator must have owned the 8004 agent since a block before the one the key is
+set in. So set the key in a transaction of its own after the 8004 agent is minted, not in the
+`register` call that mints it. A claim that fails either test is never read again; setting the
+key once more, correctly, makes a new one.
+
+An oracle finds the link at its next epoch if it has `EXTERNAL_LINK_FROM_BLOCK` set and its
+ERC-8004 registry is on the chain it scores, and the link applies from the next daily snapshot,
+the start of the next UTC day. `GET /score/:didHash` then
+returns the 8004 agent id as `erc8004AgentId`. The link lasts while the key still holds the
+didHash and the operator still owns the 8004 agent: setting the key to anything else, or
+transferring the NFT, ends it from the next snapshot. Linking makes the feedback readable, not
+countable: it counts only from the reviewers the
+[reputation model](reputation-model.md#external-trust-25-pts) accepts.
 
 ## Events
 
