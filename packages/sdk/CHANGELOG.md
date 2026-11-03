@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.0.0-alpha.15
 
 ### Added: `sigvara-mcp`, a read-only trust server over MCP
 

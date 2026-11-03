@@ -316,8 +316,7 @@ tested against, and the same cases are checked on chain with OpenZeppelin's own 
 
 ## Trust lookups for agents: `sigvara-mcp`
 
-**Status:** in the repository, not yet in a published release. Until it is, build the package and run
-`node packages/sdk/dist/mcp-cli.js` from a checkout.
+From 1.0.0-alpha.15.
 
 An MCP server that lets any agent with an MCP host (Claude, Cursor, ElizaOS through its MCP plugin, and
 others) check another agent on chain before paying or relying on it. Every tool reads. None signs or
