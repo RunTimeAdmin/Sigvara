@@ -84,6 +84,18 @@ const EXPECTED_HEADERS = {
   'Cross-Origin-Resource-Policy': 'same-origin',
 };
 
+/**
+ * Headers set for named files only, inside a <FilesMatch> block, by its exact pattern. The
+ * ERC-8004 registration file and the image it names are read by explorers on other origins,
+ * so these two, and nothing else, may be read cross-origin.
+ */
+const EXPECTED_SCOPED = {
+  '^(agent-registration\\.json|sigvara-avatar\\.svg)$': {
+    'Cross-Origin-Resource-Policy': 'cross-origin',
+    'Access-Control-Allow-Origin': '*',
+  },
+};
+
 async function* walk(dir) {
   for (const entry of await readdir(dir, { withFileTypes: true })) {
     const p = join(dir, entry.name);
@@ -131,12 +143,34 @@ if (policy === null) {
   }
 }
 
-// The other headers, read from the file's real directives (comments are skipped).
+// The other headers, read from the file's real directives (comments are skipped). One inside
+// a <FilesMatch> block applies to those files only, so it is checked against EXPECTED_SCOPED.
 const htaccess = await readFile(CANONICAL, 'utf8');
 const set = new Map();
+const scoped = new Map();
+let scope = null;
 for (const line of htaccess.split('\n')) {
+  const open = /^\s*<FilesMatch\s+"([^"]*)"\s*>\s*$/i.exec(line);
+  if (open) { scope = open[1]; scoped.set(scope, new Map()); continue; }
+  if (/^\s*<\/FilesMatch>\s*$/i.test(line)) { scope = null; continue; }
   const m = /^\s*Header\s+always\s+set\s+(\S+)\s+"([^"]*)"\s*$/i.exec(line);
-  if (m && m[1].toLowerCase() !== 'content-security-policy') set.set(m[1], m[2]);
+  if (!m) continue;
+  if (scope !== null) scoped.get(scope).set(m[1], m[2]);
+  else if (m[1].toLowerCase() !== 'content-security-policy') set.set(m[1], m[2]);
+}
+for (const [pattern, headers] of scoped) {
+  const want = EXPECTED_SCOPED[pattern];
+  if (!want) { problems.push(`unexpected <FilesMatch "${pattern}"> block (add it to EXPECTED_SCOPED if it is intended)`); continue; }
+  for (const [name, value] of headers) {
+    if (!(name in want)) problems.push(`<FilesMatch "${pattern}"> sets unexpected header "${name}"`);
+    else if (value !== want[name]) problems.push(`<FilesMatch "${pattern}"> sets "${name}" to "${value}", expected "${want[name]}"`);
+  }
+  for (const name of Object.keys(want)) {
+    if (!headers.has(name)) problems.push(`<FilesMatch "${pattern}"> does not set "${name}"`);
+  }
+}
+for (const pattern of Object.keys(EXPECTED_SCOPED)) {
+  if (!scoped.has(pattern)) problems.push(`no <FilesMatch "${pattern}"> block`);
 }
 for (const [name, want] of Object.entries(EXPECTED_HEADERS)) {
   if (!set.has(name)) problems.push(`header "${name}" is not set`);
