@@ -7,6 +7,12 @@ const X = window.SigvaraExplorer;
 const $ = (id) => document.getElementById(id);
 const DIVERGENCES_SHOWN = 15;
 const HISTORY_SHOWN = 30;
+// Each operator's newest proposal is read from the chain over this many blocks (about 14 hours,
+// ten log reads). ScoreProposed does not name its proposer, so the sender of each proposal's
+// transaction is asked for, newest first, up to PROPOSALS_CHECKED of them.
+const PROPOSAL_BLOCKS = 100000;
+const PROPOSALS_CHECKED = 60;
+const PROPOSED = X.EVENTS.find((e) => e.name === "ScoreProposed").topic;
 
 function setCard(id, html) {
   $(id).querySelector(".card-body").innerHTML = html;
@@ -58,7 +64,7 @@ async function renderOperators(history, health) {
   const active = ops.filter((o) => o.status === 2).length;
   let html = `<p><b>${plural(active, "active operator")}</b> of ${plural(ops.length, "address", "addresses")} that ever bonded. An operator is active while its bond is at least <b>${X.esc(X.fmtSvr(bondAmount))}</b>.`
     + " Both operators named below are run by the Sigvara team, so they are two machines, not two independent parties. Independence is what a second operator is for, and it is not here yet.</p>";
-  html += `<div class="ex-scroll"><table class="ex-table"><thead><tr><th>Operator</th><th>Status</th><th>Bond</th><th>Signs with</th></tr></thead><tbody>`;
+  html += `<div class="ex-scroll"><table class="ex-table"><thead><tr><th>Operator</th><th>Status</th><th>Bond</th><th>Signs with</th><th>Last proposal</th></tr></thead><tbody>`;
   for (const o of ops) {
     const name = nameOf(o);
     html += `<tr>
@@ -66,12 +72,53 @@ async function renderOperators(history, health) {
       <td>${X.esc(X.BOND_STATUS[o.status] ?? "?")}${o.status === 3 && o.unbondingAt ? `<div class="ex-note">since ${X.esc(X.fmtWhen(o.unbondingAt))}</div>` : ""}</td>
       <td class="num">${X.esc(X.fmtSvr(o.bond))}</td>
       <td>${o.signer ? X.addrLink(o.signer) : '<span class="ex-note">the operator address itself</span>'}</td>
+      <td data-proposal="${o.address}"><span class="ex-note">reading the chain…</span></td>
     </tr>`;
   }
   html += "</tbody></table></div>";
+  html += '<p class="netnote">Last proposal is the newest score proposal sent by the operator or its signing key, read from the chain. A checker proposes only into a slot the primary has left empty, so it usually has none.</p>';
+  html += X.historyNote(history.value);
   html += `<p class="netnote">A slashed operator bond goes to the slash beneficiary, ${X.addrLink(beneficiary)}, not to a burn. The bond contract's slash takes no evidence and has no appeal window; see <a href="slashes">Slashes</a>.</p>`;
   html += healthList(health);
   setCard("operatorsCard", html);
+  const cells = [...document.querySelectorAll("[data-proposal]")];
+  lastProposals(ops).then((found) => {
+    for (const td of cells) {
+      const p = found.newest.get(td.getAttribute("data-proposal"));
+      td.innerHTML = p
+        ? `${X.esc(X.fmtWhen(p.at))}<div class="ex-note">${X.txLink(p.tx)}</div>`
+        : `<span class="ex-note">none since ${X.esc(X.fmtWhen(found.since))}</span>`;
+    }
+  }).catch((e) => { for (const td of cells) td.innerHTML = X.failed("the proposals", e); });
+}
+
+// The newest proposal each operator sent, as { at, tx }, and how far back the search reached.
+async function lastProposals(ops) {
+  const to = await X.blockNumber();
+  const from = Math.max(0, to - PROPOSAL_BLOCKS + 1);
+  const blockOf = (r) => parseInt(r.blockNumber, 16), indexOf = (r) => parseInt(r.logIndex, 16) || 0;
+  const rows = (await X.chainLogs([X.REPUTATION], [PROPOSED], from, to, { times: false }))
+    .filter((r) => X.same(r.address, X.REPUTATION) && X.isHash(r.transactionHash) && typeof r.data === "string")
+    .sort((a, b) => blockOf(b) - blockOf(a) || indexOf(b) - indexOf(a));
+  const all = [...new Set(rows.map((r) => r.transactionHash.toLowerCase()))];
+  const txs = all.slice(0, PROPOSALS_CHECKED);
+  const [start, ...got] = await X.rpcMany([
+    ["eth_getBlockByNumber", ["0x" + from.toString(16), false]],
+    ...txs.map((h) => ["eth_getTransactionByHash", [h]]),
+  ]);
+  const sender = new Map(txs.map((h, i) => [h, String(got[i]?.from ?? "").toLowerCase()]));
+  const newest = new Map();
+  let since = Number(BigInt(start?.timestamp ?? 0));
+  for (const r of rows) {
+    const tx = r.transactionHash.toLowerCase(), by = sender.get(tx);
+    // Past the senders read, the search reaches back only to the oldest one that was.
+    if (by === undefined) break;
+    const w = X.word(r.data, 0), at = w.length === 66 ? Number(BigInt(w)) : 0;
+    if (all.length > txs.length) since = at;
+    const op = ops.find((o) => X.same(o.address, by) || (o.signer && X.same(o.signer, by)));
+    if (op && !newest.has(op.address)) newest.set(op.address, { at, tx });
+  }
+  return { newest, since };
 }
 
 function healthList(health) {

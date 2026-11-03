@@ -7,7 +7,8 @@
 //   - the Arc explorer's log index: the history of proposals, finalizations and rejections.
 //     The RPC answers eth_getLogs over at most 10,000 blocks (about 85 minutes) and
 //     rate-limits a batch of them, so a week of history would be over a hundred requests.
-//     The explorer answers the whole history in one.
+//     The explorer answers the whole history in one. Its index can stop while the chain goes
+//     on, so the blocks after it are read from the RPC, as the explorer pages do (explorer.js).
 //   - the primary oracle: the payments behind the agent's score (/evidence).
 //   - the checker: whether its own recomputation disagreed with a proposal (/divergence).
 // Everything that comes back is untrusted input: hex is shape-checked before it goes into a
@@ -60,6 +61,7 @@ const EXPLORER_PAGE = 1000;
 const RECENT_BLOCKS = 172800;
 const TIMELINE_SHOWN = 25;
 
+const X = window.SigvaraExplorer;
 const $ = (id) => document.getElementById(id);
 const esc = (v) => String(v).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const strip = (h) => h.startsWith("0x") ? h.slice(2) : h;
@@ -164,18 +166,47 @@ async function agentHistory(didHash) {
     const hit = JSON.parse(sessionStorage.getItem(key));
     if (hit && Date.now() - hit.at < HISTORY_TTL_MS && Array.isArray(hit.value?.logs)) return hit.value;
   } catch (_) { /* no cache */ }
-  const value = await explorerLogs({ topic1: didHash });
+  const [indexed, tail] = await Promise.all([
+    explorerLogs({ topic1: didHash }),
+    X.tailRange().then(async (range) => ({ ...range, logs: await chainHistory(didHash, range.from, range.to) }))
+      .catch((e) => ({ error: String(e?.message ?? e), logs: [] })),
+  ]);
+  const { logs, ...how } = tail;
   // Likewise an answer about another agent.
-  value.logs = value.logs.filter(l => l.didHash === didHash);
-  try { sessionStorage.setItem(key, JSON.stringify({ at: Date.now(), value })); } catch (_) { /* no cache */ }
+  const value = { logs: mergeLogs(indexed.logs, logs).filter(l => l.didHash === didHash), truncated: indexed.truncated, tail: how };
+  // A chain read that failed is asked again next time rather than kept.
+  if (!how.error) try { sessionStorage.setItem(key, JSON.stringify({ at: Date.now(), value })); } catch (_) { /* no cache */ }
   return value;
+}
+
+// The reputation contract's logs over blocks [from, to], read from the chain and parsed like the
+// explorer's, oldest first. `didHash` narrows them to one agent. ScoreProposed and ReputationUpdated carry their
+// block's time; only the other two need it read.
+async function chainHistory(didHash, from, to) {
+  const topics = [EVENTS.map(e => e.topic), ...(didHash ? [didHash] : [])];
+  const rows = from <= to ? await X.chainLogs([REPUTATION], topics, from, to, { times: false }) : [];
+  const timed = new Set(EVENTS.filter(e => e.name === "ScoreRejected" || e.name === "ReputationZeroed").map(e => e.topic));
+  await X.addTimes(rows.filter(r => timed.has(String(r?.topics?.[0]).toLowerCase())));
+  const logs = rows.map(parseLog).filter(Boolean);
+  for (const l of logs) if (!(l.time > 0)) l.time = l.at;
+  return logs.sort((a, b) => a.block - b.block || a.index - b.index);
+}
+
+// The explorer's logs and the chain's, oldest first, with a log both hold kept once.
+function mergeLogs(a, b) {
+  const seen = new Set(), out = [];
+  for (const l of [...a, ...b]) {
+    const k = `${String(l.tx).toLowerCase()}:${l.index}`;
+    if (!seen.has(k)) { seen.add(k); out.push(l); }
+  }
+  return out.sort((x, y) => x.block - y.block || x.index - y.index);
 }
 
 // The reputation contract's logs from the explorer, oldest first. A full page is continued from
 // its last block, because the explorer has no cursor; rows already seen are dropped.
-async function explorerLogs(extra, fromBlock = 0) {
+async function explorerLogs(extra) {
   const out = [], seen = new Set();
-  let from = fromBlock, more = false;
+  let from = 0, more = false;
   for (let page = 0; page < 10; page++) {
     const q = new URLSearchParams({ module: "logs", action: "getLogs", address: REPUTATION, fromBlock: String(from), toBlock: "latest", ...extra });
     const j = await getJson(`${EXPLORER_API}?${q}`);
@@ -502,6 +533,7 @@ function renderTimeline(history, chain, showAll) {
   if (shown.length < items.length) html += `<button class="btn btn-secondary btn-sm" id="showAllBtn" type="button">Show all ${items.length}</button>`;
   // Pages are read oldest first, so what a cut-off loses is the newest.
   if (truncated) html += '<p class="pill-warn">The explorer has more history than this page reads, so the newest entries may be missing.</p>';
+  html += X.historyNote(history.value);
   setCard("timelineCard", html);
   const btn = $("showAllBtn");
   if (btn) btn.onclick = () => guard("timelineCard", () => renderTimeline(history, chain, true));
@@ -512,8 +544,11 @@ async function loadRecent() {
   const card = "recentCard";
   setCard(card, "<p class=\"netnote\">Reading the last day of proposals…</p>");
   try {
+    // A day is 18 log reads, a few seconds, so it comes from the chain: that keeps it current
+    // when the explorer's index is not, and leaves the explorer's ten an hour for an agent's
+    // whole history.
     const head = await blockNumber();
-    const { logs, truncated } = await explorerLogs({}, Math.max(0, head - RECENT_BLOCKS));
+    const logs = await chainHistory(null, Math.max(0, head - RECENT_BLOCKS + 1), head);
     const byAgent = new Map();
     for (const l of logs) {
       if (!isHash(l.didHash)) continue;
@@ -525,7 +560,8 @@ async function loadRecent() {
     }
     const agents = [...byAgent.values()].sort((a, b) => b.last.block - a.last.block).slice(0, 20);
     if (!agents.length) return setCard(card, "<p>No agent was scored in the last day.</p>");
-    const idents = await rpcBatch(agents.map(a => ({ to: IDENTITY, data: SEL.identities + pad32(a.didHash) })));
+    // Up to twenty reads, more than the RPC takes in one batch, so they go through explorer.js.
+    const idents = await X.ethCalls(agents.map(a => ({ to: IDENTITY, data: SEL.identities + pad32(a.didHash) })));
     const verb = { ScoreProposed: "proposed", ReputationUpdated: "finalized", ScoreRejected: "rejected", ReputationZeroed: "zeroed by a slash" };
     setCard(card, `<p>Agents with a proposal, finalization or rejection in about the last day, most recent first.</p>
       <ul class="recent">${agents.map((a, i) => {
@@ -535,7 +571,7 @@ async function loadRecent() {
         return `<li>${who}<span>${esc(verb[a.last.name])} ${esc(fmtWhen(a.last.time))}</span>`
           + `<span>${a.score === null ? "" : `finalized at ${a.score}`}</span></li>`;
       }).join("")}</ul>`
-      + (truncated ? '<p class="pill-warn">The explorer has more for this day than this page reads, so the most recent agents may be missing.</p>' : ""));
+      + '<p class="netnote">Read from the chain itself.</p>');
   } catch (e) {
     setCard(card, failed("recent activity", e));
   }

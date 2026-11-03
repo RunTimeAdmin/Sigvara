@@ -67,7 +67,8 @@ function evidenceFrom(input) {
 async function renderSlashes(staking) {
   if (staking.status === "rejected") return setCard("slashCard", X.failed("the staking contract's history from the explorer", staking.reason));
   const list = buildProceedings(staking.value.logs);
-  if (!list.length) return setCard("slashCard", "<p>No slash has been filed on this deployment.</p>");
+  // Both cards read the same blocks from the chain, so the note on how is given once, here.
+  if (!list.length) return setCard("slashCard", "<p>No slash has been filed on this deployment.</p>" + X.historyNote(staking.value));
 
   const hashes = [...new Set(list.map((p) => p.didHash))];
   const [idents, txs] = await Promise.all([
@@ -115,6 +116,7 @@ async function renderSlashes(staking) {
     </div>`;
   }).join("");
   if (staking.value.truncated) html += '<p class="pill-warn">The explorer has more history than this page reads, so the newest slashes may be missing.</p>';
+  html += X.historyNote(staking.value);
   setCard("slashCard", html);
 }
 

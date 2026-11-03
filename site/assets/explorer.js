@@ -6,7 +6,8 @@
  *   - the Arc explorer's log index: which agents registered, which operators bonded and every
  *     slash. The RPC answers eth_getLogs over at most 10,000 blocks, and the explorer answers a
  *     contract's whole history in one request (it allows ten an hour from one address, so
- *     answers are kept in the tab for a few minutes).
+ *     answers are kept in the tab for a few minutes). The index can stop while the chain goes
+ *     on, as it did on 2 November 2026, so the blocks after it are read from the RPC.
  *   - the operators' own public endpoints: the primary's /evidence and /health, the checker's
  *     /health and /divergence.
  * Everything that comes back is untrusted input: hex is shape-checked before it goes into a
@@ -56,6 +57,7 @@
   // slash drill of October emitted that form.
   const EVENTS = [
     { name: "AgentRegistered", sig: "AgentRegistered(bytes32,address,address,bytes32)", topic: "0x05721be61cc3d7a6bf132adf5eaa7898a92db50c5db47b35e8ade18b06423281", contract: "identity" },
+    { name: "ScoreProposed", sig: "ScoreProposed(bytes32,uint256,bytes32)", topic: "0x2ecf59b65d6c5f89b87bffff8937f2a81e253859b6b76bfd7f137c2db9b6caff", contract: "reputation" },
     { name: "SlashInitiated", sig: "SlashInitiated(bytes32,address,address,uint256)", topic: "0x68a6dcb0be51611092b43c97ef36088f9f1c0905c37d8170b379a590d8a50f01", contract: "staking" },
     { name: "SlashDisputed", sig: "SlashDisputed(bytes32,address)", topic: "0x58fadd7ae5483f79dd4d61a778aa5c239fb4d42bef831f52807cd1ec32d9999a", contract: "staking" },
     { name: "SlashExecuted", sig: "SlashExecuted(bytes32,uint256,uint256)", topic: "0x2c8595d6ea47659522ccbb27b6d576b6f1aa1fa9b540727b7e4292546f78af8d", contract: "staking" },
@@ -83,8 +85,15 @@
   const EXPLORER_PAGE = 1000;
   const LOGS_TTL_MS = 10 * 60 * 1000;
   const EXPLORER_TIMEOUT_MS = 60000;
+  // The RPC answers eth_getLogs over at most this many blocks, inclusive.
+  const LOG_SPAN = 10000;
+  // How far back the pages read the chain itself when the explorer's index is behind: about 42
+  // hours of Arc blocks, at roughly two a second, which is 30 log reads.
+  const TAIL_BLOCKS = 300000;
+  // An index this far behind the chain (about an hour) is worth a note on the page.
+  const LAG_NOTED = 7200;
   // What a card says while it waits on the explorer.
-  const READING_HISTORY = '<p class="netnote">Reading the contract\'s history from the Arc explorer. It can take up to a minute.</p>';
+  const READING_HISTORY = '<p class="netnote">Reading the contract\'s history from the Arc explorer, and the newest blocks from the chain. It can take up to a minute.</p>';
 
   // ---- small helpers ----
   const esc = (v) => String(v).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -184,14 +193,15 @@
   //
   // The public RPC answers about ten calls in one batch; past that it refuses each extra call with
   // "rate limit exceeded", and it limits how fast batches arrive too. So calls go ten at a time with
-  // a short gap, and a call it refused is asked again after a pause, up to four times.
+  // a short gap, and a call it refused is asked again after a pause, up to four times. A log read
+  // costs it more: it refuses a batch of four, so those go three at a time, a second apart.
   const RPC_BATCH = 10;
   const pause = (ms) => new Promise((r) => setTimeout(r, ms));
-  async function rpcMany(calls) {
+  async function rpcMany(calls, { batch = RPC_BATCH, gap = 150 } = {}) {
     const out = new Array(calls.length);
-    for (let start = 0; start < calls.length; start += RPC_BATCH) {
-      if (start) await pause(150);
-      let pending = calls.slice(start, start + RPC_BATCH).map((c, k) => start + k);
+    for (let start = 0; start < calls.length; start += batch) {
+      if (start) await pause(gap);
+      let pending = calls.slice(start, start + batch).map((c, k) => start + k);
       for (let attempt = 0; pending.length; attempt++) {
         const arr = await getJson(RPC, {
           method: "POST",
@@ -220,18 +230,90 @@
     return out;
   }
 
-  // One contract's logs for one event set, from the explorer, oldest first. A full page is
-  // continued from its last block, because the explorer has no cursor; rows already seen are
-  // dropped. Kept in the tab for ten minutes, because the explorer allows ten requests an hour.
-  async function contractLogs(address, names) {
-    const wanted = EVENTS.filter((e) => names.includes(e.name));
-    const topics = new Map(wanted.map((e) => [e.topic, e]));
-    const key = `sigvara-explorer:${address.toLowerCase()}:${names.join(",")}`;
+  async function blockNumber() {
+    const [h] = await rpcMany([["eth_blockNumber", []]]);
+    const n = parseInt(h, 16);
+    if (!Number.isSafeInteger(n) || n <= 0) throw new Error("no block number");
+    return n;
+  }
+
+  // An answer kept in the tab for ten minutes, because the explorer allows ten requests an hour
+  // and the RPC's log reads are slow. An answer `keep` turns down is not kept. Storage can be
+  // missing or refuse a write; then every call asks again.
+  async function cached(key, read, keep = () => true) {
     try {
       const hit = JSON.parse(sessionStorage.getItem(key));
-      if (hit && Date.now() - hit.at < LOGS_TTL_MS && Array.isArray(hit.value?.logs)) return hit.value;
+      if (hit && Date.now() - hit.at < LOGS_TTL_MS && hit.value !== undefined) return hit.value;
     } catch (_) { /* no cache */ }
-    const out = [], seen = new Set();
+    const value = await read();
+    if (keep(value)) {
+      try { sessionStorage.setItem(key, JSON.stringify({ at: Date.now(), value })); } catch (_) { /* no cache */ }
+    }
+    return value;
+  }
+
+  // The newest block the explorer has indexed, as { block, time }, or null when it does not say.
+  // Its block list is no guide: on 2 November 2026 that kept up while the per-contract index
+  // stopped. So this is the reputation contract's newest indexed log, which the oracle writes
+  // every epoch it has something to score.
+  async function indexHead() {
+    try {
+      return await cached("sigvara-explorer:index-head", async () => {
+        const j = await getJson(`${EXPLORER}/api/v2/addresses/${REPUTATION}/logs`);
+        const block = Number(j?.items?.[0]?.block_number);
+        const time = Math.floor(Date.parse(j?.items?.[0]?.block_timestamp) / 1000);
+        return Number.isSafeInteger(block) && block > 0 ? { block, time: time > 0 ? time : null } : null;
+      });
+    } catch (_) { return null; }
+  }
+
+  // Logs from the chain itself over blocks [from, to], read in spans the RPC accepts, as rows
+  // shaped like the explorer's (its hex timeStamp included unless `times` is false), so both go
+  // through the same parsing. `topics` is an eth_getLogs topic filter, or null for none.
+  async function chainLogs(addresses, topics, from, to, { times = true } = {}) {
+    const hex = (n) => "0x" + n.toString(16);
+    const spans = [];
+    for (let end = to; end >= from; end -= LOG_SPAN) spans.push([Math.max(from, end - LOG_SPAN + 1), end]);
+    const filter = (a, b) => ({ address: addresses, ...(topics ? { topics } : {}), fromBlock: hex(a), toBlock: hex(b) });
+    const got = await rpcMany(spans.map(([a, b]) => ["eth_getLogs", [filter(a, b)]]), { batch: 3, gap: 1000 });
+    if (!got.every(Array.isArray)) throw new Error("a log read came back malformed");
+    const rows = got.flat().filter((r) => r && typeof r === "object" && !r.removed);
+    if (times) await addTimes(rows);
+    return rows;
+  }
+  // Each row's block time, which eth_getLogs leaves out.
+  async function addTimes(rows) {
+    const blocks = [...new Set(rows.map((r) => r.blockNumber))].filter((b) => typeof b === "string");
+    const got = await rpcMany(blocks.map((b) => ["eth_getBlockByNumber", [b, false]]));
+    const at = new Map(blocks.map((b, i) => [b, got[i]?.timestamp]));
+    for (const r of rows) r.timeStamp = at.get(r.blockNumber);
+  }
+
+  // Where to read the chain itself: from just past the explorer's newest block, or TAIL_BLOCKS
+  // back if that is nearer, to the newest block. `missed` is the span neither source covers.
+  async function tailRange() {
+    const [head, latest] = await Promise.all([indexHead(), blockNumber()]);
+    const floor = Math.max(0, latest - TAIL_BLOCKS + 1);
+    const from = head ? Math.max(head.block + 1, floor) : floor;
+    return { from, to: latest, indexHead: head, missed: head && from > head.block + 1 ? [head.block + 1, from - 1] : null };
+  }
+
+  // The identity, staking and bond contracts' logs in the blocks the explorer has not indexed.
+  // One read serves every page, and it is kept in the tab like the explorer's answers. It reads
+  // every log the three emit and contractLogs picks out its events, because the RPC calls a
+  // filter on the fifteen topics the pages read "requested range too large" over any span.
+  function chainTail() {
+    return cached("sigvara-explorer:tail", async () => {
+      const range = await tailRange();
+      const rows = range.from <= range.to ? await chainLogs([IDENTITY, STAKING, ORACLE_BOND], null, range.from, range.to) : [];
+      return { ...range, rows };
+    });
+  }
+
+  // One contract's logs for one event set, from the explorer, as it answers them. A full page is
+  // continued from its last block, because the explorer has no cursor.
+  async function explorerLogs(address, wanted) {
+    const rows = [];
     let from = 0, more = false;
     for (let page = 0; page < 10; page++) {
       const q = new URLSearchParams({ module: "logs", action: "getLogs", address, fromBlock: String(from), toBlock: "latest" });
@@ -241,34 +323,64 @@
       const j = await getJson(`${EXPLORER_API}?${q}`, undefined, EXPLORER_TIMEOUT_MS);
       // "No logs found" comes back as status 0 with an empty result, and is an answer.
       if (!Array.isArray(j?.result)) throw new Error(typeof j?.message === "string" ? j.message : "unexpected answer");
-      for (const r of j.result) {
-        if (!r || typeof r !== "object" || !same(r.address, address)) continue;
-        const k = `${r.transactionHash}:${r.logIndex}`;
-        if (!seen.has(k)) { seen.add(k); out.push(r); }
-      }
+      rows.push(...j.result);
       more = j.result.length >= EXPLORER_PAGE;
       if (!more) break;
       from = parseInt(j.result[j.result.length - 1].blockNumber, 16);
     }
-    const logs = [];
-    for (const r of out) {
-      const ev = topics.get(String(r?.topics?.[0]).toLowerCase());
-      if (!ev || typeof r.data !== "string" || !/^0x[0-9a-fA-F]*$/.test(r.data)) continue;
-      logs.push({
-        name: ev.name,
-        legacy: Boolean(ev.legacy),
-        topics: r.topics.map((t) => String(t).toLowerCase()),
-        data: r.data,
-        block: parseInt(r.blockNumber, 16),
-        index: parseInt(r.logIndex, 16) || 0,
-        time: parseInt(r.timeStamp, 16),
-        tx: isHash(r.transactionHash) ? r.transactionHash.toLowerCase() : null,
-      });
+    return { rows, more };
+  }
+
+  // One contract's logs for one event set, oldest first: the explorer's history, then the blocks
+  // after its index read from the chain. A row both sources hold is kept once. `tail` says how
+  // the chain filled in, for historyNote.
+  function contractLogs(address, names) {
+    const wanted = EVENTS.filter((e) => names.includes(e.name));
+    const topics = new Map(wanted.map((e) => [e.topic, e]));
+    return cached(`sigvara-explorer:${address.toLowerCase()}:${names.join(",")}`, async () => {
+      const [indexed, tail] = await Promise.all([
+        explorerLogs(address, wanted),
+        chainTail().catch((e) => ({ error: String(e?.message ?? e), rows: [] })),
+      ]);
+      const logs = [], seen = new Set();
+      for (const r of [...indexed.rows, ...tail.rows]) {
+        if (!r || typeof r !== "object" || !same(r.address, address)) continue;
+        const ev = topics.get(String(r?.topics?.[0]).toLowerCase());
+        if (!ev || typeof r.data !== "string" || !/^0x[0-9a-fA-F]*$/.test(r.data)) continue;
+        const tx = isHash(r.transactionHash) ? r.transactionHash.toLowerCase() : null;
+        const index = parseInt(r.logIndex, 16) || 0;
+        if (seen.has(`${tx}:${index}`)) continue;
+        seen.add(`${tx}:${index}`);
+        logs.push({
+          name: ev.name,
+          legacy: Boolean(ev.legacy),
+          topics: r.topics.map((t) => String(t).toLowerCase()),
+          data: r.data,
+          block: parseInt(r.blockNumber, 16),
+          index,
+          time: parseInt(r.timeStamp, 16),
+          tx,
+        });
+      }
+      logs.sort((a, b) => a.block - b.block || a.index - b.index);
+      const { rows, ...how } = tail;
+      return { logs, truncated: indexed.more, tail: how };
+    // A chain read that failed is asked again on the next visit rather than kept.
+    }, (v) => !v.tail.error);
+  }
+
+  // What a page says under a history the chain had to fill in for the explorer, or "".
+  function historyNote(v) {
+    const t = v?.tail;
+    const n = (x) => Number(x).toLocaleString("en-US");
+    if (!t) return "";
+    if (t.error) return `<p class="pill-warn">The newest blocks, which the Arc explorer may not have indexed yet, could not be read from the chain (${esc(t.error)}), so the newest entries may be missing.</p>`;
+    if (t.missed) {
+      return `<p class="pill-warn">Blocks ${n(t.missed[0])} to ${n(t.missed[1])} were not read, so entries from them are missing: the Arc explorer has not indexed them, and they are further back than the ${n(TAIL_BLOCKS)} blocks this page reads from the chain itself.</p>`;
     }
-    logs.sort((a, b) => a.block - b.block || a.index - b.index);
-    const value = { logs, truncated: more };
-    try { sessionStorage.setItem(key, JSON.stringify({ at: Date.now(), value })); } catch (_) { /* no cache */ }
-    return value;
+    if (!t.indexHead) return `<p class="netnote">The Arc explorer did not say how far it has indexed, so the newest ${n(TAIL_BLOCKS)} blocks were read from the chain itself.</p>`;
+    if (t.to - t.indexHead.block < LAG_NOTED) return "";
+    return `<p class="netnote">The Arc explorer has indexed nothing after block ${n(t.indexHead.block)}${t.indexHead.time ? ` (${esc(fmtWhen(t.indexHead.time))})` : ""}, so this page read the newest ${n(t.to - t.from + 1)} blocks from the chain itself.</p>`;
   }
 
   // ---- evidence: the Merkle root, rebuilt the way oracle/merkle.js builds it ----
@@ -372,11 +484,11 @@
   const api = {
     CHAIN_ID, RPC, EXPLORER, PRIMARY, CHECKER, SOURCE,
     IDENTITY, REPUTATION, STAKING, ORACLE_BOND, SVR, DEPLOYER, OPERATORS,
-    SEL, EVENTS, BOND_EVENTS, STATUS, BOND_STATUS, ZERO32, READING_HISTORY,
+    SEL, EVENTS, BOND_EVENTS, STATUS, BOND_STATUS, ZERO32, READING_HISTORY, TAIL_BLOCKS,
     esc, strip, pad32, word, wordAddr, isAddr, isHash, same, short, topicAddr,
     fmtWhen, fmtSvr, txLink, addrLink, rootCode, commitLink, whoIs, failed,
     loadSimulation, simAgent, simWallet,
-    getJson, rpcMany, ethCalls, contractLogs,
+    getJson, rpcMany, ethCalls, blockNumber, cached, chainLogs, addTimes, tailRange, contractLogs, historyNote,
     outcomeCode, leafOf, hashPair, layersOf, rootOf, proofOf, matchRoot, verifyEvidenceCall,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
