@@ -40,6 +40,9 @@
   const ORACLE_BOND = "0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171";
   const SVR         = "0x41De2D6D55318e197a00E8f5B496eA2790e23E6c";
   const DEPLOYER    = "0x18CBcE50390f5f6ebe4E20Fc17833F25c8D94811";
+  // The operator of the slash-drill agents (docs/slash-drill.md, "The adversarial drill"). It
+  // holds no role; the agents it bonds exist to be slashed at, so they are marked as Sigvara's.
+  const DRILL_OPERATOR = "0x11bbb7764D215c7Ab2E7c677283E226D599ce956";
   // The two ORACLE_ROLE holders, read from RoleGranted on the reputation proxy on 1 Nov 2026
   // (none revoked). Both are run by the Sigvara team. Used to name them; any other address is
   // shown bare.
@@ -145,6 +148,7 @@
     const name = OPERATORS[a.toLowerCase()];
     if (name) return `the ${name} oracle (${addrLink(a)})`;
     if (same(a, DEPLOYER)) return `the Sigvara deployer (${addrLink(a)})`;
+    if (same(a, DRILL_OPERATOR)) return `the slash drill's operator (${addrLink(a)})`;
     const sim = simWallet(a);
     if (sim) return `the simulation's ${esc(sim)} (${addrLink(a)})`;
     return addrLink(a);
@@ -571,7 +575,7 @@
 
   const api = {
     CHAIN_ID, RPC, EXPLORER, PRIMARY, CHECKER, SOURCE,
-    IDENTITY, REPUTATION, STAKING, ORACLE_BOND, SVR, DEPLOYER, OPERATORS,
+    IDENTITY, REPUTATION, STAKING, ORACLE_BOND, SVR, DEPLOYER, DRILL_OPERATOR, OPERATORS,
     SEL, EVENTS, BOND_EVENTS, STATUS, BOND_STATUS, ZERO32, READING_HISTORY, TAIL_BLOCKS,
     esc, strip, pad32, word, wordAddr, isAddr, isHash, same, short, topicAddr,
     fmtWhen, fmtSvr, txLink, addrLink, rootCode, commitLink, whoIs, failed,
