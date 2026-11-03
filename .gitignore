@@ -32,6 +32,7 @@ oracle/.state/
 !.env.mainnet.example
 !.env.mainnet.checker.example
 !.env.mainnet.watcher.example
+!.env.publisher.example
 
 # Compose file secrets: docker-compose.mainnet.yml reads ./secrets/oracle_key.
 # A directory pattern, so it does not touch oracle/secrets.js.

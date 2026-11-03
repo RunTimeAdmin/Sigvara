@@ -17,7 +17,7 @@ require('./config').requireValidNumericConfig('oracle');
 const http = require('http');
 const chain = require('./chain');
 const external = require('./external');
-const linkClaims = require('./link-claims');
+const { createLinkScanner } = require('./link-scan');
 const reviewers = require('./reviewers');
 const { computeScore } = require('./scoring');
 const {
@@ -444,156 +444,50 @@ function onChainLinks() {
   return linksOnChain() && externalOnThisChain();
 }
 
+// The scan and the test of a claim, shared with the ERC-8004 publisher (link-scan.js).
+const linkScanner = createLinkScanner({
+  chain, external,
+  fromBlock: cfg.externalLinkFromBlock,
+  chunkSize: cfg.logChunkSize,
+  getState: getLinkScanState,
+  setState: setLinkScanState,
+  persist: persistState,
+});
+
 function hasLink(didHash) {
-  return links.has(didHash)
-    || (onChainLinks() && linkClaims.candidatesAt(getLinkScanState()?.claims, didHash).length > 0);
+  return links.has(didHash) || (onChainLinks() && linkScanner.hasClaims(didHash));
 }
 
 /**
  * The ERC-8004 agent `didHash` is linked to, as of `blockTag` when given: the newest claim made on
- * chain that still holds, or else the link made with POST /link, or undefined. A claim holds while
- * the 8004 agent still names this didHash and is owned by its operator, so clearing the key or
- * moving the NFT undoes the link, with nothing to tell the oracle.
+ * chain that still holds (link-scan.js), or else the link made with POST /link, or undefined.
+ * Throws when the node could not answer, and the agent is skipped this epoch.
  */
 async function linkedAgentId(didHash, operator, blockTag) {
   if (onChainLinks()) {
-    for (const agentId of linkClaims.candidatesAt(getLinkScanState()?.claims, didHash, blockTag)) {
-      try {
-        const holds = await chain.readWithBackoff('link claim', () => external.claimHolds(agentId, linkClaims.LINK_KEY, didHash, operator, blockTag));
-        if (holds) return agentId;
-      } catch (err) {
-        // A node that could not answer: the agent is skipped this epoch. Anything else, such as an
-        // agent id the registry does not have, is a claim that does not hold.
-        if (chain.isTransientReadError(err)) throw err;
-      }
-    }
+    const claimed = await linkScanner.claimedAgentAt(didHash, operator, blockTag);
+    if (claimed !== undefined) return claimed;
   }
   return links.get(didHash);
 }
 
 /**
- * Whether a claim was made by the operator of the Sigvara agent it names: as of the log's block,
- * the 8004 agent still names the didHash and is owned by that operator, and it was owned by the
- * same operator in the block before. Without the second test, a contract could mint an 8004 agent,
- * set the key to someone else's didHash and give the NFT to that agent's operator, all in one
- * transaction, and the claim would hold.
- *
- * The reads stop at the first one that fails, and `cache` keeps them for one scan, so a burst of
- * claims from one 8004 agent in one block costs one ownership read, not one each.
- */
-async function claimMadeByOperator({ didHash, agentId, block }, cache) {
-  const once = (key, fn) => {
-    if (!cache.has(key)) cache.set(key, fn());
-    return cache.get(key);
-  };
-  try {
-    const { operator } = await once(`operator ${didHash} ${block}`, () => chain.getAgentInfo(didHash, block));
-    if (/^0x0{40}$/i.test(String(operator))) return false;
-    const before = await once(`owner ${agentId} ${block - 1}`,
-      () => chain.readWithBackoff('link owner', () => external.ownerAt(agentId, block - 1)));
-    if (before.toLowerCase() !== String(operator).toLowerCase()) return false;
-    return await chain.readWithBackoff('link claim', () => external.claimHolds(agentId, linkClaims.LINK_KEY, didHash, operator, block));
-  } catch (err) {
-    // A node that could not answer stops the scan, which resumes at this log next epoch. Anything
-    // else, such as an 8004 agent that did not exist in the block before, is not the operator's claim.
-    if (chain.isTransientReadError(err)) throw err;
-    return false;
-  }
-}
-
-// A span the node refuses for its size or does not answer in time is halved. A rate limit is
-// not: a smaller span would only be throttled the same way.
-const spanTooBig = (err) => {
-  const msg = String((err && err.message) || err);
-  return !/rate limit|429|too many requests/i.test(msg) && /more than \d+|too many results|response size|block range|timeout/i.test(msg);
-};
-// Retried in place, like any read, except a timeout, which halving the span answers better.
-const retryLinkRead = (err) => chain.isTransientReadError(err) && !/timeout/i.test(String((err && err.message) || err));
-
-/**
- * Reads the `sigvara` MetadataSet logs in blocks [from, to] a span at a time, oldest first, and
- * hands each span's logs to `onLogs(logs, end)`. Paced like the registry scan, so a long catch-up
- * is not a burst.
- */
-async function eachLinkSpan(from, to, onLogs) {
-  let start = from;
-  let span = cfg.logChunkSize;
-  while (start <= to) {
-    const end = Math.min(start + span - 1, to);
-    let logs;
-    try {
-      logs = await chain.readWithBackoff('link logs', () => external.readLinkLogs(linkClaims.LINK_KEY, start, end), 4, retryLinkRead);
-    } catch (err) {
-      if (end > start && spanTooBig(err)) { span = Math.ceil((end - start + 1) / 2); continue; }
-      throw err;
-    }
-    await onLogs(logs, end);
-    start = end + 1;
-    span = cfg.logChunkSize;
-    if (start <= to) await new Promise((r) => setTimeout(r, 400));
-  }
-}
-
-/**
- * Reads the MetadataSet logs for the `sigvara` key since the last scan, and keeps the claims
- * made by the operator of the Sigvara agent they name (claimMadeByOperator).
- *
- * The operator test is made here, as of the log's block, and not only at scoring: anyone can set
- * `sigvara` on an 8004 agent of their own, and enough such claims on one didHash would push its
- * operator's out of the list. Read as of the log's block, every operator decides it the same way.
- *
- * Anyone can also post such logs in bulk to slow the scan. One costs no read unless it names a
- * registered agent, and the checkpoint moves after every log, so a scan cut short resumes where it
- * stopped. What a scan that falls behind costs is decided in the epoch (uncheckedLinkAgents).
- *
- * `agents` is what the registry scan found. This scan reads no further than that one did, so an
- * agent registered after it is never mistaken for one that does not exist.
+ * Reads the links made on chain since the last scan (link-scan.js). `agents` is what the registry
+ * scan found: a log naming any other didHash costs no read, and this scan reads no further than
+ * the registry scan did, so an agent registered after it is never mistaken for one that does not
+ * exist. What a scan that falls behind costs is decided in the epoch (uncheckedLinkAgents).
  */
 async function runLinkScan(agents) {
-  const known = new Set(agents.map((a) => String(a.didHash).toLowerCase()));
-  const state = getLinkScanState() ?? { cursor: null, claims: {} };
-  if (!state.cursor) state.cursor = { block: cfg.externalLinkFromBlock, logIndex: 0 };
-  const head = await chain.readWithBackoff('head', () => external.latestBlock());
-  const to = Math.min(head, chain.getScanState()?.lastScannedBlock ?? head);
-  const cache = new Map();
-  let found = 0;
-  try {
-    await eachLinkSpan(state.cursor.block, to, async (logs, end) => {
-      for (const log of logs) {
-        if (linkClaims.isBefore(log, state.cursor)) continue;
-        const claim = linkClaims.claimFromLog(log);
-        if (claim && known.has(claim.didHash) && await claimMadeByOperator(claim, cache)) {
-          linkClaims.addClaim(state.claims, claim);
-          found++;
-        }
-        state.cursor = { block: log.blockNumber, logIndex: log.logIndex + 1 };
-      }
-      state.cursor = { block: end + 1, logIndex: 0 };
-    });
-  } finally {
-    setLinkScanState(state);
-    persistState();
-  }
+  const found = await linkScanner.scan({
+    known: new Set(agents.map((a) => String(a.didHash).toLowerCase())),
+    upTo: chain.getScanState()?.lastScannedBlock ?? Infinity,
+  });
   if (found) console.log(`[oracle] ERC-8004 link scan: ${found} link(s) made on chain`);
 }
 
-/**
- * The didHashes named by `sigvara` logs that the scan has not checked yet, up to `block`. Listing
- * them takes the logs alone and no read per log, so it answers when the checks cannot keep up.
- * Only these agents can hold a link this oracle has not found and the other operator has; every
- * other agent's links up to `block` are all known. Throws when the logs cannot be read.
- */
-async function uncheckedLinkAgents(block) {
-  const cursor = getLinkScanState()?.cursor ?? { block: cfg.externalLinkFromBlock, logIndex: 0 };
-  const named = new Set();
-  await eachLinkSpan(cursor.block, block, async (logs) => {
-    for (const log of logs) {
-      if (linkClaims.isBefore(log, cursor)) continue;
-      const claim = linkClaims.claimFromLog(log);
-      if (claim) named.add(claim.didHash);
-    }
-  });
-  return named;
+// The didHashes named by link logs the scan has not checked yet, up to `block` (link-scan.js).
+function uncheckedLinkAgents(block) {
+  return linkScanner.uncheckedAgents(block);
 }
 
 /**
@@ -986,7 +880,7 @@ async function runEpochInner() {
   }
   if (onChainLinks()) {
     const snapshotBlock = await chain.blockAtOrBefore(reviewers.snapshotOf(chainNow));
-    if (!linkClaims.scanCovers(getLinkScanState()?.cursor ?? null, cfg.externalLinkFromBlock, snapshotBlock)) {
+    if (!linkScanner.covers(snapshotBlock)) {
       // Behind. Only the agents its unchecked logs name are at risk, so those are skipped and the
       // rest are scored. If even the logs cannot be listed, any agent could be, and none is scored.
       try {
