@@ -14,11 +14,14 @@
  *   node agent-wallet.js
  *
  * Env: RPC_URL, EXTERNAL_IDENTITY_ADDRESS, SIGVARA_ERC8004_AGENT_ID, PUBLISHER_ADDRESS,
- * PUBLISH_SIGNER_URL. Prints DEADLINE=... and SIGNATURE=... for the Forge script. Neither is a
+ * PUBLISH_SIGNER_URL, PUBLISH_SIGNER_SECRET (the publisher's, so it runs inside the publisher's
+ * container: docker exec sigvara-publisher node agent-wallet.js). Prints DEADLINE=... and
+ * SIGNATURE=... for the Forge script. Neither is a
  * secret: the signature is only good for this agent, this wallet, this owner and five minutes.
  */
 
 const { ethers } = require('ethers');
+const signerAuth = require('./signer-auth');
 
 // The window setAgentWallet allows, and how much of it to use: enough left to send the transaction.
 const MAX_DEADLINE_DELAY = 300;
@@ -57,17 +60,17 @@ function signedBy(typed, signature) {
  * eth_signTypedData) for the publisher's signature, and checks it recovers to the publisher before
  * returning it.
  */
-async function requestSignature(signerUrl, typed) {
+async function requestSignature(signerUrl, typed, secret) {
   const ask = async (method) => {
+    const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method, params: [typed.message.newWallet, JSON.stringify({ ...typed, types: { EIP712Domain: [
+      { name: 'name', type: 'string' }, { name: 'version', type: 'string' },
+      { name: 'chainId', type: 'uint256' }, { name: 'verifyingContract', type: 'address' },
+    ], ...typed.types } })] });
     const res = await fetch(signerUrl, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, redirect: 'error',
-      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params: [typed.message.newWallet, JSON.stringify({ ...typed, types: { EIP712Domain: [
-        { name: 'name', type: 'string' }, { name: 'version', type: 'string' },
-        { name: 'chainId', type: 'uint256' }, { name: 'verifyingContract', type: 'address' },
-      ], ...typed.types } })] }),
-      signal: AbortSignal.timeout(15_000),
+      method: 'POST', redirect: 'error', body, signal: AbortSignal.timeout(15_000),
+      headers: { 'content-type': 'application/json', [signerAuth.HEADER]: signerAuth.authHeader(secret, body) },
     });
-    return res.json();
+    return res.status === 200 ? res.json() : { error: { message: `HTTP ${res.status}` } };
   };
   let body = await ask('eth_signTypedData_v4');
   if (body.error && /method|not (found|supported)/i.test(body.error.message || '')) body = await ask('eth_signTypedData');
@@ -92,7 +95,7 @@ async function main(env = process.env) {
   const now = (await provider.getBlock('latest')).timestamp;
   const deadline = now + DEADLINE_AHEAD;
   const typed = agentWalletTypedData({ chainId, registry, agentId, newWallet, owner, deadline });
-  const signature = await requestSignature(need('PUBLISH_SIGNER_URL'), typed);
+  const signature = await requestSignature(need('PUBLISH_SIGNER_URL'), typed, need('PUBLISH_SIGNER_SECRET'));
   console.log(`# agent ${agentId}, owner ${owner}, new agentWallet ${newWallet}; send within ${DEADLINE_AHEAD} s`);
   console.log(`DEADLINE=${deadline}`);
   console.log(`SIGNATURE=${signature}`);
