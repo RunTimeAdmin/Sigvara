@@ -679,11 +679,11 @@ Proxy addresses never change; these are the implementations behind them, newest 
 | | `0x87492399e34e5247740d0280c329e7553403404c` | recorded 21 Sep |
 | | `0x0dc80134817e6fea978c06497f48391371a8413d` | 19 Sep, evidence roots |
 | | `0xea5940bc23d7bf82113316dd03a3b1bb1bc2f084` | 18 Sep, maturity |
-| `oracleBond` | `0x3c06a98ba5137e967af182e91f88729ca1880e83` | 2 Nov, `76bbc97`, exit time fixed at unbonding (current) |
+| `oracleBond` | `0x722abaa614edd77cb5b31655eb1bfdb18e823a51` | 3 Nov, `0483a3c`, a signer key stays bound to the operator that named it (current) |
+| | `0x3c06a98ba5137e967af182e91f88729ca1880e83` | 2 Nov, `76bbc97`, exit time fixed at unbonding |
 | | `0xa33fc1b6ee82309bbf77fde4113a223742c53931` | 26 Oct, `fdce1a7` |
 | | `0x9ed31f024e0c3e7df853c411744babb53f5aaffa` | 21 Sep |
-| | `0xf8464144726850d222a06b85a230c8030673b933` | 19 Sep, bond binds on read |
-| | `0x826fc09041a8a678b06336a253c55bd84f1fdc50` | 18 Sep, initial |
+| | `0xf8464144726850d222a06b85a230c8030673b933`, `0x826fc09041a8a678b06336a253c55bd84f1fdc50` | 19 Sep, bond binds on read; 18 Sep, initial |
 
 Read the current one straight from the proxy rather than trusting this table:
 
