@@ -1,0 +1,24 @@
+{
+  "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
+  "name": "Sigvara",
+  "description": "Sigvara computes a reputation score for AI agents on top of ERC-8004 and puts a slashable bond behind it. An oracle computes each score from payments verified on chain, outcomes reported for those payments, tenure, and ERC-8004 feedback from reviewers that paid the agent, and proposes it to a contract on Arc. A second operator recomputes each proposal and compares, and a committee can slash a bond. Both operators are run by the same team today. Finalized scores are on chain in SigvaraReputation; https://oracle.sigvara.xyz/score/{didHash} previews the next one. Arc testnet (chain 5042002) only, with no external audit. A score is not an audit, insurance or a guarantee.",
+  "image": "https://sigvara.xyz/assets/sigvara-avatar.svg",
+  "services": [
+    {
+      "name": "web",
+      "endpoint": "https://sigvara.xyz/"
+    }
+  ],
+  "x402Support": false,
+  "active": true,
+  "registrations": [
+    {
+      "agentId": 897764,
+      "agentRegistry": "eip155:5042002:0x8004A818BFB912233c491871b3d84c89A494BD9e"
+    }
+  ],
+  "supportedTrust": [
+    "reputation",
+    "crypto-economic"
+  ]
+}

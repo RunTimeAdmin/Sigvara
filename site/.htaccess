@@ -28,6 +28,14 @@
   Header always set Cross-Origin-Opener-Policy "same-origin"
   Header always set Cross-Origin-Resource-Policy "same-origin"
   Header always set Content-Security-Policy "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https://oracle.sigvara.xyz; font-src 'self'; connect-src 'self' https://rpc.testnet.arc.io https://explorer.testnet.arc.io https://index.sigvara.xyz https://oracle.sigvara.xyz https://checker.sigvara.xyz; upgrade-insecure-requests"
+
+  # The two files other sites are meant to read: Sigvara's ERC-8004 registration file and
+  # the image it names. ERC-8004 explorers fetch the one and show the other from their own
+  # origin, which same-origin above refuses. Both are public by design and hold no state.
+  <FilesMatch "^(agent-registration\.json|sigvara-avatar\.svg)$">
+    Header always set Cross-Origin-Resource-Policy "cross-origin"
+    Header always set Access-Control-Allow-Origin "*"
+  </FilesMatch>
 </IfModule>
 
 # Missing and refused paths get the site's own static page, not the host's default one.
