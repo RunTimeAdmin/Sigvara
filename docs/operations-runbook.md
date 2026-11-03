@@ -425,11 +425,23 @@ below are done is `the registration's agentWallet is 0x18CB...4811, not the publ
    publisher host can ask for anything, so the signer must enforce its own policy too: only type-2
    transactions to the ERC-8004 Reputation Registry, calling `giveFeedback` or `revokeFeedback`,
    with no value.
-2. Make it the registration's `agentWallet`: the publisher key signs the EIP-712 message
-   `setAgentWallet` asks for, and the registration's owner (the deployer) sends
-   `setAgentWallet(897764, publisher, deadline, signature)`. Check with
-   `cast call 0x8004A818BFB912233c491871b3d84c89A494BD9e "getAgentWallet(uint256)(address)" 897764`.
-   No script does this yet.
+2. Make it the registration's `agentWallet`. The publisher key signs the EIP-712 message
+   `setAgentWallet` checks, and the registration's owner (the deployer) sends
+   `setAgentWallet(897764, publisher, deadline, signature)`. The registry refuses a deadline more
+   than five minutes ahead, so the two go in one sitting:
+   1. David loads the deployer key into `D:\Sigvara\.env` with his key helper.
+   2. `node oracle/agent-wallet.js`, with `RPC_URL`, `EXTERNAL_IDENTITY_ADDRESS`,
+      `SIGVARA_ERC8004_AGENT_ID`, `PUBLISHER_ADDRESS` and `PUBLISH_SIGNER_URL` set, asks the signer
+      for the signature, checks it, and prints `DEADLINE` and `SIGNATURE`, four minutes ahead of
+      the chain's clock.
+   3. From `D:\Sigvara`, with those two and `PUBLISHER_ADDRESS` in the environment and the
+      project on the same drive: `forge script <project>/script/SetAgentWallet.s.sol:SetAgentWallet
+      --root <project> --rpc-url https://rpc.testnet.arc.network --broadcast`. It checks the sender
+      owns the registration, and that `getAgentWallet(897764)` is the publisher afterwards.
+   4. The key helper's `-Remove`.
+
+   Rehearsed on a fork of Arc testnet on 3 November 2026, with a throwaway key behind a stand-in
+   signer: `getAgentWallet(897764)` went from the deployer to the stand-in.
 3. One end-to-end cycle: set `PUBLISH_MODE=live` and `PUBLISH_ALLOW_AGENT_IDS` to one test agent
    linked on chain, and `docker compose up -d`. The first run in live mode reads every scored
    agent again. After it, read the result back:
@@ -459,3 +471,21 @@ that 8004 agent is set to 0 whatever the link says by then.
 **Rotating the key**: create a new key in the signer, repeat step 2 with it, and set
 `PUBLISHER_ADDRESS` to it. Consumers that read `getAgentWallet(897764)` follow at once. The new
 address has posted nothing, so the next daily refresh posts every linked agent's score from it.
+
+**Backing up its state**, before going live: append this to the primary's
+`/root/backup-oracle-state.sh` (section 1), after the oracle copy's last line, so a failure here
+cannot cost that one. It writes `publisher-<date>.tgz` beside the oracle's copies and pushes it to
+the same off-box folder, where the same 90-day cleanup applies.
+
+```sh
+pvol=sigvara-publisher_publisher_state
+if docker volume inspect "$pvol" >/dev/null 2>&1; then
+  p=publisher-$(date -u +%F).tgz
+  docker run --rm -v "$pvol":/data:ro -v "$out":/out node:20-alpine tar czf "/out/$p" -C /data .
+  tar tzf "$out/$p" | grep -qx './publisher-state.json'
+  age -r <recipient-public-key> -o "$out/$p.age" "$out/$p"
+  rsync -t -e "ssh <the oracle copy's options>" "$out/$p.age" <backup-host>:/
+  rm -f "$out/$p.age"
+  find "$out" -name 'publisher-*' -mtime +14 -delete
+fi
+```
