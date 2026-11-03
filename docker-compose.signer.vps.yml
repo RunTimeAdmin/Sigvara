@@ -1,0 +1,84 @@
+# The ERC-8004 publisher's policy signer, shaped for a bare VPS (oracle/signer.js, docs/adr/0008).
+#
+# Run it on a host that is NOT the publisher's: the publisher runs beside the primary oracle, and
+# this holds the key it signs with. Like the watcher, it fetches ONE PINNED COMMIT of the public
+# repository inside the container, chosen by SIGVARA_COMMIT in .env. A deploy is:
+#
+#   1. change SIGVARA_COMMIT in .env
+#   2. docker compose up -d        (a plain restart does NOT re-read .env)
+#   3. read the log: "[deploy] running <that hash>", then "[signer] <address> on ..."
+#
+# Testnet only: the key is an encrypted keystore in ./secrets, not in a KMS or HSM (David,
+# 3 November 2026). ./secrets holds the keystore, its password and the HMAC secret it shares with
+# the publisher, owned by uid 1000 (the image's `node` user, which the signer runs as) and readable
+# by it alone; the signer refuses a secret anyone else can read. It signs only the publisher's two
+# Reputation Registry calls and its agentWallet message, and only for requests carrying that HMAC
+# from an address in SIGNER_ALLOW_FROM. Host networking, so the address it checks is the caller's;
+# a host firewall rule should still let only that address reach SIGNER_PORT (runbook section 5).
+# The record of what it signed, for the hourly cap, is kept in the state volume.
+#
+#   cd /docker/sigvara-signer && docker compose up -d
+services:
+  signer:
+    image: node:20-alpine
+    container_name: sigvara-signer
+    restart: unless-stopped
+    working_dir: /app
+    init: true
+    network_mode: host
+    env_file:
+      - .env
+    environment:
+      SIGVARA_COMMIT: ${SIGVARA_COMMIT:?set SIGVARA_COMMIT in .env to the full 40-character commit hash}
+      SIGNER_KEYSTORE: /secrets/keystore.json
+      SIGNER_PASSWORD_FILE: /secrets/password
+      SIGNER_SECRET_FILE: /secrets/hmac-secret
+      SIGNER_STATE_FILE: /data/signer-state.json
+    security_opt:
+      - no-new-privileges:true
+    # Root only to fetch the code and hand /data to `node`; then su-exec drops to `node`.
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+    mem_limit: 256m
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+    command:
+      - sh
+      - -c
+      - |
+        set -eu
+        case "$${SIGVARA_COMMIT:-}" in ""|*[!0-9a-f]*) echo "[deploy] SIGVARA_COMMIT must be 40 lowercase hex characters" >&2; exit 1;; esac
+        [ "$${#SIGVARA_COMMIT}" -eq 40 ] || { echo "[deploy] SIGVARA_COMMIT must be 40 characters" >&2; exit 1; }
+        apk add --no-cache git su-exec >/dev/null
+        rm -rf /src && mkdir /src && cd /src
+        git init -q
+        git remote add origin https://github.com/RunTimeAdmin/Sigvara.git
+        git fetch -q --depth 1 origin "$$SIGVARA_COMMIT"
+        git checkout -q --detach FETCH_HEAD
+        [ "$$(git rev-parse HEAD)" = "$$SIGVARA_COMMIT" ] || { echo "[deploy] checkout is not $$SIGVARA_COMMIT, refusing to start" >&2; exit 1; }
+        rm -rf /app/node_modules /app/*.js /app/package.json /app/package-lock.json
+        cp /src/oracle/*.js /src/oracle/package.json /src/oracle/package-lock.json /app/
+        rm -f /app/*.test.js
+        cd /app
+        npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+        echo "[deploy] running $$SIGVARA_COMMIT"
+        # Empty to serve. Once, to make the key: SIGNER_ARGS="new-keystore /secrets-rw/keystore.json"
+        # with ./secrets also mounted writable at /secrets-rw (runbook section 5).
+        chown node:node /data
+        exec su-exec node:node node signer.js $${SIGNER_ARGS:-}
+    volumes:
+      - signer_app:/app
+      - signer_state:/data
+      - ./secrets:/secrets:ro
+
+volumes:
+  signer_app:
+  signer_state:

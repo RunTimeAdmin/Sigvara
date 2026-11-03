@@ -27,6 +27,7 @@ const path = require('path');
 const { ethers } = require('ethers');
 const policy = require('./publisher-policy');
 const { createLinkScanner } = require('./link-scan');
+const signerAuth = require('./signer-auth');
 
 const REPUTATION_EVENTS = [
   'event ReputationUpdated(bytes32 indexed didHash, uint8 totalScore, uint256 timestamp, bytes32 evidenceRoot)',
@@ -258,18 +259,21 @@ function createPublisher({ cfg, chain, scanner, reads, signer, state, log = cons
  * Web3Signer in front of a KMS or HSM, on another host. The key never reaches this process. Each
  * signed transaction is decoded and checked against what was asked before it is broadcast.
  */
-function remoteSigner({ url, publisher, provider, chainId, to, maxFeeWei, maxGas, waitMs = 120_000 }) {
+function remoteSigner({ url, secret, publisher, provider, chainId, to, maxFeeWei, maxGas, waitMs = 120_000 }) {
   const iface = new ethers.Interface(FEEDBACK_ABI);
   let id = 0;
   async function rpc(method, params) {
+    // Signed with the secret both hosts hold (signer-auth.js), so the signer can tell this request
+    // from one changed or replayed on the way.
+    const body = JSON.stringify({ jsonrpc: '2.0', id: ++id, method, params });
     const res = await fetch(url, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, redirect: 'error',
-      body: JSON.stringify({ jsonrpc: '2.0', id: ++id, method, params }),
-      signal: AbortSignal.timeout(15_000),
+      method: 'POST', redirect: 'error', body, signal: AbortSignal.timeout(15_000),
+      headers: { 'content-type': 'application/json', [signerAuth.HEADER]: signerAuth.authHeader(secret, body) },
     });
-    const body = await res.json();
-    if (body.error) throw new Error(`signer ${method}: ${body.error.message || JSON.stringify(body.error)}`);
-    return body.result;
+    if (res.status !== 200) throw new Error(`signer ${method}: HTTP ${res.status}`);
+    const reply = await res.json();
+    if (reply.error) throw new Error(`signer ${method}: ${reply.error.message || JSON.stringify(reply.error)}`);
+    return reply.result;
   }
   return {
     async address() {
@@ -347,6 +351,10 @@ function readConfig(env = process.env) {
     if (!ethers.isAddress(v)) throw new Error(`${name} is not an address`);
     return ethers.getAddress(v);
   };
+  const hexSecret = (v) => {
+    if (!/^[0-9a-f]{64,}$/i.test(v)) throw new Error('PUBLISH_SIGNER_SECRET must be at least 32 bytes of hex');
+    return v;
+  };
   const mode = String(env.PUBLISH_MODE || 'shadow').trim();
   if (!['shadow', 'live'].includes(mode)) throw new Error(`PUBLISH_MODE is "${mode}"; it is shadow or live`);
   const allow = String(env.PUBLISH_ALLOW_AGENT_IDS ?? '').split(',').map((x) => x.trim()).filter(Boolean);
@@ -372,6 +380,8 @@ function readConfig(env = process.env) {
     minBalance: ethers.parseEther(String(env.PUBLISH_MIN_BALANCE || '0.5')),
     // Live mode only.
     signerUrl: mode === 'live' ? need('PUBLISH_SIGNER_URL') : '',
+    // The HMAC secret shared with the signer, as hex (signer-auth.js).
+    signerSecret: mode === 'live' ? hexSecret(need('PUBLISH_SIGNER_SECRET')) : '',
     maxFeeWei: mode === 'live' ? ethers.parseUnits(need('PUBLISH_MAX_FEE_GWEI'), 'gwei') : 0n,
     maxGas: BigInt(env.PUBLISH_MAX_GAS || 400_000),
   };
@@ -450,7 +460,7 @@ async function main() {
     },
   };
   const signer = cfg.mode === 'live'
-    ? remoteSigner({ url: cfg.signerUrl, publisher: cfg.publisher, provider, chainId, to: cfg.feedbackRegistry, maxFeeWei: cfg.maxFeeWei, maxGas: cfg.maxGas })
+    ? remoteSigner({ url: cfg.signerUrl, secret: cfg.signerSecret, publisher: cfg.publisher, provider, chainId, to: cfg.feedbackRegistry, maxFeeWei: cfg.maxFeeWei, maxGas: cfg.maxGas })
     : null;
 
   // One file, two writers: the cycle's state and the link scan's. Each writes only its own part,

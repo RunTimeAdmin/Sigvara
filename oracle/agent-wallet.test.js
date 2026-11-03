@@ -61,7 +61,7 @@ test('requestSignature: asks the remote signer, and checks the answer is the pub
   for (const method of ['eth_signTypedData_v4', 'eth_signTypedData']) {
     const s = await fakeSigner(publisher, { method });
     try {
-      assert.ok(signedBy(typed, await requestSignature(s.url, typed)), method);
+      assert.ok(signedBy(typed, await requestSignature(s.url, typed, 'ab'.repeat(32))), method);
     } finally {
       await s.close();
     }
@@ -73,7 +73,7 @@ test('requestSignature: a signature from another key is refused', async () => {
   const typed = agentWalletTypedData({ chainId: 5042002, registry: REGISTRY, agentId: 897764, newWallet: publisher.address, owner: OWNER, deadline: 1 });
   const s = await fakeSigner(ethers.Wallet.createRandom());
   try {
-    await assert.rejects(requestSignature(s.url, typed), /not the publisher's/);
+    await assert.rejects(requestSignature(s.url, typed, 'ab'.repeat(32)), /not the publisher's/);
   } finally {
     await s.close();
   }

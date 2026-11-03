@@ -409,7 +409,7 @@ Sigvara's own registration (agent 897764). The design and David's decisions are 
 | Where | The primary's host, `/docker/sigvara-publisher`, from `docker-compose.publisher.vps.yml` and `oracle/.env.publisher.example`. One copy only, never on the checker. |
 | Container | `sigvara-publisher` |
 | State volume | `sigvara-publisher_publisher_state` (`/data/publisher-state.json`: the score-event and link scan positions, what is pending, and what was posted to which 8004 agent). The positions can be rebuilt from the chain; the record of where each score went cannot, and without it a score left on an 8004 agent that is no longer linked is not revoked. Back it up with the oracle state (section 1). |
-| Key | None on this host. In live mode a remote signer on another host, backed by a KMS or HSM, signs at `PUBLISH_SIGNER_URL` |
+| Key | None on this host. In live mode the policy signer (`oracle/signer.js`) on `packrai-vps` signs at `PUBLISH_SIGNER_URL`. On testnet its key is an encrypted keystore there (David, 3 November 2026); mainnet needs a KMS or HSM behind it |
 
 **Shadow mode** (`PUBLISH_MODE=shadow`, the default) reads everything and sends nothing. Each run
 logs `[publisher] run: N planned, 0 sent, M skipped (reason: count, ...)`, and each post it would
@@ -419,21 +419,46 @@ below are done is `the registration's agentWallet is 0x18CB...4811, not the publ
 
 **Going live**, in this order. Each step is David's go.
 
-1. Create the publisher key in the remote signer and note its address. Point `PUBLISHER_ADDRESS`
-   and `PUBLISH_SIGNER_URL` at it, and fund it with testnet USDC above `PUBLISH_MIN_BALANCE`. The
-   publisher refuses any signed transaction other than the one it asked for, but a compromised
-   publisher host can ask for anything, so the signer must enforce its own policy too: only type-2
-   transactions to the ERC-8004 Reputation Registry, calling `giveFeedback` or `revokeFeedback`,
-   with no value.
+1. Set up the signer on `packrai-vps`, in `/docker/sigvara-signer`, from
+   `docker-compose.signer.vps.yml` and `oracle/.env.signer.example`:
+   - Make `secrets/` with `umask 077`, owned by uid 1000 (the container's `node` user) with mode
+     0700, and in it `password` and `hmac-secret` (each `openssl rand -hex 32`), owned by uid 1000
+     with mode 0400. The signer refuses a secret anyone else can read.
+   - Write `keystore.json` once with
+     `docker compose run --rm -e SIGNER_ARGS="new-keystore /secrets-rw/keystore.json" -v "$PWD/secrets:/secrets-rw" signer`.
+     It prints only the new address, writes the file 0400, and refuses to overwrite one.
+   - Let only the publisher's host reach the port: `ufw allow from 72.62.41.138 to any port 28600 proto tcp`,
+     with nothing else allowing it. The signer also drops any other connection itself.
+   - Start it, and check its log names that address and `72.62.41.138` as the only caller. It
+     signs nothing in its first minute.
+   - On the publisher's host, set `PUBLISHER_ADDRESS` to that address, `PUBLISH_SIGNER_URL` to
+     `http://76.13.101.31:28600`, and `PUBLISH_SIGNER_SECRET` to the same secret. Keep
+     `PUBLISH_MODE=shadow` until step 3.
+   - Fund the address with testnet USDC above `PUBLISH_MIN_BALANCE`.
+
+   The signer signs only:
+   - `giveFeedback` on the ERC-8004 Reputation Registry, tagged `sigvara`/`score`, 0 to 100, with
+     a `data:` URI holding JSON;
+   - `revokeFeedback` on the same registry;
+   - the `AgentWalletSet` message for agent 897764, naming itself, for the registration's owner,
+     due within five minutes of the chain's clock.
+
+   Each transaction must be type 2 with no value, at the publisher's next nonce as the chain has
+   it, under the gas and fee caps, and it signs at most `SIGNER_MAX_PER_HOUR` an hour, counted
+   across restarts. A compromised publisher host can make it post wrong scores at that rate, for as
+   long as it is compromised, and nothing else: nothing can be signed ahead and kept for later.
+
+   **If the publisher's host is compromised**, rotate the key, not just the HMAC secret: a new
+   keystore, step 2 with the new address, and the old address's posts revoked by hand. Until then,
+   the old key keeps posting whatever the host asks, at the capped rate.
 2. Make it the registration's `agentWallet`. The publisher key signs the EIP-712 message
    `setAgentWallet` checks, and the registration's owner (the deployer) sends
    `setAgentWallet(897764, publisher, deadline, signature)`. The registry refuses a deadline more
    than five minutes ahead, so the two go in one sitting:
    1. David loads the deployer key into `D:\Sigvara\.env` with his key helper.
-   2. `node oracle/agent-wallet.js`, with `RPC_URL`, `EXTERNAL_IDENTITY_ADDRESS`,
-      `SIGVARA_ERC8004_AGENT_ID`, `PUBLISHER_ADDRESS` and `PUBLISH_SIGNER_URL` set, asks the signer
-      for the signature, checks it, and prints `DEADLINE` and `SIGNATURE`, four minutes ahead of
-      the chain's clock.
+   2. `docker exec sigvara-publisher node agent-wallet.js` on the publisher's host, which has the
+      settings and the HMAC secret, asks the signer for the signature, checks it, and prints
+      `DEADLINE` and `SIGNATURE`, four minutes ahead of the chain's clock.
    3. From `D:\Sigvara`, with those two and `PUBLISHER_ADDRESS` in the environment and the
       project on the same drive: `forge script <project>/script/SetAgentWallet.s.sol:SetAgentWallet
       --root <project> --rpc-url https://rpc.testnet.arc.network --broadcast`. It checks the sender

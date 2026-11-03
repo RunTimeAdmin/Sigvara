@@ -406,6 +406,7 @@ const { ethers } = require('ethers');
 const { remoteSigner, readConfig } = require('./publisher');
 
 const REGISTRY = '0x8004B663056A597Dffe9eCcC1965A193B7388713';
+const SECRET = 'ab'.repeat(32);
 
 /**
  * A JSON-RPC signer on a local port, signing with a throwaway key. `tamper` changes the transaction
@@ -451,7 +452,7 @@ test('remoteSigner: signs through the remote signer, checks what came back, and 
   const s = await fakeSigner();
   try {
     const provider = fakeProvider();
-    const signer = remoteSigner({ url: s.url, publisher: s.address, provider, chainId: 5042002, to: REGISTRY, maxFeeWei: 50n * 10n ** 9n, maxGas: 400_000n });
+    const signer = remoteSigner({ url: s.url, secret: SECRET, publisher: s.address, provider, chainId: 5042002, to: REGISTRY, maxFeeWei: 50n * 10n ** 9n, maxGas: 400_000n });
     assert.equal(await signer.address(), s.address);
     const hash = await signer.send('revoke', 7, [7, 1]);
     assert.equal(provider.broadcast.length, 1);
@@ -470,7 +471,7 @@ test('remoteSigner: a fee above PUBLISH_MAX_FEE_GWEI is not sent', async () => {
   const s = await fakeSigner();
   try {
     const provider = fakeProvider({ maxFeePerGas: 80n * 10n ** 9n });
-    const signer = remoteSigner({ url: s.url, publisher: s.address, provider, chainId: 5042002, to: REGISTRY, maxFeeWei: 50n * 10n ** 9n, maxGas: 400_000n });
+    const signer = remoteSigner({ url: s.url, secret: SECRET, publisher: s.address, provider, chainId: 5042002, to: REGISTRY, maxFeeWei: 50n * 10n ** 9n, maxGas: 400_000n });
     await assert.rejects(signer.send('revoke', 7, [7, 1]), /above PUBLISH_MAX_FEE_GWEI/);
     assert.equal(provider.broadcast.length, 0);
   } finally {
@@ -491,7 +492,7 @@ test('remoteSigner: a signed transaction other than the one asked for is not sen
     const s = await fakeSigner({ tamper });
     try {
       const provider = fakeProvider();
-      const signer = remoteSigner({ url: s.url, publisher: s.address, provider, chainId: 5042002, to: REGISTRY, maxFeeWei: 50n * 10n ** 9n, maxGas: 400_000n });
+      const signer = remoteSigner({ url: s.url, secret: SECRET, publisher: s.address, provider, chainId: 5042002, to: REGISTRY, maxFeeWei: 50n * 10n ** 9n, maxGas: 400_000n });
       await assert.rejects(signer.send('revoke', 7, [7, 1]), /other than the one asked for/, JSON.stringify(tamper));
       assert.equal(provider.broadcast.length, 0, JSON.stringify(tamper));
     } finally {
@@ -501,7 +502,7 @@ test('remoteSigner: a signed transaction other than the one asked for is not sen
 });
 
 test('remoteSigner: a signer that does not answer reads as no address', async () => {
-  const signer = remoteSigner({ url: 'http://127.0.0.1:9', publisher: PUBLISHER, provider: fakeProvider(), chainId: 1, to: REGISTRY, maxFeeWei: 1n, maxGas: 1n });
+  const signer = remoteSigner({ url: 'http://127.0.0.1:9', secret: SECRET, publisher: PUBLISHER, provider: fakeProvider(), chainId: 1, to: REGISTRY, maxFeeWei: 1n, maxGas: 1n });
   assert.equal(await signer.address(), null);
 });
 
@@ -517,9 +518,12 @@ test('readConfig: shadow mode needs no key, signer or publisher address; live mo
   assert.equal(shadow.signerUrl, '');
   assert.throws(() => readConfig({ ...base, PUBLISH_MODE: 'live' }), /PUBLISHER_ADDRESS is required/);
   assert.throws(() => readConfig({ ...base, PUBLISH_MODE: 'live', PUBLISHER_ADDRESS: PUBLISHER }), /PUBLISH_SIGNER_URL is required/);
-  assert.throws(() => readConfig({ ...base, PUBLISH_MODE: 'live', PUBLISHER_ADDRESS: PUBLISHER, PUBLISH_SIGNER_URL: 'https://signer.internal' }), /PUBLISH_MAX_FEE_GWEI is required/);
-  const liveCfg = readConfig({ ...base, PUBLISH_MODE: 'live', PUBLISHER_ADDRESS: PUBLISHER, PUBLISH_SIGNER_URL: 'https://signer.internal', PUBLISH_MAX_FEE_GWEI: '50' });
+  assert.throws(() => readConfig({ ...base, PUBLISH_MODE: 'live', PUBLISHER_ADDRESS: PUBLISHER, PUBLISH_SIGNER_URL: 'https://signer.internal' }), /PUBLISH_SIGNER_SECRET is required/);
+  const live = { ...base, PUBLISH_MODE: 'live', PUBLISHER_ADDRESS: PUBLISHER, PUBLISH_SIGNER_URL: 'https://signer.internal', PUBLISH_SIGNER_SECRET: SECRET };
+  assert.throws(() => readConfig(live), /PUBLISH_MAX_FEE_GWEI is required/);
+  const liveCfg = readConfig({ ...live, PUBLISH_MAX_FEE_GWEI: '50' });
   assert.equal(liveCfg.maxFeeWei, 50n * 10n ** 9n);
+  assert.equal(liveCfg.signerSecret, SECRET);
   assert.throws(() => readConfig({ ...base, PUBLISH_MODE: 'loud' }), /shadow or live/);
   assert.throws(() => readConfig({ ...base, EXTERNAL_LINK_FROM_BLOCK: '' }), /EXTERNAL_LINK_FROM_BLOCK is required/);
 });
