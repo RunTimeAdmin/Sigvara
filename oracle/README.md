@@ -161,8 +161,8 @@ adversarial belongs to `/evidence`, which recomputes against the chain.
 
 `externalFeed` is `disabled`, `configured` or `unreachable`, and exists because
 `externalScore` renders 0 in three unrelated situations: `EXTERNAL_*` was never set, the
-agent is not linked to an ERC-8004 id, or it is linked with no feedback in a recognized
-tag. Those need different responses and the score cannot tell them apart.
+agent is not linked to an ERC-8004 id, or no reviewer of it passes `reviewers.js` with feedback in a
+recognized tag (the epoch log says which). Those need different responses and the score cannot tell them apart.
 
 `externalChainId` is the chain the feed actually reached, read from the provider rather
 than parsed out of the URL, and `null` when it could not be reached.
@@ -206,7 +206,7 @@ Also exposed, and worth knowing about:
 
 | series | what it answers |
 |---|---|
-| `sigvara_oracle_checker_comparisons_total{verdict}` | how many pending scores this checker re-measured, and how many it disagreed with. Zero on a primary, which never compares. |
+| `sigvara_oracle_checker_comparisons_total{verdict}` | how many pending scores this checker re-measured, and how many it disagreed with. Zero on a primary, which never compares. Beside it, `sigvara_oracle_checker_deferred_total{action}` counts the finalizes and empty slots it left to the primary inside `CHECKER_GRACE_MINUTES`. |
 | `sigvara_oracle_propose_total{result="slot_taken"}` | `proposeIfEmpty` declining to overwrite a pending score. A normal race outcome, not a failure. |
 | `sigvara_oracle_propose_attempts_total`, `..._finalize_attempts_total` | attempts, so success + error + slot_taken can be reconciled rather than assumed to account for everything. |
 | `sigvara_oracle_proposals_rejected_total` | scores the slashing committee rejected. |
@@ -792,9 +792,9 @@ So the second operator runs with `ORACLE_MODE=checker` and never competes for th
 
 | pending proposal | checker does |
 |---|---|
-| none | proposes: covers for a silent primary, and in practice for the hour after a finalization before the primary proposes again (35 of 262 proposals to 3 November 2026, none of them recomputed, since a primary never compares) |
+| none, for `CHECKER_GRACE_MINUTES` or longer | proposes: covers for a silent primary. A slot empty for less is left to the primary, since nothing recomputes a checker's proposal (until 3 November 2026 the checker did not wait, and proposed 35 of the first 262 scores, none of them recomputed) |
 | agrees, window open | nothing |
-| agrees, window elapsed | finalizes |
+| agrees, window elapsed by `CHECKER_GRACE_MINUTES` or more | finalizes. Sooner, it leaves the finalize to the primary, which finalizes and proposes again in one epoch, so the slot is never left empty |
 | **disagrees** | **records a divergence and touches nothing** |
 
 The last row is the one that matters. Overwriting a disputed proposal would restart the
@@ -830,7 +830,7 @@ What this does and does not buy:
 - **Does**: an independent recomputation of every score, and an alert the slashing
   committee can act on inside the challenge window. The committee has always held the
   reject power and has never had anything telling it when to use it.
-- **Does**: failover. If the primary stops, the checker finds an empty slot and proposes.
+- **Does**: failover. If the primary stops, the checker finalizes what it left and proposes into the empty slot, once the primary is `CHECKER_GRACE_MINUTES` late.
 - **Does not**: make agreement a protocol guarantee. Nothing in the contract requires the
   two to agree; a committee still has to act on the alert. Enforcing N-of-M agreement
   would need a storage change to `pendingScores` and a UUPS upgrade.
@@ -965,7 +965,7 @@ and then its silence means nothing.
 | `FEE_REGISTRY_ADDRESS` | (empty) | SigvaraEpochFees address for fee-gated scoring |
 | `EXTERNAL_RPC` | (empty) | RPC for ERC-8004 external score lookups |
 | `EXTERNAL_IDENTITY_ADDRESS` | (empty) | ERC-8004 Identity contract |
-| `EXTERNAL_REPUTATION_ADDRESS` | (empty) | ERC-8004 Reputation contract |
+| `EXTERNAL_REPUTATION_ADDRESS` | (empty) | ERC-8004 Reputation contract. Its feedback counts only from reviewers `reviewers.js` accepts; `EXTERNAL_PUBLIC_FUNDERS` lists wallets that fund everyone (a faucet, an exchange), which end a funding trace instead of joining every reviewer they funded |
 
 ### Transactions and the clock
 
@@ -1112,7 +1112,7 @@ See [Running a second operator](#running-a-second-operator).
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `ORACLE_MODE` | `primary` | `checker` scores every agent, compares with the pending proposal, records divergences and proposes only into an empty slot. Refused together with `FEE_REGISTRY_ADDRESS`. Any value other than `primary` or `checker`, including `Checker`, stops the process |
+| `ORACLE_MODE` | `primary` | `checker` scores every agent, compares with the pending proposal, records divergences, and finalizes or fills an empty slot only once the primary is `CHECKER_GRACE_MINUTES` late (default twice `EPOCH_HOURS`; refused below one epoch; set it above the primary's epoch). Refused together with `FEE_REGISTRY_ADDRESS`. Any value other than `primary` or `checker`, including `Checker`, stops the process |
 | `DIVERGENCE_TOLERANCE` | `3` | Points of difference, in the total or in any one factor, that count as benign skew between two honest operators (`decideCheckerAction` in `epoch-policy.js`). A non-number, a negative value or one above `10` stops the process at startup, since each would make the checker agree with everything |
 | `PRIMARY_EVIDENCE_URL` | `https://oracle.sigvara.xyz` | The primary's public base URL. Named in each divergence record as `compareWith`, so a reader is told where the other side's evidence lives |
 

@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  decideAction, decideCheckerAction, finalizableAtOf, scoreDivergence, mapChunked, scoringIsStale,
+  decideAction, decideCheckerAction, checkerGraceMs, finalizableAtOf, scoreDivergence, mapChunked, scoringIsStale,
   epochIntervalError, divergenceToleranceError, MAX_TIMER_MS, MIN_EPOCH_MS,
 } = require('./epoch-policy');
 
@@ -139,6 +139,40 @@ test('epochIntervalError: a too-short interval is refused', () => {
 const WINDOW = 21600; // the live challenge window on Arc: 6 hours
 const agreed = { feeScore: 0, successScore: 7, ageScore: 0, externalScore: 0, communityScore: 5, propagationScore: 0 };
 const pendingAt = (t, data = agreed) => ({ exists: true, proposedAt: t, data });
+
+test('decideCheckerAction: with a grace, the primary keeps an emptied slot until it is late', () => {
+  const grace = { graceSeconds: 7200, emptySince: 1_000_000 };
+  assert.equal(decideCheckerAction({ exists: false }, agreed, WINDOW, 1_000_000 + 7199, undefined, grace), 'defer-propose');
+  assert.equal(decideCheckerAction({ exists: false }, agreed, WINDOW, 1_000_000 + 7200, undefined, grace), 'propose');
+  // emptySince 0 covers at once: a slot held by a proposer that lost its authority.
+  assert.equal(decideCheckerAction({ exists: false }, agreed, WINDOW, 1_000_000, undefined, { graceSeconds: 7200 }), 'propose');
+});
+
+test('decideCheckerAction: with a grace, the primary keeps a ready finalize until it is late', () => {
+  const t = 1_000_000;
+  const grace = { graceSeconds: 7200 };
+  assert.equal(decideCheckerAction(pendingAt(t), agreed, WINDOW, t + WINDOW - 1, undefined, grace), 'skip');
+  assert.equal(decideCheckerAction(pendingAt(t), agreed, WINDOW, t + WINDOW, undefined, grace), 'defer-finalize');
+  assert.equal(decideCheckerAction(pendingAt(t), agreed, WINDOW, t + WINDOW + 7199, undefined, grace), 'defer-finalize');
+  assert.equal(decideCheckerAction(pendingAt(t), agreed, WINDOW, t + WINDOW + 7200, undefined, grace), 'finalize');
+});
+
+test('decideCheckerAction: a grace never lets a disputed score through', () => {
+  const t = 1_000_000;
+  const mine = { ...agreed, successScore: agreed.successScore + 10 };
+  assert.equal(decideCheckerAction(pendingAt(t), mine, WINDOW, t + WINDOW * 100, undefined, { graceSeconds: 7200 }), 'diverged');
+});
+
+test('checkerGraceMs: twice the epoch unset, and never shorter than the epoch', () => {
+  const hour = 3_600_000;
+  assert.deepEqual(checkerGraceMs(undefined, hour), { ms: 2 * hour });
+  assert.deepEqual(checkerGraceMs('', hour), { ms: 2 * hour });
+  assert.deepEqual(checkerGraceMs('90', hour), { ms: 90 * 60_000 });
+  assert.deepEqual(checkerGraceMs('60', hour), { ms: hour });
+  for (const bad of ['59', '-1', 'two hours', 'NaN']) {
+    assert.ok(checkerGraceMs(bad, hour).error, bad);
+  }
+});
 
 test('decideCheckerAction: nothing pending -> propose, covering a silent primary', () => {
   assert.equal(decideCheckerAction({ exists: false }, agreed, WINDOW, 1_000_000), 'propose');

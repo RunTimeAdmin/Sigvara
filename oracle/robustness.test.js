@@ -532,10 +532,13 @@ const ZERO_SCORE = { feeScore: 0, successScore: 0, ageScore: 0, externalScore: 0
 // Far from anything an agent with no payments computes, so a checker is bound to disagree.
 const HIGH_SCORE = { feeScore: 40, successScore: 25, ageScore: 10, externalScore: 0, communityScore: 5, propagationScore: 5 };
 
-function pendingProposal(world, { agedPastWindow = false, data = ZERO_SCORE, ...extra } = {}) {
+// The checker's grace when CHECKER_GRACE_MINUTES is unset: twice the 24-hour default epoch.
+const DEFAULT_GRACE = 2 * 86_400;
+
+function pendingProposal(world, { agedPastWindow = false, agedPastGrace = false, data = ZERO_SCORE, ...extra } = {}) {
   return {
     exists: true,
-    proposedAt: world.data.nowSec - (agedPastWindow ? 30_000 : 100),
+    proposedAt: world.data.nowSec - (agedPastGrace ? 21_600 + DEFAULT_GRACE + 600 : agedPastWindow ? 30_000 : 100),
     data,
     evidenceRoot: null,
     ...extra,
@@ -650,6 +653,8 @@ test('a checker covers for a pending proposal whose proposer has lost its author
   const world = new World();
   const agent = world.addRegisteredAgent();
   world.setFor('pending', agent.didHash, pendingProposal(world, { data: HIGH_SCORE, proposerDead: true }));
+  // Scored a minute ago, so being stranded is the only thing that lets it cover at once.
+  world.setFor('reputation', agent.didHash, { lastUpdated: world.data.nowSec - 60 });
 
   await inEpoch({ world, env: CHECKER_ENV }, ({ text, calls, logs }) => {
     assert.deepEqual(
@@ -700,11 +705,11 @@ function computedScores() {
   });
 }
 
-test('a checker finalizes a proposal it agrees with once its window has passed', async () => {
+test('a checker finalizes a proposal it agrees with once the primary is a grace period late', async () => {
   const agreed = await computedScores();
   const world = new World();
   const agent = world.addRegisteredAgent();
-  world.setFor('pending', agent.didHash, pendingProposal(world, { agedPastWindow: true, data: agreed }));
+  world.setFor('pending', agent.didHash, pendingProposal(world, { agedPastGrace: true, data: agreed }));
 
   await inEpoch({ world, env: CHECKER_ENV }, ({ text, calls }) => {
     assert.deepEqual(names(calls), ['canPropose', 'finalizeScore'], 'it asked, found a live proposer, and finalized');
@@ -719,7 +724,7 @@ test('a checker that finds the proposer gone only when it finalizes leaves the s
   const agent = world.addRegisteredAgent();
   // The probe is told the proposer was live when it asked, and the finalize that it is not: the
   // operator was removed in between.
-  world.setFor('pending', agent.didHash, pendingProposal(world, { agedPastWindow: true, data: agreed, proposerDead: true }));
+  world.setFor('pending', agent.didHash, pendingProposal(world, { agedPastGrace: true, data: agreed, proposerDead: true }));
   world.setFor('canPropose', agent.didHash, { ok: false, reason: 'ScoreAlreadyPending' });
 
   await inEpoch({ world, env: CHECKER_ENV }, ({ text, calls, logs }) => {
@@ -730,6 +735,139 @@ test('a checker that finds the proposer gone only when it finalizes leaves the s
     assert.equal(counter(text, 'sigvara_oracle_propose_total{result="success"}'), 0, 'and nothing proposed on a guess');
     assert.equal(counter(text, EPOCHS_OK), 1);
   });
+});
+
+// ---- a checker leaves the primary its turn ----------------------------------------------
+//
+// The primary finalizes and proposes again in one epoch, so a slot is empty only for moments. A
+// checker that finalized as soon as a window passed emptied the slot itself, and then often
+// proposed into it before the primary did: 35 of the first 262 proposals on Arc testnet, none of
+// them recomputed, since a primary never compares (docs/divergence-log.md, 2026-11-03). It now
+// waits out CHECKER_GRACE_MINUTES before doing either.
+
+const DEFERRED_FINALIZE = 'sigvara_oracle_checker_deferred_total{action="finalize"}';
+const DEFERRED_PROPOSE = 'sigvara_oracle_checker_deferred_total{action="propose"}';
+// For tests that move the chain's clock between epochs: the oracle refuses an epoch when the
+// chain and this host disagree by more than MAX_CLOCK_SKEW_SECONDS, and these jump days ahead.
+const MOVING_CLOCK_ENV = { ...CHECKER_ENV, MAX_CLOCK_SKEW_SECONDS: String(4 * 86_400) };
+
+test('a checker leaves a finalize to the primary until the primary is a grace period late', async () => {
+  const agreed = await computedScores();
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  // Past its window by two and a half hours, well inside the grace.
+  world.setFor('pending', agent.didHash, pendingProposal(world, { agedPastWindow: true, data: agreed }));
+
+  await inEpoch({ world, env: CHECKER_ENV }, ({ text, calls, logs }) => {
+    assert.deepEqual(names(calls), ['canPropose'], 'it asked whether the proposer is live, and sent nothing');
+    assert.match(logs, /agreed; leaving the finalize to the primary until /);
+    assert.equal(counter(text, DEFERRED_FINALIZE), 1);
+    assert.equal(counter(text, AGREED), 1, 'it still says it agrees');
+    assert.equal(counter(text, 'sigvara_oracle_finalize_total{result="success"}'), 0);
+  });
+});
+
+test('a checker leaves a slot emptied by a finalize to the primary', async () => {
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  world.setFor('reputation', agent.didHash, { lastUpdated: world.data.nowSec - 3600 });
+
+  await inEpoch({ world, env: CHECKER_ENV }, ({ text, calls, logs }) => {
+    assert.deepEqual(names(calls), [], 'nothing was proposed');
+    assert.match(logs, /slot empty, counted from .*; leaving it to the primary until /);
+    assert.equal(counter(text, DEFERRED_PROPOSE), 1);
+    assert.equal(counter(text, 'sigvara_oracle_propose_total{result="success"}'), 0);
+  });
+});
+
+test('a checker leaves a newly registered agent to the primary too', async () => {
+  const world = new World();
+  // Registered an hour ago and never scored.
+  world.addRegisteredAgent({ registeredDaysAgo: 1 / 24 });
+
+  await inEpoch({ world, env: CHECKER_ENV }, ({ text, calls }) => {
+    assert.deepEqual(names(calls), []);
+    assert.equal(counter(text, DEFERRED_PROPOSE), 1);
+  });
+});
+
+test('a checker covers for a primary that has left a slot empty for the whole grace', async () => {
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  world.setFor('reputation', agent.didHash, { lastUpdated: world.data.nowSec - DEFAULT_GRACE - 600 });
+
+  await withOracle({ world, env: MOVING_CLOCK_ENV }, async (oracle) => {
+    // The first epoch to find the slot empty starts the count, however old the last score is.
+    let text = await epochsFinished(oracle, 1);
+    assert.deepEqual(names(oracle.calls()), []);
+    assert.equal(counter(text, DEFERRED_PROPOSE), 1);
+
+    world.set('nowSec', world.data.nowSec + DEFAULT_GRACE);
+    assert.equal((await oracle.call('POST', '/epoch', {}, ADMIN)).status, 202);
+    text = await epochsFinished(oracle, 2);
+    assert.deepEqual(
+      oracle.calls().map((c) => [c.name, c.args[3]]),
+      [['proposeScore', true]],
+      'proposed through the compare-and-swap entry point',
+    );
+    assert.equal(counter(text, DEFERRED_PROPOSE), 1, 'deferred once, not again');
+    assert.equal(counter(text, 'sigvara_oracle_propose_total{result="success"}'), 1);
+  });
+});
+
+test('a checker leaves the primary a slot emptied by a rejection, though the last score is old', async () => {
+  // A committee rejection deletes the proposal and leaves lastUpdated where it was, here ten days
+  // back. Counted from there, the checker proposed at once, ahead of the primary, on the very
+  // agent the committee had just acted on.
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  world.setFor('reputation', agent.didHash, { lastUpdated: world.data.nowSec - 10 * 86_400 });
+
+  await inEpoch({ world, env: CHECKER_ENV }, ({ text, calls }) => {
+    assert.deepEqual(names(calls), []);
+    assert.equal(counter(text, DEFERRED_PROPOSE), 1);
+  });
+});
+
+test('a checker that finalized for a late primary covers the slot at its next epoch', async () => {
+  const agreed = await computedScores();
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  world.setFor('pending', agent.didHash, pendingProposal(world, { agedPastGrace: true, data: agreed }));
+
+  await withOracle({ world, env: MOVING_CLOCK_ENV }, async (oracle) => {
+    await epochsFinished(oracle, 1);
+    assert.deepEqual(names(oracle.calls()), ['canPropose', 'finalizeScore']);
+
+    // The finalize landed: the slot is empty, and its score was finalized a moment ago.
+    world.setFor('pending', agent.didHash, { exists: false });
+    world.setFor('reputation', agent.didHash, { lastUpdated: world.data.nowSec });
+    world.set('nowSec', world.data.nowSec + 3600);
+    assert.equal((await oracle.call('POST', '/epoch', {}, ADMIN)).status, 202);
+    const text = await epochsFinished(oracle, 2);
+    assert.deepEqual(names(oracle.calls()), ['canPropose', 'finalizeScore', 'proposeScore'], 'no second grace');
+    assert.equal(counter(text, DEFERRED_PROPOSE), 0);
+  });
+});
+
+test('a checker that cannot read when a slot was last scored sends nothing for that agent', async () => {
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  world.setFor('reputation', agent.didHash, 'throw');
+
+  await inEpoch({ world, env: CHECKER_ENV }, ({ text, calls, logs }) => {
+    assert.deepEqual(names(calls), [], 'skipped, not proposed on a guess');
+    assert.match(logs, /reputation read failed/);
+    assert.equal(counter(text, EPOCHS_OK), 1, 'the epoch carries on');
+  });
+});
+
+test('a grace shorter than the checker\'s own epoch stops it at startup', async () => {
+  for (const [grace, why] of [['30', /shorter than this checker's epoch of 1440 minutes/], ['-5', /CHECKER_GRACE_MINUTES="-5" is below the minimum of 0/]]) {
+    const { code, log } = await runToExit({ world: new World(), env: { ...CHECKER_ENV, CHECKER_GRACE_MINUTES: grace } });
+    assert.equal(code, 1, `CHECKER_GRACE_MINUTES=${grace}`);
+    assert.match(log, why);
+  }
 });
 
 test('a checker whose own wallet would be refused leaves the proposal alone', async () => {

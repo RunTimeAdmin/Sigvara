@@ -18,6 +18,12 @@
 //     explodeHealth: when true, the /health route throws
 //     externalOwns: when set, the ERC-8004 registry reads as configured and /link finds the agent owned by
 //                its Sigvara operator (true) or not (false); left out, the registry is not configured
+//     externalFeedback: [{ client, value, tag }] the feedback a linked agent's ERC-8004 identity holds, judged
+//                by the real reviewers.js when externalOwns is true
+//     reviewers: { "<address>": { registered, operator, status, registeredAt, matured, bonded } } what the
+//                identity registry says of a reviewer (default not an agent); "throw" when the node cannot say
+//     funders:   { "<address>": "<address>" } who first funded an address (default none found); the
+//                snapshot block, the payment blocks and every funding block read as `head`
 //     chainId:   the chain id the fake node reports (default 5042)
 //     nonceGap:  how many of the wallet's transactions the node holds pending (default 0)
 //     operatorStanding: { enforced, allowed, operatorBond } what the boot check finds (default not enforced)
@@ -36,6 +42,7 @@
 //     challengeWindow: seconds (default 21600)
 //     feeGating:       true to configure the epoch fee; epochFee: its size, as a decimal string
 //     pending:         { "<didhash>": { exists, proposedAt, finalizableAt, data, evidenceRoot, proposerDead } }  (default none)
+//     reputation:      { "<didhash>": { lastUpdated } } when the agent's score was last finalized (default never)
 //                      finalizableAt: the deadline the contract fixed when the proposal was made; leave it out (or 0)
 //                      for a proposal judged against the live challengeWindow
 //                      proposerDead: the proposer has lost its authority, so finalize reverts with
@@ -150,8 +157,24 @@ const chain = {
   feeGatingConfigured: () => !!world().feeGating,
   getEpochFee: async () => BigInt(world().epochFee ?? 0),
   getPendingScore: async (didHash) => world().pending?.[didHash] ?? { exists: false },
+  // The finalized score; lastUpdated is 0 until one is finalized, as on chain.
+  getReputationData: async (didHash) => {
+    if (world().reputation?.[didHash] === 'throw') throw new Error('stub: reputation read failed');
+    return { lastUpdated: 0, ...(world().reputation?.[didHash] ?? {}) };
+  },
   isCovered: async (didHash) => world().covered?.[didHash] ?? true,
   isBonded: async (didHash) => world().bonded?.[didHash] ?? true,
+  getReviewerStanding: async (address) => {
+    const r = world().reviewers?.[address.toLowerCase()];
+    if (r === 'throw') throw new Error('stub: reviewer read failed');
+    return r ?? { registered: false };
+  },
+  firstFunder: async (address) => {
+    const funder = world().funders?.[address.toLowerCase()];
+    return funder === undefined ? null : { funder: funder.toLowerCase(), block: world().head ?? 1 };
+  },
+  paymentBlock: async (event) => event.blockNumber ?? world().head ?? 1,
+  blockAtOrBefore: async () => world().head ?? 1,
   pruneAgent() {},
   isSlotTaken: () => false,
   isRateLimited: () => false,
@@ -204,7 +227,11 @@ const external = {
     if (world().explodeHealth) throw new Error('stub: the health route was told to fail');
     return { status: 'disabled', chainId: null };
   },
-  externalScoreFor: async () => 0,
+  // The ownership check and the read are faked; what is made of the rows is the real judgment.
+  externalScoreFor: async (agentId, owner, judge) => {
+    if (world().externalOwns !== true || !world().externalFeedback) return 0;
+    return judge(world().externalFeedback);
+  },
   verifyOwnership: async () => world().externalOwns === true,
 };
 

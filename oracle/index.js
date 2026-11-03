@@ -17,9 +17,10 @@ require('./config').requireValidNumericConfig('oracle');
 const http = require('http');
 const chain = require('./chain');
 const external = require('./external');
+const reviewers = require('./reviewers');
 const { computeScore } = require('./scoring');
 const {
-  decideAction, decideCheckerAction, finalizableAtOf, scoreDivergence,
+  decideAction, decideCheckerAction, checkerGraceMs, finalizableAtOf, scoreDivergence,
   epochIntervalError, divergenceToleranceError, DEFAULT_DIVERGENCE_TOLERANCE,
   mapChunked, clockSkewError, scoringIsStale,
 } = require('./epoch-policy');
@@ -111,11 +112,17 @@ const cfg = {
   externalRpc:        process.env.EXTERNAL_RPC || '',
   externalIdentity:   process.env.EXTERNAL_IDENTITY_ADDRESS || '',
   externalReputation: process.env.EXTERNAL_REPUTATION_ADDRESS || '',
+  // Wallets that fund everyone, such as a faucet or an exchange, so a reviewer funded by one
+  // is not clustered with every other (reviewers.js). Checked at startup.
+  publicFunders:      reviewers.parsePublicFunders(process.env.EXTERNAL_PUBLIC_FUNDERS),
   // Checker mode: a second bonded operator that audits the primary's proposals rather
   // than racing them. It scores every agent independently and compares; it proposes only
   // when nothing is pending, and never finalizes or overwrites a score it disputes.
   // See decideCheckerAction in epoch-policy.js for why those two prohibitions matter.
   checkerMode:        process.env.ORACLE_MODE === 'checker',
+  // How long a checker leaves a finalizable proposal or an empty slot to the primary
+  // (checkerGraceMs in epoch-policy.js). Checked at startup in checker mode.
+  checkerGrace:       checkerGraceMs(process.env.CHECKER_GRACE_MINUTES, Number(process.env.EPOCH_HOURS || 24) * 3_600_000),
   divergenceTolerance: Number(process.env.DIVERGENCE_TOLERANCE || DEFAULT_DIVERGENCE_TOLERANCE),
   // Named in divergence records so a reader is told where the other side's evidence
   // lives, rather than having to already know the deployment's endpoint layout.
@@ -170,6 +177,11 @@ if (cfg.checkerMode) {
     console.error(`[oracle] ${tolErr}`);
     process.exit(1);
   }
+  if (cfg.checkerGrace.error) {
+    console.error(`[oracle] ${cfg.checkerGrace.error}`);
+    process.exit(1);
+  }
+  console.log(`[oracle] checker leaves finalizes and empty slots to the primary for ${cfg.checkerGrace.ms / 60_000} minutes`);
   // A checker that proposes as failover would otherwise run the primary's fee path. A fee
   // registry from before the once-per-epoch charge would debit the agent a second time for
   // one scoring epoch, and a current one would refuse the second charge while the two
@@ -203,6 +215,11 @@ try {
   cfg.scopes = readScopes(process.env, cfg.credentials);
 } catch (err) {
   console.error(`[oracle] ${err.message}`);
+  process.exit(1);
+}
+
+if (cfg.publicFunders.error) {
+  console.error(`[oracle] ${cfg.publicFunders.error}`);
   process.exit(1);
 }
 
@@ -309,6 +326,13 @@ function measuredFactorsFor(didHash, now, payerScores = null, events = getPaymen
 // chain reads. Cleared at the start of every epoch so standings cannot go stale.
 let payerScoreCache = new Map();
 
+// A checker's memory of empty slots (decideCheckerAction): when it first found each agent's
+// slot empty, in chain seconds, and which agents it is covering because it finalized their
+// proposal itself once the primary was a grace late. In memory only. A restart forgets both,
+// which delays failover by one grace and never brings it forward.
+const emptySeenAt = new Map();
+const coveringLate = new Set();
+
 async function payerScoresFor(didHash) {
   if (!payments.required(paymentCfg)) return null;
 
@@ -342,6 +366,47 @@ async function payerScoresFor(didHash) {
   const out = {};
   for (const [key] of unique) out[key] = payerScoreCache.get(key);
   return out;
+}
+
+/**
+ * The external factor for one agent: the feedback on its linked ERC-8004 identity, counted
+ * only from the reviewers reviewers.js accepts. 0 when nothing is linked, the feed is off, or
+ * the registry cannot be read (externalScoreFor). Throws when the snapshot or a reviewer
+ * cannot be read, and the agent is skipped this epoch. `nowMs` is the chain's clock, as for scoreAt, and
+ * `events` the payment evidence to judge reviewers by: the checker passes the evidence as it
+ * stood at the proposal it audits.
+ *
+ * Everything is read as of the snapshot, the start of the UTC day containing `nowMs`
+ * (reviewers.snapshotOf): the registry and each reviewer's standing at the snapshot's block,
+ * and only evidence settled by then. A checker auditing a proposal made the same day reads
+ * exactly what its primary read. The feedback itself is read at that block only when the
+ * ERC-8004 registry is on this chain; on another chain it is read at its latest block.
+ */
+async function externalScoreOf(didHash, { operator, agentAddress }, nowMs, events = getPaymentEvents(didHash)) {
+  const linkedId = links.get(didHash);
+  if (!external.configured() || linkedId === undefined) return 0;
+  const snapshotSec = reviewers.snapshotOf(Math.floor(nowMs / 1000));
+  const snapshotBlock = await chain.blockAtOrBefore(snapshotSec);
+  const sameChain = verifiedChainId !== null && external.chainState().chainId === verifiedChainId;
+  return external.externalScoreFor(linkedId, operator, async (rows) => {
+    const result = await reviewers.scoreFeedback(
+      rows,
+      {
+        agent: { operator, agentAddress },
+        events: events.filter((e) => e.ts <= snapshotSec * 1000),
+        nowMs: snapshotSec * 1000,
+      },
+      {
+        standingOf: (address) => chain.getReviewerStanding(address, snapshotBlock),
+        funderOf: chain.firstFunder,
+        paymentBlock: chain.paymentBlock,
+        snapshotBlock,
+        publicFunders: cfg.publicFunders.set,
+      },
+    );
+    if (rows.length) console.log(`[oracle]   ${didHash.slice(0, 10)}… external: ${reviewers.describe(result)}`);
+    return result.score;
+  }, sameChain ? snapshotBlock : undefined);
 }
 
 /**
@@ -797,7 +862,7 @@ async function runEpochInner() {
     }));
 
     for (let k = 0; k < chunk.length; k++) {
-      const { didHash, operator, registeredAt, pending } = chunk[k];
+      const { didHash, operator, agentAddress, registeredAt, pending } = chunk[k];
       const { fresh, bonded, guardError } = guards[k];
       if (guardError) {
         console.error(`[oracle]   ${didHash.slice(0, 10)}… error: ${guardError.message}`);
@@ -861,12 +926,6 @@ async function runEpochInner() {
         // Age-weighted, not the raw count: a flag decays out of the penalty rather than
         // costing two points forever. See store.decayedFlagCount.
         const flagWeight = decayedFlagCount(didHash);
-        // externalScore: only for agents linked to an ERC-8004 identity they own.
-        // Ownership is re-verified inside externalScoreFor; any failure yields 0.
-        const linkedId  = links.get(didHash);
-        const externalScore = (external.configured() && linkedId !== undefined)
-          ? await external.externalScoreFor(linkedId, operator)
-          : 0;
         // The chain's clock, not this host's. chainNow is a block timestamp in seconds;
         // every scoring function below measures in milliseconds, and getting that
         // conversion wrong would date every payment to 1970 and decay the lot to zero.
@@ -877,6 +936,10 @@ async function runEpochInner() {
         // enough to move no integer factor, large enough that the two were not computing
         // the same function. A divergence tolerance hid it rather than fixing it.
         const scoringNowMs = chainNow * 1000;
+        // externalScore: only for agents linked to an ERC-8004 identity they own, and only from
+        // the reviewers reviewers.js accepts. Ownership is re-verified inside externalScoreFor;
+        // any failure yields 0.
+        const externalScore = await externalScoreOf(didHash, { operator, agentAddress }, scoringNowMs);
         const inputs = { registeredAt, att, flagWeight, externalScore };
         const { measured, scores } = await scoreAt(didHash, inputs, scoringNowMs);
 
@@ -899,6 +962,7 @@ async function runEpochInner() {
           // the propose below uses proposeIfEmpty, which reverts rather than replacing a
           // proposal that lands in the remaining gap.
           let freshPending = await chain.getPendingScore(didHash);
+          let coveringStranded = false;
 
           // A proposal whose proposer has lost its authority holds the slot in name only. It
           // can never be finalized, and the contract lets proposeIfEmpty replace it, which is
@@ -915,6 +979,7 @@ async function runEpochInner() {
               console.log(`[oracle]   ${didHash.slice(0, 10)}… the pending proposal's proposer is no longer authorized; covering for it`);
               metrics.inc('proposalsStranded');
               freshPending = { exists: false, proposedAt: 0, data: {}, evidenceRoot: null };
+              coveringStranded = true;
             }
           }
 
@@ -949,13 +1014,44 @@ async function runEpochInner() {
             asOf = payments.required(paymentCfg)
               ? evidenceAsOf(getPaymentEvents(didHash), atProposalMs, freshPending.evidenceRoot ?? null)
               : null;
-            auditScores = (await scoreAt(didHash, inputs, atProposalMs, asOf?.events)).scores;
+            // The external factor too, as the primary would have read it at its proposal: same
+            // snapshot, same evidence. Computed at this epoch's clock instead, a reviewer that
+            // changed in the hours between made an honest proposal look wrong.
+            const auditInputs = links.has(didHash)
+              ? {
+                ...inputs,
+                externalScore: await externalScoreOf(
+                  didHash, { operator, agentAddress }, atProposalMs, asOf?.events ?? getPaymentEvents(didHash),
+                ),
+              }
+              : inputs;
+            auditScores = (await scoreAt(didHash, auditInputs, atProposalMs, asOf?.events)).scores;
           }
 
           // auditScores for every comparison; `scores` stays as-is for the propose path
           // below, because covering a silent primary means proposing a CURRENT score, not
           // a reconstruction of some past moment.
-          const decision = decideCheckerAction(freshPending, auditScores, challengeWindow, chainNow, cfg.divergenceTolerance);
+          // When the slot became empty, as far as this checker can tell: the last finalized
+          // score, registration for an agent never scored, or the first epoch it found the slot
+          // empty, whichever is latest. The last is what catches a slot emptied by anything but a
+          // finalize. A committee rejection deletes the proposal and leaves lastUpdated where it
+          // was, and so does a stretch the primary skipped an agent while it was unbonded or
+          // uncovered; counted from lastUpdated, either looked like a primary days late.
+          // A slot held by a stranded proposer counts as empty at once, and so does one this
+          // checker emptied itself by finalizing for a primary that was already a grace late.
+          let emptySince = 0;
+          if (freshPending.exists) {
+            emptySeenAt.delete(didHash);
+            coveringLate.delete(didHash);
+          } else if (!coveringStranded && !coveringLate.has(didHash)) {
+            if (!emptySeenAt.has(didHash)) emptySeenAt.set(didHash, chainNow);
+            const rep = await chain.getReputationData(didHash);
+            emptySince = Math.max(Number(registeredAt) || 0, Number(rep.lastUpdated) || 0, emptySeenAt.get(didHash));
+          }
+          const graceSeconds = cfg.checkerGrace.ms / 1000;
+          const decision = decideCheckerAction(
+            freshPending, auditScores, challengeWindow, chainNow, cfg.divergenceTolerance, { graceSeconds, emptySince },
+          );
 
           if (decision === 'diverged') {
             const d = scoreDivergence(freshPending.data, auditScores);
@@ -997,6 +1093,22 @@ async function runEpochInner() {
             continue;
           }
 
+          // Not yet late. The primary finalizes and proposes again in one epoch, so a checker that
+          // finalized first emptied the slot and then often proposed into it ahead of the primary,
+          // a score nothing recomputes. It waits out the grace instead (decideCheckerAction).
+          if (decision === 'defer-finalize') {
+            metrics.inc('checkerAgreed');
+            metrics.inc('checkerDeferredFinalize');
+            const at = finalizableAtOf(freshPending, challengeWindow) + graceSeconds;
+            console.log(`[oracle]   ${didHash.slice(0, 10)}… agreed; leaving the finalize to the primary until ${new Date(at * 1000).toISOString()}`);
+            continue;
+          }
+          if (decision === 'defer-propose') {
+            metrics.inc('checkerDeferredPropose');
+            console.log(`[oracle]   ${didHash.slice(0, 10)}… slot empty, counted from ${new Date(emptySince * 1000).toISOString()}; leaving it to the primary until ${new Date((emptySince + graceSeconds) * 1000).toISOString()}`);
+            continue;
+          }
+
           if (decision === 'finalize') {
             // Agreed, and the window is up. Finalizing is permissionless and this oracle
             // has checked the number itself, which is the only condition under which a
@@ -1015,6 +1127,9 @@ async function runEpochInner() {
               console.log(`[oracle]   ${didHash.slice(0, 10)}… agreed, finalized tx=${finalizeTx.slice(0, 10)}…`);
               finalized++;
               metrics.inc('finalizeSuccesses');
+              // The primary was a grace late with this one, so the slot this leaves is covered at
+              // the next epoch rather than after a second grace.
+              coveringLate.add(didHash);
             } catch (finalizeErr) {
               // Same distinction as the propose path, and checked before the pending
               // re-read: a throttled send never reached the chain, so the slot is still
@@ -2492,13 +2607,10 @@ async function handleRequest(req, res) {
         console.warn(`[oracle] /score chain read failed for ${didHash}: ${err.message}`);
         return json(res, 502, { error: 'could not read the chain', code: 'rpc_error' });
       }
-      const { operator, registeredAt, status } = info;
+      const { operator, agentAddress, registeredAt, status } = info;
       const att       = attestations.get(didHash) ?? { successful: 0, total: 0 };
       const flagWeight = decayedFlagCount(didHash);
       const linkedId  = links.get(didHash);
-      const externalScore = (external.configured() && linkedId !== undefined)
-        ? await external.externalScoreFor(linkedId, operator)
-        : 0;
       // Same inputs as the epoch, including counterparty standing AND the chain clock,
       // or this endpoint would serve a number the oracle never proposes. Two operators'
       // /score are compared against each other by hand when a divergence is investigated,
@@ -2507,6 +2619,7 @@ async function handleRequest(req, res) {
       //
       // One extra chain read per request, on an endpoint that already makes several.
       const scoringNowMs = (await chain.getLatestBlockTimestamp()) * 1000;
+      const externalScore = await externalScoreOf(didHash, { operator, agentAddress }, scoringNowMs);
       const { measured, scores } = await scoreAt(didHash, { registeredAt, att, flagWeight, externalScore }, scoringNowMs);
       return json(res, 200, {
         didHash,

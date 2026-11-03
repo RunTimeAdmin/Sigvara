@@ -367,8 +367,8 @@ the thing it claims to replace.
   A second bonded operator has run in checker mode since 20 September 2026, on separate
   hardware and a separate RPC provider, and a watcher polls it from a third host. That
   narrows the window in which a wrong score goes unnoticed; it does not remove this
-  entry. The primary proposes most scores. The checker finalizes the ones it agrees with,
-  proposes into any slot it finds empty (35 of the 262 score proposals to 3 November 2026, each in the hour after a finalization left the slot empty, and none of them recomputed by anyone, since the primary never compares), and can record a disagreement but not
+  entry. The primary proposes and finalizes the scores. The checker finalizes, or fills an empty slot,
+  only once the primary is `CHECKER_GRACE_MINUTES` late, since nothing recomputes its own proposals (until 3 November 2026 it did not wait, and proposed 35 of the first 262 scores, none of them recomputed), and can record a disagreement but not
   reject one. Both operators are run by the same party. You are trusting fewer unobserved
   steps, not fewer people.
 - **The slashing committee.** It can reject any pending proposal and propose slashes. On
@@ -423,7 +423,7 @@ almost nothing. If the sybils are themselves scored agents this changes nothing:
 web-of-trust weighting reads their **hard** standing, meaning ERC-8004 reputation capped
 by the matured total, so a counterparty that farmed its own score to 100 is worth exactly
 what an anonymous wallet is worth. Reaching 59 requires counterparties with genuine
-outside standing, which is the one input an attacker cannot manufacture.
+outside standing, which costs an attacker a bonded, tenured, scored and separately funded agent per independent reviewer (`oracle/reviewers.js`).
 
 **What holds.** The per-payer cap binds, and splitting one wallet's volume across
 hundreds of dust payments does not defeat it. A ring of zero-scored agents grants its
@@ -484,7 +484,7 @@ Stated because they are true, not because they are solved.
    separate RPC provider, and `activeCount` on `SigvaraOracleBond` is 2. On the first
    agent both recomputed independently and agreed exactly.
 
-   That reduces the concentration; it does not remove it. The primary proposes most scores, and the 35 the checker proposed into empty slots to 3 November 2026 had no second computation.
+   That reduces the concentration; it does not remove it. The primary proposes the scores; the checker proposes only when the primary is late, and the 35 it proposed before 3 November 2026 had no second computation.
    The checker recomputes and reports disagreement, which makes a bad number visible
    inside the challenge window, but a committee still has to act on it. And both
    operators are run by the same party today, so what has been demonstrated is that two

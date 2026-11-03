@@ -14,6 +14,10 @@
 // feedback we verify the 8004 NFT is owned by the SAME wallet as the Sigvara
 // operator, so no one can claim another agent's reputation. Opt-in: when the
 // EXTERNAL_* env is unset the module is inert and every externalScore is 0.
+//
+// The registry accepts feedback from anyone, so which of it counts is decided by
+// reviewers.js, not here: this module reads and normalizes, and externalScoreFor
+// hands the rows to that judgment.
 
 const { ethers } = require('ethers');
 const { CAPS } = require('./score-caps');
@@ -45,8 +49,9 @@ const TAG_NORMALIZERS = {
   stars:       (v) => clamp01(v / 5),
 };
 
-// rows: [{ value: Number, tag: String (already lowercased) }]
-function computeExternalScore(rows) {
+// rows: [{ value: Number, tag: String (already lowercased) }]. The mean of the
+// recognized ratings, 0..1, or null when no row is in a tag this oracle reads.
+function meanRating(rows) {
   const recognized = [];
   for (const r of rows) {
     // Own keys only. `tag` is text chosen by whoever posts the feedback, and a plain object also
@@ -55,9 +60,15 @@ function computeExternalScore(rows) {
     const norm = Object.hasOwn(TAG_NORMALIZERS, r.tag) ? TAG_NORMALIZERS[r.tag] : undefined;
     if (norm) recognized.push(norm(r.value));
   }
-  if (!recognized.length) return 0;
-  const mean = recognized.reduce((a, b) => a + b, 0) / recognized.length;
-  return Math.round(mean * MAX_EXTERNAL_SCORE);
+  if (!recognized.length) return null;
+  return recognized.reduce((a, b) => a + b, 0) / recognized.length;
+}
+
+// The unfiltered mean scaled to the factor: what one reviewer's feedback would be worth
+// on its own. The score itself comes from reviewers.js.
+function computeExternalScore(rows) {
+  const mean = meanRating(rows);
+  return mean === null ? 0 : Math.round(mean * MAX_EXTERNAL_SCORE);
 }
 
 // ---- chain-connected side (opt-in) -----------------------------------------
@@ -141,17 +152,21 @@ function withTimeout(promise) {
 // getClients -> per-client getLastIndex -> readFeedback. The registry is not
 // enumerable and public RPCs cap getLogs ranges, so per-agent reads beat event
 // scanning. ethers Result arrays are frozen, hence the Array.from copy.
-async function readFeedbackRows(agentId) {
-  const clients = Array.from(await withTimeout(repContract.getClients(agentId)));
+//
+// `blockTag`, when given, reads the registry as of that block (reviewers.js reads
+// everything as of its snapshot); left out, at the latest block.
+async function readFeedbackRows(agentId, blockTag) {
+  const at = blockTag === undefined ? [] : [{ blockTag }];
+  const clients = Array.from(await withTimeout(repContract.getClients(agentId, ...at)));
   const rows = [];
   for (const c of clients) {
     let last = 0;
-    try { last = Number(await withTimeout(repContract.getLastIndex(agentId, c))); } catch { continue; }
+    try { last = Number(await withTimeout(repContract.getLastIndex(agentId, c, ...at))); } catch { continue; }
     for (let i = 1; i <= last; i++) {
       try {
-        const fb = await withTimeout(repContract.readFeedback(agentId, c, i));
+        const fb = await withTimeout(repContract.readFeedback(agentId, c, i, ...at));
         if (fb.isRevoked) continue;
-        rows.push({ value: Number(fb.value) / 10 ** Number(fb.valueDecimals), tag: (fb.tag1 || '').toLowerCase() });
+        rows.push({ client: c, value: Number(fb.value) / 10 ** Number(fb.valueDecimals), tag: (fb.tag1 || '').toLowerCase() });
       } catch { /* index gaps are expected — skip */ }
     }
   }
@@ -160,27 +175,34 @@ async function readFeedbackRows(agentId) {
 
 // True iff the 8004 agent NFT is owned by expectedOwner (same wallet across
 // chains). Case-insensitive. Any error (bad id, RPC) is treated as "no".
-async function verifyOwnership(agentId, expectedOwner) {
+async function verifyOwnership(agentId, expectedOwner, blockTag) {
   if (!enabled) return false;
   try {
-    const owner = await withTimeout(idContract.ownerOf(agentId));
+    const owner = await withTimeout(idContract.ownerOf(agentId, ...(blockTag === undefined ? [] : [{ blockTag }])));
     return owner.toLowerCase() === String(expectedOwner).toLowerCase();
   } catch { return false; }
 }
 
 // externalScore for a linked agent. Re-verifies ownership every call (the NFT is
-// transferable), then reads + normalizes feedback. Fail-safe: any error or
-// ownership mismatch yields 0 and never blocks the epoch.
-async function externalScoreFor(agentId, expectedOwner) {
+// transferable), then reads the feedback and returns what `judge` makes of it
+// (reviewers.scoreFeedback, through index.js), both as of `blockTag` when given.
+// Fail-safe: an error reading the registry or an ownership mismatch yields 0 and
+// never blocks the epoch. An error from `judge` is not swallowed: it means a
+// reviewer the node could not answer for, which is not a reviewer with no standing,
+// and the caller skips the agent this epoch rather than propose a number it knows
+// is wrong, as it does for a counterparty it could not read (chain.getAgentScore).
+async function externalScoreFor(agentId, expectedOwner, judge, blockTag) {
   if (!enabled) return 0;
+  let rows;
   try {
-    if (!(await verifyOwnership(agentId, expectedOwner))) return 0;
-    return computeExternalScore(await readFeedbackRows(agentId));
+    if (!(await verifyOwnership(agentId, expectedOwner, blockTag))) return 0;
+    rows = await readFeedbackRows(agentId, blockTag);
   } catch { return 0; }
+  return judge(rows);
 }
 
 module.exports = {
-  init, configured, computeExternalScore, readFeedbackRows,
+  init, configured, meanRating, computeExternalScore, readFeedbackRows,
   verifyOwnership, externalScoreFor, TAG_NORMALIZERS, MAX_EXTERNAL_SCORE,
   refreshChainId, chainState,
 };
