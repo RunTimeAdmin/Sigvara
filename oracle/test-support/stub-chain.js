@@ -152,7 +152,10 @@ const chain = {
   getEpochFee: async () => BigInt(world().epochFee ?? 0),
   getPendingScore: async (didHash) => world().pending?.[didHash] ?? { exists: false },
   // The finalized score; lastUpdated is 0 until one is finalized, as on chain.
-  getReputationData: async (didHash) => ({ lastUpdated: 0, ...(world().reputation?.[didHash] ?? {}) }),
+  getReputationData: async (didHash) => {
+    if (world().reputation?.[didHash] === 'throw') throw new Error('stub: reputation read failed');
+    return { lastUpdated: 0, ...(world().reputation?.[didHash] ?? {}) };
+  },
   isCovered: async (didHash) => world().covered?.[didHash] ?? true,
   isBonded: async (didHash) => world().bonded?.[didHash] ?? true,
   pruneAgent() {},

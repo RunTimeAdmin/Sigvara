@@ -317,6 +317,13 @@ function measuredFactorsFor(didHash, now, payerScores = null, events = getPaymen
 // chain reads. Cleared at the start of every epoch so standings cannot go stale.
 let payerScoreCache = new Map();
 
+// A checker's memory of empty slots (decideCheckerAction): when it first found each agent's
+// slot empty, in chain seconds, and which agents it is covering because it finalized their
+// proposal itself once the primary was a grace late. In memory only. A restart forgets both,
+// which delays failover by one grace and never brings it forward.
+const emptySeenAt = new Map();
+const coveringLate = new Set();
+
 async function payerScoresFor(didHash) {
   if (!payments.required(paymentCfg)) return null;
 
@@ -965,12 +972,22 @@ async function runEpochInner() {
           // auditScores for every comparison; `scores` stays as-is for the propose path
           // below, because covering a silent primary means proposing a CURRENT score, not
           // a reconstruction of some past moment.
-          // When the slot became empty: the last finalized score, or registration for an agent
-          // never scored. A slot held by a stranded proposer counts as empty at once.
+          // When the slot became empty, as far as this checker can tell: the last finalized
+          // score, registration for an agent never scored, or the first epoch it found the slot
+          // empty, whichever is latest. The last is what catches a slot emptied by anything but a
+          // finalize. A committee rejection deletes the proposal and leaves lastUpdated where it
+          // was, and so does a stretch the primary skipped an agent while it was unbonded or
+          // uncovered; counted from lastUpdated, either looked like a primary days late.
+          // A slot held by a stranded proposer counts as empty at once, and so does one this
+          // checker emptied itself by finalizing for a primary that was already a grace late.
           let emptySince = 0;
-          if (!freshPending.exists && !coveringStranded) {
+          if (freshPending.exists) {
+            emptySeenAt.delete(didHash);
+            coveringLate.delete(didHash);
+          } else if (!coveringStranded && !coveringLate.has(didHash)) {
+            if (!emptySeenAt.has(didHash)) emptySeenAt.set(didHash, chainNow);
             const rep = await chain.getReputationData(didHash);
-            emptySince = Math.max(Number(registeredAt) || 0, Number(rep.lastUpdated) || 0);
+            emptySince = Math.max(Number(registeredAt) || 0, Number(rep.lastUpdated) || 0, emptySeenAt.get(didHash));
           }
           const graceSeconds = cfg.checkerGrace.ms / 1000;
           const decision = decideCheckerAction(
@@ -1029,7 +1046,7 @@ async function runEpochInner() {
           }
           if (decision === 'defer-propose') {
             metrics.inc('checkerDeferredPropose');
-            console.log(`[oracle]   ${didHash.slice(0, 10)}… slot empty since ${new Date(emptySince * 1000).toISOString()}; leaving it to the primary until ${new Date((emptySince + graceSeconds) * 1000).toISOString()}`);
+            console.log(`[oracle]   ${didHash.slice(0, 10)}… slot empty, counted from ${new Date(emptySince * 1000).toISOString()}; leaving it to the primary until ${new Date((emptySince + graceSeconds) * 1000).toISOString()}`);
             continue;
           }
 
@@ -1051,6 +1068,9 @@ async function runEpochInner() {
               console.log(`[oracle]   ${didHash.slice(0, 10)}… agreed, finalized tx=${finalizeTx.slice(0, 10)}…`);
               finalized++;
               metrics.inc('finalizeSuccesses');
+              // The primary was a grace late with this one, so the slot this leaves is covered at
+              // the next epoch rather than after a second grace.
+              coveringLate.add(didHash);
             } catch (finalizeErr) {
               // Same distinction as the propose path, and checked before the pending
               // re-read: a throttled send never reached the chain, so the slot is still

@@ -830,7 +830,7 @@ What this does and does not buy:
 - **Does**: an independent recomputation of every score, and an alert the slashing
   committee can act on inside the challenge window. The committee has always held the
   reject power and has never had anything telling it when to use it.
-- **Does**: failover. If the primary stops, the checker finds an empty slot and proposes.
+- **Does**: failover. If the primary stops, the checker finalizes what it left and proposes into the empty slot, once the primary is `CHECKER_GRACE_MINUTES` late.
 - **Does not**: make agreement a protocol guarantee. Nothing in the contract requires the
   two to agree; a committee still has to act on the alert. Enforcing N-of-M agreement
   would need a storage change to `pendingScores` and a UUPS upgrade.

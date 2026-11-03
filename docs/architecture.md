@@ -106,7 +106,7 @@ the design, not an accident of where things landed.
 | | Host | Chain view | Holds | Writes |
 |---|---|---|---|---|
 | **Primary oracle** | one | Circle | signing key, state | proposes and finalizes scores |
-| **Checker** | another | QuickNode | signing key, own state | proposes into an empty slot, finalizes a score it agrees with |
+| **Checker** | another | QuickNode | signing key, own state | finalizes a score it agrees with, or proposes into an empty slot, once the primary is a grace late |
 | **Watcher** | a third | dRPC | nothing | nothing |
 
 The **checker** is a second bonded operator that audits instead of competing. It

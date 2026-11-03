@@ -375,9 +375,11 @@ was a race to the empty slot that the checker sometimes won.
 
 **Closed in code.** The checker now leaves both to the primary until the primary is late:
 - It finalizes only a proposal still unfinalized `CHECKER_GRACE_MINUTES` after its window.
-- It proposes only into a slot empty for that long, counted from the last finalized score, or from
-  registration for an agent never scored. A slot held by a proposer that lost its authority is
-  covered at once.
+- It proposes only into a slot empty for that long, counted from the last finalized score,
+  registration for an agent never scored, or the first epoch the checker found the slot empty,
+  whichever is latest. The last matters because a committee rejection deletes a proposal without
+  moving the other two. A slot held by a proposer that lost its authority is covered at once, and
+  so is one the checker emptied by finalizing for a primary already a grace late.
 
 The default is twice the checker's epoch, two hours on testnet, and the checker refuses to start with
 less than one epoch (`decideCheckerAction` and `checkerGraceMs` in `oracle/epoch-policy.js`). In normal

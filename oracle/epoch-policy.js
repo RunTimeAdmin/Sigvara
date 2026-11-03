@@ -205,7 +205,7 @@ function decideCheckerAction(
  * bring the race back, since the checker would act at the first epoch it found the slot empty.
  */
 function checkerGraceMs(raw, epochMs) {
-  if (raw === undefined || raw === '') return { ms: 2 * epochMs };
+  if (raw === undefined || String(raw).trim() === '') return { ms: 2 * epochMs };
   const minutes = Number(raw);
   if (!Number.isFinite(minutes) || minutes < 0) {
     return { error: `CHECKER_GRACE_MINUTES is ${raw}; it must be a number of minutes, at least 0.` };

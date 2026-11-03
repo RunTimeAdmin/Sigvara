@@ -490,11 +490,13 @@ curl -s http://127.0.0.1:3031/divergence
 auditing anything, whatever the empty divergence list suggests.
 
 Then leave it for one challenge window plus one epoch (about 7 hours on Arc testnet) and check that
-`sigvara_oracle_checker_deferred_total{action="finalize"}` on `/metrics` is climbing: the checker agreed with
-each proposal and left the finalize to the primary, which finalizes and proposes again in one epoch. It finalizes,
-and `sigvara_oracle_finalize_total{result="success"}` climbs, only for a proposal still unfinalized
-`CHECKER_GRACE_MINUTES` after its window, which means the primary is late. A checker whose deferred and
-agreed counts both stay at zero is not comparing anything.
+`sigvara_oracle_checker_comparisons_total{verdict="agreed"}` on `/metrics` is climbing while
+`sigvara_oracle_finalize_total{result="success"}` and `sigvara_oracle_propose_total{result="success"}` stay
+flat: the checker compares each proposal and leaves the finalize and the next proposal to the primary.
+`sigvara_oracle_checker_deferred_total{action="finalize"}` climbs only when a checker epoch lands between a
+window closing and the primary's finalize, so a healthy checker can hold it at zero. The finalize and propose
+counts climb only when the primary is `CHECKER_GRACE_MINUTES` late. A checker whose agreed count stays at
+zero is not comparing anything.
 
 ## 9. When a divergence fires
 
