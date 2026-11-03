@@ -48,7 +48,7 @@
   </ul>
   <h1 class="u-h1-28">Operators</h1>
   <p class="ep-lede">Scores are proposed by bonded oracle operators. Each one posts a bond the slashing committee can take, names the key it signs with, and runs in public: anyone can read when it last ran and what code it runs. A second operator, the checker, recomputes every pending score and publishes any disagreement while the committee can still act on it.</p>
-  <p class="netnote">Arc testnet (5042002). Reads only. Bonds and signers come from the bond contract and the Arc explorer's index of it, with blocks it has not indexed yet read from the chain; each operator's last proposal from the chain; health from each operator's own endpoint.</p>
+  <p class="netnote">Arc testnet (5042002). Reads only. Bonds and signers come from the bond contract and Sigvara's event index of it, with the newest blocks read from the chain; each operator's last proposal from the index and the chain; health from each operator's own endpoint.</p>
 
   <div class="app-card" id="operatorsCard">
     <h2>Bonded operators</h2>
@@ -82,7 +82,7 @@
 </footer>
 
 <script src="assets/did.js?v=32000f8"></script>
-<script src="assets/explorer.js?v=recent1"></script>
-<script src="assets/operators.js?v=recent1"></script>
+<script src="assets/explorer.js?v=index1"></script>
+<script src="assets/operators.js?v=index1"></script>
 </body>
 </html>

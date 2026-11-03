@@ -3,7 +3,7 @@
  * Looks at the live deployment from outside, the way a visitor and an attacker would.
  *
  *   node scripts/check-live.mjs site       every deployed file equals what main says
- *   node scripts/check-live.mjs services   oracle and checker answer, certificates are not near expiry
+ *   node scripts/check-live.mjs services   oracle, checker and event index answer, certificates are not near expiry
  *   node scripts/check-live.mjs outcomes   oracle and checker hold the same payer-signed outcomes
  *   node scripts/check-live.mjs            all three
  *
@@ -36,6 +36,7 @@ import { fileURLToPath } from 'node:url';
 const SITE = process.env.SITE_BASE || 'https://sigvara.xyz';
 const ORACLE = process.env.ORACLE_BASE || 'https://oracle.sigvara.xyz';
 const CHECKER = process.env.CHECKER_BASE || 'https://checker.sigvara.xyz';
+const INDEX = process.env.INDEX_BASE || 'https://index.sigvara.xyz';
 const EPOCH_STALE_MS = 3 * 3600 * 1000;       // the oracle runs hourly; three hours is a missed run
 const CERT_MIN_DAYS = 14;
 const OUTCOMES_LAG_HOURS = process.env.OUTCOMES_LAG_HOURS ? Number(process.env.OUTCOMES_LAG_HOURS) : 2;
@@ -151,6 +152,17 @@ async function checkServices() {
       fail(`${name}: /health unreachable or unreadable (${e.message})`);
     }
   }
+  // The event index the explorer pages read their history from (docs/event-index.md). Its /health
+  // fails once it has not polled for a few minutes or is more than about half an hour behind.
+  try {
+    const { res, body } = await get(INDEX + '/health');
+    const j = JSON.parse(body.toString('utf8'));
+    if (res.status !== 200 || j.ok !== true) {
+      fail(`index: /health status ${res.status}, ok=${j.ok}, ${j.behind ?? '?'} blocks behind${j.lastError ? `, last error: ${j.lastError}` : ''}`);
+    }
+  } catch (e) {
+    fail(`index: /health unreachable or unreadable (${e.message})`);
+  }
   try {
     const { res, body } = await get(CHECKER + '/divergence');
     const j = JSON.parse(body.toString('utf8'));
@@ -174,7 +186,7 @@ async function checkServices() {
   } catch (e) {
     fail(`checker: /divergence unreachable or unreadable (${e.message})`);
   }
-  for (const host of new URL(SITE).host === 'sigvara.xyz' ? ['sigvara.xyz', 'oracle.sigvara.xyz', 'checker.sigvara.xyz'] : []) {
+  for (const host of new URL(SITE).host === 'sigvara.xyz' ? ['sigvara.xyz', 'oracle.sigvara.xyz', 'checker.sigvara.xyz', 'index.sigvara.xyz'] : []) {
     try {
       const days = await certDaysLeft(host);
       if (days < CERT_MIN_DAYS) fail(`${host}: certificate expires in ${days.toFixed(1)} days`);
@@ -182,7 +194,7 @@ async function checkServices() {
       fail(`${host}: certificate check failed (${e.message})`);
     }
   }
-  console.log('services: oracle and checker health, divergence list and certificate expiry checked');
+  console.log('services: oracle, checker and event index health, divergence list and certificate expiry checked');
 }
 
 /**

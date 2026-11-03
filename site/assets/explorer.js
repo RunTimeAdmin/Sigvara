@@ -3,11 +3,15 @@
  * Reads only. No wallet, nothing signed, no external library (see app.js for why). Each page
  * says which source every fact came from:
  *   - the chain, over the public RPC: scores, stakes, bonds and the committed evidence roots.
- *   - the Arc explorer's log index: which agents registered, which operators bonded and every
- *     slash. The RPC answers eth_getLogs over at most 10,000 blocks, and the explorer answers a
- *     contract's whole history in one request (it allows ten an hour from one address, so
- *     answers are kept in the tab for a few minutes). The index can stop while the chain goes
- *     on, as it did on 2 November 2026, so the blocks after it are read from the RPC.
+ *   - Sigvara's event index (docs/event-index.md): which agents registered, which operators
+ *     bonded and every slash. The RPC answers eth_getLogs over at most 10,000 blocks, and the
+ *     index serves every log the contracts have emitted in one request, as eth_getLogs returned
+ *     them. The Sigvara team runs it; each log names its transaction, so any of them can be
+ *     checked against the chain. The blocks after the index's newest are read from the RPC.
+ *   - the Arc explorer's log index, when the event index does not answer. The explorer allows
+ *     ten requests an hour from one address, so its answers are kept in the tab for a few
+ *     minutes, and its index stopped on 2 November 2026, so the blocks after that are read from
+ *     the RPC as well.
  *   - the operators' own public endpoints: the primary's /evidence and /health, the checker's
  *     /health and /divergence.
  * Everything that comes back is untrusted input: hex is shape-checked before it goes into a
@@ -25,6 +29,7 @@
   const RPC = "https://rpc.testnet.arc.io";
   const EXPLORER = "https://explorer.testnet.arc.io";
   const EXPLORER_API = EXPLORER + "/api";
+  const INDEX = "https://index.sigvara.xyz";
   const PRIMARY = "https://oracle.sigvara.xyz";
   const CHECKER = "https://checker.sigvara.xyz";
   const SOURCE = "https://github.com/RunTimeAdmin/Sigvara";
@@ -97,8 +102,11 @@
   const INDEX_STALLED_AT = 70337205;
   // Reading more than this many blocks (about an hour) from the chain is worth a note on the page.
   const LAG_NOTED = 7200;
+  // An event index answering for blocks this far past the RPC's newest (about a minute) is not
+  // answering for this chain as the page sees it, so its answer is not used.
+  const INDEX_AHEAD = 100;
   // What a card says while it waits on the explorer.
-  const READING_HISTORY = '<p class="netnote">Reading the contract\'s history from the Arc explorer, and the newest blocks from the chain. It can take up to a minute.</p>';
+  const READING_HISTORY = '<p class="netnote">Reading the contract\'s history from Sigvara\'s event index and the chain.</p>';
 
   // ---- small helpers ----
   const esc = (v) => String(v).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -352,18 +360,68 @@
     return { rows, more };
   }
 
-  // One contract's logs for one event set, oldest first: the explorer's history, then the blocks
-  // after its index read from the chain. A row both sources hold is kept once. `tail` says how
-  // the chain filled in, for historyNote.
+  /**
+   * The logs of `addresses` from the event index, then the blocks after its newest read from the
+   * chain, as rows shaped like eth_getLogs'. `topic0` (a list of event topics) and `topic1` (one
+   * value) narrow both reads alike; `fromBlock` leaves out older blocks. Throws when the index
+   * does not answer, so a page can fall back to the explorer; a chain read that fails is reported
+   * in `tail.error` instead. `tail` says how the chain filled in, for historyNote.
+   */
+  async function indexLogs(addresses, { topic0 = null, topic1 = null, fromBlock = null } = {}) {
+    const q = new URLSearchParams({ address: addresses.join(",") });
+    if (topic0) q.set("topic0", topic0.join(","));
+    if (topic1) q.set("topic1", topic1);
+    if (fromBlock !== null) q.set("fromBlock", String(fromBlock));
+    const [answer, head] = await Promise.allSettled([getJson(`${INDEX}/events?${q}`), blockNumber()]);
+    if (answer.status === "rejected") throw answer.reason;
+    const j = answer.value;
+    const toBlock = Number(j?.toBlock);
+    if (j?.chainId !== CHAIN_ID || !Array.isArray(j?.logs) || !Number.isSafeInteger(toBlock)) {
+      throw new Error("the event index gave an answer for something else");
+    }
+    const indexHead = { block: toBlock, time: Number(j.toBlockTime) > 0 ? Number(j.toBlockTime) : null };
+    // The index answered; a chain that does not is the chain's problem, said as such.
+    if (head.status === "rejected") {
+      return { rows: j.logs, tail: { source: "index", from: toBlock + 1, to: toBlock, missed: null, indexHead, error: String(head.reason?.message ?? head.reason) } };
+    }
+    const latest = head.value;
+    if (toBlock > latest + INDEX_AHEAD) throw new Error(`the event index claims block ${toBlock}, past the chain's newest, ${latest}`);
+    // From just past the index, or from where the caller starts if that is later, but no
+    // further back than TAIL_BLOCKS. `missed` is what that leaves out.
+    const want = Math.max(toBlock + 1, fromBlock ?? 0);
+    const from = Math.max(want, latest - TAIL_BLOCKS + 1);
+    const topics = topic0 || topic1 ? [topic0, ...(topic1 ? [topic1] : [])] : null;
+    const tail = { source: "index", from, to: latest, missed: from > want ? [want, from - 1] : null, indexHead };
+    let rows = [];
+    try {
+      if (from <= latest) rows = await chainLogs(addresses, topics, from, latest);
+    } catch (e) {
+      tail.error = String(e?.message ?? e);
+    }
+    return { rows: [...j.logs, ...rows], tail };
+  }
+
+  // One contract's logs for one event set, oldest first: from the event index and the chain, or,
+  // when the index does not answer, from the Arc explorer and the chain. A row two sources hold
+  // is kept once. `tail` says where the history came from, for historyNote.
   async function contractLogs(address, names) {
     const wanted = EVENTS.filter((e) => names.includes(e.name));
     const topics = new Map(wanted.map((e) => [e.topic, e]));
-    const [indexed, tail] = await Promise.all([
-      explorerLogs(address, wanted),
-      chainTail().catch((e) => ({ error: String(e?.message ?? e), rows: [] })),
-    ]);
+    let rows, more = false, how;
+    try {
+      ({ rows, tail: how } = await indexLogs([address], { topic0: wanted.map((e) => e.topic) }));
+    } catch (indexError) {
+      const [indexed, tail] = await Promise.all([
+        explorerLogs(address, wanted),
+        chainTail().catch((e) => ({ error: String(e?.message ?? e), rows: [] })),
+      ]);
+      rows = [...indexed.rows, ...tail.rows];
+      more = indexed.more;
+      const { rows: _, ...rest } = tail;
+      how = { ...rest, indexError: String(indexError?.message ?? indexError) };
+    }
     const logs = [], seen = new Set();
-    for (const r of [...indexed.rows, ...tail.rows]) {
+    for (const r of rows) {
       if (!r || typeof r !== "object" || !same(r.address, address)) continue;
       const ev = topics.get(String(r?.topics?.[0]).toLowerCase());
       if (!ev || typeof r.data !== "string" || !/^0x[0-9a-fA-F]*$/.test(r.data)) continue;
@@ -378,20 +436,31 @@
         data: r.data,
         block: parseInt(r.blockNumber, 16),
         index,
-        time: parseInt(r.timeStamp, 16),
+        time: parseInt(r.timeStamp ?? r.blockTimestamp, 16),
         tx,
       });
     }
     logs.sort((a, b) => a.block - b.block || a.index - b.index);
-    const { rows, ...how } = tail;
-    return { logs, truncated: indexed.more, tail: how };
+    return { logs, truncated: more, tail: how };
   }
 
-  // What a page says under a history the chain had to fill in for the explorer, or "".
+  // What a page says under a history the chain had to fill in, or "". Quiet when the event index
+  // answered and was current; otherwise it says what was read from where, and what may be missing.
   function historyNote(v) {
     const t = v?.tail;
     const n = (x) => Number(x).toLocaleString("en-US");
     if (!t) return "";
+    if (t.source === "index") {
+      const at = t.indexHead.time ? ` (${esc(fmtWhen(t.indexHead.time))})` : "";
+      if (t.error) return `<p class="pill-warn">Sigvara's event index answered up to block ${n(t.indexHead.block)}${at}, but the blocks after it could not be read from the chain (${esc(t.error)}), so the newest entries may be missing.</p>`;
+      if (t.missed) return `<p class="pill-warn">Sigvara's event index answered only up to block ${n(t.indexHead.block)}${at}, and blocks ${n(t.missed[0])} to ${n(t.missed[1])} are further back than the ${n(TAIL_BLOCKS)} this page reads from the chain itself, so entries from them may be missing.</p>`;
+      if (t.to - t.from + 1 < LAG_NOTED) return "";
+      return `<p class="netnote">Sigvara's event index is behind the chain, at block ${n(t.indexHead.block)}${at}, so blocks ${n(t.from)} to ${n(t.to)} were read from the chain itself.</p>`;
+    }
+    const fallback = t.indexError ? `<p class="netnote">Sigvara's event index did not answer (${esc(t.indexError)}), so this history comes from the Arc explorer.</p>` : "";
+    return fallback + explorerNote(t, n);
+  }
+  function explorerNote(t, n) {
     if (t.error) return `<p class="pill-warn">The newest blocks, which the Arc explorer may not have indexed yet, could not be read from the chain (${esc(t.error)}), so the newest entries may be missing.</p>`;
     const head = t.indexHead
       ? ` The explorer's newest log for the reputation contract is in block ${n(t.indexHead.block)}${t.indexHead.time ? ` (${esc(fmtWhen(t.indexHead.time))})` : ""}.` : "";
@@ -507,7 +576,7 @@
     esc, strip, pad32, word, wordAddr, isAddr, isHash, same, short, topicAddr,
     fmtWhen, fmtSvr, txLink, addrLink, rootCode, commitLink, whoIs, failed,
     loadSimulation, simAgent, simWallet,
-    getJson, rpcMany, ethCalls, blockNumber, cached, chainLogs, addTimes, tailRange, contractLogs, historyNote,
+    getJson, rpcMany, ethCalls, blockNumber, cached, chainLogs, addTimes, tailRange, indexLogs, contractLogs, historyNote,
     outcomeCode, leafOf, hashPair, layersOf, rootOf, proofOf, matchRoot, verifyEvidenceCall,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
