@@ -12,6 +12,7 @@ const IDENTITY_ABI = [
 const STAKE_VIEW_ABI = ['function hasMinimumStake(bytes32 didHash) view returns (bool)'];
 
 const { SCORE_FACTORS } = require('./epoch-policy');
+const reviewers = require('./reviewers');
 
 const OPERATOR_SET_ABI = ['function isActiveOperator(address) view returns (bool)'];
 
@@ -259,14 +260,14 @@ function isTransientReadError(err) {
     (code === 'CALL_EXCEPTION' && (err.data === null || err.data === undefined));
 }
 
-async function readWithBackoff(label, fn, attempts = 4) {
+async function readWithBackoff(label, fn, attempts = 4, retryable = isTransientReadError) {
   let delay = 500;
   for (let i = 0; ; i++) {
     try {
       return await fn();
     } catch (err) {
       const code = err && err.code;
-      if (!isTransientReadError(err) || i >= attempts - 1) throw err;
+      if (!retryable(err) || i >= attempts - 1) throw err;
       console.log(`[oracle] ${label} failed (${code || 'error'}), retrying in ${delay}ms`);
       await sleep(delay);
       delay *= 2;
@@ -491,8 +492,8 @@ async function readStanding(address) {
   // doubles it) and counted as a fully trusted voucher (propagationScore). Measured:
   // scored sybils maxed the 30-point fee factor with four payers instead of six.
   //
-  // externalScore is the one factor a single party cannot manufacture, because it is
-  // ERC-8004 standing in a registry this protocol does not control. Capping it by the
+  // externalScore is the one factor a single party cannot farm from its own wallets: only
+  // ERC-8004 feedback from reviewers reviewers.js accepts counts toward it. Capping it by the
   // matured total keeps the existing lag: an identity cannot link an 8004 history and
   // propagate it the same epoch, and a handover restarts maturity, so bought standing
   // is not instantly spendable through counterparties either.
@@ -522,17 +523,97 @@ let stakeViewContract;
  */
 async function isBonded(didHash) {
   try {
-    if (stakeViewContract === undefined) {
-      const addr = await identityContract.stakeView();
-      stakeViewContract = addr && addr !== ethers.ZeroAddress
-        ? new ethers.Contract(addr, STAKE_VIEW_ABI, provider)
-        : null;
-    }
-    if (!stakeViewContract) return true;
-    return await stakeViewContract.hasMinimumStake(didHash);
+    const view = await resolveStakeView();
+    if (!view) return true;
+    return await view.hasMinimumStake(didHash);
   } catch {
     return true;
   }
+}
+
+async function resolveStakeView() {
+  if (stakeViewContract === undefined) {
+    const addr = await identityContract.stakeView();
+    stakeViewContract = addr && addr !== ethers.ZeroAddress
+      ? new ethers.Contract(addr, STAKE_VIEW_ABI, provider)
+      : null;
+  }
+  return stakeViewContract;
+}
+
+// ---- ERC-8004 reviewers (reviewers.js) ------------------------------------------
+
+/**
+ * What the ERC-8004 filter asks of a reviewer: whether it is a Sigvara agent, and if so its
+ * operator, status, registration time, bond and matured score.
+ *
+ * Unlike isBonded this fails closed. A read the node cannot answer throws, and the external
+ * factor reads 0 for that agent this epoch, because a reviewer that could not be checked is
+ * not one the oracle may count.
+ */
+async function getReviewerStanding(address) {
+  const didHash = localDidHash
+    ? didHashOf(address, localDidHash.chainId)
+    : await readWithBackoff('reviewer did', () => identityContract.computeDidHash(address));
+  const id = await readWithBackoff('reviewer identity', () => identityContract.getIdentity(didHash));
+  if (Number(id.registeredAt) === 0) return { registered: false };
+  const view = await readWithBackoff('stake view', resolveStakeView);
+  const [matured, bonded] = await Promise.all([
+    readWithBackoff('reviewer score', () => reputationContract.getTotalScore(didHash)),
+    view ? readWithBackoff('reviewer bond', () => view.hasMinimumStake(didHash)) : true,
+  ]);
+  return {
+    registered: true,
+    operator: id.operator,
+    status: Number(id.status),
+    registeredAt: Number(id.registeredAt),
+    matured: Number(matured),
+    bonded: Boolean(bonded),
+  };
+}
+
+// On Arc every change to a native balance emits Transfer from this address, in 18 decimals,
+// and a plain native send emits nothing else (docs/arc.md, the checklist).
+const NATIVE_TRANSFER_EMITTER = '0xfffffffffffffffffffffffffffffffffffffffe';
+const TRANSFER_TOPIC = ethers.id('Transfer(address,address,uint256)');
+
+// A first funder does not change, so each is looked up once per process.
+const funderCache = new Map();
+
+/**
+ * The address that first funded `address` on this chain, lowercased, or null
+ * (reviewers.findFirstFunder). It reads historical state, so the RPC must serve it, which
+ * Arc testnet's public RPC does. Every read is retried on any error: that RPC answers a
+ * historical read with a bare "internal error" now and then, and the same read succeeds a
+ * moment later.
+ */
+async function firstFunder(address) {
+  const key = String(address).toLowerCase();
+  if (funderCache.has(key)) return funderCache.get(key);
+  const anyError = () => true;
+  const funder = await reviewers.findFirstFunder({
+    head: () => readWithBackoff('funder head', () => provider.getBlockNumber(), 4, anyError),
+    touched: (block) => readWithBackoff('funder state', async () => {
+      const [balance, nonce] = await Promise.all([
+        provider.getBalance(address, block),
+        provider.getTransactionCount(address, block),
+      ]);
+      return balance > 0n || nonce > 0;
+    }, 4, anyError),
+    inbound: (block) => readWithBackoff('funder logs', async () => {
+      const logs = await provider.getLogs({
+        address: NATIVE_TRANSFER_EMITTER,
+        fromBlock: block,
+        toBlock: block,
+        topics: [TRANSFER_TOPIC, null, ethers.zeroPadValue(address, 32)],
+      });
+      return logs
+        .sort((a, b) => a.index - b.index)
+        .map((l) => ethers.getAddress(ethers.dataSlice(l.topics[1], 12)));
+    }, 4, anyError),
+  }, address);
+  funderCache.set(key, funder);
+  return funder;
 }
 
 // ---- Waiting for a transaction ----------------------------------------------
@@ -921,6 +1002,8 @@ module.exports = {
   getAgentInfo,
   getProvider,
   isBonded,
+  getReviewerStanding,
+  firstFunder,
   getAgentScore,
   isTransientReadError,
   getScanState,

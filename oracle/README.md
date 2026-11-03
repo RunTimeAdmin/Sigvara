@@ -161,8 +161,8 @@ adversarial belongs to `/evidence`, which recomputes against the chain.
 
 `externalFeed` is `disabled`, `configured` or `unreachable`, and exists because
 `externalScore` renders 0 in three unrelated situations: `EXTERNAL_*` was never set, the
-agent is not linked to an ERC-8004 id, or it is linked with no feedback in a recognized
-tag. Those need different responses and the score cannot tell them apart.
+agent is not linked to an ERC-8004 id, or no reviewer of it passes `reviewers.js` with feedback in a
+recognized tag (the epoch log says which). Those need different responses and the score cannot tell them apart.
 
 `externalChainId` is the chain the feed actually reached, read from the provider rather
 than parsed out of the URL, and `null` when it could not be reached.
@@ -965,7 +965,7 @@ and then its silence means nothing.
 | `FEE_REGISTRY_ADDRESS` | (empty) | SigvaraEpochFees address for fee-gated scoring |
 | `EXTERNAL_RPC` | (empty) | RPC for ERC-8004 external score lookups |
 | `EXTERNAL_IDENTITY_ADDRESS` | (empty) | ERC-8004 Identity contract |
-| `EXTERNAL_REPUTATION_ADDRESS` | (empty) | ERC-8004 Reputation contract |
+| `EXTERNAL_REPUTATION_ADDRESS` | (empty) | ERC-8004 Reputation contract. Its feedback counts only from reviewers `reviewers.js` accepts; `EXTERNAL_PUBLIC_FUNDERS` lists wallets that fund everyone (a faucet, an exchange), which end a funding trace instead of joining every reviewer they funded |
 
 ### Transactions and the clock
 

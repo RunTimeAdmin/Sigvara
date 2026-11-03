@@ -21,8 +21,8 @@
  * That fact is why the weights are what they are. Fee and success together were 55 of
  * the 100 points, and both measure activity, which is exactly what a ring manufactures.
  * They are now 35, and the 20 points released went to tenure and external trust:
- * elapsed paid activity cannot be bought at any price, and standing in a registry this
- * protocol does not control cannot be minted. The numbers below are what that bought,
+ * elapsed paid activity cannot be bought at any price, and external standing counts only
+ * from bonded, tenured reviewers that paid (reviewers.js). The numbers below are what that bought,
  * and section 5.4 of the whitepaper is what it did not.
  *
  *   node --test oracle/adversarial.test.js

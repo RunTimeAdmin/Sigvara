@@ -141,8 +141,8 @@ function computeScore({
   // externalScore comes from ERC-8004 cross-protocol feedback (see external.js),
   // 0 when unlinked or unconfigured. Clamp to the contract's cap so a bad input
   // can never make proposeReputation revert. The cap is 25: it was 15, and it took
-  // 10 of the 20 points released by cutting fee and success, because standing in a
-  // registry this protocol does not control is not something an attacker can mint.
+  // 10 of the 20 points released by cutting fee and success, because feedback from bonded,
+  // tenured reviewers that paid (reviewers.js) is not something an attacker can farm.
   const es = Math.max(0, Math.min(CAPS.external, Math.trunc(externalScore) || 0));
   const cs = communityScore(flags ?? 0);
   // Inherited trust from counterparties that are themselves scored agents. 0 when
