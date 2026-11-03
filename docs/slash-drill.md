@@ -326,3 +326,90 @@ is a single EOA on testnet, the drill is self-administered, and the target is on
 created. It demonstrates the mechanism, not the governance. Say so in the write-up. A drill
 presented as a governance proof is the kind of overclaim the rest of these documents exist
 to avoid.
+
+## The adversarial drill
+
+The drill above took one slash down the happy path: filed, left alone, executed. Every other way
+a proposal ends had been tested only in a clean-room deploy. This one takes them on the live
+deployment, against three agents bonded for the purpose, starting 3 November 2026. What happened
+goes in [slash-drill-log.md](slash-drill-log.md); what is expected is written here first, so a
+result that differs is a finding rather than something explained afterwards.
+
+| Agent | What is done to it | How it should end |
+|---|---|---|
+| A | Filed, disputed by its operator, dropped by the admin (`resolveDispute(false)`). Refiled on day 7 with new evidence, then withdrawn (`cancelSlash`). | Bond intact, Active. |
+| B | Filed, vetoed by the admin (`vetoSlash`). | Bond intact, Active. |
+| C | Filed and left alone. Expired by anyone once it lapses (`expireSlash`). | Bond intact, Active. |
+
+Rehearsed first: [`test/SlashDrillAdversarialFork.t.sol`](../test/SlashDrillAdversarialFork.t.sol)
+runs the whole sequence, guards included, against a fork of Arc testnet, from setting up the
+agents the way the live drill does to day 21. Both of its cases pass.
+
+```bash
+forge test --match-contract SlashDrillAdversarialFork -vv
+```
+
+### Who signs
+
+| Role | Address | Signs |
+|---|---|---|
+| Committee | `0x045D6C1d8404297F13596061388f6598fA94a5b7` | The filings, and the day-7 withdrawal |
+| Admin | `0x18CBcE50390f5f6ebe4E20Fc17833F25c8D94811` (the deployer) | `vetoSlash(B)` and `resolveDispute(A, false)` |
+| Drill operator | `0x11bbb7764D215c7Ab2E7c677283E226D599ce956` | Registers and bonds A, B and C, disputes A, expires C. Holds no role. Named as the victim in every filing, since the victim may not be a committee member. |
+| Agents | A `0xa656eBa21833c208B5Dbe3faFf4F6438b4Cc39E7`, B `0x52900e0ec5ca59B9e57327e0c6Ba1f7B8fd88A80`, C `0xebc125b2AB79586299BF2274582C6f63dB6300F8` | Each signs its own registration, once |
+
+The explorer marks the drill operator and its agents as Sigvara's own. Each signer runs its part with
+[`scripts/slash-drill-adversarial.sh`](../scripts/slash-drill-adversarial.sh), which reads the key
+from the terminal and checks the chain before it sends anything:
+
+```bash
+sh scripts/slash-drill-adversarial.sh status            # any time, no key
+sh scripts/slash-drill-adversarial.sh operator-setup    # faucet 3,000 SVR, register and bond A, B, C
+sh scripts/slash-drill-adversarial.sh committee-day0    # file A, B, C
+sh scripts/slash-drill-adversarial.sh operator-dispute  # dispute A, with the guards either side
+sh scripts/slash-drill-adversarial.sh admin-day0        # veto B, then drop A once it is disputed
+sh scripts/slash-drill-adversarial.sh guards-day0       # the cooldowns, C too early; no key
+sh scripts/slash-drill-adversarial.sh guards-day7       # before refiling: rejected evidence, C late; no key
+sh scripts/slash-drill-adversarial.sh committee-day7    # A again with new evidence, then withdraw
+sh scripts/slash-drill-adversarial.sh anyone-day21      # expire C, with the guards after it
+```
+
+### Predictions
+
+The guards are checked with `cast call` from the account named, which costs nothing and shows the
+revert the contract gives. The script runs each at the moment it has to: the admin's early uphold,
+for instance, only while A is disputed and not yet dropped.
+
+| When | Step | Expected |
+|---|---|---|
+| Day 0 | Bond each agent with 1,000 SVR | `PendingBond` to `Active` |
+| Day 0 | File A, B, C | `SlashInitiated` each; all three `Suspended` at once |
+| Day 0 | Committee names itself the victim | `VictimIsReporter` |
+| Day 0 | Anyone but A's operator disputes A | `NotOperator` |
+| Day 0 | Operator disputes A | `SlashDisputed`; A stays `Suspended`, its bond frozen |
+| Day 0 | Admin upholds A inside the window | `ChallengePeriodActive` |
+| Day 0 | Admin drops A (`resolveDispute(A, false)`) | `SlashCancelled`; A `Active`, 1,000 SVR still bonded |
+| Day 0 | Committee files A again at once | `SlashCooldownActive`, with a refile time 7 days after the drop |
+| Day 0 | Admin vetoes B | `SlashCancelled` and `SlashVetoed`; B `Active`, bond intact; refiling blocked for 7 days |
+| Day 0 | Anyone executes or expires C | `ChallengePeriodActive`; `ExecutionPeriodActive` |
+| Day 7 | Committee refiles A with the evidence the admin dropped | `EvidenceAlreadyRejected` |
+| Day 7 | Committee refiles A with new evidence, then withdraws it | `SlashInitiated`, then `SlashCancelled`; A `Active` |
+| Day 7 | C's operator disputes after C's deadline | `ChallengePeriodExpired` |
+| Days 7 to 21 | Anyone may still execute C | See below |
+| Day 21 | Anyone expires C before it lapses, then after | `ExecutionPeriodActive`, then `SlashCancelled`; C `Active`, bond intact |
+| Day 21 | Committee files C again | `SlashCooldownActive` |
+
+Day 7 is one challenge period (`challengePeriod()`, 604800 seconds) after day 0. Day 21 is C's
+deadline plus `EXECUTION_PERIOD` (14 days). The exact times are in the transactions.
+
+**The one exposure.** For two weeks after its deadline, C is a proposal nobody disputed, and
+anyone may execute it, as the protocol intends: execution must not wait on the committee. A
+passer-by who does burns 750 SVR of C's bond and pays 250 to the drill operator as the named
+victim, and the expire path goes unshown until a rerun. The rehearsal checks this case too
+(`test_lapsingProposalIsExecutableUntilItLapses`). If it happens, the log says so: it is the
+protocol working, not the drill failing.
+
+**What this proves and what it does not.** It shows each way out of a slash working on the live
+deployment, with each guard firing when it should. It does not show that the admin rules well or
+that the committee files in good faith: one person holds both keys on testnet, as above, and both
+the accuser and the accused are ours.

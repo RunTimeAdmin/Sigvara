@@ -70,6 +70,7 @@ function groupOf(a) {
   if (profile) return { key: "sim", profile, label: `Simulated · ${profile === "ring" ? "Sybil ring" : profile}` };
   if (KNOWN_AGENTS[a.didHash]) return { key: "own", label: KNOWN_AGENTS[a.didHash] };
   if (X.same(a.operator, X.DEPLOYER)) return { key: "own", label: "Sigvara's own" };
+  if (X.same(a.operator, X.DRILL_OPERATOR)) return { key: "own", label: "Sigvara's slash drill" };
   return { key: "outside", label: "Outside" };
 }
 let filter = "all";
