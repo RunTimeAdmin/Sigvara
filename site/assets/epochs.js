@@ -4,11 +4,12 @@
 // Reads only. No wallet, nothing signed, no external library (see app.js for why).
 // Four sources, and the page says which one each fact came from:
 //   - the chain, over the public RPC: the finalized score, the pending proposal, the window.
-//   - the Arc explorer's log index: the history of proposals, finalizations and rejections.
-//     The RPC answers eth_getLogs over at most 10,000 blocks (about 85 minutes) and
-//     rate-limits a batch of them, so a week of history would be over a hundred requests.
-//     The explorer answers the whole history in one. Its index can stop while the chain goes
-//     on, so the blocks after it are read from the RPC, as the explorer pages do (explorer.js).
+//   - Sigvara's event index (docs/event-index.md): the history of proposals, finalizations and
+//     rejections. The RPC answers eth_getLogs over at most 10,000 blocks (about 85 minutes) and
+//     rate-limits a batch of them, so a week of history would be over a hundred requests. The
+//     index answers the whole history in one, and the blocks after it are read from the RPC.
+//     When it does not answer, the Arc explorer's log index stands in, as on the explorer pages
+//     (explorer.js).
 //   - the primary oracle: the payments behind the agent's score (/evidence).
 //   - the checker: whether its own recomputation disagreed with a proposal (/divergence).
 // Everything that comes back is untrusted input: hex is shape-checked before it goes into a
@@ -161,6 +162,17 @@ async function blockNumber() {
 // refuse a write; then every lookup asks again.
 const HISTORY_TTL_MS = 10 * 60 * 1000;
 async function agentHistory(didHash) {
+  try {
+    const { rows, tail } = await X.indexLogs([REPUTATION], { topic0: EVENTS.map(e => e.topic), topic1: didHash });
+    // An answer about another agent is not this one's history.
+    return { logs: mergeLogs(rows.map(parseLog).filter(Boolean), []).filter(l => l.didHash === didHash), truncated: false, tail };
+  } catch (indexError) {
+    return explorerHistory(didHash, String(indexError?.message ?? indexError));
+  }
+}
+
+// The same history from the Arc explorer, when the event index does not answer.
+async function explorerHistory(didHash, indexError) {
   const key = `sigvara-epochs:${didHash}`;
   try {
     const hit = JSON.parse(sessionStorage.getItem(key));
@@ -173,7 +185,7 @@ async function agentHistory(didHash) {
   ]);
   const { logs, ...how } = tail;
   // Likewise an answer about another agent.
-  const value = { logs: mergeLogs(indexed.logs, logs).filter(l => l.didHash === didHash), truncated: indexed.truncated, tail: how };
+  const value = { logs: mergeLogs(indexed.logs, logs).filter(l => l.didHash === didHash), truncated: indexed.truncated, tail: { ...how, indexError } };
   // A chain read that failed is asked again next time rather than kept.
   if (!how.error) try { sessionStorage.setItem(key, JSON.stringify({ at: Date.now(), value })); } catch (_) { /* no cache */ }
   return value;
@@ -238,7 +250,7 @@ function parseLog(r) {
     didHash: String(r.topics[1] || "").toLowerCase(),
     block: parseInt(r.blockNumber, 16),
     index: parseInt(r.logIndex, 16) || 0,
-    time: parseInt(r.timeStamp, 16),
+    time: parseInt(r.timeStamp ?? r.blockTimestamp, 16),
     tx: isHash(r.transactionHash) ? r.transactionHash : null,
   };
   if (ev.name === "ScoreProposed") Object.assign(log, { at: Number(w(0)), root: rootAt(1) });
@@ -544,11 +556,20 @@ async function loadRecent() {
   const card = "recentCard";
   setCard(card, "<p class=\"netnote\">Reading the last day of proposals…</p>");
   try {
-    // A day is 18 log reads, a few seconds, so it comes from the chain: that keeps it current
-    // when the explorer's index is not, and leaves the explorer's ten an hour for an agent's
-    // whole history.
+    // From the event index. When it does not answer, the day comes from the chain, 18 log reads,
+    // rather than the explorer: that keeps it current when the explorer's index is not, and
+    // leaves the explorer's ten an hour for an agent's whole history.
     const head = await blockNumber();
-    const logs = await chainHistory(null, Math.max(0, head - RECENT_BLOCKS + 1), head);
+    const floor = Math.max(0, head - RECENT_BLOCKS + 1);
+    let logs, note;
+    try {
+      const { rows, tail } = await X.indexLogs([REPUTATION], { topic0: EVENTS.map(e => e.topic), fromBlock: floor });
+      logs = mergeLogs(rows.map(parseLog).filter(Boolean), []);
+      note = X.historyNote({ tail });
+    } catch (_) {
+      logs = await chainHistory(null, floor, head);
+      note = '<p class="netnote">Read from the chain itself, because Sigvara\'s event index did not answer.</p>';
+    }
     const byAgent = new Map();
     for (const l of logs) {
       if (!isHash(l.didHash)) continue;
@@ -559,7 +580,7 @@ async function loadRecent() {
       byAgent.set(l.didHash, a);
     }
     const agents = [...byAgent.values()].sort((a, b) => b.last.block - a.last.block).slice(0, 20);
-    if (!agents.length) return setCard(card, "<p>No agent was scored in the last day.</p>");
+    if (!agents.length) return setCard(card, "<p>No agent was scored in the last day.</p>" + note);
     // Up to twenty reads, more than the RPC takes in one batch, so they go through explorer.js.
     const idents = await X.ethCalls(agents.map(a => ({ to: IDENTITY, data: SEL.identities + pad32(a.didHash) })));
     const verb = { ScoreProposed: "proposed", ReputationUpdated: "finalized", ScoreRejected: "rejected", ReputationZeroed: "zeroed by a slash" };
@@ -571,7 +592,7 @@ async function loadRecent() {
         return `<li>${who}<span>${esc(verb[a.last.name])} ${esc(fmtWhen(a.last.time))}</span>`
           + `<span>${a.score === null ? "" : `finalized at ${a.score}`}</span></li>`;
       }).join("")}</ul>`
-      + '<p class="netnote">Read from the chain itself.</p>');
+      + note);
   } catch (e) {
     setCard(card, failed("recent activity", e));
   }

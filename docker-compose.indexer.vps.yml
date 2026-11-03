@@ -1,0 +1,97 @@
+# Event index (docs/event-index.md), shaped for a bare VPS like the watcher's file: it fetches
+# ONE PINNED COMMIT of the public repository inside the container, so the box needs no checkout.
+#
+# Which code runs is SIGVARA_COMMIT in .env: the full 40-character hash of a commit on main that
+# someone has read. A deploy is:
+#
+#   1. change SIGVARA_COMMIT in .env
+#   2. docker compose up -d        (a plain restart does NOT re-read .env)
+#   3. read the log: "[deploy] running <that hash>", then "[indexer] caught up"
+#
+# The RPC URL is the one secret. An Alchemy URL carries its API key, so it lives in ./rpc_url beside
+# this file (mode 600, one line) and reaches the container as a compose secret, never as an
+# environment variable, where `docker inspect` would show it. The index never logs or serves it.
+#
+# It holds no key that can sign and writes nothing to the chain. What it serves is public chain
+# data that anyone can check against the chain, so the worst a compromised index can do is serve
+# a wrong history, and each log names the transaction it came from.
+#
+# It listens on 127.0.0.1:3040; a TLS proxy on the same host serves it as https://index.sigvara.xyz.
+#
+#   cd /docker/sigvara-index && docker compose -f docker-compose.indexer.vps.yml up -d
+services:
+  indexer:
+    # Node 24, pinned by digest as in oracle/Dockerfile. The index needs no npm package.
+    image: node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53
+    container_name: sigvara-index
+    restart: unless-stopped
+    working_dir: /app
+    init: true
+    environment:
+      SIGVARA_COMMIT: ${SIGVARA_COMMIT:?set SIGVARA_COMMIT in .env to the full 40-character commit hash}
+      RPC_URL_FILE: /run/secrets/rpc_url
+      EXPECTED_CHAIN_ID: "5042002"
+      # identity, reputation, staking and oracleBond from deployments/5042002.json.
+      INDEX_ADDRESSES: "0x7e3aFC532eE5d922ab3cc3FFb510c7C8151477Dd,0x6603C96275e85F724Cdf74666b399365e4cA29ed,0xA69d62B2a6774D21A2c15d5d83b27277eD31d35B,0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171"
+      # The block identity, reputation and staking were created in, 18 September 2026; the bond
+      # contract came later. Nothing before it is Sigvara's.
+      INDEX_FROM_BLOCK: "62662196"
+      INDEX_HOST: 0.0.0.0
+      PORT: "3040"
+      # Alchemy takes ten log reads in one batch. Arc's public RPC refuses four: set 1 for it.
+      INDEX_BATCH: "10"
+      STATE_FILE: /data/event-index.json
+    secrets:
+      - rpc_url
+    ports:
+      - "127.0.0.1:3040:3040"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - NET_RAW
+    mem_limit: 256m
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+    # /health fails until the first run has read the history (about a minute against Alchemy)
+    # and whenever the index falls half an hour behind.
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3040/health').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 300s
+      retries: 3
+    command:
+      - sh
+      - -c
+      - |
+        set -eu
+        case "$${SIGVARA_COMMIT:-}" in ""|*[!0-9a-f]*) echo "[deploy] SIGVARA_COMMIT must be 40 lowercase hex characters" >&2; exit 1;; esac
+        [ "$${#SIGVARA_COMMIT}" -eq 40 ] || { echo "[deploy] SIGVARA_COMMIT must be 40 characters" >&2; exit 1; }
+        apk add --no-cache git >/dev/null
+        rm -rf /src && mkdir /src && cd /src
+        git init -q
+        git remote add origin https://github.com/RunTimeAdmin/Sigvara.git
+        git fetch -q --depth 1 origin "$$SIGVARA_COMMIT"
+        git checkout -q --detach FETCH_HEAD
+        [ "$$(git rev-parse HEAD)" = "$$SIGVARA_COMMIT" ] || { echo "[deploy] checkout is not $$SIGVARA_COMMIT, refusing to start" >&2; exit 1; }
+        rm -rf /app/*.js
+        cp /src/oracle/indexer.js /src/oracle/event-index.js /src/oracle/http-helpers.js /app/
+        echo "[deploy] running $$SIGVARA_COMMIT"
+        exec node indexer.js
+    volumes:
+      - index_app:/app
+      # The index itself, so a restart carries on from the last block read instead of reading
+      # the whole history again.
+      - index_data:/data
+
+secrets:
+  rpc_url:
+    file: ./rpc_url
+
+volumes:
+  index_app:
+  index_data:

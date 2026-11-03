@@ -7,9 +7,10 @@ const X = window.SigvaraExplorer;
 const $ = (id) => document.getElementById(id);
 const DIVERGENCES_SHOWN = 15;
 const HISTORY_SHOWN = 30;
-// Each operator's newest proposal is read from the chain over this many blocks (about 14 hours,
-// ten log reads). ScoreProposed does not name its proposer, so the sender of each proposal's
-// transaction is asked for, newest first, up to PROPOSALS_CHECKED of them.
+// Each operator's newest proposal: every proposal from the event index, or, when it does not
+// answer, those over this many blocks from the chain (about 14 hours, ten log reads).
+// ScoreProposed does not name its proposer, so the sender of each proposal's transaction is
+// asked for, newest first, up to PROPOSALS_CHECKED of them.
 const PROPOSAL_BLOCKS = 100000;
 const PROPOSALS_CHECKED = 60;
 const PROPOSED = X.EVENTS.find((e) => e.name === "ScoreProposed").topic;
@@ -81,7 +82,7 @@ async function renderOperators(history, health) {
     </tr>`;
   }
   html += "</tbody></table></div>";
-  html += '<p class="netnote">Last proposal is the newest score proposal sent by the operator or a signing key it has set, read from the chain. A checker proposes only into a slot the primary has left empty, so it usually has none.</p>';
+  html += '<p class="netnote">Last proposal is the newest score proposal sent by the operator or a signing key it has set, with the sender of each proposal read from its transaction on the chain. A checker proposes only into a slot the primary has left empty, so it usually has none.</p>';
   html += X.historyNote(history.value);
   html += `<p class="netnote">A slashed operator bond goes to the slash beneficiary, ${X.addrLink(beneficiary)}, not to a burn. The bond contract's slash takes no evidence and has no appeal window; see <a href="slashes">Slashes</a>.</p>`;
   html += healthList(health);
@@ -92,28 +93,36 @@ async function renderOperators(history, health) {
       const p = found.newest.get(td.getAttribute("data-proposal"));
       td.innerHTML = p
         ? `${X.esc(X.fmtWhen(p.at))}<div class="ex-note">${X.txLink(p.tx)}</div>`
-        : `<span class="ex-note">none since ${X.esc(X.fmtWhen(found.since))}</span>`;
+        : `<span class="ex-note">${found.since === null ? "none on record" : `none since ${X.esc(X.fmtWhen(found.since))}`}</span>`;
     }
   }).catch((e) => { for (const td of cells) td.innerHTML = X.failed("the proposals", e); });
 }
 
-// The newest proposal each operator sent, as { at, tx }, and how far back the search reached.
+// The newest proposal each operator sent, as { at, tx }, and how far back the search reached:
+// `since` is null when every proposal on record was checked.
 async function lastProposals(ops) {
-  const to = await X.blockNumber();
-  const from = Math.max(0, to - PROPOSAL_BLOCKS + 1);
+  let found, from = null;
+  try {
+    ({ rows: found } = await X.indexLogs([X.REPUTATION], { topic0: [PROPOSED] }));
+  } catch (_) {
+    const to = await X.blockNumber();
+    from = Math.max(0, to - PROPOSAL_BLOCKS + 1);
+    found = await X.chainLogs([X.REPUTATION], [PROPOSED], from, to, { times: false });
+  }
   const blockOf = (r) => parseInt(r.blockNumber, 16), indexOf = (r) => parseInt(r.logIndex, 16) || 0;
-  const rows = (await X.chainLogs([X.REPUTATION], [PROPOSED], from, to, { times: false }))
+  const rows = found
     .filter((r) => X.same(r.address, X.REPUTATION) && X.isHash(r.transactionHash) && /^0x[0-9a-fA-F]*$/.test(r.data))
     .sort((a, b) => blockOf(b) - blockOf(a) || indexOf(b) - indexOf(a));
   const all = [...new Set(rows.map((r) => r.transactionHash.toLowerCase()))];
   const txs = all.slice(0, PROPOSALS_CHECKED);
-  const [start, ...got] = await X.rpcMany([
-    ["eth_getBlockByNumber", ["0x" + from.toString(16), false]],
+  const got = await X.rpcMany([
+    ...(from === null ? [] : [["eth_getBlockByNumber", ["0x" + from.toString(16), false]]]),
     ...txs.map((h) => ["eth_getTransactionByHash", [h]]),
   ]);
+  const start = from === null ? null : got.shift();
   const sender = new Map(txs.map((h, i) => [h, String(got[i]?.from ?? "").toLowerCase()]));
   const newest = new Map();
-  let since = Number(BigInt(start?.timestamp ?? 0));
+  let since = from === null ? null : Number(BigInt(start?.timestamp ?? 0));
   for (const r of rows) {
     const tx = r.transactionHash.toLowerCase(), by = sender.get(tx);
     // Past the senders read, the search reaches back only to the oldest one that was.

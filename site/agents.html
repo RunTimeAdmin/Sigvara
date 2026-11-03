@@ -48,7 +48,7 @@
   </ul>
   <h1 class="u-h1-28">Agents</h1>
   <p class="ep-lede">Every agent registered on this deployment, with its score and stake. A score is only as good as the payments behind it, so each one can be checked here: your browser rebuilds the Merkle root over the payments the oracle lists, compares it with the root committed on chain, and asks the reputation contract to confirm each payment is in it.</p>
-  <p class="netnote">Arc testnet (5042002). Reads only: no wallet, and nothing is signed or sent. Registrations come from the Arc explorer's index of the identity contract, and from the chain for blocks it has not indexed yet; scores and stakes from the contracts themselves.</p>
+  <p class="netnote">Arc testnet (5042002). Reads only: no wallet, and nothing is signed or sent. Registrations come from Sigvara's event index, a copy of the identity contract's logs that the Sigvara team keeps, and from the chain for the newest blocks; scores and stakes from the contracts themselves.</p>
 
   <div class="app-card" id="agentsCard">
     <h2>Registered agents</h2>
@@ -76,7 +76,7 @@
 </footer>
 
 <script src="assets/did.js?v=32000f8"></script>
-<script src="assets/explorer.js?v=recent1"></script>
+<script src="assets/explorer.js?v=index1"></script>
 <script src="assets/agents.js?v=recent1"></script>
 </body>
 </html>

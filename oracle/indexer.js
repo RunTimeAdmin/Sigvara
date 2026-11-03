@@ -1,0 +1,308 @@
+'use strict';
+
+/**
+ * Event index.
+ *
+ * Reads every log the Sigvara contracts emit, from the block they were deployed in, and serves
+ * them over HTTP so a page can have a contract's whole history in one request. docs/event-index.md
+ * says why it exists and how it is run.
+ *
+ * It holds no key that can sign and writes nothing to the chain. Its one secret is the RPC URL,
+ * which for a provider such as Alchemy carries an API key; that is read from a file when
+ * RPC_URL_FILE is set and is never logged or served. A request to it never reaches the RPC: it
+ * answers from memory, so a busy page cannot spend the provider's credits.
+ *
+ * It reads only blocks the RPC calls finalized, in order, and moves forward only when a whole
+ * span has been read, so the index never has a hole. Arc finalizes each block as it is made.
+ *
+ *   RPC_URL_FILE=/run/secrets/rpc_url EXPECTED_CHAIN_ID=5042002 \
+ *   INDEX_ADDRESSES=0x...,0x... INDEX_FROM_BLOCK=62662196 node indexer.js
+ */
+
+const fs = require('fs');
+const http = require('http');
+const zlib = require('zlib');
+const ix = require('./event-index');
+const { runningCommit } = require('./http-helpers');
+
+const fail = (message) => { console.error(`[indexer] ${message}`); process.exit(1); };
+const intSetting = (name, fallback, min) => {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') {
+    if (fallback === undefined) fail(`need ${name}`);
+    return fallback;
+  }
+  const n = Number(raw);
+  if (!/^\d+$/.test(raw) || !Number.isSafeInteger(n) || n < min) fail(`${name} is ${raw}; must be a whole number of at least ${min}`);
+  return n;
+};
+
+// The RPC URL, from the file RPC_URL_FILE names or from RPC_URL. Never echoed: for Alchemy the
+// key is part of it. Plain http is allowed only to this machine, for tests and a local node.
+function readRpcUrl(env = process.env) {
+  if (env.RPC_URL_FILE && env.RPC_URL) fail('set RPC_URL_FILE or RPC_URL, not both');
+  let raw = env.RPC_URL || '';
+  if (env.RPC_URL_FILE) {
+    try { raw = fs.readFileSync(env.RPC_URL_FILE, 'utf8'); } catch (e) { fail(`cannot read RPC_URL_FILE ${env.RPC_URL_FILE} (${e.code || 'error'})`); }
+  }
+  const url = raw.trim();
+  if (!url) fail('need RPC_URL_FILE or RPC_URL');
+  let parsed;
+  try { parsed = new URL(url); } catch { fail('the RPC URL is not a URL (the value is not shown)'); }
+  const local = ['127.0.0.1', 'localhost', '[::1]'].includes(parsed.hostname);
+  if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && local)) fail('the RPC URL must be https (the value is not shown)');
+  return url;
+}
+
+const rpcUrl = readRpcUrl();
+// The URL, and its last path segment when that looks like a key, are cut out of every message.
+const lastSegment = new URL(rpcUrl).pathname.split('/').filter(Boolean).pop() || '';
+const secrets = [rpcUrl, lastSegment.length >= 16 ? lastSegment : ''];
+const redact = (m) => ix.redact(m, secrets);
+
+const addressList = (process.env.INDEX_ADDRESSES || '').split(',').map((a) => a.trim().toLowerCase()).filter(Boolean);
+if (!addressList.length || addressList.length > 10 || addressList.some((a) => !/^0x[0-9a-f]{40}$/.test(a))) {
+  fail('INDEX_ADDRESSES must be one to ten contract addresses, comma separated');
+}
+
+const cfg = {
+  chainId: intSetting('EXPECTED_CHAIN_ID', undefined, 1),
+  fromBlock: intSetting('INDEX_FROM_BLOCK', undefined, 0),
+  addresses: new Set(addressList),
+  port: intSetting('PORT', 3040, 1),
+  host: process.env.INDEX_HOST || '127.0.0.1',
+  pollSeconds: intSetting('POLL_SECONDS', 30, 1),
+  // Spans per JSON-RPC batch. Alchemy takes 25 at once; Arc's public RPC refuses four, so a
+  // deployment on it sets 1.
+  batch: intSetting('INDEX_BATCH', 10, 1),
+  stateFile: process.env.STATE_FILE || '',
+};
+// One poll reads at most this many spans (a million blocks) before it saves and starts the next,
+// so a first run's backfill is saved as it goes.
+const SPANS_PER_POLL = 100;
+// /health fails once the index is this far behind the chain: about half an hour of Arc blocks.
+const MAX_BEHIND = 3600;
+
+// ---- state ----
+function load() {
+  const fresh = ix.createIndex(cfg);
+  if (!cfg.stateFile || !fs.existsSync(cfg.stateFile)) return fresh;
+  try {
+    const saved = JSON.parse(fs.readFileSync(cfg.stateFile, 'utf8'));
+    if (ix.resumable(saved, cfg)) {
+      console.log(`[indexer] resuming at block ${saved.toBlock} with ${saved.logs.length} logs`);
+      return saved;
+    }
+    console.log('[indexer] the saved index is for another chain, start block or contract set; starting over');
+  } catch (e) {
+    console.log(`[indexer] the saved index cannot be read (${e.message}); starting over`);
+  }
+  return fresh;
+}
+
+// Temp file, fsync, rename: a crash leaves the old index or the new one, never half of one.
+function save() {
+  if (!cfg.stateFile) return;
+  const tmp = `${cfg.stateFile}.tmp`;
+  const fd = fs.openSync(tmp, 'w');
+  try {
+    fs.writeSync(fd, JSON.stringify(index));
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  fs.renameSync(tmp, cfg.stateFile);
+}
+
+let index = load();
+const status = { head: null, lastPollAt: null, lastOkAt: null, lastError: null };
+let caughtUp = false;
+
+// ---- the RPC ----
+async function rpc(body) {
+  // redirect: 'error'. A provider that redirects is not answering the request that was made.
+  const res = await fetch(rpcUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    redirect: 'error',
+    signal: AbortSignal.timeout(60_000),
+  });
+  if (!res.ok) throw new Error(`the RPC answered HTTP ${res.status}`);
+  return res.json();
+}
+
+async function call(method, params) {
+  const j = await rpc({ jsonrpc: '2.0', id: 1, method, params });
+  if (j && j.error) throw new Error(`${method}: ${j.error.message}`);
+  if (!j || j.result === undefined || j.result === null) throw new Error(`${method}: no result`);
+  return j.result;
+}
+
+// Every log of the indexed contracts in `spans`, in one batch. Any refused or malformed answer
+// fails the whole batch, so nothing from it is kept.
+async function readSpans(spans) {
+  const hex = (n) => '0x' + n.toString(16);
+  const answer = await rpc(spans.map(([a, b], id) => ({
+    jsonrpc: '2.0', id, method: 'eth_getLogs', params: [{ address: [...cfg.addresses], fromBlock: hex(a), toBlock: hex(b) }],
+  })));
+  if (!Array.isArray(answer)) throw new Error(`eth_getLogs: ${answer && answer.error ? answer.error.message : 'not a batch answer'}`);
+  const byId = new Map(answer.map((r) => [r && r.id, r]));
+  const logs = [];
+  spans.forEach(([a, b], id) => {
+    const r = byId.get(id);
+    if (!r || r.error || !Array.isArray(r.result)) throw new Error(`eth_getLogs ${a} to ${b}: ${r && r.error ? r.error.message : 'no result'}`);
+    for (const raw of r.result) {
+      const l = ix.normalizeLog(raw, { addresses: cfg.addresses, from: a, to: b });
+      if (l instanceof Error) throw new Error(`eth_getLogs ${a} to ${b}: ${l.message}`);
+      logs.push(l);
+    }
+  });
+  return logs;
+}
+
+// An RPC that leaves blockTimestamp out of its logs gets each block's time asked for.
+async function addTimes(logs) {
+  const blocks = [...new Set(logs.filter((l) => !l.blockTimestamp).map((l) => l.blockNumber))];
+  for (let i = 0; i < blocks.length; i += 10) {
+    const part = blocks.slice(i, i + 10);
+    const answer = await rpc(part.map((b, id) => ({ jsonrpc: '2.0', id, method: 'eth_getBlockByNumber', params: [b, false] })));
+    const at = new Map((Array.isArray(answer) ? answer : []).map((r) => [part[r.id], r.result && r.result.timestamp]));
+    for (const l of logs) {
+      if (l.blockTimestamp) continue;
+      const t = at.get(l.blockNumber);
+      if (typeof t !== 'string' || !/^0x[0-9a-f]{1,16}$/i.test(t)) throw new Error(`no time for block ${parseInt(l.blockNumber, 16)}`);
+      l.blockTimestamp = '0x' + parseInt(t, 16).toString(16);
+    }
+  }
+}
+
+let timer = null;
+async function poll() {
+  timer = null;
+  let more = false;
+  try {
+    const fin = await call('eth_getBlockByNumber', ['finalized', false]);
+    const head = parseInt(fin.number, 16), headTime = parseInt(fin.timestamp, 16);
+    if (!Number.isSafeInteger(head)) throw new Error('the finalized block has no number');
+    status.head = head;
+    const spans = ix.planSpans(index.toBlock + 1, head);
+    more = spans.length > SPANS_PER_POLL;
+    const work = spans.slice(0, SPANS_PER_POLL);
+    const before = index.toBlock;
+    for (let i = 0; i < work.length; i += cfg.batch) {
+      const group = work.slice(i, i + cfg.batch);
+      const logs = await readSpans(group);
+      await addTimes(logs);
+      const through = group[group.length - 1][1];
+      ix.appendLogs(index, logs, through, through === head ? headTime : null);
+    }
+    if (index.toBlock !== before) {
+      if (index.toBlockTime === null) index.toBlockTime = parseInt((await call('eth_getBlockByNumber', ['0x' + index.toBlock.toString(16), false])).timestamp, 16);
+      save();
+    }
+    if (!more && !caughtUp) {
+      caughtUp = true;
+      console.log(`[indexer] caught up: ${index.logs.length} logs through block ${index.toBlock}`);
+    }
+    status.lastOkAt = Date.now();
+    status.lastError = null;
+  } catch (e) {
+    status.lastError = redact(e && e.message ? e.message : e);
+    console.error(`[indexer] poll failed at block ${index.toBlock}: ${status.lastError}`);
+  } finally {
+    status.lastPollAt = Date.now();
+    // While behind, the next million blocks follow at once; after that, one poll a period.
+    timer = setTimeout(poll, more && !status.lastError ? 1000 : cfg.pollSeconds * 1000);
+  }
+}
+
+// ---- http ----
+const iso = (ms) => (ms ? new Date(ms).toISOString() : null);
+function health() {
+  const behind = status.head === null ? null : Math.max(0, status.head - index.toBlock);
+  const fresh = status.lastOkAt !== null && Date.now() - status.lastOkAt < cfg.pollSeconds * 5000 + 60_000;
+  return {
+    ok: fresh && behind !== null && behind <= MAX_BEHIND,
+    chainId: index.chainId,
+    fromBlock: index.fromBlock,
+    toBlock: index.toBlock,
+    toBlockTime: index.toBlockTime,
+    head: status.head,
+    behind,
+    logs: index.logs.length,
+    lastPollAt: iso(status.lastPollAt),
+    lastOkAt: iso(status.lastOkAt),
+    lastError: status.lastError,
+    commit: runningCommit(),
+  };
+}
+
+// Public chain data, so any origin may read it: a reader checking this index against another
+// one is the point.
+const COMMON = {
+  'Access-Control-Allow-Origin': '*',
+  'X-Content-Type-Options': 'nosniff',
+  'Cross-Origin-Resource-Policy': 'cross-origin',
+};
+
+function send(req, res, status, body, cache = 'no-store') {
+  const json = Buffer.from(JSON.stringify(body));
+  const gzip = /\bgzip\b/.test(req.headers['accept-encoding'] || '') && json.length > 1024;
+  const out = gzip ? zlib.gzipSync(json) : json;
+  res.writeHead(status, {
+    ...COMMON,
+    'Content-Type': 'application/json',
+    'Cache-Control': cache,
+    Vary: 'Accept-Encoding',
+    ...(gzip ? { 'Content-Encoding': 'gzip' } : {}),
+    'Content-Length': out.length,
+  });
+  res.end(req.method === 'HEAD' ? undefined : out);
+}
+
+const server = http.createServer((req, res) => {
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, { ...COMMON, 'Access-Control-Allow-Methods': 'GET, HEAD', 'Access-Control-Max-Age': '86400' });
+    return res.end();
+  }
+  if (req.method !== 'GET' && req.method !== 'HEAD') return send(req, res, 405, { error: 'GET only' });
+  let url;
+  try { url = new URL(req.url, 'http://index.invalid'); } catch { return send(req, res, 400, { error: 'bad request' }); }
+  if (url.pathname === '/health') {
+    const h = health();
+    return send(req, res, h.ok ? 200 : 503, h);
+  }
+  if (url.pathname === '/events') {
+    const q = ix.parseQuery(url.searchParams, cfg.addresses);
+    if (q instanceof Error) return send(req, res, 400, { error: q.message });
+    if (index.toBlock < index.fromBlock) return send(req, res, 503, { error: 'nothing indexed yet' });
+    return send(req, res, 200, ix.eventsBody(index, q), 'public, max-age=10');
+  }
+  return send(req, res, 404, { error: 'not found' });
+});
+
+async function start() {
+  let chainId;
+  try {
+    chainId = parseInt(await call('eth_chainId', []), 16);
+  } catch (e) {
+    fail(`cannot reach the RPC: ${redact(e && e.message ? e.message : e)}`);
+  }
+  if (chainId !== cfg.chainId) fail(`the RPC serves chain ${chainId}, not EXPECTED_CHAIN_ID ${cfg.chainId}`);
+  server.listen(cfg.port, cfg.host, () => {
+    console.log(`[indexer] chain ${chainId}, ${cfg.addresses.size} contracts from block ${cfg.fromBlock}, serving on ${cfg.host}:${cfg.port}${runningCommit() ? `, running ${runningCommit()}` : ''}`);
+  });
+  poll();
+}
+
+for (const sig of ['SIGTERM', 'SIGINT']) {
+  process.on(sig, () => {
+    if (timer) clearTimeout(timer);
+    server.close();
+    try { save(); } catch (e) { console.error(`[indexer] could not save on exit: ${e.message}`); }
+    process.exit(0);
+  });
+}
+
+start();
