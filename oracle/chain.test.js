@@ -698,7 +698,7 @@ test('the three named refusals do not overlap', () => {
 // count as a fully trusted voucher. The code comment records that measured as scored
 // sybils maxing the fee factor with four payers instead of six. So it returns the
 // HARD part only, externalScore, which counts only feedback from reviewers reviewers.js
-// accepts, so a single party cannot farm it from its own wallets.
+// accepts, so a single party cannot fill it from fresh wallets.
 //
 // The consequence is worth stating plainly, because it is not obvious from either
 // call site: propagationScore is gated on counterparties having ERC-8004 standing.

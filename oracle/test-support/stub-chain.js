@@ -22,7 +22,8 @@
 //                by the real reviewers.js when externalOwns is true
 //     reviewers: { "<address>": { registered, operator, status, registeredAt, matured, bonded } } what the
 //                identity registry says of a reviewer (default not an agent); "throw" when the node cannot say
-//     funders:   { "<address>": "<address>" } who first funded an address (default none found)
+//     funders:   { "<address>": "<address>" } who first funded an address (default none found); the
+//                snapshot block, the payment blocks and every funding block read as `head`
 //     chainId:   the chain id the fake node reports (default 5042)
 //     nonceGap:  how many of the wallet's transactions the node holds pending (default 0)
 //     operatorStanding: { enforced, allowed, operatorBond } what the boot check finds (default not enforced)
@@ -162,7 +163,12 @@ const chain = {
     if (r === 'throw') throw new Error('stub: reviewer read failed');
     return r ?? { registered: false };
   },
-  firstFunder: async (address) => world().funders?.[address.toLowerCase()] ?? null,
+  firstFunder: async (address) => {
+    const funder = world().funders?.[address.toLowerCase()];
+    return funder === undefined ? null : { funder: funder.toLowerCase(), block: world().head ?? 1 };
+  },
+  paymentBlock: async (event) => event.blockNumber ?? world().head ?? 1,
+  blockAtOrBefore: async () => world().head ?? 1,
   pruneAgent() {},
   isSlotTaken: () => false,
   isRateLimited: () => false,
@@ -218,7 +224,7 @@ const external = {
   // The ownership check and the read are faked; what is made of the rows is the real judgment.
   externalScoreFor: async (agentId, owner, judge) => {
     if (world().externalOwns !== true || !world().externalFeedback) return 0;
-    try { return await judge(world().externalFeedback); } catch { return 0; }
+    return judge(world().externalFeedback);
   },
   verifyOwnership: async () => world().externalOwns === true,
 };

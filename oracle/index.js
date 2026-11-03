@@ -354,6 +354,47 @@ async function payerScoresFor(didHash) {
 }
 
 /**
+ * The external factor for one agent: the feedback on its linked ERC-8004 identity, counted
+ * only from the reviewers reviewers.js accepts. 0 when nothing is linked, the feed is off, or
+ * the registry cannot be read (externalScoreFor). Throws when the snapshot or a reviewer
+ * cannot be read, and the agent is skipped this epoch. `nowMs` is the chain's clock, as for scoreAt, and
+ * `events` the payment evidence to judge reviewers by: the checker passes the evidence as it
+ * stood at the proposal it audits.
+ *
+ * Everything is read as of the snapshot, the start of the UTC day containing `nowMs`
+ * (reviewers.snapshotOf): the registry and each reviewer's standing at the snapshot's block,
+ * and only evidence settled by then. A checker auditing a proposal made the same day reads
+ * exactly what its primary read. The feedback itself is read at that block only when the
+ * ERC-8004 registry is on this chain; on another chain it is read at its latest block.
+ */
+async function externalScoreOf(didHash, { operator, agentAddress }, nowMs, events = getPaymentEvents(didHash)) {
+  const linkedId = links.get(didHash);
+  if (!external.configured() || linkedId === undefined) return 0;
+  const snapshotSec = reviewers.snapshotOf(Math.floor(nowMs / 1000));
+  const snapshotBlock = await chain.blockAtOrBefore(snapshotSec);
+  const sameChain = verifiedChainId !== null && external.chainState().chainId === verifiedChainId;
+  return external.externalScoreFor(linkedId, operator, async (rows) => {
+    const result = await reviewers.scoreFeedback(
+      rows,
+      {
+        agent: { operator, agentAddress },
+        events: events.filter((e) => e.ts <= snapshotSec * 1000),
+        nowMs: snapshotSec * 1000,
+      },
+      {
+        standingOf: (address) => chain.getReviewerStanding(address, snapshotBlock),
+        funderOf: chain.firstFunder,
+        paymentBlock: chain.paymentBlock,
+        snapshotBlock,
+        publicFunders: cfg.publicFunders.set,
+      },
+    );
+    if (rows.length) console.log(`[oracle]   ${didHash.slice(0, 10)}… external: ${reviewers.describe(result)}`);
+    return result.score;
+  }, sameChain ? snapshotBlock : undefined);
+}
+
+/**
  * One agent's score at `nowMs` (the chain's clock, in milliseconds): the single assembly
  * shared by the epoch, the checker's re-score at a proposal's own time, and GET /score.
  * It was written out three times, and the point of each copy was to match the others,
@@ -361,25 +402,6 @@ async function payerScoresFor(didHash) {
  * callers report. `events`, when given, is the evidence to score instead of all this
  * operator holds: the checker passes the evidence as it stood at a proposal.
  */
-/**
- * The external factor for one agent: the feedback on its linked ERC-8004 identity, counted
- * only from the reviewers reviewers.js accepts. 0 when nothing is linked, the feed is off, or
- * any read fails (externalScoreFor). `nowMs` is the chain's clock, as for scoreAt.
- */
-async function externalScoreOf(didHash, { operator, agentAddress }, nowMs) {
-  const linkedId = links.get(didHash);
-  if (!external.configured() || linkedId === undefined) return 0;
-  return external.externalScoreFor(linkedId, operator, async (rows) => {
-    const result = await reviewers.scoreFeedback(
-      rows,
-      { agent: { operator, agentAddress }, events: getPaymentEvents(didHash), nowMs },
-      { standingOf: chain.getReviewerStanding, funderOf: chain.firstFunder, publicFunders: cfg.publicFunders.set },
-    );
-    if (rows.length) console.log(`[oracle]   ${didHash.slice(0, 10)}… external: ${reviewers.describe(result)}`);
-    return result.score;
-  });
-}
-
 async function scoreAt(didHash, { registeredAt, att, flagWeight, externalScore }, nowMs, events) {
   const measured = measuredFactorsFor(didHash, nowMs, await payerScoresFor(didHash), events);
   const scores = computeScore({
@@ -975,7 +997,18 @@ async function runEpochInner() {
             asOf = payments.required(paymentCfg)
               ? evidenceAsOf(getPaymentEvents(didHash), atProposalMs, freshPending.evidenceRoot ?? null)
               : null;
-            auditScores = (await scoreAt(didHash, inputs, atProposalMs, asOf?.events)).scores;
+            // The external factor too, as the primary would have read it at its proposal: same
+            // snapshot, same evidence. Computed at this epoch's clock instead, a reviewer that
+            // changed in the hours between made an honest proposal look wrong.
+            const auditInputs = links.has(didHash)
+              ? {
+                ...inputs,
+                externalScore: await externalScoreOf(
+                  didHash, { operator, agentAddress }, atProposalMs, asOf?.events ?? getPaymentEvents(didHash),
+                ),
+              }
+              : inputs;
+            auditScores = (await scoreAt(didHash, auditInputs, atProposalMs, asOf?.events)).scores;
           }
 
           // auditScores for every comparison; `scores` stays as-is for the propose path

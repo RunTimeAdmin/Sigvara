@@ -6,8 +6,8 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  parsePublicFunders, findFirstFunder, verdictFor, scoreReviews, scoreFeedback,
-  REVIEWER_MIN_TENURE_DAYS, REVIEWER_MIN_SCORE, FULL_WEIGHT_CLUSTERS,
+  snapshotOf, parsePublicFunders, findFirstFunder, verdictFor, scoreReviews, scoreFeedback,
+  REVIEWER_MIN_TENURE_DAYS, REVIEWER_MIN_SCORE, FULL_WEIGHT_CLUSTERS, FUNDING_FLOOR,
 } = require('./reviewers');
 const { MAX_EXTERNAL_SCORE } = require('./external');
 const { World, startOracle, runToExit, wallet } = require('./test-support/oracle-harness');
@@ -16,28 +16,33 @@ const DAY_MS = 86_400_000;
 const NOW_MS = 1_800_000_000_000;
 const addr = (n) => `0x${n.toString(16).padStart(40, '0')}`;
 const AGENT = { operator: addr(0xa0), agentAddress: addr(0xa1) };
+const FAUCET = addr(0xfa);
+const ZERO = addr(0);
 
-/** A reviewer that passes every rule: paid today, Active, bonded, a year old, scored 60. */
+/** A reviewer that passes every rule: Active, bonded, a year old, scored 60. */
 function goodStanding(operator) {
   return { registered: true, operator, status: 0, registeredAt: (NOW_MS - 365 * DAY_MS) / 1000, matured: 60, bonded: true };
 }
 
 /**
- * A world of reviewers: each has its own operator and is funded by its own wallet, which a
- * faucet funded, unless the test says otherwise.
+ * `n` reviewers who each paid the agent: each has its own operator, and is funded by its own
+ * wallet, which a faucet funded, unless the test says otherwise.
  */
-function world(n, { standing = {}, funders = {}, paidDaysAgo = 0 } = {}) {
+function world(n, { paidDaysAgo = 0 } = {}) {
   const clients = Array.from({ length: n }, (_, i) => addr(0x100 + i));
-  const events = clients.map((c) => ({ payer: c, ts: NOW_MS - paidDaysAgo * DAY_MS, amount: '1000000' }));
+  const events = clients.map((c) => ({ payer: c, ts: NOW_MS - paidDaysAgo * DAY_MS, amount: '1000000', txHash: c }));
+  const own = (a) => (clients.includes(a) ? addr(0x300 + clients.indexOf(a)) : FAUCET);
   const deps = {
-    standingOf: async (c) => standing[c] ?? goodStanding(addr(0x200 + clients.indexOf(c))),
-    funderOf: async (a) => (a in funders ? funders[a] : clients.includes(a) ? addr(0x300 + clients.indexOf(a)) : FAUCET),
+    standingOf: async (c) => goodStanding(addr(0x200 + clients.indexOf(c))),
+    funderOf: async (a) => ({ funder: own(a), block: 10 }),
+    paymentBlock: async () => 100,
+    snapshotBlock: 1000,
     publicFunders: new Set([FAUCET]),
   };
-  return { clients, ctx: { agent: AGENT, events, nowMs: NOW_MS }, deps };
+  return { clients, ctx: { agent: AGENT, events, nowMs: NOW_MS }, deps, own };
 }
-const FAUCET = addr(0xfa);
 const rated = (clients, value = 100) => clients.map((client) => ({ client, value, tag: 'quality' }));
+const funding = (map) => async (a) => (map(a) === null ? null : { funder: map(a), block: 10 });
 
 // ---- the rules ------------------------------------------------------------------------
 
@@ -53,7 +58,7 @@ test('fifty fresh wallets rating an agent 100 are worth nothing', async () => {
   assert.equal(reads, 0, 'an unpaid reviewer costs no chain read');
 });
 
-test('one independent reviewer who paid today is worth a fifth of the cap', async () => {
+test('one independent reviewer who paid recently is worth a fifth of the cap', async () => {
   const { clients, ctx, deps } = world(1);
   assert.equal((await scoreFeedback(rated(clients), ctx, deps)).score, MAX_EXTERNAL_SCORE / FULL_WEIGHT_CLUSTERS);
 });
@@ -68,7 +73,7 @@ test('five independent reviewers who paid recently reach the cap', async () => {
 test('reviewers funded from one wallet count once between them', async () => {
   const shared = addr(0x777);
   const { clients, ctx, deps } = world(5);
-  deps.funderOf = async (a) => (clients.includes(a) ? shared : FAUCET);
+  deps.funderOf = funding((a) => (clients.includes(a) ? shared : FAUCET));
   const r = await scoreFeedback(rated(clients), ctx, deps);
   assert.equal(r.clusters, 1);
   assert.equal(r.score, MAX_EXTERNAL_SCORE / FULL_WEIGHT_CLUSTERS);
@@ -77,15 +82,25 @@ test('reviewers funded from one wallet count once between them', async () => {
 test('a shared funder two hops back still joins them, and a public one does not', async () => {
   // Each reviewer has its own funder, and every one of those was funded by the same treasury.
   const treasury = addr(0x888);
-  const { clients, ctx, deps } = world(5);
-  const own = deps.funderOf;
+  const { clients, ctx, deps, own } = world(5);
   const middle = (a) => Number(a) >= 0x300 && Number(a) < 0x305; // each reviewer's own funder
-  deps.funderOf = async (a) => (middle(a) ? treasury : own(a));
+  deps.funderOf = funding((a) => (middle(a) ? treasury : own(a)));
   assert.equal((await scoreFeedback(rated(clients), ctx, deps)).clusters, 1);
 
-  // The same shape through a faucet is five independent reviewers.
-  deps.funderOf = async (a) => (middle(a) ? FAUCET : own(a));
+  // The same shape through a faucet, or through the zero address a mint comes from, is five
+  // independent reviewers.
+  deps.funderOf = funding((a) => (middle(a) ? FAUCET : own(a)));
   assert.equal((await scoreFeedback(rated(clients), ctx, deps)).clusters, 5);
+  deps.funderOf = funding((a) => (clients.includes(a) ? ZERO : FAUCET));
+  assert.equal((await scoreFeedback(rated(clients), ctx, deps)).clusters, 5);
+});
+
+test('reviewers whose operators one treasury funded count once between them', async () => {
+  const treasury = addr(0x999);
+  const { clients, ctx, deps, own } = world(5);
+  const operator = (a) => Number(a) >= 0x200 && Number(a) < 0x205;
+  deps.funderOf = funding((a) => (operator(a) ? treasury : own(a)));
+  assert.equal((await scoreFeedback(rated(clients), ctx, deps)).clusters, 1);
 });
 
 test('reviewers run by one operator count once between them', async () => {
@@ -125,25 +140,42 @@ test('each standing rule keeps a reviewer out, and says which', async () => {
   }
 });
 
-test('the agent cannot review itself, nor fund its reviewers', async () => {
+test('the agent cannot review itself, nor fund its reviewers or their operators', async () => {
   const { ctx, deps } = world(1);
-  const self = { ...ctx, events: [{ payer: AGENT.operator, ts: NOW_MS, amount: '1' }] };
+  const self = { ...ctx, events: [{ payer: AGENT.operator, ts: NOW_MS, amount: '1', txHash: '0x1' }] };
   assert.equal((await verdictFor(AGENT.operator, self, deps)).reason, 'self');
 
-  // Funded by the agent's operator directly, and through one wallet in between.
+  // Funded by the agent's operator directly, through one wallet in between, and the reviewer's
+  // operator funded by the agent.
   const direct = world(1);
-  direct.deps.funderOf = async () => AGENT.operator;
+  direct.deps.funderOf = funding(() => AGENT.operator);
   assert.equal((await verdictFor(direct.clients[0], direct.ctx, direct.deps)).reason, 'self-funded');
   const twoHops = world(1);
   const middle = addr(0x444);
-  twoHops.deps.funderOf = async (a) => (a === middle ? AGENT.agentAddress : middle);
+  twoHops.deps.funderOf = funding((a) => (a === middle ? AGENT.agentAddress : middle));
   assert.equal((await verdictFor(twoHops.clients[0], twoHops.ctx, twoHops.deps)).reason, 'self-funded');
+  const viaOperator = world(1);
+  viaOperator.deps.funderOf = funding((a) => (a === addr(0x200) ? AGENT.operator : viaOperator.own(a)));
+  assert.equal((await verdictFor(viaOperator.clients[0], viaOperator.ctx, viaOperator.deps)).reason, 'self-funded');
 });
 
-test('a reviewer whose funder cannot be found is not counted', async () => {
-  const { clients, ctx, deps } = world(1);
-  deps.funderOf = async () => null;
+test('a reviewer whose funder cannot be found is not counted; an operator\'s is just untraced', async () => {
+  const { clients, ctx, deps, own } = world(1);
+  deps.funderOf = funding(() => null);
   assert.equal((await verdictFor(clients[0], ctx, deps)).reason, 'unknown-funder');
+  deps.funderOf = funding((a) => (a === addr(0x200) ? null : own(a)));
+  assert.equal((await verdictFor(clients[0], ctx, deps)).ok, true);
+});
+
+test('the reviewer\'s funding is searched up to its first payment, and an operator\'s up to the snapshot', async () => {
+  const { clients, ctx, deps, own } = world(1);
+  ctx.events.push({ payer: clients[0], ts: NOW_MS - 10 * DAY_MS, amount: '1', txHash: 'early' });
+  deps.paymentBlock = async (e) => (e.txHash === 'early' ? 42 : 100);
+  const caps = [];
+  deps.funderOf = async (a, cap) => { caps.push([a, cap]); return { funder: own(a), block: 7 }; };
+  await verdictFor(clients[0], ctx, deps);
+  // The second hop is searched up to the block the first was funded in.
+  assert.deepEqual(caps, [[clients[0], 42], [addr(0x300), 7], [addr(0x200), 1000]]);
 });
 
 test('feedback in tags this oracle does not read costs no chain read and changes nothing', async () => {
@@ -163,25 +195,60 @@ test('scoreReviews is the arithmetic alone: unchecked reviewers are left out', (
   });
 });
 
-// ---- the first funder -------------------------------------------------------------------
-
-test('findFirstFunder: finds the first funding block and its sender in a few dozen reads', async () => {
-  const head = 70_000_000;
-  let reads = 0;
-  const read = {
-    head: async () => head,
-    touched: async (b) => { reads++; return b >= 12_345_678; },
-    inbound: async (b) => (b === 12_345_678 ? ['0xAbC0000000000000000000000000000000000001', addr(9)] : []),
-  };
-  assert.equal(await findFirstFunder(read, addr(1)), '0xabc0000000000000000000000000000000000001');
-  assert.ok(reads <= 2 + Math.ceil(Math.log2(head)), `${reads} reads`);
+test('snapshotOf: the start of the UTC day', () => {
+  assert.equal(snapshotOf(86_400 * 20_000 + 3_599), 86_400 * 20_000);
+  assert.equal(snapshotOf(86_400 * 20_000), 86_400 * 20_000);
 });
 
-test('findFirstFunder: null for an address never funded, or one first touched with nothing sent to it', async () => {
-  const never = { head: async () => 100, touched: async () => false, inbound: async () => [] };
-  assert.equal(await findFirstFunder(never, addr(1)), null);
-  const sponsored = { head: async () => 100, touched: async (b) => b >= 40, inbound: async () => [] };
-  assert.equal(await findFirstFunder(sponsored, addr(1)), null);
+// ---- the first funder -------------------------------------------------------------------
+
+test('findFirstFunder: the first funding block up to the cap, named by its largest transfer in', async () => {
+  let reads = 0;
+  const read = {
+    touched: async (b) => { reads++; return b >= 12_345_678; },
+    inbound: async (b) => (b === 12_345_678
+      ? [{ from: addr(9), value: 5n }, { from: '0xAbC0000000000000000000000000000000000001', value: 2n * FUNDING_FLOOR }]
+      : []),
+  };
+  assert.deepEqual(await findFirstFunder(read, addr(1), 70_000_000),
+    { funder: '0xabc0000000000000000000000000000000000001', block: 12_345_678 });
+  assert.ok(reads <= 2 + Math.ceil(Math.log2(70_000_000)), `${reads} reads`);
+});
+
+test('findFirstFunder: null when not funded by the cap; the block before when the payment spent it all', async () => {
+  const never = { touched: async () => false, inbound: async () => [] };
+  assert.equal(await findFirstFunder(never, addr(1), 100), null);
+  // Funded at 40, emptied by the payment at 90 with no transaction of its own (an EIP-3009 payer).
+  const spent = { touched: async (b) => b >= 40 && b < 90, inbound: async (b) => (b === 40 ? [{ from: addr(5), value: FUNDING_FLOOR }] : []) };
+  assert.deepEqual(await findFirstFunder(spent, addr(1), 90), { funder: addr(5), block: 40 });
+  // Touched by a transaction with nothing sent in: a gas-sponsored account.
+  const sponsored = { touched: async (b) => b >= 40, inbound: async () => [] };
+  assert.deepEqual(await findFirstFunder(sponsored, addr(1), 100), { funder: null, block: 40 });
+});
+
+test('chain.firstFunder: dust below the floor does not make its sender the funder', async () => {
+  // A griefer seeds the reviewer with a fraction of a cent at block 100; the real funding,
+  // two USDC, arrives at block 200. Counted from the first wei, the griefer would be the funder,
+  // and every agent it seeded would share it.
+  const chain = require('./chain');
+  const griefer = addr(0x66);
+  const treasury = addr(0x77);
+  const reviewer = addr(0x42);
+  const balanceAt = (b) => (b >= 200 ? 2n * FUNDING_FLOOR + 10n ** 15n : b >= 100 ? 10n ** 15n : 0n);
+  const provider = {
+    getBalance: async (a, b) => balanceAt(b),
+    getTransactionCount: async () => 0,
+    getLogs: async ({ fromBlock, topics }) => {
+      const from = fromBlock === 100 ? griefer : fromBlock === 200 ? treasury : null;
+      if (!from) return [];
+      const value = fromBlock === 100 ? 10n ** 15n : 2n * FUNDING_FLOOR;
+      return [{ topics: [topics[0], `0x${'0'.repeat(24)}${from.slice(2)}`, topics[2]], data: `0x${value.toString(16).padStart(64, '0')}` }];
+    },
+  };
+  chain.init({ rpcUrl: 'unused', identityAddress: addr(1), reputationAddress: addr(2) }, {
+    provider, wallet: provider, identityContract: {}, reputationContract: {},
+  });
+  assert.deepEqual(await chain.firstFunder(reviewer, 1000), { funder: treasury, block: 200 });
 });
 
 test('parsePublicFunders: a list of addresses, and nothing else', () => {
@@ -192,19 +259,24 @@ test('parsePublicFunders: a list of addresses, and nothing else', () => {
   assert.match(parsePublicFunders(`${a},faucet`).error, /"faucet", which is not an address/);
 });
 
-// ---- end to end: what a primary proposes -------------------------------------------------
+// ---- end to end: what a primary proposes, and what a checker makes of it --------------------
 
 const ADMIN = 'a'.repeat(64);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const counter = (text, name) => Number((text.match(new RegExp(`^${escapeRe(name)} (\\d+)`, 'm')) || [])[1]);
 
-/** A linked agent and `n` reviewers who each paid it an hour ago, in a world the stub chain reads. */
+/**
+ * A linked agent and `n` reviewers who each paid it an hour before today's snapshot, in a world
+ * the stub chain reads.
+ */
 function linkedWorld(n) {
   const w = new World();
   const agent = w.addRegisteredAgent();
   const reviewers = Array.from({ length: n }, () => wallet().toLowerCase());
-  const nowMs = w.data.nowSec * 1000;
+  const paidMs = snapshotOf(w.data.nowSec) * 1000 - 3_600_000;
   const events = reviewers.map((payer, i) => ({
-    payer, ts: nowMs - 3_600_000, amount: '1000000', txHash: `0x${(i + 1).toString(16).padStart(64, '0')}`,
+    payer, ts: paidMs, amount: '1000000', txHash: `0x${(i + 1).toString(16).padStart(64, '0')}`,
   }));
   w.set('externalOwns', true);
   w.set('externalFeedback', rated(reviewers));
@@ -216,13 +288,22 @@ function linkedWorld(n) {
   return { w, agent, reviewers, files: { 'state.json': state } };
 }
 
-async function proposedExternal(w, files, env = {}) {
+async function untilEpoch(oracle) {
+  for (let i = 0; i < 300; i++) {
+    const text = (await oracle.call('GET', '/metrics')).text;
+    if ((counter(text, 'sigvara_oracle_epochs_total{status="succeeded"}') || 0) >= 1) return text;
+    await sleep(50);
+  }
+  throw new Error(`no epoch finished:\n${oracle.logs()}`);
+}
+
+async function proposed(w, files, env = {}) {
   const oracle = await startOracle({ world: w, env: { ORACLE_ADMIN_TOKEN: ADMIN, ...env }, files });
   try {
-    for (let i = 0; i < 300 && !oracle.calls().some((c) => c.name === 'proposeScore'); i++) await sleep(50);
+    await untilEpoch(oracle);
     const call = oracle.calls().find((c) => c.name === 'proposeScore');
     assert.ok(call, `nothing was proposed:\n${oracle.logs()}`);
-    return { external: call.args[1].externalScore, logs: oracle.logs() };
+    return { scores: call.args[1], logs: oracle.logs() };
   } finally {
     await oracle.stop();
   }
@@ -232,8 +313,8 @@ test('end to end: five independent paying reviewers carry a linked agent to the 
   const { w, files } = linkedWorld(5);
   const spam = Array.from({ length: 20 }, () => ({ client: wallet().toLowerCase(), value: 100, tag: 'quality' }));
   w.set('externalFeedback', [...w.data.externalFeedback, ...spam]);
-  const { external, logs } = await proposedExternal(w, files);
-  assert.equal(external, MAX_EXTERNAL_SCORE);
+  const { scores, logs } = await proposed(w, files);
+  assert.equal(scores.externalScore, MAX_EXTERNAL_SCORE);
   assert.match(logs, /external: 25\/25 from 5 reviewer\(s\) in 5 cluster\(s\); not counted: unpaid 20/);
 });
 
@@ -241,13 +322,53 @@ test('end to end: the same five funded from one wallet are worth one', async () 
   const { w, reviewers, files } = linkedWorld(5);
   const treasury = wallet().toLowerCase();
   w.set('funders', Object.fromEntries(reviewers.map((r) => [r, treasury])));
-  assert.equal((await proposedExternal(w, files)).external, MAX_EXTERNAL_SCORE / FULL_WEIGHT_CLUSTERS);
+  assert.equal((await proposed(w, files)).scores.externalScore, MAX_EXTERNAL_SCORE / FULL_WEIGHT_CLUSTERS);
 });
 
-test('end to end: a reviewer the node cannot answer for leaves the factor at 0, and the epoch goes on', async () => {
+test('end to end: a payment made since the snapshot counts from the next one', async () => {
+  const { w, agent, reviewers, files } = linkedWorld(5);
+  const state = JSON.parse(files['state.json']);
+  state.paymentEvents[agent.didHash][4].ts = snapshotOf(w.data.nowSec) * 1000 + 1;
+  assert.equal(
+    (await proposed(w, { 'state.json': JSON.stringify(state) })).scores.externalScore,
+    4 * MAX_EXTERNAL_SCORE / FULL_WEIGHT_CLUSTERS,
+    `the fifth reviewer, ${reviewers[4]}, paid after today's snapshot`,
+  );
+});
+
+test('end to end: a reviewer the node cannot answer for skips the agent this epoch, and the epoch goes on', async () => {
+  // Scoring 0 on it would propose a number known to be wrong, which the checker, whose reads
+  // worked, would then dispute.
   const { w, reviewers, files } = linkedWorld(5);
   w.set('reviewers', { ...w.data.reviewers, [reviewers[2]]: 'throw' });
-  assert.equal((await proposedExternal(w, files)).external, 0);
+  const oracle = await startOracle({ world: w, env: { ORACLE_ADMIN_TOKEN: ADMIN }, files });
+  try {
+    await untilEpoch(oracle);
+    assert.deepEqual(oracle.calls().filter((c) => c.name === 'proposeScore'), [], 'nothing proposed on a guess');
+    assert.match(oracle.logs(), /reviewer read failed/);
+  } finally {
+    await oracle.stop();
+  }
+});
+
+test('end to end: a checker re-measures the external factor of a proposal and agrees with it exactly', async () => {
+  const { w, agent, files } = linkedWorld(5);
+  const { scores } = await proposed(w, files);
+  assert.equal(scores.externalScore, MAX_EXTERNAL_SCORE);
+
+  // The same world for the checker; the first oracle's directory went with it.
+  w.file = null;
+  w.setFor('pending', agent.didHash, { exists: true, proposedAt: w.data.nowSec - 100, data: scores, evidenceRoot: null });
+  const oracle = await startOracle({
+    world: w, env: { ORACLE_ADMIN_TOKEN: ADMIN, ORACLE_MODE: 'checker', DIVERGENCE_TOLERANCE: '0' }, files,
+  });
+  try {
+    const text = await untilEpoch(oracle);
+    assert.equal(counter(text, 'sigvara_oracle_checker_comparisons_total{verdict="agreed"}'), 1, oracle.logs());
+    assert.equal(counter(text, 'sigvara_oracle_checker_comparisons_total{verdict="diverged"}'), 0);
+  } finally {
+    await oracle.stop();
+  }
 });
 
 test('a malformed EXTERNAL_PUBLIC_FUNDERS stops the oracle at startup', async () => {

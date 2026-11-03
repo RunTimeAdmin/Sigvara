@@ -161,16 +161,29 @@ all of it, and one fresh wallet posting `quality=100` would have carried a linke
 - is a Sigvara agent that is Active, holds the minimum bond, has been registered for 30
   days and has a matured score of at least 40.
 
-One rating per reviewer, however many reviews it posts. Reviewers run by one operator, or
-whose funding traces to a shared wallet within two hops, count as one; wallets that fund
-everyone (a faucet, an exchange) are listed in `EXTERNAL_PUBLIC_FUNDERS` and end a trace.
-The factor is the recency-weighted mean of those independent ratings, scaled down below
-five of them, so one reviewer who paid recently is worth at most 5 of the 25.
+One rating per reviewer, however many reviews it posts. Reviewers count as one when they
+share an operator, or when their funding, or their operator's, traces to a shared wallet within
+two hops. A wallet's funder is the largest native transfer into it in the first block where it
+held 1 USDC or had sent a transaction, so dust from a stranger does not make the stranger its
+funder. Wallets that fund everyone end a trace: the zero address a mint comes from always, and
+a faucet or an exchange when `EXTERNAL_PUBLIC_FUNDERS` lists it. The factor is the
+recency-weighted mean of those independent ratings, scaled down below five of them, so one
+reviewer who paid recently is worth at most 5 of the 25.
 
-That makes the factor hard to farm from wallets an attacker controls, not unbuyable: each
-reviewer it counts costs a bond, a month, an earned score, a separately funded wallet and a
-payment. An attacker willing to build genuine standing can carry it here, and the
-measurements in the whitepaper's section 5.3 say what that costs.
+Everything is read as of the start of the current UTC day: the feedback, each reviewer's
+standing, the funding and the payment evidence. A primary and a checker scoring the same agent
+hours apart then read the same chain state, and the checker re-runs the filter for the day of
+the proposal it audits. The cost is that a payment or a review made today counts from tomorrow.
+
+Reviewers count only through the oracle's payment evidence, so the factor is 0 on an operator
+that verifies no payments (`PAYMENT_VERIFICATION` off and the pull scanner off).
+
+That makes the factor harder to farm, not unbuyable. Each reviewer it counts costs a bond, a
+month, an earned score of 40, separately funded wallets and a payment of at least
+`PAYMENT_MIN_AMOUNT`. What it does not stop: a party that builds five such reviewers once can
+point them at any number of its own agents, and money laundered through a public source or
+more than two wallets is not traced. The measurements in the whitepaper's section 5.3 say
+what genuine standing costs.
 
 This is 0 unless the link is configured and the linked agent has feedback. Feedback
 CounterAudit wrote is deliberately excluded from the normalizer, because CounterAudit
@@ -233,8 +246,8 @@ The reason is that everything except `externalScore` can be manufactured by the 
 being scored. Inheriting a total let a farmed score launder into someone else's: a
 Sybil that wash-traded its way to 100 both raised its target's per-payer cap and
 counted as a fully trusted voucher, measured as scored Sybils maxing the fee factor
-with four payers instead of six. `externalScore` is the one factor a single party
-cannot farm from its own wallets, because only reviewers that pass `oracle/reviewers.js` count.
+with four payers instead of six. `externalScore` is the one factor a single party cannot
+fill from its own fresh wallets, because only reviewers that pass `oracle/reviewers.js` count.
 
 **The network-level consequence.** Propagation is therefore gated on ERC-8004 adoption,
 not on Sigvara activity. Until counterparties hold external standing, this factor is 0
@@ -479,10 +492,11 @@ agent id. `oracle/external.js` does exactly this:
    `win-rate` is used as is, and `rating`, `e2e-test` and `stars` are divided by 5. Each
    is clamped to 0..1. Every other tag is ignored.
 4. Each client with a kept rating is one reviewer, rated by the mean of its kept ratings.
-   `oracle/reviewers.js` drops the reviewers that fail the rules above, which needs the
-   oracle's payment evidence for the agent, the reviewer's Sigvara identity, bond and
-   matured score, and its first funders (the sender of the first native transfer into it,
-   twice over).
+   `oracle/reviewers.js` drops the reviewers that fail the rules above. Everything in this
+   step and steps 1 to 3 is read as of the last block at or before the start of the UTC
+   day: the payment evidence settled by then, the reviewer's Sigvara identity, bond and
+   matured score at that block, and its funders, searched up to its first payment to the
+   agent (and its operator's, up to that block), two hops each.
 5. Reviewers sharing an operator or a funder are one cluster, rated by its members' mean
    weighted by `0.5^(days since the reviewer last paid / 90)` and weighted by its most
    recent member. The factor is the weighted mean over clusters, times

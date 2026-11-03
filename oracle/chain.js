@@ -492,7 +492,7 @@ async function readStanding(address) {
   // doubles it) and counted as a fully trusted voucher (propagationScore). Measured:
   // scored sybils maxed the 30-point fee factor with four payers instead of six.
   //
-  // externalScore is the one factor a single party cannot farm from its own wallets: only
+  // externalScore is the one factor a single party cannot fill from fresh wallets: only
   // ERC-8004 feedback from reviewers reviewers.js accepts counts toward it. Capping it by the
   // matured total keeps the existing lag: an identity cannot link an 8004 history and
   // propagate it the same epoch, and a handover restarts maturity, so bought standing
@@ -542,25 +542,54 @@ async function resolveStakeView() {
 }
 
 // ---- ERC-8004 reviewers (reviewers.js) ------------------------------------------
+//
+// Every read here takes a block, the snapshot's (reviewers.snapshotOf), so that two operators
+// reading at different times read the same thing. Each is retried on any error, six times over
+// about half a minute: Arc testnet's public RPC answers a historical read with a bare "internal
+// error" now and then, and the same read succeeds a moment later. What still fails throws, and
+// the agent is skipped for the epoch (external.externalScoreFor).
+
+const anyError = () => true;
+const RETRIES = 6;
+
+// Standings at the snapshot block. They cannot change for a block already mined, and the cache
+// is dropped when the snapshot moves on.
+let standingBlock = null;
+let standingCache = new Map();
 
 /**
- * What the ERC-8004 filter asks of a reviewer: whether it is a Sigvara agent, and if so its
- * operator, status, registration time, bond and matured score.
+ * What the ERC-8004 filter asks of a reviewer, as of `blockTag`: whether it is a Sigvara agent,
+ * and if so its operator, status, registration time, bond and matured score.
  *
  * Unlike isBonded this fails closed. A read the node cannot answer throws, and the external
  * factor reads 0 for that agent this epoch, because a reviewer that could not be checked is
  * not one the oracle may count.
  */
-async function getReviewerStanding(address) {
+function getReviewerStanding(address, blockTag) {
+  if (blockTag !== standingBlock) {
+    standingBlock = blockTag;
+    standingCache = new Map();
+  }
+  const key = String(address).toLowerCase();
+  if (!standingCache.has(key)) {
+    const read = readStandingAt(address, blockTag);
+    standingCache.set(key, read);
+    read.catch(() => standingCache.delete(key));
+  }
+  return standingCache.get(key);
+}
+
+async function readStandingAt(address, blockTag) {
+  const at = { blockTag };
   const didHash = localDidHash
     ? didHashOf(address, localDidHash.chainId)
-    : await readWithBackoff('reviewer did', () => identityContract.computeDidHash(address));
-  const id = await readWithBackoff('reviewer identity', () => identityContract.getIdentity(didHash));
+    : await readWithBackoff('reviewer did', () => identityContract.computeDidHash(address), RETRIES, anyError);
+  const id = await readWithBackoff('reviewer identity', () => identityContract.getIdentity(didHash, at), RETRIES, anyError);
   if (Number(id.registeredAt) === 0) return { registered: false };
   const view = await readWithBackoff('stake view', resolveStakeView);
   const [matured, bonded] = await Promise.all([
-    readWithBackoff('reviewer score', () => reputationContract.getTotalScore(didHash)),
-    view ? readWithBackoff('reviewer bond', () => view.hasMinimumStake(didHash)) : true,
+    readWithBackoff('reviewer score', () => reputationContract.getTotalScore(didHash, at), RETRIES, anyError),
+    view ? readWithBackoff('reviewer bond', () => view.hasMinimumStake(didHash, at), RETRIES, anyError) : true,
   ]);
   return {
     registered: true,
@@ -577,43 +606,73 @@ async function getReviewerStanding(address) {
 const NATIVE_TRANSFER_EMITTER = '0xfffffffffffffffffffffffffffffffffffffffe';
 const TRANSFER_TOPIC = ethers.id('Transfer(address,address,uint256)');
 
-// A first funder does not change, so each is looked up once per process.
+// A funder found up to a given block does not change, so each search runs once per process.
+// The promise is kept, so concurrent callers share one search.
 const funderCache = new Map();
 
 /**
- * The address that first funded `address` on this chain, lowercased, or null
- * (reviewers.findFirstFunder). It reads historical state, so the RPC must serve it, which
- * Arc testnet's public RPC does. Every read is retried on any error: that RPC answers a
- * historical read with a bare "internal error" now and then, and the same read succeeds a
- * moment later.
+ * Who first funded `address` by block `cap` (reviewers.findFirstFunder). It reads historical
+ * state, so the RPC must serve it, which Arc testnet's public RPC does.
  */
-async function firstFunder(address) {
-  const key = String(address).toLowerCase();
-  if (funderCache.has(key)) return funderCache.get(key);
-  const anyError = () => true;
-  const funder = await reviewers.findFirstFunder({
-    head: () => readWithBackoff('funder head', () => provider.getBlockNumber(), 4, anyError),
-    touched: (block) => readWithBackoff('funder state', async () => {
-      const [balance, nonce] = await Promise.all([
-        provider.getBalance(address, block),
-        provider.getTransactionCount(address, block),
-      ]);
-      return balance > 0n || nonce > 0;
-    }, 4, anyError),
-    inbound: (block) => readWithBackoff('funder logs', async () => {
-      const logs = await provider.getLogs({
-        address: NATIVE_TRANSFER_EMITTER,
-        fromBlock: block,
-        toBlock: block,
-        topics: [TRANSFER_TOPIC, null, ethers.zeroPadValue(address, 32)],
-      });
-      return logs
-        .sort((a, b) => a.index - b.index)
-        .map((l) => ethers.getAddress(ethers.dataSlice(l.topics[1], 12)));
-    }, 4, anyError),
-  }, address);
-  funderCache.set(key, funder);
-  return funder;
+function firstFunder(address, cap) {
+  const key = `${String(address).toLowerCase()}@${cap}`;
+  if (!funderCache.has(key)) {
+    const search = reviewers.findFirstFunder({
+      touched: (block) => readWithBackoff('funder state', async () => {
+        const [balance, nonce] = await Promise.all([
+          provider.getBalance(address, block),
+          provider.getTransactionCount(address, block),
+        ]);
+        return balance >= reviewers.FUNDING_FLOOR || nonce > 0;
+      }, RETRIES, anyError),
+      inbound: (block) => readWithBackoff('funder logs', async () => {
+        const logs = await provider.getLogs({
+          address: NATIVE_TRANSFER_EMITTER,
+          fromBlock: block,
+          toBlock: block,
+          topics: [TRANSFER_TOPIC, null, ethers.zeroPadValue(address, 32)],
+        });
+        return logs.map((l) => ({ from: ethers.dataSlice(l.topics[1], 12), value: BigInt(l.data) }));
+      }, RETRIES, anyError),
+    }, address, cap);
+    funderCache.set(key, search);
+    search.catch(() => funderCache.delete(key));
+  }
+  return funderCache.get(key);
+}
+
+const paymentBlocks = new Map();
+
+/** The block a payment in the evidence settled in: recorded with it, or read from its receipt. */
+async function paymentBlock(event) {
+  if (Number.isInteger(event.blockNumber)) return event.blockNumber;
+  if (!paymentBlocks.has(event.txHash)) {
+    const receipt = await readWithBackoff('payment receipt', () => provider.getTransactionReceipt(event.txHash), RETRIES, anyError);
+    if (!receipt) throw new Error(`no receipt for payment ${event.txHash}`);
+    paymentBlocks.set(event.txHash, receipt.blockNumber);
+  }
+  return paymentBlocks.get(event.txHash);
+}
+
+const blocksAt = new Map();
+
+/**
+ * The last block with a timestamp at or before `seconds`: a binary search over block headers,
+ * about log2(head) reads, run once per snapshot.
+ */
+async function blockAtOrBefore(seconds) {
+  if (blocksAt.has(seconds)) return blocksAt.get(seconds);
+  const time = async (n) => Number((await readWithBackoff('block time', () => provider.getBlock(n), RETRIES, anyError)).timestamp);
+  let hi = await readWithBackoff('head', () => provider.getBlockNumber(), RETRIES, anyError);
+  if (await time(hi) <= seconds) return hi; // the snapshot is still ahead: not cached, the head moves
+  let lo = 0;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (await time(mid) <= seconds) lo = mid;
+    else hi = mid - 1;
+  }
+  blocksAt.set(seconds, lo);
+  return lo;
 }
 
 // ---- Waiting for a transaction ----------------------------------------------
@@ -1004,6 +1063,8 @@ module.exports = {
   isBonded,
   getReviewerStanding,
   firstFunder,
+  paymentBlock,
+  blockAtOrBefore,
   getAgentScore,
   isTransientReadError,
   getScanState,

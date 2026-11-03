@@ -423,7 +423,7 @@ almost nothing. If the sybils are themselves scored agents this changes nothing:
 web-of-trust weighting reads their **hard** standing, meaning ERC-8004 reputation capped
 by the matured total, so a counterparty that farmed its own score to 100 is worth exactly
 what an anonymous wallet is worth. Reaching 59 requires counterparties with genuine
-outside standing, which an attacker cannot farm from its own wallets: only feedback from bonded, tenured agents that paid counts toward it (`oracle/reviewers.js`).
+outside standing, which costs an attacker a bonded, tenured, scored and separately funded agent per independent reviewer (`oracle/reviewers.js`).
 
 **What holds.** The per-payer cap binds, and splitting one wallet's volume across
 hundreds of dust payments does not defeat it. A ring of zero-scored agents grants its

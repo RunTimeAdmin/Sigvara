@@ -260,7 +260,7 @@ Scores are computed off-chain by the oracle network and written to `SigvaraReput
 | Fee Activity | 20 | Settled payment volume to the agent, verified on chain | `min(20, decayedVolume / PAYMENT_FEE_UNIT)`, capped per payer | live |
 | Success Rate | 15 | Outcome signed by the payer ([ADR 0006](docs/adr/0006-payer-signed-outcomes.md)), or reported by a credentialed service | `floor(successful / (total + 5) × 15)`, on decayed weights | live; payer-signed outcomes since 31 Oct 2026, positive only |
 | Tenure | 30 | Span of verified paid activity, faded by how long since the last of it | `min(30, floor(log₂(spanDays+1) × 3)) × recency` | live |
-| External Trust | 25 | Normalized ERC-8004 feedback (linked agents), from reviewers that are bonded Sigvara agents and paid the agent | mean rating × 25, in full only with five independent reviewers ([reviewers.js](oracle/reviewers.js)) | live |
+| External Trust | 25 | Normalized ERC-8004 feedback (linked agents), from reviewers that are bonded Sigvara agents and paid the agent | mean rating × 25, in full only with five independent reviewers that paid recently ([reviewers.js](oracle/reviewers.js)) | live |
 | Community | 5 | Flags from watchdog feeds (e.g. HoodScan), age-weighted | `max(0, 5 − flags × 2)`, flags decay on a 30-day half-life | live |
 | Propagation | 5 | Standing of the counterparties that paid the agent | 1 pt per fully-trusted counterparty, pro-rated by its external standing | live |
 | **Total** | **100** | | | |
