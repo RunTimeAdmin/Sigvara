@@ -193,3 +193,64 @@ test('externalScore: a tag that names an Object.prototype member is just an unre
   // On their own they carry no evidence at all.
   assert.equal(computeExternalScore([{ value: 100, tag: 'constructor' }, { value: 100, tag: '__proto__' }]), 0);
 });
+
+// ---- the tags the ERC-8004 spec and its best-practices guide give ------------
+
+const near = (actual, expected) => assert.ok(Math.abs(actual - expected) < 1e-9, `${actual} is not ${expected}`);
+
+test('externalScore: starred, successRate and uptime are read as 0-100', () => {
+  near(external.meanRating([{ value: 87, tag: 'starred' }]), 0.87);
+  near(external.meanRating([{ value: 89, tag: 'successrate' }]), 0.89);
+  near(external.meanRating([{ value: 99.77, tag: 'uptime' }]), 0.9977);
+  // A catalog's five stars are starred 100, its one star starred 20.
+  assert.equal(computeExternalScore([{ value: 100, tag: 'starred' }]), MAX_EXTERNAL_SCORE);
+  near(external.meanRating([{ value: 20, tag: 'starred' }]), 0.2);
+  assert.equal(computeExternalScore([{ value: 150, tag: 'uptime' }]), MAX_EXTERNAL_SCORE, 'clamped at 1');
+});
+
+test('externalScore: reachable is 0 or 1, and anything else is clamped', () => {
+  assert.equal(external.meanRating([{ value: 1, tag: 'reachable' }]), 1);
+  assert.equal(external.meanRating([{ value: 0, tag: 'reachable' }]), 0);
+  assert.equal(external.meanRating([{ value: 7, tag: 'reachable' }]), 1);
+  assert.equal(external.meanRating([{ value: -1, tag: 'reachable' }]), 0);
+});
+
+test('externalScore: the guide tags that are not ratings are ignored', () => {
+  const rows = [
+    { value: 1, tag: 'ownerverified' },
+    { value: 560, tag: 'responsetime' },
+    { value: 4, tag: 'blocktimefreshness' },
+    { value: 560, tag: 'revenues' },
+    { value: -3.2, tag: 'tradingyield' },
+  ];
+  assert.equal(external.meanRating(rows), null);
+  assert.equal(computeExternalScore(rows), 0);
+});
+
+test('readFeedbackRows: the guide examples arrive scaled, lowercased and counted', async () => {
+  const client = '0x' + '33'.repeat(20);
+  // As ethers returns them: int128 and uint8 are bigints, and tags keep the poster's case.
+  const feedback = [
+    { value: 9977n, valueDecimals: 2n, tag1: 'uptime', tag2: '', isRevoked: false },
+    { value: 89n, valueDecimals: 0n, tag1: 'successRate', tag2: '', isRevoked: false },
+    { value: 87n, valueDecimals: 0n, tag1: 'starred', tag2: '', isRevoked: false },
+    { value: 0n, valueDecimals: 0n, tag1: 'reachable', tag2: '', isRevoked: true },
+  ];
+  external.init(CFG, {
+    provider: {},
+    idContract: {},
+    repContract: {
+      getClients: async () => [client],
+      getLastIndex: async () => BigInt(feedback.length),
+      readFeedback: async (_agentId, _client, index) => feedback[Number(index) - 1],
+    },
+  });
+  const rows = await external.readFeedbackRows(7);
+  external.init({ externalRpc: '', externalIdentity: '', externalReputation: '' });
+
+  assert.deepStrictEqual(rows.map((r) => r.tag), ['uptime', 'successrate', 'starred'], 'the revoked entry is skipped');
+  near(rows[0].value, 99.77);
+  assert.equal(rows[1].value, 89);
+  near(external.meanRating(rows), (0.9977 + 0.89 + 0.87) / 3);
+  assert.equal(computeExternalScore(rows), Math.round(((0.9977 + 0.89 + 0.87) / 3) * MAX_EXTERNAL_SCORE));
+});
