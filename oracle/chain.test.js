@@ -191,6 +191,42 @@ test('finalizeScore: calls finalizeReputation and returns tx hash', async () => 
   assert.deepEqual(repContract.calls.finalizeReputation, [{ didHash: '0xaaa' }]);
 });
 
+test('finalizeScore: goes through the reward distributor when one is configured', async () => {
+  const repContract = makeFakeReputationContract();
+  const finalized = [];
+  chain.init(CFG, {
+    provider: makeFakeProvider(120),
+    identityContract: makeFakeIdentityContract(),
+    reputationContract: repContract,
+    distributorContract: {
+      finalize: async (didHash) => { finalized.push(didHash); return { hash: '0xviaDistributor', wait: async () => ({}) }; },
+      reputation: async () => '0xREPUTATION',
+    },
+  });
+
+  assert.equal(await chain.finalizeScore('0xaaa'), '0xviaDistributor');
+  assert.deepEqual(finalized, ['0xaaa']);
+  assert.deepEqual(repContract.calls.finalizeReputation, [], 'not also directly');
+  assert.equal(await chain.distributorMismatch(), null, 'the same registry, whatever the case');
+});
+
+test('distributorMismatch: names the other registry, and is null with no distributor', async () => {
+  chain.init(CFG, {
+    provider: makeFakeProvider(120),
+    identityContract: makeFakeIdentityContract(),
+    reputationContract: makeFakeReputationContract(),
+    distributorContract: { finalize: async () => ({}), reputation: async () => '0xElsewhere' },
+  });
+  assert.equal(await chain.distributorMismatch(), '0xElsewhere');
+
+  chain.init(CFG, {
+    provider: makeFakeProvider(120),
+    identityContract: makeFakeIdentityContract(),
+    reputationContract: makeFakeReputationContract(),
+  });
+  assert.equal(await chain.distributorMismatch(), null);
+});
+
 // -------------------------------------------------------------------------
 // getPendingScore / getChallengeWindow
 // -------------------------------------------------------------------------

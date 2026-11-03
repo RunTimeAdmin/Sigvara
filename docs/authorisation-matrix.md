@@ -1,8 +1,8 @@
 # Authorisation matrix
 
 Every function that changes state in Sigvara's contracts: who may call it, what has to hold for the
-call to succeed, and what it changes. It covers the five registries and the SVR faucet token as they
-are on `main`. `SigvaraReader` only reads, so it has no table.
+call to succeed, and what it changes. It covers the five registries, the reward distributor and the SVR faucet
+token as they are on `main`. `SigvaraReader` only reads, so it has no table.
 
 [`scripts/check-authz.mjs`](../scripts/check-authz.mjs) reads `src/` in CI and fails when:
 
@@ -184,6 +184,18 @@ README's [Access Control Summary](../README.md#access-control-summary).
 | `setStage(Stage)` | `role:DEFAULT_ADMIN_ROLE` | `-` | `DEFAULT_ADMIN_ROLE`. Any stage, in either direction. | Sets `stage`, which fixes the burn share of the next `distributeFees`: Bootstrap 0%, Transition 20%, Mature 50%. Emits `StageUpdated`. |
 | `upgradeToAndCall(address,bytes)` | `inherited` | `-` | `UPGRADER_ROLE` via `_authorizeUpgrade`, a role only `UPGRADER_ROLE` grants; called through the proxy; the new implementation must be UUPS with the matching `proxiableUUID`. | Points the ERC-1967 implementation slot at the new code and emits `Upgraded`, then delegatecalls `data` if non-empty, for example a reinitializer, whose own role check applies to the caller. |
 | `withdraw(bytes32,uint256)` | `checked` | `-` | Only the agent's current `operator` in `identityRegistry`. `amount` nonzero and at most `balance[didHash]`. Non-reentrant. | Debits `balance[didHash]` and transfers `amount` of `svr` to the caller, including balance others deposited. Emits `FeesWithdrawn`. |
+
+## SigvaraRewardDistributor
+
+Not a proxy, and with no roles: no owner, no admin, no pause and no upgrade. Every parameter is
+fixed in the constructor.
+
+| Function | Caller | Guard | Requires | Effect |
+|---|---|---|---|---|
+| `claim(uint256)` | `checked` | `-` | The caller is an active operator in `operatorBond` (`isActiveOperator(msg.sender)`); `period` closed and not released; not claimed by the caller; the caller's share, `allotted * pointsOf / totalPoints`, nonzero. Points are held by the bond owner, so a signer passes the operator check and has nothing to claim. Non-reentrant. | Marks the caller as claimed for `period`, adds the share to `paid`, takes it off `reserved` and transfers it in `token` to the caller. Emits `Claimed`. |
+| `close()` | `anyone` | `-` | Any account. The oldest unclosed period, `nextToClose`, has ended. | Allots that period every token held and not `reserved` if it earned any point, and nothing otherwise; records `closedAt`, adds the allotment to `reserved` and moves `nextToClose` on by one. Emits `PeriodClosed`. |
+| `finalize(bytes32)` | `anyone` | `-` | Any account. Whatever `SigvaraReputation.finalizeReputation` requires, since it calls it and its revert passes through unchanged. Non-reentrant. | Makes the pending score live through `finalizeReputation`, then credits one point in the current period to the operator behind its proposer (`operatorBond.operatorOfSigner`, or the proposer itself). A proposal that names no proposer earns nothing. Emits `Served`. |
+| `release(uint256)` | `anyone` | `-` | Any account. `period` closed and not released; `claimPeriods` periods have passed since `closedAt`. | Marks the period released, so it can no longer be claimed, and takes what it still holds, unclaimed shares and rounding, off `reserved`, which makes it allottable to a later period. Emits `Released`. |
 
 ## SVRToken
 

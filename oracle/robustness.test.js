@@ -745,6 +745,15 @@ test('a checker whose own wallet would be refused leaves the proposal alone', as
   });
 });
 
+test('a reward distributor that finalizes on another registry stops the oracle at startup', async () => {
+  // Every finalize through it would revert, and no score would go live.
+  const world = new World();
+  world.set('distributorMismatch', '0x00000000000000000000000000000000000000d1');
+  const { code, log } = await runToExit({ world, env: BASE_ENV });
+  assert.equal(code, 1);
+  assert.match(log, /REWARD_DISTRIBUTOR_ADDRESS finalizes on 0x0+d1, not on REPUTATION_ADDRESS/);
+});
+
 test('a transaction left pending by an earlier epoch is warned about, and the epoch carries on', async () => {
   const world = new World();
   world.addRegisteredAgent();

@@ -21,6 +21,7 @@
 //     chainId:   the chain id the fake node reports (default 5042)
 //     nonceGap:  how many of the wallet's transactions the node holds pending (default 0)
 //     operatorStanding: { enforced, allowed, operatorBond } what the boot check finds (default not enforced)
+//     distributorMismatch: the other registry a configured reward distributor finalizes on (default none)
 //     jobs:      { head, logs } what the ERC-8183 job registry's node answers, when the oracle
 //                is given JOBS_REGISTRY_ADDRESS (head defaults to `head`, logs to none)
 //     scanLogs, canaryLogs: what the payment scan's getLogs finds. A range is the scan, a single
@@ -120,6 +121,7 @@ const chain = {
   restoreScanState: () => false,
   verifyDidHashDerivation: async () => false,
   operatorStanding: async () => world().operatorStanding ?? ({ enforced: false }),
+  distributorMismatch: async () => world().distributorMismatch ?? null,
   getLatestBlockTimestamp: async () => world().nowSec,
   getAgentScore: async (address) => {
     const key = String(address).toLowerCase();
