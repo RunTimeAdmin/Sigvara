@@ -190,9 +190,11 @@ contract SplitAuthority is Script {
     /// The head of a Safe's module list (SENTINEL_MODULES).
     address internal constant SAFE_MODULES_HEAD = address(0x1);
     /// The longest a reconciliation report counts for. Long enough to run phase 5 after it; the nonces in it
-    /// catch anything the Safe or the deployer does in between.
+    /// catch anything the Safe or the deployer does in between, and the timelock operation states in it catch an
+    /// operation that runs in between: anyone may execute one, and that moves no nonce.
     uint256 internal constant MAX_RECONCILIATION_AGE = 1 hours;
-    string internal constant RECONCILIATION_SCHEMA = "sigvara/renounce-check/v1";
+    /// v2 is read at one finalized block and carries the timelock's queue (scripts/check-before-renounce.mjs).
+    string internal constant RECONCILIATION_SCHEMA = "sigvara/renounce-check/v2";
 
     /// Every contract in the artifact that gates anything on these two roles. The first four are the
     /// launch registries and are required in every phase: one that is missing from the artifact, holds
@@ -529,8 +531,15 @@ contract SplitAuthority is Script {
      *        - a Safe that is an account which has delegated to a contract (EIP-7702): its own key can still act
      *          as itself, whatever threshold the contract it delegates to reports
      *        - no reconciliation report from scripts/check-before-renounce.mjs, a failed one, one for another
-     *          chain, Safe, timelock or deployer, one over an hour old, or one the Safe or the deployer has made a
-     *          transaction since. What the Safe has done since it was made is in its log and nowhere else
+     *          chain, Safe, timelock, deployer or deployment artifact, one over an hour old, or one the Safe or the
+     *          deployer has made a transaction since. What the Safe has done since it was made is in its log and
+     *          nowhere else
+     *        - a timelock operation that has run since the report (anyone may execute, and that moves no nonce) or
+     *          whose state is otherwise not the one the report recorded, a pending one the report does not list as
+     *          reviewed, or a REVIEWED_TIMELOCK_OPERATIONS that is not the list the report was made with. Pending
+     *          operations run after the handover whether or not anyone remembered them
+     *        - a deployer with code, such as an EIP-7702 delegation: calls made through it move no nonce, and the
+     *          deployer still holds UPGRADER_ROLE, which administers itself
      *
      *      All of them are checked against the chain, not against what the earlier
      *      phases in this file intended to do.
@@ -769,10 +778,12 @@ contract SplitAuthority is Script {
         if (guard != address(0)) revert SafeHasGuard(safe, guard);
     }
 
-    /// @dev The report scripts/check-before-renounce.mjs writes when every role holder and the Safe's whole history
-    ///      reconcile. It counts only for this chain, Safe, timelock and deployer, for an hour, and while the Safe's
-    ///      nonce and the deployer's are what they were when it was written: a transaction by either since then may
-    ///      be one the report never saw.
+    /// @dev The report scripts/check-before-renounce.mjs writes when every role holder, the Safe's whole history and
+    ///      the timelock's queue reconcile, all read at one finalized block. It counts only for this chain, Safe,
+    ///      timelock, deployer and artifact, for an hour, and while the Safe's nonce and the deployer's are what they
+    ///      were when it was written: a transaction by either since then may be one the report never saw. A new
+    ///      timelock operation or a cancel needs the Safe, so the Safe's nonce covers those too; one that runs moves
+    ///      no nonce, since anyone may execute it, which is what `_requireTimelockQueueUnchanged` is for.
     function _requireReconciliation(address safe, address timelock, address deployer) internal view {
         string memory path = string.concat("deployments/", vm.toString(block.chainid), ".renounce-check.json");
         if (!vm.exists(path)) {
@@ -780,7 +791,7 @@ contract SplitAuthority is Script {
         }
         string memory json = vm.readFile(path);
         if (keccak256(bytes(vm.parseJsonString(json, ".schema"))) != keccak256(bytes(RECONCILIATION_SCHEMA))) {
-            revert ReconciliationRefused("the report is not a sigvara/renounce-check/v1");
+            revert ReconciliationRefused("the report is not a sigvara/renounce-check/v2");
         }
         if (!vm.parseJsonBool(json, ".passed")) revert ReconciliationRefused("the report did not pass");
         if (vm.parseJsonUint(json, ".chain_id") != block.chainid) revert ReconciliationRefused("the report is for another chain");
@@ -795,9 +806,78 @@ contract SplitAuthority is Script {
         if (!ok || ret.length != 32 || abi.decode(ret, (uint256)) != vm.parseJsonUint(json, ".safe_nonce")) {
             revert ReconciliationRefused("the Safe has made a transaction since the report: run it again");
         }
+        // A deployer with code (an EIP-7702 delegation) can act through it without moving its nonce, and it still
+        // holds UPGRADER_ROLE, which administers itself. Its nonce then shows nothing about what it has done.
+        if (deployer.code.length != 0) {
+            revert ReconciliationRefused("the deployer has code (an EIP-7702 delegation?), so its nonce does not show what it has done");
+        }
         if (vm.getNonce(deployer) != vm.parseJsonUint(json, ".deployer_nonce")) {
             revert ReconciliationRefused("the deployer has made a transaction since the report: run it again");
         }
+        // The addresses the report checked are the ones this phase is about to hand over.
+        string memory artifact = vm.readFile(string.concat("deployments/", vm.toString(block.chainid), ".json"));
+        if (keccak256(bytes(artifact)) != vm.parseJsonBytes32(json, ".artifact_keccak")) {
+            revert ReconciliationRefused("the report was made against another deployment artifact: run it again");
+        }
+        _requireTimelockQueueUnchanged(json, timelock);
+    }
+
+    /// @dev Every operation the timelock has ever had scheduled, as the report recorded it at its block, read again
+    ///      now, just before the broadcast. An operation that ran or was cancelled since may have granted a role or
+    ///      upgraded a registry the report checked, and neither nonce shows it. A pending one runs after the handover,
+    ///      so it must be one the report lists as reviewed, and the operator must give the same list again here.
+    ///      The digest is keccak256(abi.encode(ids, states)), which the gate computes the same way. It catches a
+    ///      report whose lists were changed and the digest not, a careless edit. It is not a seal: whoever runs this
+    ///      phase holds the deployer key anyway, and the report is a guard against mistakes, not against them.
+    function _requireTimelockQueueUnchanged(string memory json, address timelock) internal view {
+        bytes32[] memory ids = vm.parseJsonBytes32Array(json, ".timelock_operation_ids");
+        uint256[] memory states = vm.parseJsonUintArray(json, ".timelock_operation_states");
+        if (ids.length != states.length) revert ReconciliationRefused("the report's timelock operations do not line up");
+        if (keccak256(abi.encode(ids, states)) != vm.parseJsonBytes32(json, ".timelock_operations_digest")) {
+            revert ReconciliationRefused("the report's timelock digest does not match its operations");
+        }
+        bytes32[] memory reviewed = vm.parseJsonBytes32Array(json, ".reviewed_timelock_operations");
+        if (!_sameIds(reviewed, _reviewedOperations())) {
+            revert ReconciliationRefused("REVIEWED_TIMELOCK_OPERATIONS is not the list the report was made with");
+        }
+        TimelockController tl = TimelockController(payable(timelock));
+        for (uint256 i = 0; i < ids.length; i++) {
+            TimelockController.OperationState state = tl.getOperationState(ids[i]);
+            bool pending = state == TimelockController.OperationState.Waiting
+                || state == TimelockController.OperationState.Ready;
+            // Waiting turns into Ready by itself when its delay runs out, which is not a change anyone made, so
+            // pending is compared as pending. Anything else must be exactly what the report recorded.
+            bool wasPending = states[i] == uint256(TimelockController.OperationState.Waiting)
+                || states[i] == uint256(TimelockController.OperationState.Ready);
+            if (wasPending ? !pending : uint256(state) != states[i]) {
+                revert ReconciliationRefused("a timelock operation has changed state since the report: run it again");
+            }
+            if (pending && !_hasId(reviewed, ids[i])) {
+                revert ReconciliationRefused("the report passes a pending timelock operation nobody reviewed");
+            }
+        }
+    }
+
+    /// @dev REVIEWED_TIMELOCK_OPERATIONS, comma-separated, or none when it is unset or empty.
+    function _reviewedOperations() internal view returns (bytes32[] memory) {
+        if (bytes(vm.envOr("REVIEWED_TIMELOCK_OPERATIONS", string(""))).length == 0) return new bytes32[](0);
+        return vm.envBytes32("REVIEWED_TIMELOCK_OPERATIONS", ",");
+    }
+
+    function _hasId(bytes32[] memory list, bytes32 id) internal pure returns (bool) {
+        for (uint256 i = 0; i < list.length; i++) {
+            if (list[i] == id) return true;
+        }
+        return false;
+    }
+
+    /// @dev The same ids in any order.
+    function _sameIds(bytes32[] memory a, bytes32[] memory b) internal pure returns (bool) {
+        if (a.length != b.length) return false;
+        for (uint256 i = 0; i < a.length; i++) {
+            if (!_hasId(b, a[i]) || !_hasId(a, b[i])) return false;
+        }
+        return true;
     }
 
     /// @dev SAFE is the address `factory` gives the call in `creation`, the input of the transaction that created

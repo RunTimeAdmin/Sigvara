@@ -14,7 +14,11 @@ solc_version = "0.8.24"
 # cancun bytecode runs there.
 evm_version = "cancun"
 
-fs_permissions = [{ access = "read-write", path = "./deployments" }]
+fs_permissions = [
+  { access = "read-write", path = "./deployments" },
+  # The renounce report scripts/check-before-renounce.mjs writes, read as the renounce reads one.
+  { access = "read", path = "./test/fixtures" },
+]
 
 [profile.default.fuzz]
 runs = 1000

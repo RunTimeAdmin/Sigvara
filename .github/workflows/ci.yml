@@ -140,8 +140,9 @@ jobs:
         run: node scripts/check-secrets.mjs --self-test && node scripts/check-secrets.mjs
 
       # The renounce in script/SplitAuthority.s.sol refuses to run without the report this script
-      # writes, so its rules on a Safe's history are checked here, on made-up logs.
-      - name: Safe-history rules before the renounce
+      # writes, so its rules on a Safe's history and the timelock's queue, its single block and the
+      # report's format are checked here, on made-up logs and a made-up provider.
+      - name: Rules before the renounce
         working-directory: .
         run: node scripts/check-before-renounce.mjs --self-test
 
