@@ -50,6 +50,10 @@ async function renderOperators(history, health) {
   ]);
   const bondAmount = BigInt(reads[0]);
   const beneficiary = X.wordAddr(reads[1], 0);
+  // Every key an operator has signed with, so a proposal from one it has since rotated out
+  // still counts as its own.
+  const signedWith = (a) => history.value.logs.filter((l) => l.name === "SignerSet" && X.same(X.topicAddr(l.topics[1]), a))
+    .map((l) => X.topicAddr(l.topics[2]));
   const ops = addresses.map((address, i) => {
     const op = reads[2 + i * 2], signer = X.wordAddr(reads[3 + i * 2], 0);
     return {
@@ -58,6 +62,7 @@ async function renderOperators(history, health) {
       status: Number(BigInt(X.word(op, 1))),
       unbondingAt: Number(BigInt(X.word(op, 2))),
       signer: /^0x0{40}$/.test(signer) ? null : signer,
+      keys: new Set([address, ...signedWith(address)].map((k) => k.toLowerCase())),
     };
   });
   ops.sort((a, b) => b.status - a.status || (b.bond > a.bond ? 1 : b.bond < a.bond ? -1 : 0));
@@ -76,7 +81,7 @@ async function renderOperators(history, health) {
     </tr>`;
   }
   html += "</tbody></table></div>";
-  html += '<p class="netnote">Last proposal is the newest score proposal sent by the operator or its signing key, read from the chain. A checker proposes only into a slot the primary has left empty, so it usually has none.</p>';
+  html += '<p class="netnote">Last proposal is the newest score proposal sent by the operator or a signing key it has set, read from the chain. A checker proposes only into a slot the primary has left empty, so it usually has none.</p>';
   html += X.historyNote(history.value);
   html += `<p class="netnote">A slashed operator bond goes to the slash beneficiary, ${X.addrLink(beneficiary)}, not to a burn. The bond contract's slash takes no evidence and has no appeal window; see <a href="slashes">Slashes</a>.</p>`;
   html += healthList(health);
@@ -98,7 +103,7 @@ async function lastProposals(ops) {
   const from = Math.max(0, to - PROPOSAL_BLOCKS + 1);
   const blockOf = (r) => parseInt(r.blockNumber, 16), indexOf = (r) => parseInt(r.logIndex, 16) || 0;
   const rows = (await X.chainLogs([X.REPUTATION], [PROPOSED], from, to, { times: false }))
-    .filter((r) => X.same(r.address, X.REPUTATION) && X.isHash(r.transactionHash) && typeof r.data === "string")
+    .filter((r) => X.same(r.address, X.REPUTATION) && X.isHash(r.transactionHash) && /^0x[0-9a-fA-F]*$/.test(r.data))
     .sort((a, b) => blockOf(b) - blockOf(a) || indexOf(b) - indexOf(a));
   const all = [...new Set(rows.map((r) => r.transactionHash.toLowerCase()))];
   const txs = all.slice(0, PROPOSALS_CHECKED);
@@ -115,7 +120,7 @@ async function lastProposals(ops) {
     if (by === undefined) break;
     const w = X.word(r.data, 0), at = w.length === 66 ? Number(BigInt(w)) : 0;
     if (all.length > txs.length) since = at;
-    const op = ops.find((o) => X.same(o.address, by) || (o.signer && X.same(o.signer, by)));
+    const op = ops.find((o) => o.keys.has(by));
     if (op && !newest.has(op.address)) newest.set(op.address, { at, tx });
   }
   return { newest, since };

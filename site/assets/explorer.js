@@ -90,7 +90,12 @@
   // How far back the pages read the chain itself when the explorer's index is behind: about 42
   // hours of Arc blocks, at roughly two a second, which is 30 log reads.
   const TAIL_BLOCKS = 300000;
-  // An index this far behind the chain (about an hour) is worth a note on the page.
+  // The block the explorer's per-contract index stopped at on 2 November 2026. Its index is not
+  // relied on past it, even once its newest block moves on, because an index that resumes at the
+  // head before it backfills would leave a hole a page could not see. Remove this once the
+  // explorer has been seen to hold the blocks after it.
+  const INDEX_STALLED_AT = 70337205;
+  // Reading more than this many blocks (about an hour) from the chain is worth a note on the page.
   const LAG_NOTED = 7200;
   // What a card says while it waits on the explorer.
   const READING_HISTORY = '<p class="netnote">Reading the contract\'s history from the Arc explorer, and the newest blocks from the chain. It can take up to a minute.</p>';
@@ -238,17 +243,15 @@
   }
 
   // An answer kept in the tab for ten minutes, because the explorer allows ten requests an hour
-  // and the RPC's log reads are slow. An answer `keep` turns down is not kept. Storage can be
-  // missing or refuse a write; then every call asks again.
-  async function cached(key, read, keep = () => true) {
+  // and the RPC's log reads are slow. A read that fails is not kept. Storage can be missing or
+  // refuse a write; then every call asks again.
+  async function cached(key, read) {
     try {
       const hit = JSON.parse(sessionStorage.getItem(key));
       if (hit && Date.now() - hit.at < LOGS_TTL_MS && hit.value !== undefined) return hit.value;
     } catch (_) { /* no cache */ }
     const value = await read();
-    if (keep(value)) {
-      try { sessionStorage.setItem(key, JSON.stringify({ at: Date.now(), value })); } catch (_) { /* no cache */ }
-    }
+    try { sessionStorage.setItem(key, JSON.stringify({ at: Date.now(), value })); } catch (_) { /* no cache */ }
     return value;
   }
 
@@ -267,6 +270,14 @@
     } catch (_) { return null; }
   }
 
+  // Log reads go one stream at a time across the page: two at once are more than the RPC allows.
+  let logQueue = Promise.resolve();
+  const queued = (read) => {
+    const run = logQueue.then(read, read);
+    logQueue = run.catch(() => {});
+    return run;
+  };
+
   // Logs from the chain itself over blocks [from, to], read in spans the RPC accepts, as rows
   // shaped like the explorer's (its hex timeStamp included unless `times` is false), so both go
   // through the same parsing. `topics` is an eth_getLogs topic filter, or null for none.
@@ -275,31 +286,36 @@
     const spans = [];
     for (let end = to; end >= from; end -= LOG_SPAN) spans.push([Math.max(from, end - LOG_SPAN + 1), end]);
     const filter = (a, b) => ({ address: addresses, ...(topics ? { topics } : {}), fromBlock: hex(a), toBlock: hex(b) });
-    const got = await rpcMany(spans.map(([a, b]) => ["eth_getLogs", [filter(a, b)]]), { batch: 3, gap: 1000 });
+    const got = await queued(() => rpcMany(spans.map(([a, b]) => ["eth_getLogs", [filter(a, b)]]), { batch: 3, gap: 1000 }));
     if (!got.every(Array.isArray)) throw new Error("a log read came back malformed");
     const rows = got.flat().filter((r) => r && typeof r === "object" && !r.removed);
+    // Arc's RPC gives each log its block's time; addTimes covers one that does not.
+    for (const r of rows) if (typeof r.blockTimestamp === "string") r.timeStamp = r.blockTimestamp;
     if (times) await addTimes(rows);
     return rows;
   }
-  // Each row's block time, which eth_getLogs leaves out.
-  async function addTimes(rows) {
+  // The block time of each row that does not carry one yet.
+  async function addTimes(all) {
+    const rows = all.filter((r) => r.timeStamp === undefined);
     const blocks = [...new Set(rows.map((r) => r.blockNumber))].filter((b) => typeof b === "string");
     const got = await rpcMany(blocks.map((b) => ["eth_getBlockByNumber", [b, false]]));
     const at = new Map(blocks.map((b, i) => [b, got[i]?.timestamp]));
     for (const r of rows) r.timeStamp = at.get(r.blockNumber);
   }
 
-  // Where to read the chain itself: from just past the explorer's newest block, or TAIL_BLOCKS
-  // back if that is nearer, to the newest block. `missed` is the span neither source covers.
+  // Where to read the chain itself: from just past the last block the explorer is relied on for
+  // (its newest, but no later than INDEX_STALLED_AT, which also stands in when it does not say),
+  // or TAIL_BLOCKS back if that is nearer, to the newest block. `missed` is the span between.
   async function tailRange() {
     const [head, latest] = await Promise.all([indexHead(), blockNumber()]);
     const floor = Math.max(0, latest - TAIL_BLOCKS + 1);
-    const from = head ? Math.max(head.block + 1, floor) : floor;
-    return { from, to: latest, indexHead: head, missed: head && from > head.block + 1 ? [head.block + 1, from - 1] : null };
+    const trusted = Math.min(head?.block ?? INDEX_STALLED_AT, INDEX_STALLED_AT);
+    const from = Math.max(trusted + 1, floor);
+    return { from, to: latest, indexHead: head, missed: from > trusted + 1 ? [trusted + 1, from - 1] : null };
   }
 
-  // The identity, staking and bond contracts' logs in the blocks the explorer has not indexed.
-  // One read serves every page, and it is kept in the tab like the explorer's answers. It reads
+  // The identity, staking and bond contracts' logs in the blocks the explorer is not relied on
+  // for. One read serves every page, and it is kept in the tab like the explorer's answers. It reads
   // every log the three emit and contractLogs picks out its events, because the RPC calls a
   // filter on the fifteen topics the pages read "requested range too large" over any span.
   function chainTail() {
@@ -311,8 +327,13 @@
   }
 
   // One contract's logs for one event set, from the explorer, as it answers them. A full page is
-  // continued from its last block, because the explorer has no cursor.
-  async function explorerLogs(address, wanted) {
+  // continued from its last block, because the explorer has no cursor. Kept in the tab apart
+  // from the chain's tail, so a page is never older than the older of the two.
+  function explorerLogs(address, wanted) {
+    const key = `sigvara-explorer-logs:${address.toLowerCase()}:${wanted.map((e) => e.topic).join(",")}`;
+    return cached(key, () => explorerPages(address, wanted));
+  }
+  async function explorerPages(address, wanted) {
     const rows = [];
     let from = 0, more = false;
     for (let page = 0; page < 10; page++) {
@@ -334,39 +355,36 @@
   // One contract's logs for one event set, oldest first: the explorer's history, then the blocks
   // after its index read from the chain. A row both sources hold is kept once. `tail` says how
   // the chain filled in, for historyNote.
-  function contractLogs(address, names) {
+  async function contractLogs(address, names) {
     const wanted = EVENTS.filter((e) => names.includes(e.name));
     const topics = new Map(wanted.map((e) => [e.topic, e]));
-    return cached(`sigvara-explorer:${address.toLowerCase()}:${names.join(",")}`, async () => {
-      const [indexed, tail] = await Promise.all([
-        explorerLogs(address, wanted),
-        chainTail().catch((e) => ({ error: String(e?.message ?? e), rows: [] })),
-      ]);
-      const logs = [], seen = new Set();
-      for (const r of [...indexed.rows, ...tail.rows]) {
-        if (!r || typeof r !== "object" || !same(r.address, address)) continue;
-        const ev = topics.get(String(r?.topics?.[0]).toLowerCase());
-        if (!ev || typeof r.data !== "string" || !/^0x[0-9a-fA-F]*$/.test(r.data)) continue;
-        const tx = isHash(r.transactionHash) ? r.transactionHash.toLowerCase() : null;
-        const index = parseInt(r.logIndex, 16) || 0;
-        if (seen.has(`${tx}:${index}`)) continue;
-        seen.add(`${tx}:${index}`);
-        logs.push({
-          name: ev.name,
-          legacy: Boolean(ev.legacy),
-          topics: r.topics.map((t) => String(t).toLowerCase()),
-          data: r.data,
-          block: parseInt(r.blockNumber, 16),
-          index,
-          time: parseInt(r.timeStamp, 16),
-          tx,
-        });
-      }
-      logs.sort((a, b) => a.block - b.block || a.index - b.index);
-      const { rows, ...how } = tail;
-      return { logs, truncated: indexed.more, tail: how };
-    // A chain read that failed is asked again on the next visit rather than kept.
-    }, (v) => !v.tail.error);
+    const [indexed, tail] = await Promise.all([
+      explorerLogs(address, wanted),
+      chainTail().catch((e) => ({ error: String(e?.message ?? e), rows: [] })),
+    ]);
+    const logs = [], seen = new Set();
+    for (const r of [...indexed.rows, ...tail.rows]) {
+      if (!r || typeof r !== "object" || !same(r.address, address)) continue;
+      const ev = topics.get(String(r?.topics?.[0]).toLowerCase());
+      if (!ev || typeof r.data !== "string" || !/^0x[0-9a-fA-F]*$/.test(r.data)) continue;
+      const tx = isHash(r.transactionHash) ? r.transactionHash.toLowerCase() : null;
+      const index = parseInt(r.logIndex, 16) || 0;
+      if (seen.has(`${tx}:${index}`)) continue;
+      seen.add(`${tx}:${index}`);
+      logs.push({
+        name: ev.name,
+        legacy: Boolean(ev.legacy),
+        topics: r.topics.map((t) => String(t).toLowerCase()),
+        data: r.data,
+        block: parseInt(r.blockNumber, 16),
+        index,
+        time: parseInt(r.timeStamp, 16),
+        tx,
+      });
+    }
+    logs.sort((a, b) => a.block - b.block || a.index - b.index);
+    const { rows, ...how } = tail;
+    return { logs, truncated: indexed.more, tail: how };
   }
 
   // What a page says under a history the chain had to fill in for the explorer, or "".
@@ -375,12 +393,13 @@
     const n = (x) => Number(x).toLocaleString("en-US");
     if (!t) return "";
     if (t.error) return `<p class="pill-warn">The newest blocks, which the Arc explorer may not have indexed yet, could not be read from the chain (${esc(t.error)}), so the newest entries may be missing.</p>`;
+    const head = t.indexHead
+      ? ` The explorer's newest log for the reputation contract is in block ${n(t.indexHead.block)}${t.indexHead.time ? ` (${esc(fmtWhen(t.indexHead.time))})` : ""}.` : "";
     if (t.missed) {
-      return `<p class="pill-warn">Blocks ${n(t.missed[0])} to ${n(t.missed[1])} were not read, so entries from them are missing: the Arc explorer has not indexed them, and they are further back than the ${n(TAIL_BLOCKS)} blocks this page reads from the chain itself.</p>`;
+      return `<p class="pill-warn">Blocks ${n(t.missed[0])} to ${n(t.missed[1])} were not read from the chain, and the Arc explorer's index is not relied on for them, so entries from them may be missing. This page reads only the newest ${n(TAIL_BLOCKS)} blocks from the chain itself.${head}</p>`;
     }
-    if (!t.indexHead) return `<p class="netnote">The Arc explorer did not say how far it has indexed, so the newest ${n(TAIL_BLOCKS)} blocks were read from the chain itself.</p>`;
-    if (t.to - t.indexHead.block < LAG_NOTED) return "";
-    return `<p class="netnote">The Arc explorer has indexed nothing after block ${n(t.indexHead.block)}${t.indexHead.time ? ` (${esc(fmtWhen(t.indexHead.time))})` : ""}, so this page read the newest ${n(t.to - t.from + 1)} blocks from the chain itself.</p>`;
+    if (t.to - t.from + 1 < LAG_NOTED) return "";
+    return `<p class="netnote">Blocks ${n(t.from)} to ${n(t.to)} were read from the chain itself, because the Arc explorer's index is not relied on past block ${n(t.from - 1)}.${head}</p>`;
   }
 
   // ---- evidence: the Merkle root, rebuilt the way oracle/merkle.js builds it ----
