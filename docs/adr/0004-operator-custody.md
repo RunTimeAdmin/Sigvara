@@ -32,7 +32,7 @@ nothing on a compromised admin.
 1. **Signer registry.** An Active operator calls `setSigner(address)`; `isActiveOperator(signer)`
    then answers for that operator. Only Active operators can name one (otherwise anyone could
    reserve addresses they do not control), a signer cannot hold a bond or sign for two operators,
-   and an operator cannot be named. `clearSigner()` works in any status. Naming a signer grants no
+   at once or one after the other (`boundTo`, since 3 November 2026: a released key named by a second operator revived its pending proposals), and an operator cannot be named. `clearSigner()` works in any status. Naming a signer grants no
    role: `ORACLE_ROLE` stays a separate admin decision on each contract.
 2. **Store the proposer and ask again at finalize.** `finalizeReputation` stays permissionless but
    refuses a proposal whose proposer no longer holds `ORACLE_ROLE` or is no longer an active

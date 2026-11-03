@@ -90,6 +90,10 @@ contract OperatorCustodyTest is StackFixture {
         vm.stopPrank();
     }
 
+    function BOUND_ERROR(address key, address operator) internal pure returns (bytes memory) {
+        return abi.encodeWithSelector(SigvaraOracleBond.SignerBoundElsewhere.selector, key, operator);
+    }
+
     function _propose(address who, SigvaraReputation.ReputationData memory data) internal {
         vm.prank(who);
         reputation.proposeReputation(didHash, data, bytes32(0));
@@ -191,6 +195,78 @@ contract OperatorCustodyTest is StackFixture {
         SigvaraReputation.ReputationData memory perfect = _perfect();
         vm.expectRevert(abi.encodeWithSelector(SigvaraReputation.OracleNotBonded.selector, signer));
         _propose(signer, perfect);
+    }
+
+    /// A cleared key stays dead: no other operator can name it and bring its proposals back.
+    /// Naming it would make isActiveOperator(signer) true again, for the new operator, and the
+    /// thief's pending proposal finalizable, without the operator it was stolen from doing
+    /// anything. A key the thief holds would accept any nomination, so asking the key to
+    /// consent would not help; the key is bound to the operator that first named it instead.
+    function test_aClearedSigner_cannotBeAdoptedByAnotherOperator() public {
+        _onboard(cold2, signer2);
+        _propose(signer, _perfect());
+        vm.prank(cold);
+        bondReg.clearSigner();
+
+        vm.expectRevert(BOUND_ERROR(signer, cold));
+        vm.prank(cold2);
+        bondReg.setSigner(signer);
+
+        vm.warp(block.timestamp + SCORE_WINDOW + 1);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraReputation.ProposerNotAuthorized.selector, didHash, signer));
+        reputation.finalizeReputation(didHash);
+        assertEq(reputation.getEarnedScore(didHash), 0, "the thief's score never goes live");
+    }
+
+    /// The same for a key the operator rotated away from rather than cleared.
+    function test_aReplacedSigner_cannotBeAdoptedByAnotherOperator() public {
+        _onboard(cold2, signer2);
+        _propose(signer, _perfect());
+        vm.prank(cold);
+        bondReg.setSigner(makeAddr("rotatedTo"));
+
+        vm.expectRevert(BOUND_ERROR(signer, cold));
+        vm.prank(cold2);
+        bondReg.setSigner(signer);
+    }
+
+    /// And for an operator that proposed as itself and then left: its address cannot become
+    /// another operator's signer and revive what it proposed.
+    function test_aDepartedOperatorsAddress_cannotBeAdoptedAsASigner() public {
+        _onboard(cold2, signer2);
+        address solo = makeAddr("soloOperator");
+        svr.mint(solo, BOND);
+        vm.startPrank(solo);
+        svr.approve(address(bondReg), type(uint256).max);
+        bondReg.depositBond(BOND);
+        vm.stopPrank();
+        vm.prank(admin);
+        bondReg.admit(solo);
+        bytes32 role = reputation.ORACLE_ROLE();
+        vm.prank(admin);
+        reputation.grantRole(role, solo);
+
+        _propose(solo, _perfect());
+        vm.startPrank(solo);
+        bondReg.initiateUnbond();
+        vm.warp(block.timestamp + UNBOND);
+        bondReg.withdrawBond();
+        vm.stopPrank();
+
+        vm.expectRevert(BOUND_ERROR(solo, solo));
+        vm.prank(cold2);
+        bondReg.setSigner(solo);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraReputation.ProposerNotAuthorized.selector, didHash, solo));
+        reputation.finalizeReputation(didHash);
+    }
+
+    /// The operator's own decision is still its own: it may name a key it cleared again.
+    function test_theOperatorMayNameItsOwnClearedSignerAgain() public {
+        vm.startPrank(cold);
+        bondReg.clearSigner();
+        bondReg.setSigner(signer);
+        vm.stopPrank();
+        assertEq(bondReg.operatorOfSigner(signer), cold);
     }
 
     /// The same by governance, for an operator that is unreachable: removing it from the

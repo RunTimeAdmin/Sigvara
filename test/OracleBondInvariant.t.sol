@@ -129,6 +129,16 @@ contract OracleBondInvariantTest is Test {
         (, s,) = bond.operators(a);
     }
 
+    /// A named signer is bound to the operator that named it, so that once released no other
+    /// operator can name it and revive what it left pending.
+    function invariant_aNamedSignerIsBoundToItsOperator() public view {
+        for (uint256 i = 0; i < handler.actorCount(); i++) {
+            address a = handler.actors(i);
+            address op = bond.operatorOfSigner(a);
+            if (op != address(0)) assertEq(bond.boundTo(a), op, "a signer bound elsewhere, or not at all");
+        }
+    }
+
     /// A signer and its operator name each other, or neither names anything.
     function invariant_signerMappingsAreSymmetric() public view {
         for (uint256 i = 0; i < handler.actorCount(); i++) {

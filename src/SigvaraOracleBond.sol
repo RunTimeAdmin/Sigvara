@@ -41,7 +41,9 @@ import "./interfaces/IOperatorSet.sol";
  *         every function that moves the bond stays with the operator. Before this split the
  *         two were one address, so whoever took the service's key could also start an unbond
  *         and withdraw seven days later. Now it can only speak, and the operator can end that
- *         at once by naming another signer or none.
+ *         at once by naming another signer or none. A key that has spoken for one operator, as
+ *         its signer or as the operator itself, can never speak for another (`boundTo`), so a
+ *         key ended that way stays ended.
  */
 contract SigvaraOracleBond is
     Initializable,
@@ -112,6 +114,17 @@ contract SigvaraOracleBond is
     /// before this existed (see _claimableAt).
     mapping(address => uint256) public unbondingClaimableAt; // slot 8: operator => when it may withdraw
 
+    /// The one operator each address may ever speak for: the operator that first named it as its
+    /// signer, or, for an operator's own address, that operator. Appended after
+    /// `unbondingClaimableAt`. setSigner used to accept any address nobody was using at that
+    /// moment, so a key an operator had cleared or rotated away from, because it was stolen,
+    /// could be named by a second operator. isActiveOperator then answered true for it again,
+    /// and every proposal it had left pending could be finalized, without the operator it was
+    /// taken from doing anything. The thief holds the key, so asking the key to consent would
+    /// not have stopped that. Zero for an address named before this existed; it is bound when
+    /// it is next named or released (_bind).
+    mapping(address => address) public boundTo; // slot 9: address => the operator it may speak for
+
     // -------------------------------------------------------------------------
     // Events
     // -------------------------------------------------------------------------
@@ -148,6 +161,9 @@ contract SigvaraOracleBond is
     /// isActiveOperator could then not say which of the two it was answering for.
     error AlreadySigner(address account);
     error NoSigner(address operator);
+    /// The address has spoken for another operator, as its signer or as that operator itself,
+    /// and can speak for no one else: naming it would revive whatever it left pending.
+    error SignerBoundElsewhere(address signer, address operator);
     /// One address would hold the slasher role and receive what is slashed. It could take an
     /// operator's bond and pay itself, which is the opposite of a performance bond.
     error SlasherIsBeneficiary(address account);
@@ -238,6 +254,7 @@ contract SigvaraOracleBond is
 
         op.bond += received;
         if (op.status == Status.None) op.status = Status.Bonded;
+        _bind(msg.sender, msg.sender);
 
         emit BondDeposited(msg.sender, received, op.bond);
     }
@@ -277,6 +294,7 @@ contract SigvaraOracleBond is
         op.unbondingAt = 0;
         delete unbondingClaimableAt[msg.sender];
         _clearSigner(msg.sender);
+        _bind(msg.sender, msg.sender);
 
         svr.safeTransfer(msg.sender, amount);
         emit BondWithdrawn(msg.sender, amount);
@@ -290,8 +308,10 @@ contract SigvaraOracleBond is
      *         owner from using them: a signer cannot hold a bond or be another operator's
      *         signer. The cost of being Active is the cost of doing that.
      *
-     *         The signer must be an address nobody else uses here. The caller keeps every
-     *         power over the bond. Naming a signer does not grant ORACLE_ROLE anywhere: that
+     *         The signer must be an address nobody else uses here, and one that has never spoken
+     *         for another operator (`boundTo`), including one that was another operator's own
+     *         address. The caller may name again a key it cleared itself. It keeps every power
+     *         over the bond. Naming a signer does not grant ORACLE_ROLE anywhere: that
      *         stays a governance decision on each contract, and the signer needs it as well as
      *         this.
      *
@@ -302,22 +322,27 @@ contract SigvaraOracleBond is
         if (op.status != Status.Active) revert WrongStatus(msg.sender, op.status);
         if (signer == address(0)) revert ZeroAddress();
         if (signer == msg.sender || !_isFree(signer)) revert SignerNotFree(signer);
+        address bound = boundTo[signer];
+        if (bound != address(0) && bound != msg.sender) revert SignerBoundElsewhere(signer, bound);
 
         address previous = signerOf[msg.sender];
         if (previous != address(0)) {
+            _bind(previous, msg.sender);
             delete operatorOfSigner[previous];
             emit SignerCleared(msg.sender, previous);
         }
 
         signerOf[msg.sender] = signer;
         operatorOfSigner[signer] = msg.sender;
+        _bind(signer, msg.sender);
         emit SignerSet(msg.sender, signer);
     }
 
     /**
      * @notice Stop anyone signing for this operator. Takes effect in the same block: the
      *         former signer's next call to propose, finalize or charge is refused, and so
-     *         are its proposals still waiting out their challenge window.
+     *         are its proposals still waiting out their challenge window. No other operator can
+     *         name the key afterwards and bring them back (`boundTo`).
      * @dev    Allowed in any status, including Exiting. It is the operator's answer to a
      *         stolen signing key, and an operator that has already started leaving should
      *         still be able to give it.
@@ -385,6 +410,7 @@ contract SigvaraOracleBond is
             op.unbondingAt = 0;
             delete unbondingClaimableAt[operator];
             _clearSigner(operator);
+            _bind(operator, operator);
         }
 
         svr.safeTransfer(slashBeneficiary, amount);
@@ -473,9 +499,17 @@ contract SigvaraOracleBond is
     function _clearSigner(address operator) internal {
         address signer = signerOf[operator];
         if (signer == address(0)) return;
+        _bind(signer, operator);
         delete signerOf[operator];
         delete operatorOfSigner[signer];
         emit SignerCleared(operator, signer);
+    }
+
+    /// @dev Records that `account` speaks for `operator`, unless something is recorded already.
+    ///      Run wherever an address is named or released, so that one named before `boundTo`
+    ///      existed is bound at the latest when it is released, the moment it could be taken.
+    function _bind(address account, address operator) internal {
+        if (boundTo[account] == address(0)) boundTo[account] = operator;
     }
 
     /// @dev The time fixed when the operator started to leave. An operator that started before

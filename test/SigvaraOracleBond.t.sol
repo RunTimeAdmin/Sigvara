@@ -1111,6 +1111,96 @@ contract SigvaraOracleBondTest is Test {
             bond.unbondingClaimableAt(op1), "slot 8 is unbondingClaimableAt");
     }
 
+    /// Appended after unbondingClaimableAt. The tests below write this slot by hand to stand in
+    /// for an address named before it existed.
+    function test_storageLayout_boundToPinnedToSlot9() public {
+        _withSigner(op1, signer1);
+        assertEq(bond.boundTo(signer1), op1);
+        assertEq(address(uint160(uint256(vm.load(address(bond), _boundSlot(signer1))))), op1, "slot 9 is boundTo");
+        assertEq(bond.boundTo(op1), op1, "and an operator is bound to itself when it bonds");
+    }
+
+    function _boundSlot(address a) internal pure returns (bytes32) {
+        return keccak256(abi.encode(a, uint256(9)));
+    }
+
+    /// A signer named before boundTo existed carries no record. It is bound when it is
+    /// released, which is the moment another operator could otherwise take it.
+    function test_aSignerNamedBeforeTheUpgrade_isBoundWhenCleared() public {
+        _withSigner(op1, signer1);
+        vm.store(address(bond), _boundSlot(signer1), bytes32(0));
+        assertEq(bond.boundTo(signer1), address(0));
+
+        vm.prank(op1);
+        bond.clearSigner();
+        assertEq(bond.boundTo(signer1), op1);
+
+        _bondAndAdmit(op2, BOND);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraOracleBond.SignerBoundElsewhere.selector, signer1, op1));
+        vm.prank(op2);
+        bond.setSigner(signer1);
+    }
+
+    function test_aSignerNamedBeforeTheUpgrade_isBoundWhenReplaced() public {
+        _withSigner(op1, signer1);
+        vm.store(address(bond), _boundSlot(signer1), bytes32(0));
+
+        vm.prank(op1);
+        bond.setSigner(signer2);
+        assertEq(bond.boundTo(signer1), op1);
+        assertEq(bond.boundTo(signer2), op1);
+    }
+
+    /// And an operator that bonded before it is bound to itself when it leaves, so its address
+    /// cannot become another operator's signer.
+    function test_anOperatorBondedBeforeTheUpgrade_isBoundWhenItLeaves() public {
+        _bondAndAdmit(op1, BOND);
+        vm.store(address(bond), _boundSlot(op1), bytes32(0));
+        vm.startPrank(op1);
+        bond.initiateUnbond();
+        vm.warp(block.timestamp + UNBOND);
+        bond.withdrawBond();
+        vm.stopPrank();
+        assertEq(bond.boundTo(op1), op1);
+
+        _bondAndAdmit(op2, BOND);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraOracleBond.SignerBoundElsewhere.selector, op1, op1));
+        vm.prank(op2);
+        bond.setSigner(op1);
+    }
+
+    function test_anOperatorSlashedToNothing_cannotBecomeAnotherOperatorsSigner() public {
+        _bondAndAdmit(op1, BOND);
+        vm.store(address(bond), _boundSlot(op1), bytes32(0));
+        vm.prank(slasher);
+        bond.slash(op1, BOND);
+
+        _bondAndAdmit(op2, BOND);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraOracleBond.SignerBoundElsewhere.selector, op1, op1));
+        vm.prank(op2);
+        bond.setSigner(op1);
+    }
+
+    /// A key released when its operator left can still become an operator in its own right, which
+    /// governance has to admit. What it cannot do is speak for a second operator.
+    function test_aReleasedSigner_canBondItself_butNotSpeakForAnother() public {
+        _withSigner(op1, signer1);
+        vm.prank(op1);
+        bond.clearSigner();
+        _bondAndAdmit(op2, BOND);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraOracleBond.SignerBoundElsewhere.selector, signer1, op1));
+        vm.prank(op2);
+        bond.setSigner(signer1);
+
+        svr.mint(signer1, BOND);
+        vm.startPrank(signer1);
+        svr.approve(address(bond), BOND);
+        bond.depositBond(BOND);
+        vm.stopPrank();
+        assertEq(bond.bondOf(signer1), BOND);
+        assertEq(bond.boundTo(signer1), op1, "the binding does not move");
+    }
+
     /// An operator written the way a proxy that predates signers wrote it has empty signer
     /// mappings and must read as active exactly as before.
     function test_legacyOperator_withNoSignerMappingsStillReadsActive() public {
