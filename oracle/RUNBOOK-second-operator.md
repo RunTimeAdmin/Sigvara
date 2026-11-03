@@ -296,6 +296,11 @@ cast call 0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171 \
 From the `DEFAULT_ADMIN_ROLE` wallet. `admit` reverts (`WrongStatus` with no deposit, `InsufficientBond` with a short one) if
 step 3 did not land, so it is safe to attempt.
 
+First check that the address never signed for another operator: no `SignerSet` log on the bond registry names it as the
+signer (the second indexed topic). If one does and the address still holds `ORACLE_ROLE` on `SigvaraReputation`, admitting
+it makes every proposal it left pending as that operator's signer finalizable again. Revoke the role before admitting, and
+grant it again in step 5.
+
 ```bash
 cast send 0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171 \
   "admit(address)" <CHECKER_ADDRESS> \

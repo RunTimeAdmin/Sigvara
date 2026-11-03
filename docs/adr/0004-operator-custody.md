@@ -32,8 +32,10 @@ nothing on a compromised admin.
 1. **Signer registry.** An Active operator calls `setSigner(address)`; `isActiveOperator(signer)`
    then answers for that operator. Only Active operators can name one (otherwise anyone could
    reserve addresses they do not control), a signer cannot hold a bond or sign for two operators,
-   at once or one after the other (`boundTo`, since 3 November 2026: a released key named by a second operator revived its pending proposals), and an operator cannot be named. `clearSigner()` works in any status. Naming a signer grants no
-   role: `ORACLE_ROLE` stays a separate admin decision on each contract.
+   and an operator cannot be named. `clearSigner()` works in any status. Naming a signer grants no
+   role: `ORACLE_ROLE` stays a separate admin decision on each contract. Since 3 November 2026 a
+   key stays bound to the operator that first named it, and an operator's own address to itself
+   (`boundTo`): a released key named by a second operator revived its pending proposals.
 2. **Store the proposer and ask again at finalize.** `finalizeReputation` stays permissionless but
    refuses a proposal whose proposer no longer holds `ORACLE_ROLE` or is no longer an active
    operator or signer, and `proposeIfEmpty` may replace such a proposal. The check is live, not a
@@ -64,6 +66,17 @@ nothing on a compromised admin.
   withdraws or is slashed to nothing.
 - The oracle names `ProposerNotAuthorized` and `AlreadyCharged` from the revert data, not from
   ethers' decoding: a send that fails at gas estimation reaches it with the data and no name.
+- Binding is permanent, which makes a reservation permanent too. An Active operator that names an
+  address nobody has used yet, and clears it, keeps every other operator from ever naming it. Before
+  binding the same move blocked the address only until it was cleared. Accepted: it takes a
+  malicious admitted operator, the victim names a fresh key, and asking the key to accept its
+  nomination would not have stopped the theft binding exists for, since a thief holds the key.
+- Two moves no longer work: moving a bond to a new cold key or Safe while keeping the same signer
+  (the signer is bound to the old operator; name a new one), and an operator that has left becoming
+  another operator's signer.
+- A released signer can still bond and be admitted in its own right. If it still holds
+  `ORACLE_ROLE`, admitting it revives what it proposed as the other operator's signer, so admission
+  checks its `SignerSet` history first (oracle/RUNBOOK-second-operator.md, step 4).
 
 > **Update, 27 October 2026.** The Arc testnet contracts have run this code since 26 October 2026, so the
 > signer registry is live there. Neither live operator has named a signer, so on the testnet each operator

@@ -1181,6 +1181,29 @@ contract SigvaraOracleBondTest is Test {
         bond.setSigner(op1);
     }
 
+    /// An operator cannot bind an address before it bonds and adopt it after it leaves: naming a
+    /// stranger and clearing it bound the stranger to that operator, and bonding left it so.
+    function test_aBindingMadeBeforeAnAddressBonds_isReplacedWhenItBonds() public {
+        _bondAndAdmit(op2, BOND);
+        vm.startPrank(op2);
+        bond.setSigner(op1);
+        bond.clearSigner();
+        vm.stopPrank();
+        assertEq(bond.boundTo(op1), op2, "reserved by op2 before op1 ever bonded");
+
+        _bondAndAdmit(op1, BOND);
+        assertEq(bond.boundTo(op1), op1);
+        vm.startPrank(op1);
+        bond.initiateUnbond();
+        vm.warp(block.timestamp + UNBOND);
+        bond.withdrawBond();
+        vm.stopPrank();
+
+        vm.expectRevert(abi.encodeWithSelector(SigvaraOracleBond.SignerBoundElsewhere.selector, op1, op1));
+        vm.prank(op2);
+        bond.setSigner(op1);
+    }
+
     /// A key released when its operator left can still become an operator in its own right, which
     /// governance has to admit. What it cannot do is speak for a second operator.
     function test_aReleasedSigner_canBondItself_butNotSpeakForAnother() public {
@@ -1198,7 +1221,7 @@ contract SigvaraOracleBondTest is Test {
         bond.depositBond(BOND);
         vm.stopPrank();
         assertEq(bond.bondOf(signer1), BOND);
-        assertEq(bond.boundTo(signer1), op1, "the binding does not move");
+        assertEq(bond.boundTo(signer1), signer1, "bound to itself once it bonds, so op1 cannot name it either");
     }
 
     /// An operator written the way a proxy that predates signers wrote it has empty signer

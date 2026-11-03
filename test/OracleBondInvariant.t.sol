@@ -139,6 +139,15 @@ contract OracleBondInvariantTest is Test {
         }
     }
 
+    /// An address holding a bond is bound to itself, whatever named it before it bonded, so no
+    /// operator can name it after it leaves.
+    function invariant_aBondedAddressIsBoundToItself() public view {
+        for (uint256 i = 0; i < handler.actorCount(); i++) {
+            address a = handler.actors(i);
+            if (bond.bondOf(a) > 0) assertEq(bond.boundTo(a), a, "a bonded address bound elsewhere");
+        }
+    }
+
     /// A signer and its operator name each other, or neither names anything.
     function invariant_signerMappingsAreSymmetric() public view {
         for (uint256 i = 0; i < handler.actorCount(); i++) {
