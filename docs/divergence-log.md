@@ -327,3 +327,44 @@ Both records predate that change, so neither carries those two fields, and neith
 retracted: they stay on `/divergence` until they age out after 30 days. `scripts/check-live.mjs`
 fails only on records whose proposal may still be rejected, so these two no longer turn the
 Live checks workflow red.
+
+---
+
+## 2026-11-03 · every agent · what the checker proposed
+
+Not a divergence: nothing here was a disagreement. It is here because it bounds what the
+disagreements above can show.
+
+**What was found.** The event index made the whole history of score proposals readable at once,
+and the operators page shows each operator's last one. The checker's last was on 1 November, which
+did not fit the docs. They said that "in normal running only the primary proposes scores".
+Counting every `ScoreProposed` on the reputation contract and reading each one's sender from its
+transaction gives this:
+
+| Sender | Proposals | First | Last |
+|---|---|---|---|
+| primary `0x6352…3943` | 227 | 18 September | 3 November |
+| checker `0x989a…172d` | 35 | 21 September | 1 November |
+
+That is all 262, with no other sender. To reproduce it:
+- `https://index.sigvara.xyz/events?address=0x6603c96275e85f724cdf74666b399365e4ca29ed&topic0=0x2ecf59b65d6c5f89b87bffff8937f2a81e253859b6b76bfd7f137c2db9b6caff,0x0f4fc0d3f795b014a93d83c4400d66dc10813958b8b0f11bf69d0b4310cd47f0`
+  lists the proposals;
+- `eth_getTransactionByHash` on each gives its sender.
+
+**Why.** Every checker proposal came within about an hour after a finalization had left the
+slot empty and before the primary proposed again. That is the first row of the checker's table in
+[oracle/README.md](../oracle/README.md#running-a-second-operator) ("none: proposes"), working as
+written. The row was meant for a silent primary, but it also fires in that ordinary gap.
+
+**What it means.** The checker recomputes the primary's pending proposals and records a
+disagreement. Nothing recomputes the checker's own, because a primary never compares (its
+`sigvara_oracle_checker_comparisons_total` stays at zero). So 35 of the 262 proposals, 13%, were
+finalized with no second computation at all. The second operator's check covered the other 227,
+not every score.
+
+**Verdict:** by design, and not a disagreement, but a coverage gap that the documents described
+wrongly. The README, the whitepaper, the security review, oracle/README.md and the epochs and
+operators pages now say what happens.
+
+Closing the gap would mean either the primary comparing what the checker proposes, or the checker
+leaving an empty slot to the primary for an epoch before it proposes. Neither has been decided.

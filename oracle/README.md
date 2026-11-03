@@ -792,7 +792,7 @@ So the second operator runs with `ORACLE_MODE=checker` and never competes for th
 
 | pending proposal | checker does |
 |---|---|
-| none | proposes — covers for a silent primary |
+| none | proposes: covers for a silent primary, and in practice for the hour after a finalization before the primary proposes again (35 of 262 proposals to 3 November 2026, none of them recomputed, since a primary never compares) |
 | agrees, window open | nothing |
 | agrees, window elapsed | finalizes |
 | **disagrees** | **records a divergence and touches nothing** |

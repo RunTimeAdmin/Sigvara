@@ -63,7 +63,9 @@ The pages fall back to what they did before:
 
 ## Running it
 
-On a host with a TLS proxy, in `/docker/sigvara-index`:
+The live one runs on `archipelago-standby` since 3 November 2026; where everything is, and what to
+do when its `/health` fails, is [operations-runbook.md, section 4](operations-runbook.md#4-event-index).
+To run one, on a host with a TLS proxy, in `/docker/sigvara-index`:
 
 1. Copy `docker-compose.indexer.vps.yml` there. Put `SIGVARA_COMMIT=<a commit on main>` in `.env`.
 2. Put the RPC URL in `./rpc_url`, one line, mode 600. For Alchemy that is `https://arc-testnet.g.alchemy.com/v2/<key>`, from an Alchemy app with Arc testnet enabled. It reaches the container as a compose secret, never as an environment variable, and the index never logs or serves it (`readRpcUrl`, `redact`).
