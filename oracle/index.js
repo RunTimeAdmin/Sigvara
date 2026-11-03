@@ -19,7 +19,7 @@ const chain = require('./chain');
 const external = require('./external');
 const { computeScore } = require('./scoring');
 const {
-  decideAction, decideCheckerAction, finalizableAtOf, scoreDivergence,
+  decideAction, decideCheckerAction, checkerGraceMs, finalizableAtOf, scoreDivergence,
   epochIntervalError, divergenceToleranceError, DEFAULT_DIVERGENCE_TOLERANCE,
   mapChunked, clockSkewError, scoringIsStale,
 } = require('./epoch-policy');
@@ -116,6 +116,9 @@ const cfg = {
   // when nothing is pending, and never finalizes or overwrites a score it disputes.
   // See decideCheckerAction in epoch-policy.js for why those two prohibitions matter.
   checkerMode:        process.env.ORACLE_MODE === 'checker',
+  // How long a checker leaves a finalizable proposal or an empty slot to the primary
+  // (checkerGraceMs in epoch-policy.js). Checked at startup in checker mode.
+  checkerGrace:       checkerGraceMs(process.env.CHECKER_GRACE_MINUTES, Number(process.env.EPOCH_HOURS || 24) * 3_600_000),
   divergenceTolerance: Number(process.env.DIVERGENCE_TOLERANCE || DEFAULT_DIVERGENCE_TOLERANCE),
   // Named in divergence records so a reader is told where the other side's evidence
   // lives, rather than having to already know the deployment's endpoint layout.
@@ -170,6 +173,11 @@ if (cfg.checkerMode) {
     console.error(`[oracle] ${tolErr}`);
     process.exit(1);
   }
+  if (cfg.checkerGrace.error) {
+    console.error(`[oracle] ${cfg.checkerGrace.error}`);
+    process.exit(1);
+  }
+  console.log(`[oracle] checker leaves finalizes and empty slots to the primary for ${cfg.checkerGrace.ms / 60_000} minutes`);
   // A checker that proposes as failover would otherwise run the primary's fee path. A fee
   // registry from before the once-per-epoch charge would debit the agent a second time for
   // one scoring epoch, and a current one would refuse the second charge while the two
@@ -308,6 +316,13 @@ function measuredFactorsFor(didHash, now, payerScores = null, events = getPaymen
 // an agent's payers repeat across epochs and within one, and each lookup is three
 // chain reads. Cleared at the start of every epoch so standings cannot go stale.
 let payerScoreCache = new Map();
+
+// A checker's memory of empty slots (decideCheckerAction): when it first found each agent's
+// slot empty, in chain seconds, and which agents it is covering because it finalized their
+// proposal itself once the primary was a grace late. In memory only. A restart forgets both,
+// which delays failover by one grace and never brings it forward.
+const emptySeenAt = new Map();
+const coveringLate = new Set();
 
 async function payerScoresFor(didHash) {
   if (!payments.required(paymentCfg)) return null;
@@ -899,6 +914,7 @@ async function runEpochInner() {
           // the propose below uses proposeIfEmpty, which reverts rather than replacing a
           // proposal that lands in the remaining gap.
           let freshPending = await chain.getPendingScore(didHash);
+          let coveringStranded = false;
 
           // A proposal whose proposer has lost its authority holds the slot in name only. It
           // can never be finalized, and the contract lets proposeIfEmpty replace it, which is
@@ -915,6 +931,7 @@ async function runEpochInner() {
               console.log(`[oracle]   ${didHash.slice(0, 10)}… the pending proposal's proposer is no longer authorized; covering for it`);
               metrics.inc('proposalsStranded');
               freshPending = { exists: false, proposedAt: 0, data: {}, evidenceRoot: null };
+              coveringStranded = true;
             }
           }
 
@@ -955,7 +972,27 @@ async function runEpochInner() {
           // auditScores for every comparison; `scores` stays as-is for the propose path
           // below, because covering a silent primary means proposing a CURRENT score, not
           // a reconstruction of some past moment.
-          const decision = decideCheckerAction(freshPending, auditScores, challengeWindow, chainNow, cfg.divergenceTolerance);
+          // When the slot became empty, as far as this checker can tell: the last finalized
+          // score, registration for an agent never scored, or the first epoch it found the slot
+          // empty, whichever is latest. The last is what catches a slot emptied by anything but a
+          // finalize. A committee rejection deletes the proposal and leaves lastUpdated where it
+          // was, and so does a stretch the primary skipped an agent while it was unbonded or
+          // uncovered; counted from lastUpdated, either looked like a primary days late.
+          // A slot held by a stranded proposer counts as empty at once, and so does one this
+          // checker emptied itself by finalizing for a primary that was already a grace late.
+          let emptySince = 0;
+          if (freshPending.exists) {
+            emptySeenAt.delete(didHash);
+            coveringLate.delete(didHash);
+          } else if (!coveringStranded && !coveringLate.has(didHash)) {
+            if (!emptySeenAt.has(didHash)) emptySeenAt.set(didHash, chainNow);
+            const rep = await chain.getReputationData(didHash);
+            emptySince = Math.max(Number(registeredAt) || 0, Number(rep.lastUpdated) || 0, emptySeenAt.get(didHash));
+          }
+          const graceSeconds = cfg.checkerGrace.ms / 1000;
+          const decision = decideCheckerAction(
+            freshPending, auditScores, challengeWindow, chainNow, cfg.divergenceTolerance, { graceSeconds, emptySince },
+          );
 
           if (decision === 'diverged') {
             const d = scoreDivergence(freshPending.data, auditScores);
@@ -997,6 +1034,22 @@ async function runEpochInner() {
             continue;
           }
 
+          // Not yet late. The primary finalizes and proposes again in one epoch, so a checker that
+          // finalized first emptied the slot and then often proposed into it ahead of the primary,
+          // a score nothing recomputes. It waits out the grace instead (decideCheckerAction).
+          if (decision === 'defer-finalize') {
+            metrics.inc('checkerAgreed');
+            metrics.inc('checkerDeferredFinalize');
+            const at = finalizableAtOf(freshPending, challengeWindow) + graceSeconds;
+            console.log(`[oracle]   ${didHash.slice(0, 10)}… agreed; leaving the finalize to the primary until ${new Date(at * 1000).toISOString()}`);
+            continue;
+          }
+          if (decision === 'defer-propose') {
+            metrics.inc('checkerDeferredPropose');
+            console.log(`[oracle]   ${didHash.slice(0, 10)}… slot empty, counted from ${new Date(emptySince * 1000).toISOString()}; leaving it to the primary until ${new Date((emptySince + graceSeconds) * 1000).toISOString()}`);
+            continue;
+          }
+
           if (decision === 'finalize') {
             // Agreed, and the window is up. Finalizing is permissionless and this oracle
             // has checked the number itself, which is the only condition under which a
@@ -1015,6 +1068,9 @@ async function runEpochInner() {
               console.log(`[oracle]   ${didHash.slice(0, 10)}… agreed, finalized tx=${finalizeTx.slice(0, 10)}…`);
               finalized++;
               metrics.inc('finalizeSuccesses');
+              // The primary was a grace late with this one, so the slot this leaves is covered at
+              // the next epoch rather than after a second grace.
+              coveringLate.add(didHash);
             } catch (finalizeErr) {
               // Same distinction as the propose path, and checked before the pending
               // re-read: a throttled send never reached the chain, so the slot is still

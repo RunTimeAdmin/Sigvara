@@ -41,6 +41,7 @@ const NUMERIC = [
   ['MAX_FEE_GWEI', 'num', 0.000001],
   ['MAX_TX_COST', 'num', 0.000001],
   ['MAX_CLOCK_SKEW_SECONDS', 'num', 1],
+  ['CHECKER_GRACE_MINUTES', 'num', 0],
   // The watcher's. POLL_SECONDS is also checked there, with its own message.
   ['POLL_SECONDS', 'num', 30],
   ['MAX_SILENCE_MINUTES', 'num', 1],
