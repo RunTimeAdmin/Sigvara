@@ -1,8 +1,8 @@
 # Operations runbook
 
 For the two oracle operators on the Arc testnet: keeping and restoring state, payer-signed
-outcomes that are slow to reach the other operator, the two operators disagreeing, and the event
-index the explorer pages read (section 4). A stolen
+outcomes that are slow to reach the other operator, the two operators disagreeing, the event
+index the explorer pages read (section 4), and the ERC-8004 publisher (section 5). A stolen
 key is [incident-operator-key.md](incident-operator-key.md); bringing up an operator is
 [oracle/RUNBOOK-second-operator.md](../oracle/RUNBOOK-second-operator.md).
 
@@ -396,3 +396,66 @@ read `.env` again.
 stopped at block 70,337,205 (`INDEX_STALLED_AT` in `site/assets/explorer.js`). Once its v2 API
 shows the identity contract's `AgentRegistered` logs in blocks 70,385,000 to 70,388,999, that line
 can go, and the fallback goes back to reading only the newest blocks from the chain.
+
+## 5. ERC-8004 publisher
+
+`oracle/publisher.js` posts the spendable score of each agent linked on chain to the ERC-8004
+Reputation Registry, tagged `sigvara` / `score`, from the address named as the `agentWallet` of
+Sigvara's own registration (agent 897764). The design and David's decisions are in
+[ADR 0008](adr/0008-sigvara-as-erc8004-signal-provider.md).
+
+| | |
+|---|---|
+| Where | The primary's host, `/docker/sigvara-publisher`, from `docker-compose.publisher.vps.yml` and `oracle/.env.publisher.example`. One copy only, never on the checker. |
+| Container | `sigvara-publisher` |
+| State volume | `sigvara-publisher_publisher_state` (`/data/publisher-state.json`: the score-event and link scan positions, what is pending, and what was posted to which 8004 agent). The positions can be rebuilt from the chain; the record of where each score went cannot, and without it a score left on an 8004 agent that is no longer linked is not revoked. Back it up with the oracle state (section 1). |
+| Key | None on this host. In live mode a remote signer on another host, backed by a KMS or HSM, signs at `PUBLISH_SIGNER_URL` |
+
+**Shadow mode** (`PUBLISH_MODE=shadow`, the default) reads everything and sends nothing. Each run
+logs `[publisher] run: N planned, 0 sent, M skipped (reason: count, ...)`, and each post it would
+make as `shadow: agent <id> ← <score>`. Until an agent is linked on chain, every scored agent is
+skipped as `not linked on chain`. It also says what would stop live mode, which until the steps
+below are done is `the registration's agentWallet is 0x18CB...4811, not the publisher`.
+
+**Going live**, in this order. Each step is David's go.
+
+1. Create the publisher key in the remote signer and note its address. Point `PUBLISHER_ADDRESS`
+   and `PUBLISH_SIGNER_URL` at it, and fund it with testnet USDC above `PUBLISH_MIN_BALANCE`. The
+   publisher refuses any signed transaction other than the one it asked for, but a compromised
+   publisher host can ask for anything, so the signer must enforce its own policy too: only type-2
+   transactions to the ERC-8004 Reputation Registry, calling `giveFeedback` or `revokeFeedback`,
+   with no value.
+2. Make it the registration's `agentWallet`: the publisher key signs the EIP-712 message
+   `setAgentWallet` asks for, and the registration's owner (the deployer) sends
+   `setAgentWallet(897764, publisher, deadline, signature)`. Check with
+   `cast call 0x8004A818BFB912233c491871b3d84c89A494BD9e "getAgentWallet(uint256)(address)" 897764`.
+   No script does this yet.
+3. One end-to-end cycle: set `PUBLISH_MODE=live` and `PUBLISH_ALLOW_AGENT_IDS` to one test agent
+   linked on chain, and `docker compose up -d`. The first run in live mode reads every scored
+   agent again. After it, read the result back:
+   `cast call 0x8004B663056A597Dffe9eCcC1965A193B7388713 "getSummary(uint256,address[],string,string)(uint64,int128,uint8)" <agent> "[<publisher>]" sigvara score`
+   must return a count of 1 and the agent's spendable score. Then change its score, or wait for the
+   daily refresh, and check that the old feedback is revoked and the count is still 1.
+4. Empty `PUBLISH_ALLOW_AGENT_IDS` and redeploy.
+
+**When it stops posting**, the log says why:
+- `posting blocked: ...` is a failed gate: the `agentWallet` changed, the signer is not answering
+  or signs as another address, the balance is below the floor, or a transaction of the publisher's
+  is still pending. Nothing is sent until it passes, and the agents wait. A pending transaction
+  that never settles needs a look by hand: sending around it is how one update becomes two. Find
+  its nonce (`cast nonce <publisher> --block pending` against `--block latest`), and once it is
+  clearly stuck, have the signer replace it with a zero-value transaction from the publisher to
+  itself at that nonce and a higher fee. When it has settled, the next run reads what landed, and
+  revokes any duplicate it finds.
+- `the link scan has not reached block ...` means the link scan failed this run. It resumes at the
+  next.
+- `<didHash> not published this run: ...` is one agent's read or transaction failing. It is tried
+  again next run. A failed transaction also ends the run, before the next agent's revoke goes out.
+  A revoke whose post failed is finished by the retry without a second revoke.
+
+An agent that unlinks has its score revoked on the 8004 agent it was posted to, and after a slash
+that 8004 agent is set to 0 whatever the link says by then.
+
+**Rotating the key**: create a new key in the signer, repeat step 2 with it, and set
+`PUBLISHER_ADDRESS` to it. Consumers that read `getAgentWallet(897764)` follow at once. The new
+address has posted nothing, so the next daily refresh posts every linked agent's score from it.

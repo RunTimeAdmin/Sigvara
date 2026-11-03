@@ -1,0 +1,74 @@
+# ERC-8004 publisher, shaped for a bare VPS (oracle/publisher.js, docs/adr/0008).
+#
+# Like the watcher, this fetches ONE PINNED COMMIT of the public repository inside the
+# container. Which code runs is decided by SIGVARA_COMMIT in .env: the full 40-character hash
+# of a commit on main that someone has read. A deploy is:
+#
+#   1. change SIGVARA_COMMIT in .env
+#   2. docker compose up -d        (a plain restart does NOT re-read .env)
+#   3. read the log: "[deploy] running <that hash>", then "[publisher] shadow mode" or "live mode"
+#
+# Run exactly one, beside the primary. The checker never runs one: a second publisher with the
+# same key races the first for nonces, and one with another key is a second, unnamed provider.
+#
+# It holds no private key. In shadow mode (the default) it signs nothing at all; in live mode it
+# asks the remote signer at PUBLISH_SIGNER_URL, on another host, which keeps the key in a KMS or
+# HSM. A compromised publisher host can ask for signatures while it is compromised but cannot
+# take the key away. The state volume holds what it has read and posted. Its scan positions can
+# be rebuilt from the chain; its record of which 8004 agent each score went to cannot, and without
+# it a score left on an 8004 agent that is no longer linked stays there. Back the volume up.
+#
+#   cd /docker/sigvara-publisher && docker compose up -d
+services:
+  publisher:
+    image: node:20-alpine
+    container_name: sigvara-publisher
+    restart: unless-stopped
+    working_dir: /app
+    init: true
+    env_file:
+      - .env
+    environment:
+      SIGVARA_COMMIT: ${SIGVARA_COMMIT:?set SIGVARA_COMMIT in .env to the full 40-character commit hash}
+      PUBLISH_STATE_PATH: /data/publisher-state.json
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - NET_RAW
+    mem_limit: 256m
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+    command:
+      - sh
+      - -c
+      - |
+        set -eu
+        case "$${SIGVARA_COMMIT:-}" in ""|*[!0-9a-f]*) echo "[deploy] SIGVARA_COMMIT must be 40 lowercase hex characters" >&2; exit 1;; esac
+        [ "$${#SIGVARA_COMMIT}" -eq 40 ] || { echo "[deploy] SIGVARA_COMMIT must be 40 characters" >&2; exit 1; }
+        apk add --no-cache git >/dev/null
+        rm -rf /src && mkdir /src && cd /src
+        git init -q
+        git remote add origin https://github.com/RunTimeAdmin/Sigvara.git
+        git fetch -q --depth 1 origin "$$SIGVARA_COMMIT"
+        git checkout -q --detach FETCH_HEAD
+        [ "$$(git rev-parse HEAD)" = "$$SIGVARA_COMMIT" ] || { echo "[deploy] checkout is not $$SIGVARA_COMMIT, refusing to start" >&2; exit 1; }
+        rm -rf /app/node_modules /app/*.js /app/package.json /app/package-lock.json
+        cp /src/oracle/*.js /src/oracle/package.json /src/oracle/package-lock.json /app/
+        rm -f /app/*.test.js
+        cd /app
+        # npm ci installs exactly the committed lockfile; --ignore-scripts keeps dependencies
+        # from running code at install time.
+        npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+        echo "[deploy] running $$SIGVARA_COMMIT"
+        exec node publisher.js
+    volumes:
+      - publisher_app:/app
+      - publisher_state:/data
+
+volumes:
+  publisher_app:
+  publisher_state:
