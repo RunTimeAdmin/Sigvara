@@ -8,6 +8,7 @@
 const { test, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const net = require('node:net');
 const { ethers } = require('ethers');
 const { World, startOracle, wallet, ASSET } = require('./test-support/oracle-harness');
 const { TRANSFER_TOPIC } = require('./payments');
@@ -206,9 +207,43 @@ test('in shadow mode the scan reports what it would credit, and the epoch is not
   });
   oracle = await startOracle({ world, env: env(base.url, { [`PAYMENT_CHAIN_${BASE}_MODE`]: 'shadow' }) });
   await waitFor(/\[oracle\] epoch done/);
-  assert.match(oracle.logs(), new RegExp(`payment chain ${BASE} \\(shadow\\) .*: 1 would credit`));
+  await waitFor(new RegExp(`payment chain ${BASE} \\(shadow\\) .*: 1 would credit`));
   const ev = await oracle.call('GET', `/evidence/${agent.didHash}`);
   assert.equal(ev.body.count, 0, 'nothing was credited');
+  // That run has ended, so a later epoch scans again.
+  const asked = () => base.calls.filter((c) => c === 'eth_chainId').length;
+  const before = asked();
+  const deadline = Date.now() + 10_000;
+  while (asked() === before) {
+    if (Date.now() > deadline) throw new Error('no later epoch scanned the chain');
+    await oracle.call('POST', '/epoch', {}, ADMIN);
+    await new Promise((r) => setTimeout(r, 200));
+  }
+});
+
+test('a chain in shadow runs beside the epoch, so a hung endpoint cannot hold up a score', async () => {
+  const world = new World();
+  world.addRegisteredAgent();
+  // Takes the connection and never answers. Scanned inside the epoch, this would hold it for two minutes.
+  const sockets = [];
+  const hung = net.createServer((s) => { s.on('error', () => {}); sockets.push(s); });
+  await new Promise((resolve) => hung.listen(0, '127.0.0.1', resolve));
+  try {
+    const url = `http://127.0.0.1:${hung.address().port}/v2/SECRET-KEY`;
+    oracle = await startOracle({ world, env: env(url, { [`PAYMENT_CHAIN_${BASE}_MODE`]: 'shadow' }) });
+    await waitFor(/\[oracle\] epoch done/);
+    const opened = sockets.length;
+    assert.ok(opened > 0, 'the scan had started');
+    // It is still waiting, so another epoch leaves it to finish rather than starting a second.
+    assert.equal((await oracle.call('POST', '/epoch', {}, ADMIN)).status, 202);
+    await waitFor(/\[oracle\] epoch done[\s\S]*\[oracle\] epoch done/);
+    assert.equal(sockets.length, opened);
+  } finally {
+    if (oracle) await oracle.stop();
+    oracle = null;
+    sockets.forEach((s) => s.destroy());
+    hung.close();
+  }
 });
 
 test('a payment chain that is the scored chain, or set up without EXPECTED_CHAIN_ID, stops the process', async () => {
@@ -550,15 +585,15 @@ test('a scan that cannot move is run again once per cut-off, not once per agent'
   assert.equal(failures, 2, `the epoch's scan and one more:\n${oracle.logs()}`);
 });
 
-test('each payment chain is scanned before the scored chain, so a slow one does not widen the gap before scoring', async () => {
+test('a payment chain that is on is scanned before the scored chain, so a slow one does not widen the gap before scoring', async () => {
   const world = new World();
   world.addRegisteredAgent();
   const now = world.data.nowSec;
   base = await healthyBase(now);
-  oracle = await startOracle({ world, env: env(base.url, { [`PAYMENT_CHAIN_${BASE}_MODE`]: 'shadow' }) });
+  oracle = await startOracle({ world, env: env(base.url) });
   await waitFor(/\[oracle\] epoch done/);
   const logs = oracle.logs();
-  assert.ok(logs.indexOf(`payment chain ${BASE} (shadow)`) < logs.indexOf('payment scan '), logs);
+  assert.ok(logs.indexOf(`payment chain ${BASE} (on)`) < logs.indexOf('payment scan '), logs);
 });
 
 test('a checker agrees with a primary: it finds the cut-off, whatever order it credited the payments in', async () => {
