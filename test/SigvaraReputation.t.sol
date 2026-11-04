@@ -1254,7 +1254,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
     }
 
     /// Arc timestamps have one second granularity and consecutive blocks can share one. A sale
-    /// accepted in the same second as a finalize has operatorChangedAt == maturedAt, which a
+    /// accepted in the same second as a finalize can have operatorChangedAt == maturedAt, which a
     /// strict comparison read as "no handover since the anchor was set", so the buyer kept
     /// the anchor the seller had matured.
     function test_maturity_restartsWhenTheSaleSharesTheFinalizeTimestamp() public {

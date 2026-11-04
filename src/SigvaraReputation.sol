@@ -699,12 +699,13 @@ contract SigvaraReputation is Initializable, TimelockedGrants, UUPSUpgradeable, 
     }
 
     /**
-     * @dev The spendable score, and when it stood at that score, which is where a finalize restarts
-     *      the clock. Partway to the next point that is before now, so a finalize keeps the time
-     *      built up toward it. Dropping it would make the rate depend on how often an agent is
-     *      finalized, and a gap too short to release a point would release nothing, ever. The time
-     *      kept rounds down to a whole second, so it can lose a second a finalize and never gain one.
-     *      It counts from any sale before now, so the clock stays at or after that sale.
+     * @dev The spendable score, and where a finalize restarts the clock. That is now, unless the score
+     *      is partway to the next point, when it is the moment the agent reached this score, so a
+     *      finalize keeps the time built up toward that point. Dropping it would make the rate depend
+     *      on how often an agent is finalized, and a gap too short to release a point would release
+     *      nothing, ever. The time kept rounds down to a whole second, so it can lose a second a
+     *      finalize and never gain one. It counts from any sale before now, so the clock stays at or
+     *      after that sale.
      */
     function _maturity(bytes32 didHash) internal view returns (uint8 spendable, uint256 clock) {
         uint8 earned = getEarnedScore(didHash);
@@ -722,7 +723,7 @@ contract SigvaraReputation is Initializable, TimelockedGrants, UUPSUpgradeable, 
         // or one that had fallen below its anchor, went to the buyer whole.
         //
         // `>=`, not `>`. Arc timestamps have one second granularity and consecutive blocks
-        // can share one, so a sale accepted in the same second as a finalize has
+        // can share one, so a sale accepted in the same second as a finalize can have
         // operatorChangedAt == maturedAt. That finalize anchored what the SELLER had
         // matured. A finalize that runs after the sale re-anchors from the restarted value,
         // so treating equality as a handover costs nothing there and closes the other order.
