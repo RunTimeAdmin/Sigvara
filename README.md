@@ -2,7 +2,7 @@
 
 **Computed reputation and staked slashing for autonomous AI agents, on top of ERC-8004.**
 
-[Website](https://sigvara.xyz) · [Quickstart](docs/quickstart.md) · [Live demo](https://sigvara.xyz/demo) · [Check an agent](https://sigvara.xyz/check) · [Explorer](https://sigvara.xyz/agents) · [SDK on npm](https://www.npmjs.com/package/@sigvara/protocol-sdk) · [Wiki](https://github.com/RunTimeAdmin/Sigvara/wiki)
+[Website](https://sigvara.xyz) · [Quickstart](docs/quickstart.md) · [Live demo](https://sigvara.xyz/demo) · [Check an agent](https://sigvara.xyz/check) · [Explorer](https://sigvara.xyz/agents) · [Status](https://sigvara.xyz/status) · [SDK on npm](https://www.npmjs.com/package/@sigvara/protocol-sdk) · [Wiki](https://github.com/RunTimeAdmin/Sigvara/wiki)
 
 As AI agents become independent economic actors, they need a trust score that means something and accountability that costs something. [ERC-8004](https://eips.ethereum.org/EIPS/eip-8004) gives agents a standard on-chain identity and a raw feedback ledger, but deliberately leaves out the hard parts: computing a trustworthy score from that feedback, and putting slashable stake behind it. Sigvara is that layer. It takes ERC-8004 as the identity and feedback substrate, computes a normalized reputation score with an oracle, and enforces bonds and slashing — the accountability the standard omits. (Ed25519 PKI challenge-response for agent-to-agent auth rides alongside.)
 
@@ -601,7 +601,7 @@ Everything below runs offline, with no deployed contracts, except three fork sui
 | Suite | Count | Command |
 |---|---|---|
 | Contracts: unit, fuzz, E2E, upgrade, deploy-script, handover and 21 invariants | 748 | `forge test` |
-| Oracle | 1096 | `cd oracle && node --test` |
+| Oracle | 1117 | `cd oracle && node --test` |
 | SDK | 300 | `cd packages/sdk && npx vitest run` |
 
 Counts are individual tests as measured on 4 November 2026, so each of the 21 invariants counts once. Without a fork URL, 736 of the contract tests run and 12 skip. Run after `npm run build`, 291 of the SDK's 300 pass and 9 skip: the 8 integration tests, which need a live deployment, and one check that runs only in CI. Without a build, the 8 built-package tests skip too. Vitest strips types without checking them, so `npm run typecheck` in `packages/sdk` checks the tests against the SDK's types as well as the sources. [`scripts/mutation`](scripts/mutation/README.md) holds the harnesses that measure whether these tests would catch a deliberate break in the contracts or deploy scripts.

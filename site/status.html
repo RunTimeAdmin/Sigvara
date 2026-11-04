@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Status | Sigvara</title>
+  <meta name="description" content="Whether Sigvara's Arc testnet services are running: the oracle operators and their last epoch, disagreements between them, and how far behind the event index is, read live from their public endpoints." />
+  <link rel="canonical" href="https://sigvara.xyz/status" />
+  <meta property="og:title" content="Status | Sigvara" />
+  <meta property="og:description" content="Whether Sigvara's Arc testnet services are running: the oracle operators and their last epoch, disagreements between them, and how far behind the event index is, read live from their public endpoints." />
+  <meta property="og:url" content="https://sigvara.xyz/status" />
+  <meta property="og:image" content="https://sigvara.xyz/assets/sigvara-card.png" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:image" content="https://sigvara.xyz/assets/sigvara-card.png" />
+  <meta property="og:type" content="website" />
+  <link rel="icon" type="image/svg+xml" href="./assets/sigvara-avatar.svg" />
+  <link rel="icon" type="image/png" sizes="512x512" href="assets/sigvara-card.png" />
+  <link rel="apple-touch-icon" href="assets/sigvara-card.png" />
+  <link rel="stylesheet" href="assets/style.css?v=4d3c26f" />
+  <link rel="stylesheet" href="assets/app.css?v=ac69814" />
+  <link rel="stylesheet" href="assets/epochs.css?v=6081b79" />
+  <link rel="stylesheet" href="assets/explorer.css?v=simview1" />
+</head>
+<body>
+
+<nav>
+  <div class="nav-inner">
+    <a href="./" class="logo" aria-label="Sigvara home"><svg class="brand-mark" viewBox="0 0 64 64" role="img" aria-label="Sigvara mark"><defs><linearGradient id="brand-gradient" x1="8" y1="8" x2="56" y2="56" gradientUnits="userSpaceOnUse"><stop stop-color="#c5b7ff"/><stop offset=".55" stop-color="#9475ff"/><stop offset="1" stop-color="#6fe5ea"/></linearGradient></defs><rect x="1" y="1" width="62" height="62" rx="19" fill="#15172b" stroke="rgba(197,183,255,.25)"/><path d="M46.5 20.5c-4.5-5-12.5-6.8-19.2-4.1-6.5 2.7-8.5 9.4-3.4 13.2 2.3 1.7 5.1 2.1 8.7 2.7 5.8.9 8 2.6 7.1 6.2-1.1 4.6-7.4 7-12.9 5.8-3.4-.8-6-2.4-8.2-5.3" fill="none" stroke="url(#brand-gradient)" stroke-width="5.2" stroke-linecap="round"/><circle cx="47" cy="20" r="3.1" fill="#6fe5ea"/><circle cx="18.5" cy="39" r="3.1" fill="#c5b7ff"/></svg><span class="wordmark">sig<span class="accent">vara</span></span></a>
+    <ul class="nav-links">
+      <li><a href="testnet">Run an agent</a></li>
+      <li><a href="./#protocol">Protocol</a></li>
+      <li><a href="agents">Explorer</a></li>
+      <li><a href="demo">Demo</a></li>
+      <li><a href="docs/quickstart">Docs</a></li>
+      <li><a href="https://github.com/RunTimeAdmin/Sigvara" rel="noopener">Source</a></li>
+      <li><a href="check" class="nav-cta">Check an agent</a></li>
+    </ul>
+  </div>
+</nav>
+
+<div class="app-wrap">
+  <ul class="ex-tabs">
+    <li><a href="agents">Agents</a></li>
+    <li><a href="operators">Operators</a></li>
+    <li><a href="slashes">Slashes</a></li>
+    <li><a href="simulation">Simulation</a></li>
+    <li><a href="epochs">Score epochs</a></li>
+    <li><a href="status" aria-current="page">Status</a></li>
+  </ul>
+  <h1 class="u-h1-28">Status</h1>
+  <p class="ep-lede">Whether Sigvara's testnet services are running. Your browser reads each one from its public endpoint when this page opens, and nothing is kept or summarised in between.</p>
+  <p class="netnote">Arc testnet (5042002). Reads only. The Sigvara team runs both oracle operators and the event index, so this is their own report of themselves, and each line links to where it came from. The same limits are checked from outside, on a schedule, by <a href="https://github.com/RunTimeAdmin/Sigvara/actions/workflows/live-checks.yml" target="_blank" rel="noopener">the live checks workflow</a>.</p>
+
+  <div class="app-card" id="statusCard">
+    <h2>Right now</h2>
+    <div class="card-body" aria-live="polite"><p class="netnote">Reading…</p></div>
+  </div>
+</div>
+
+<footer>
+  <div class="footer-inner">
+    <div class="footer-left">
+      <a class="u-mono-13" href="./">sigvara.xyz</a> &nbsp;·&nbsp; MIT License
+    </div>
+    <div class="footer-links">
+      <a href="docs/quickstart">Quickstart</a>
+      <a href="docs/reputation">Reputation</a>
+      <a href="https://github.com/RunTimeAdmin/Sigvara" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </div>
+</footer>
+
+<script src="assets/did.js?v=32000f8"></script>
+<script src="assets/explorer.js?v=status1"></script>
+<script src="assets/status.js?v=status1"></script>
+</body>
+</html>
