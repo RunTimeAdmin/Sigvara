@@ -21,7 +21,7 @@
 #   cd /docker/sigvara-publisher && docker compose up -d
 services:
   publisher:
-    image: node:20-alpine
+    image: node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53
     container_name: sigvara-publisher
     restart: unless-stopped
     working_dir: /app
@@ -80,7 +80,7 @@ services:
   # alone. A dropped link is retried in place, waiting longer each time it fails quickly, so a bad
   # key does not hammer that host's sshd (and its fail2ban) from the address the backups use.
   signer-tunnel:
-    image: alpine:3.22
+    image: alpine:3.22@sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f
     container_name: sigvara-signer-tunnel
     restart: unless-stopped
     init: true
@@ -88,8 +88,16 @@ services:
       SIGNER_SSH: ${SIGNER_SSH:?set SIGNER_SSH in .env to user@host of the signer's tunnel account}
     security_opt:
       - no-new-privileges:true
+    # Root only to install ssh and hand a copy of the key to uid 10002; then su-exec drops to it,
+    # and ssh runs with no capabilities at all.
     cap_drop:
-      - NET_RAW
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+    tmpfs:
+      - /run/tunnel:size=64k,mode=0700
     mem_limit: 64m
     pids_limit: 32
     logging:
@@ -102,14 +110,25 @@ services:
       - -c
       - |
         set -eu
-        apk add --no-cache openssh-client >/dev/null
+        apk add --no-cache openssh-client su-exec >/dev/null
+        # ssh refuses a uid with no passwd entry. This one owns nothing but the copies below.
+        grep -q '^tunnel:' /etc/passwd || adduser -D -H -h /run/tunnel -s /sbin/nologin -u 10002 tunnel
+        # The files are root's, read-only here. Copied while root still owns the folder, then
+        # handed over: chmod before chown, as root without CAP_FOWNER cannot chmod what it gave away.
+        for f in id_ed25519 known_hosts; do
+          cp "/tunnel/$$f" "/run/tunnel/$$f"
+          chmod 0400 "/run/tunnel/$$f"
+          chown 10002:10002 "/run/tunnel/$$f"
+        done
+        chown 10002:10002 /run/tunnel
+        cat > /usr/local/bin/signer-tunnel <<'EOF'
         delay=60
         while :; do
-          echo "[tunnel] forwarding signer-tunnel:28600 to 127.0.0.1:28600 on $$SIGNER_SSH"
+          echo "[tunnel] forwarding signer-tunnel:28600 to 127.0.0.1:28600 on $$SIGNER_SSH, as uid $$(id -u)"
           started=$$(date +%s)
-          ssh -N -T -i /tunnel/id_ed25519 \
+          ssh -N -T -i /run/tunnel/id_ed25519 \
             -o IdentitiesOnly=yes -o BatchMode=yes \
-            -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/tunnel/known_hosts \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/run/tunnel/known_hosts \
             -o GlobalKnownHostsFile=/dev/null -o HostKeyAlgorithms=ssh-ed25519 \
             -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
             -L 0.0.0.0:28600:127.0.0.1:28600 "$$SIGNER_SSH" || true
@@ -119,6 +138,8 @@ services:
           sleep "$$delay"
           delay=$$(( delay * 2 > 900 ? 900 : delay * 2 ))
         done
+        EOF
+        exec su-exec 10002:10002 sh /usr/local/bin/signer-tunnel
     volumes:
       - ./secrets/tunnel:/tunnel:ro
 
