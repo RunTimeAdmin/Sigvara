@@ -186,9 +186,11 @@ function decodeTransfer(log, asset) {
  *          for THAT agent. One transaction can pay several, so the hash alone is not
  *          the question being asked.
  *   @param {bigint} opts.minAmount
+ *   @param {(didHash:string) => number|null} [opts.registeredBlockOf] didHash -> the block it
+ *          registered in, on the chain these transfers are from
  */
 function planCredits(decoded, opts) {
-  const { didHashOf, operatorOf = () => null, isUsed = () => false, minAmount = 0n } = opts;
+  const { didHashOf, operatorOf = () => null, isUsed = () => false, minAmount = 0n, registeredBlockOf = () => null } = opts;
 
   // (txHash, recipient, sender) -> accumulated
   //
@@ -239,6 +241,11 @@ function planCredits(decoded, opts) {
     if (lower(g.from) === lower(g.to)) { reject('self_payment'); continue; }
     const operator = operatorOf(g.didHash);
     if (operator && lower(g.from) === lower(operator)) { reject('self_payment'); continue; }
+    // Paid before the address was an agent. An operator that scanned this block before the registration
+    // does not know the agent and credits nothing, and one that scanned it after would credit it, so
+    // whether it counted would depend on when each one looked. The registration's own block counts.
+    const registeredBlock = registeredBlockOf(g.didHash);
+    if (Number.isInteger(registeredBlock) && g.blockNumber < registeredBlock) { reject('before_registration'); continue; }
 
     credits.push({
       didHash: g.didHash,

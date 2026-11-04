@@ -18,8 +18,9 @@
  *   - When that is asked. Code on this chain is read at the payment's block, and on the scored chain
  *     at the block the agent registered in, so the answer does not depend on when an operator scanned.
  *   - Registration. A payment made before the agent registered is skipped as
- *     `before_registration`. Otherwise whether it counted would depend on whether an operator
- *     happened to scan its block before or after the registration.
+ *     `before_registration`, as on the scored chain, though by the block's time and not its number,
+ *     since a payment chain's blocks are not the scored chain's. Otherwise whether it counted would
+ *     depend on whether an operator happened to scan its block before or after the registration.
  *   - Units. Each chain names its own asset and fee unit, and amounts are converted into the
  *     scored chain's fee units before evidence from different chains is added up (forScoring).
  *   - Timing. A payment chain's evidence enters a score only once it is older than the chain's

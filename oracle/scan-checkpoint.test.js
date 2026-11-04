@@ -9,7 +9,9 @@
 
 const { test, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
+const { ethers } = require('ethers');
 const { World, startOracle, wallet, ASSET } = require('./test-support/oracle-harness');
+const { TRANSFER_TOPIC } = require('./payments');
 
 const USDC = 1_000_000n;
 const ADMIN = 'a'.repeat(64);
@@ -85,4 +87,30 @@ test('a canary that passes lets the checkpoint advance', async () => {
 
   assert.match(oracle.logs(), /canary passed/);
   assert.equal(savedCheckpoint(), HEAD + 100 - CONFIRMATIONS, 'the empty range was proved empty and is done');
+});
+
+test('a payment made before the agent registered is skipped, and the scan goes on past it', async () => {
+  const world = new World();
+  const registeredBlock = HEAD - 500;
+  const agent = world.addRegisteredAgent({ registeredBlock });
+  const payer = wallet();
+  const log = (block) => ({
+    address: ASSET,
+    topics: [TRANSFER_TOPIC, ethers.zeroPadValue(payer, 32), ethers.zeroPadValue(agent.agentAddress, 32)],
+    data: ethers.toBeHex(5n * USDC, 32),
+    blockNumber: block,
+    transactionHash: ethers.id(`pay-${block}`),
+    logIndex: 0,
+    removed: false,
+  });
+  world.set('scanLogs', [log(registeredBlock - 1), log(registeredBlock), log(registeredBlock + 1)]);
+  oracle = await startOracle({ world, env: ENV });
+  await waitForEpochs(1);
+  assert.match(oracle.logs(), /payment scan \d+-\d+: 2 credited, 1 skipped .*"before_registration":1/);
+  assert.equal(savedCheckpoint(), HEAD - CONFIRMATIONS);
+  const evidence = await oracle.call('GET', `/evidence/${agent.didHash}`);
+  assert.deepEqual(
+    evidence.body.evidence.map((e) => e.txHash).sort(),
+    [ethers.id(`pay-${registeredBlock}`), ethers.id(`pay-${registeredBlock + 1}`)].sort(),
+  );
 });

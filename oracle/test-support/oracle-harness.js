@@ -48,7 +48,7 @@ class World {
   }
 
   /** A registered, active agent. Returns its didHash, addresses and registration age. */
-  addAgent({ registeredDaysAgo = 400 } = {}) {
+  addAgent({ registeredDaysAgo = 400, registeredBlock } = {}) {
     const operator = wallet();
     const agentAddress = wallet();
     const didHash = ethers.id(`agent-${agentAddress}`);
@@ -57,6 +57,7 @@ class World {
       agentAddress,
       registeredAt: this.data.nowSec - registeredDaysAgo * 86_400,
       status: 0,
+      ...(registeredBlock === undefined ? {} : { registeredBlock }),
     };
     this.flush();
     return { didHash, operator, agentAddress };
