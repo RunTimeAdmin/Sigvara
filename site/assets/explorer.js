@@ -140,6 +140,39 @@
     ? `<a href="${EXPLORER}/tx/${h}" target="_blank" rel="noopener"><code>${short(h)}</code></a>` : "");
   const addrLink = (a) => (isAddr(a)
     ? `<a href="${EXPLORER}/address/${a}" target="_blank" rel="noopener"><code>${short(a)}</code></a>` : "?");
+  // Chains whose payments the oracle can count beside this one's (ADR 0009), so that a payment
+  // from one is shown in its own asset and linked to its own explorer.
+  const PAYMENT_CHAINS = {
+    84532: { name: "Base Sepolia", symbol: "USDC", decimals: 6, explorer: "https://sepolia.basescan.org" },
+    8453: { name: "Base", symbol: "USDC", decimals: 6, explorer: "https://basescan.org" },
+  };
+  const paymentChainOf = (e) => (e?.chainId == null ? null : PAYMENT_CHAINS[e.chainId] ?? { name: `chain ${e.chainId}` });
+  // A payment's amount in its own asset: test SVR here, or the payment chain's.
+  function fmtAmount(e) {
+    const c = paymentChainOf(e);
+    if (!c) return fmtSvr(e?.amount);
+    try {
+      const v = BigInt(e.amount);
+      if (!c.decimals) return `${v} base units on ${c.name}`;
+      const d = 10n ** BigInt(c.decimals);
+      // Every decimal that is not a trailing zero: x402 payments are often a fraction of a cent.
+      const f = (v % d).toString().padStart(c.decimals, "0").replace(/0+$/, "");
+      return `${f ? `${v / d}.${f}` : (v / d).toLocaleString("en-US")} ${c.symbol} on ${c.name}`;
+    } catch (_) { return "?"; }
+  }
+  // A payment's transaction and payer, on the explorer of the chain it settled on.
+  const paymentTxLink = (e) => {
+    const c = paymentChainOf(e);
+    if (!c) return txLink(e?.txHash);
+    if (!isHash(e.txHash)) return "";
+    return c.explorer ? `<a href="${c.explorer}/tx/${e.txHash}" target="_blank" rel="noopener"><code>${short(e.txHash)}</code></a>` : `<code>${short(e.txHash)}</code>`;
+  };
+  const paymentPayerLink = (e) => {
+    const c = paymentChainOf(e);
+    if (!c) return addrLink(e?.payer);
+    if (!isAddr(e.payer)) return "?";
+    return c.explorer ? `<a href="${c.explorer}/address/${e.payer}" target="_blank" rel="noopener"><code>${short(e.payer)}</code></a>` : `<code>${short(e.payer)}</code>`;
+  };
   const rootCode = (r) => (!r ? "none" : same(r, ZERO32) ? "<code>0x0</code> (none)" : `<code title="${esc(r)}">${esc(short(r))}</code>`);
   const commitLink = (c) => (/^[0-9a-f]{40}$/.test(c || "")
     ? `<a href="${SOURCE}/commit/${c}" target="_blank" rel="noopener"><code>${c.slice(0, 7)}</code></a>` : "unknown");
@@ -485,14 +518,20 @@
 
   // The leaf for one payment: keccak256(keccak256(abi.encode(bytes32 txHash, address payer,
   // uint256 amount, uint256 settledAt, uint8 outcome))). settledAt is in seconds, as the block
-  // timestamp is. Throws on a field the oracle could not have committed to.
+  // timestamp is. A payment that settled on a payment chain (ADR 0009) has its uint256 chainId in
+  // front. Throws on a field the oracle could not have committed to.
   function leafOf(e, success = e.success) {
     if (!isHash(e?.txHash)) throw new Error("a payment without a transaction hash");
     if (!isAddr(e.payer)) throw new Error("a payment without a payer address");
     const amount = BigInt(e.amount);
     const settled = BigInt(e.settledAt);
     if (amount < 0n || amount >= UINT256 || settled < 0n || settled >= UINT256) throw new Error("a payment amount or time out of range");
-    const hex = pad32(e.txHash) + pad32(e.payer) + amount.toString(16).padStart(64, "0")
+    let chain = "";
+    if (e.chainId != null) {
+      if (!Number.isSafeInteger(e.chainId) || e.chainId <= 0) throw new Error("a payment with a chain id that is not one");
+      chain = BigInt(e.chainId).toString(16).padStart(64, "0");
+    }
+    const hex = chain + pad32(e.txHash) + pad32(e.payer) + amount.toString(16).padStart(64, "0")
       + settled.toString(16).padStart(64, "0") + outcomeCode(success).toString(16).padStart(64, "0");
     return keccak(hexBytes(keccak(hexBytes(hex))));
   }
@@ -539,22 +578,34 @@
    * payment, against those settled by a cut-off, and against both with each payer-signed outcome
    * set back to unreported. With `at` (the proposal's time, in seconds) only that cut-off is
    * tried; without it, the cut-offs are each settlement time, newest first, up to `maxCuts`.
+   * `delays` (chain id to seconds, as /evidence serves them) says how much later a payment chain's
+   * payment enters a score than its settlement: it counts for a cut-off once settledAt plus its
+   * delay has passed. `evidenceCut` ({ quantumSeconds, windowSeconds }, also from /evidence, present
+   * when the oracle reads payment chains) says a proposal's evidence was cut at a whole quantum at
+   * most the window before `at`, so with `at` those cut-offs are tried too.
    *
    * Returns { events, leaves, cut, unset } for the reading that matched, or null.
    */
-  function matchRoot(events, committed, { at = null, maxCuts = 64 } = {}) {
+  function matchRoot(events, committed, { at = null, maxCuts = 64, delays = {}, evidenceCut = null } = {}) {
     if (!isHash(committed)) return null;
     const want = committed.toLowerCase();
     const asServed = events.map((e) => leafOf(e));
     const signed = events.map((e) => e.outcomeSource === "payer_signed");
     const unsetLeaves = events.map((e, i) => (signed[i] ? leafOf(e, null) : asServed[i]));
+    const counts = events.map((e) => Number(e.settledAt) + (e.chainId != null ? Number(delays[e.chainId] ?? 0) : 0));
+    const q = Number(evidenceCut?.quantumSeconds) || 0;
+    const w = Number(evidenceCut?.windowSeconds) || 0;
+    const quantized = [];
+    if (at !== null && q > 0 && w > 0) {
+      for (let t = Math.floor(Number(at) / q) * q; t > Number(at) - w; t -= q) quantized.push(t);
+    }
     const cuts = at !== null
-      ? [Number(at)]
-      : [Infinity, ...[...new Set(events.map((e) => Number(e.settledAt)))].sort((a, b) => b - a).slice(0, maxCuts)];
-    // Each cut-off keeps every payment settled by then, so the settlement times cover every set a
+      ? [Number(at), ...quantized.filter((t) => t < Number(at))]
+      : [Infinity, ...[...new Set(counts)].sort((a, b) => b - a).slice(0, maxCuts)];
+    // Each cut-off keeps every payment that counted by then, so those times cover every set a
     // proposal made between two of them could have committed to.
     for (const cut of cuts) {
-      const idx = events.map((e, i) => (Number(e.settledAt) <= cut ? i : -1)).filter((i) => i >= 0);
+      const idx = events.map((e, i) => (counts[i] <= cut ? i : -1)).filter((i) => i >= 0);
       const tries = [[asServed, false]];
       if (idx.some((i) => signed[i])) tries.push([unsetLeaves, true]);
       for (const [leaves, unset] of tries) {
@@ -579,6 +630,7 @@
     SEL, EVENTS, BOND_EVENTS, STATUS, BOND_STATUS, ZERO32, READING_HISTORY, TAIL_BLOCKS,
     esc, strip, pad32, word, wordAddr, isAddr, isHash, same, short, topicAddr,
     fmtWhen, fmtSvr, txLink, addrLink, rootCode, commitLink, whoIs, failed,
+    PAYMENT_CHAINS, fmtAmount, paymentTxLink, paymentPayerLink,
     loadSimulation, simAgent, simWallet,
     getJson, rpcMany, ethCalls, blockNumber, cached, chainLogs, addTimes, tailRange, indexLogs, contractLogs, historyNote,
     outcomeCode, leafOf, hashPair, layersOf, rootOf, proofOf, matchRoot, verifyEvidenceCall,

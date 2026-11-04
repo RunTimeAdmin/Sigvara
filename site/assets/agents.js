@@ -151,6 +151,10 @@ async function renderCheck(a, evidence, pendingRead) {
   const j = evidence.value;
   const list = (Array.isArray(j?.evidence) ? j.evidence : []).filter((e) => e && typeof e === "object");
   const served = X.isHash(j?.evidenceRoot) ? j.evidenceRoot.toLowerCase() : null;
+  // How long after settling a payment chain's payment enters a score (ADR 0009), by chain id.
+  const delays = Object.fromEntries((Array.isArray(j?.paymentChains) ? j.paymentChains : [])
+    .filter((c) => c && Number.isSafeInteger(c.chainId)).map((c) => [c.chainId, Number(c.delaySeconds) || 0]));
+  const evidenceCut = j?.evidenceCut && typeof j.evidenceCut === "object" ? j.evidenceCut : null;
 
   // 1. Rebuild every leaf from its fields, never from the leaf the oracle served.
   const rebuilt = [], bad = [];
@@ -177,7 +181,7 @@ async function renderCheck(a, evidence, pendingRead) {
   } else if (X.same(a.root, X.ZERO32)) {
     finalHtml = "none yet: no score with an evidence root has been finalized for this agent";
   } else {
-    const m = X.matchRoot(list, a.root);
+    const m = X.matchRoot(list, a.root, { delays });
     if (!m) {
       finalHtml = `${X.rootCode(a.root)} <span class="pill-err">no reading of these payments reproduces it</span>. The oracle no longer lists the set this score was made on, or lists it differently.`;
     } else {
@@ -191,7 +195,7 @@ async function renderCheck(a, evidence, pendingRead) {
     if (BigInt(X.word(raw, 8)) === 1n) {
       const proposedAt = Number(BigInt(X.word(raw, 7)));
       const root = X.word(raw, 9).toLowerCase();
-      const m = bad.length ? null : X.matchRoot(list, root, { at: proposedAt });
+      const m = bad.length ? null : X.matchRoot(list, root, { at: proposedAt, delays, evidenceCut });
       pendingHtml = `${X.rootCode(root)}, proposed ${X.esc(X.fmtWhen(proposedAt))}: ` + (m
         ? `<span class="pill-ok">reproduced</span> from ${describeMatch(m, list.length)}`
         : '<span class="pill-err">not reproduced</span> from the payments settled by then');
@@ -206,7 +210,7 @@ async function renderCheck(a, evidence, pendingRead) {
     rows[rows.length - 1] = ["Contract check", contractHtml];
     setCard("checkCard", head + `<dl class="kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd class="prose">${v}</dd>`).join("")}</dl>`
       + (list.length ? `<p><button class="btn btn-secondary btn-sm" type="button" id="chainCheckBtn">Check the payments against the chain</button></p><div id="chainCheck"></div>` : "")
-      + '<p class="netnote">The leaf is <code>keccak256(keccak256(abi.encode(txHash, payer, amount, settledAt, outcome)))</code>, the tree hashes sorted pairs, and an odd node is promoted, as in <a href="https://github.com/RunTimeAdmin/Sigvara/blob/main/oracle/merkle.js" target="_blank" rel="noopener">oracle/merkle.js</a>. A test holds this page to it.</p>');
+      + '<p class="netnote">The leaf is <code>keccak256(keccak256(abi.encode(txHash, payer, amount, settledAt, outcome)))</code>, with <code>chainId</code> first for a payment that settled on another chain, the tree hashes sorted pairs, and an odd node is promoted, as in <a href="https://github.com/RunTimeAdmin/Sigvara/blob/main/oracle/merkle.js" target="_blank" rel="noopener">oracle/merkle.js</a>. A test holds this page to it.</p>');
     const btn = $("chainCheckBtn");
     if (btn) btn.onclick = () => checkPayments(a, list);
   };
@@ -232,7 +236,8 @@ async function renderCheck(a, evidence, pendingRead) {
 
 function describeMatch(m, of) {
   const what = m.events.length === of ? `all ${plural(of, "payment")} listed` : `${m.events.length} of the ${of} payments listed`;
-  const when = Number.isFinite(m.cut) && m.events.length !== of ? `, the ones settled by ${X.esc(X.fmtWhen(m.cut))}` : "";
+  const counted = m.events.some((e) => e.chainId != null) ? "counted" : "settled";
+  const when = Number.isFinite(m.cut) && m.events.length !== of ? `, the ones ${counted} by ${X.esc(X.fmtWhen(m.cut))}` : "";
   const unset = m.unset ? ", reading each outcome the payer signed afterwards as not yet reported" : "";
   return what + when + unset + ".";
 }
@@ -240,7 +245,10 @@ function describeMatch(m, of) {
 // ---- each payment against its transaction ----
 async function checkPayments(a, list) {
   const out = $("chainCheck");
-  const picked = [...list].sort((x, y) => Number(y.settledAt) - Number(x.settledAt)).slice(0, CHAIN_CHECK_LIMIT)
+  // A payment chain's payment (ADR 0009) is not on this chain, so it is listed and not checked here.
+  const elsewhere = list.filter((e) => e.chainId != null);
+  const picked = [...list].filter((e) => e.chainId == null)
+    .sort((x, y) => Number(y.settledAt) - Number(x.settledAt)).slice(0, CHAIN_CHECK_LIMIT)
     .filter((e) => X.isHash(e.txHash));
   out.innerHTML = `<p class="netnote">Reading ${plural(picked.length, "transaction")} from the chain…</p>`;
   try {
@@ -259,12 +267,18 @@ async function checkPayments(a, list) {
     out.innerHTML = `<p>${ok === results.length
       ? `<span class="pill-ok">All ${plural(ok, "payment")} checked</span> match their transactions`
       : `<span class="pill-err">${results.length - ok} of ${results.length} do not match</span> their transactions`}: a successful transfer of test SVR to the agent from the listed payer, for the listed amount, in a block with the listed time.`
-      + (list.length > picked.length ? ` The newest ${picked.length} of ${list.length} were checked.` : "") + "</p>"
+      + (list.length - elsewhere.length > picked.length ? ` The newest ${picked.length} of ${list.length - elsewhere.length} were checked.` : "")
+      + (elsewhere.length ? ` ${plural(elsewhere.length, "payment")} settled on another chain and ${elsewhere.length === 1 ? "is" : "are"} not checked here.` : "") + "</p>"
       + `<ul class="pay-list">${results.map(({ e, problem }) => `<li>
           <span>${X.esc(X.fmtWhen(Number(e.settledAt)))}</span>
           <span>${X.esc(X.fmtSvr(e.amount))} from ${X.whoIs(e.payer)}</span>
           <span class="${problem ? "pill-err" : "pill-ok"}">${X.esc(problem || "matches")}</span>
           <span>${X.txLink(e.txHash)}</span>
+        </li>`).join("")}${elsewhere.slice(0, CHAIN_CHECK_LIMIT).map((e) => `<li>
+          <span>${X.esc(X.fmtWhen(Number(e.settledAt)))}</span>
+          <span>${X.esc(X.fmtAmount(e))} from ${X.paymentPayerLink(e)}</span>
+          <span>not checked here</span>
+          <span>${X.paymentTxLink(e)}</span>
         </li>`).join("")}</ul>`;
   } catch (e) {
     out.innerHTML = X.failed("the transactions", e);

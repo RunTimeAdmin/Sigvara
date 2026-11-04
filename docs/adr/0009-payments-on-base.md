@@ -1,6 +1,9 @@
 # ADR 0009: Count payments that settle on Base, starting with Base Sepolia
 
-**Status:** Accepted · 2026-11-03, with David's decisions below. Not built.
+**Status:** Accepted · 2026-11-03, with David's decisions below. Rollout step 1 is built for payments,
+off by default (`oracle/payment-chains.js`): sections 1 to 6 and 8. Section 7, payer-signed outcomes
+for a payment chain's payments, is not built yet; until it is, the outcome paths look for a payment on
+the scored chain only.
 
 ## Context
 

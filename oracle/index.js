@@ -37,6 +37,7 @@ const { createResponseCache } = require('./response-cache');
 const badge = require('./badge');
 const jobs = require('./jobs');
 const paymentScan = require('./payment-scan');
+const paymentChains = require('./payment-chains');
 const payerOutcome = require('./payer-outcome');
 const metrics = require('./metrics');
 const { readPrivateKey } = require('./secrets');
@@ -166,6 +167,33 @@ if (!cfg.rpcUrl || !cfg.privateKey || !cfg.identityAddress || !cfg.reputationAdd
   process.exit(1);
 }
 
+// Chains whose payments count beside the scored chain's (ADR 0009). Read once cfg is known, since
+// a payment chain must not be the scored one, and only with EXPECTED_CHAIN_ID set, since without it
+// nothing says which chain is the scored one.
+let paymentChainsCfg;
+try {
+  paymentChainsCfg = paymentChains.readConfig(process.env, {
+    scoredChainId: cfg.expectedChainId, paymentRequired: payments.required(paymentCfg),
+  });
+} catch (err) {
+  console.error(`[oracle] ${err.message}`);
+  process.exit(1);
+}
+if (paymentChainsCfg.chains.length && !cfg.expectedChainId) {
+  console.error('[oracle] PAYMENT_CHAIN_IDS needs EXPECTED_CHAIN_ID, so that the scored chain is known.');
+  process.exit(1);
+}
+// One provider per payment chain. Its network is given so ethers does not ask for it on every call;
+// the scan asks eth_chainId itself each time, because an endpoint can fail over onto another chain.
+const paymentChainProviders = new Map(paymentChainsCfg.chains.map((c) => [
+  c.chainId, new (require('ethers').JsonRpcProvider)(c.rpcUrl, c.chainId, { staticNetwork: true }),
+]));
+// The last scan of each payment chain, for /health.
+const lastPaymentChainScans = new Map();
+// How long one epoch spends catching a payment chain up, in steps of MAX_BLOCKS, before it leaves the
+// rest to the next epoch.
+const PAYMENT_CHAIN_SCAN_BUDGET_MS = 10 * 60_000;
+
 // Checked before anything starts, because the failure is silent: a bad interval does
 // not throw, it just runs the epoch loop flat out against the RPC.
 const epochErr = epochIntervalError(cfg.epochMs);
@@ -270,6 +298,8 @@ const {
   setScanState,
   getPaymentScanState,
   setPaymentScanState,
+  getPaymentChainScanState,
+  setPaymentChainScanState,
   getLinkScanState,
   setLinkScanState,
   isCredited,
@@ -291,6 +321,35 @@ const {
   ATTEST_COOLDOWN_MS,
 } = require('./store');
 
+/**
+ * The payments a score made at `atMs` reads: every one on the scored chain, and a payment chain's
+ * once it is older than that chain's delay (payment-chains.eventsAt). The proposal, its evidence
+ * root, the checker's audit and /score all choose evidence here, so they cannot drift apart.
+ */
+function evidenceAt(didHash, atMs) {
+  return paymentChains.eventsAt(getPaymentEvents(didHash), atMs, paymentChainsCfg);
+}
+
+/**
+ * How the checker reads a proposal's evidence once payment chains are configured: at each whole-minute
+ * cut-off in the half hour before it (evidence-as-of.js, payment-chains.auditCuts), since the proposer
+ * chose its evidence at one of them and its transaction landed later. Unset without payment chains,
+ * so an operator on the scored chain alone audits exactly as before.
+ */
+const auditOptions = (atMs) => (paymentChainsCfg.chains.length
+  ? { eligibleAt: (e) => paymentChains.eligibleAtMs(e, paymentChainsCfg), cuts: paymentChains.auditCuts(atMs, paymentChainsCfg) }
+  : undefined);
+
+/** Every agent's payments that settled on `chainId`, or on the scored chain when it is null. */
+function eventsOnChain(chainId) {
+  const out = new Map();
+  for (const [did, events] of allPaymentEvents()) {
+    const here = events.filter((e) => (chainId == null ? e.chainId == null : e.chainId === chainId));
+    if (here.length) out.set(did, here);
+  }
+  return out;
+}
+
 // With verification on, the payment log replaces both the attestation-count proxy
 // for feeScore and the raw attestation tally for successScore, and both are weighted
 // by age. Nulls keep computeScore on the old path. Used by the epoch and by /score so
@@ -300,13 +359,16 @@ const {
 // reintroduce host-clock drift into a score — the exact failure this parameter exists to
 // remove, and one that shows up as an unexplainable divergence between operators rather
 // than as an error.
-function measuredFactorsFor(didHash, now, payerScores = null, events = getPaymentEvents(didHash)) {
+function measuredFactorsFor(didHash, now, payerScores = null, held = evidenceAt(didHash, now)) {
   if (!Number.isFinite(now)) {
     throw new TypeError('measuredFactorsFor: now (ms, from the chain clock) is required');
   }
   if (!payments.required(paymentCfg)) {
     return { measuredFeeScore: null, measuredAttestations: null, activity: null, propagation: 0 };
   }
+  // A payment chain's amounts in this chain's fee units, so that one cap and one fee unit apply to
+  // all of an agent's payments (ADR 0009). The same array when it has none.
+  const events = paymentChains.forScoring(held, paymentCfg.feeUnit, paymentChainsCfg);
   // Group once. diversifiedVolume, diversifiedAttestations and distinctPayers each used
   // to call byPayer independently, so one agent's evidence was walked three times an
   // epoch with the BigInt decay arithmetic run on each pass. Same answers, a third of
@@ -341,13 +403,13 @@ let payerScoreCache = new Map();
 const emptySeenAt = new Map();
 const coveringLate = new Set();
 
-async function payerScoresFor(didHash) {
+async function payerScoresFor(didHash, events = getPaymentEvents(didHash)) {
   if (!payments.required(paymentCfg)) return null;
 
   // Unique payers first: an address recurs across an agent's events, and this way it is
   // neither looked up nor awaited twice.
   const unique = new Map(); // lowercased key => the address as recorded
-  for (const e of getPaymentEvents(didHash)) {
+  for (const e of events) {
     const key = String(e.payer || '').toLowerCase();
     if (!unique.has(key)) unique.set(key, e.payer);
   }
@@ -392,7 +454,7 @@ async function payerScoresFor(didHash) {
  *
  * Returns { score, agentId }: the factor, and the ERC-8004 agent it was read from (null when none).
  */
-async function externalScoreOf(didHash, { operator, agentAddress }, nowMs, events = getPaymentEvents(didHash)) {
+async function externalScoreOf(didHash, { operator, agentAddress }, nowMs, events = evidenceAt(didHash, nowMs)) {
   if (!external.configured() || !hasLink(didHash)) return { score: 0, agentId: null };
   const snapshotSec = reviewers.snapshotOf(Math.floor(nowMs / 1000));
   const snapshotBlock = await chain.blockAtOrBefore(snapshotSec);
@@ -408,7 +470,9 @@ async function externalScoreOf(didHash, { operator, agentAddress }, nowMs, event
       rows,
       {
         agent: { operator: snapshotOperator, agentAddress },
-        events: events.filter((e) => e.ts <= snapshotSec * 1000),
+        // The scored chain's payments only. A reviewer's payment is traced back to its funder on this
+        // chain, by block, and a payment chain's block number means nothing here.
+        events: events.filter((e) => e.chainId == null && e.ts <= snapshotSec * 1000),
         nowMs: snapshotSec * 1000,
       },
       {
@@ -499,7 +563,10 @@ function uncheckedLinkAgents(block) {
  * operator holds: the checker passes the evidence as it stood at a proposal.
  */
 async function scoreAt(didHash, { registeredAt, att, flagWeight, externalScore }, nowMs, events) {
-  const measured = measuredFactorsFor(didHash, nowMs, await payerScoresFor(didHash), events);
+  // The evidence this score reads, once: the payers looked up are the ones it scores. By default
+  // what counted by the cut-off for a score made now (payment-chains.cutFor), as the epoch uses.
+  const held = events ?? evidenceAt(didHash, paymentChains.cutFor(nowMs, paymentChainsCfg));
+  const measured = measuredFactorsFor(didHash, nowMs, await payerScoresFor(didHash, held), held);
   const scores = computeScore({
     registeredAt,
     attestations: measured.measuredAttestations ?? att,
@@ -606,7 +673,11 @@ async function runScanCanary(byAddress, provider) {
   const byDidAddress = new Map();
   for (const a of byAddress.values()) byDidAddress.set(a.didHash, a.agentAddress);
 
-  const canary = paymentScan.pickCanary(allPaymentEvents(), (did) => byDidAddress.get(did) ?? null);
+  // This chain's payments only. A payment chain's newest settlement is not on this chain, and
+  // looking for it here would fail the canary and hold the checkpoint for good.
+  // Also after a payment chain is dropped from the config while its payments are still held.
+  const known = eventsOnChain(null);
+  const canary = paymentScan.pickCanary(known, (did) => byDidAddress.get(did) ?? null);
   if (!canary) return 'unavailable';
 
   try {
@@ -763,6 +834,73 @@ async function runPaymentScan(agents) {
   return { from, to, credited, skipped: skipped.length, unresolved: unresolved.length, checkpoint: nextCheckpoint, canary, reasons: bySkipReason };
 }
 
+/**
+ * Scan each payment chain (ADR 0009), one after another. A chain that fails is logged and left at
+ * its checkpoint; whether the epoch may still score is decided once the chain's clock is known
+ * (paymentChains.behind, in runEpochInner).
+ */
+async function runPaymentChainScans(agents) {
+  // When each agent registered, in ms, read once a run (scanChain's before_registration).
+  const registered = new Map();
+  for (const pc of paymentChainsCfg.chains) {
+    const key = paymentChains.stateKey(pc);
+    const startedAt = Date.now();
+    // Steps of at most MAX_BLOCKS, each saved as it completes, until the scan reaches the finalized
+    // block or the time budget is spent. One step an epoch could not keep up with a chain that makes
+    // more blocks an epoch than a step covers, and a failure costs only the step it happens in.
+    try {
+      for (;;) {
+        const summary = await paymentChains.scanChain(pc, {
+          provider: paymentChainProviders.get(pc.chainId),
+          scoredProvider: chain.getProvider(),
+          agents,
+          state: getPaymentChainScanState(key),
+          isCredited: (txHash, didHash, payer) => isCredited(txHash, didHash, payer, pc.chainId),
+          credit: (c, ts) => creditPayment(c.didHash, c.txHash, c.amount, c.payer, null, ts, null, c.blockNumber, pc.chainId),
+          knownOnChain: eventsOnChain(pc.chainId),
+          registeredAtMs: async (didHash) => {
+            if (!registered.has(didHash)) registered.set(didHash, Number((await chain.getAgentInfo(didHash)).registeredAt) * 1000);
+            return registered.get(didHash);
+          },
+          // Every error leaves here without the URL, which carries the provider's key (paymentChains.rpcError).
+          read: (label, fn) => chain.readWithBackoff(label, fn).catch((err) => { throw paymentChains.rpcError(err, pc.rpcUrl); }),
+        });
+        if (summary.state) setPaymentChainScanState(key, summary.state);
+        metrics.inc('paymentChainScans');
+        if (pc.mode === 'on' && summary.credited) metrics.inc('paymentsPulled', summary.credited);
+        if (summary.refused) metrics.inc('paymentScanRefused', summary.refused);
+        // In shadow mode `credited` is what would have been.
+        const counted = pc.mode === 'on' ? 'credited' : 'would credit';
+        lastPaymentChainScans.set(pc.chainId, {
+          at: new Date().toISOString(),
+          from: summary.from,
+          to: summary.to,
+          [pc.mode === 'on' ? 'credited' : 'wouldCredit']: summary.credited,
+          skipped: summary.skipped,
+          reasons: summary.reasons,
+          canary: summary.canary ?? null,
+        });
+        if (!summary.upToDate) {
+          console.log(
+            `[oracle] payment chain ${pc.chainId} (${pc.mode}) ${summary.from}-${summary.to}: ` +
+            `${summary.credited} ${counted}, ${summary.skipped} skipped` +
+            (summary.canary && summary.canary !== 'not_run' ? `, canary ${summary.canary}` : '') +
+            (summary.skipped ? ` (${JSON.stringify(summary.reasons)})` : ''),
+          );
+        }
+        if (summary.upToDate || summary.caughtUp || !summary.state) break;
+        if (Date.now() - startedAt > PAYMENT_CHAIN_SCAN_BUDGET_MS) {
+          console.warn(`[oracle] payment chain ${pc.chainId}: still catching up at block ${summary.to}; continuing next epoch`);
+          break;
+        }
+      }
+    } catch (err) {
+      metrics.inc('paymentChainScanErrors');
+      console.error(`[oracle] payment chain ${pc.chainId} scan failed: ${paymentChains.rpcError(err, pc.rpcUrl).message}`);
+    }
+  }
+}
+
 async function runEpochInner() {
   const start = Date.now();
   payerScoreCache = new Map();
@@ -830,6 +968,8 @@ async function runEpochInner() {
     metrics.inc('paymentScanErrors');
     console.error('[oracle] payment scan failed:', err.message);
   }
+  // Then each payment chain's (ADR 0009). runPaymentChainScans logs its own failures.
+  if (paymentChainsCfg.chains.length) await runPaymentChainScans(agents);
   // Likewise the links made on chain since the last scan. A failure is logged here; what it
   // costs is decided once the chain's clock is known, below.
   if (linksOnChain()) {
@@ -865,6 +1005,27 @@ async function runEpochInner() {
   // stale during a long epoch only errs toward 'skip', never toward a
   // premature finalize that would revert.
   const chainNow = await chain.getLatestBlockTimestamp();
+
+  // A payment chain's evidence counts once it is older than the chain's delay (evidenceAt). A scan
+  // that has not reached that far may be missing a payment the other operator holds, so this
+  // operator neither proposes nor finalizes until it has (ADR 0009, decision 3). Saved first, so the
+  // scans' progress survives a restart while it waits.
+  const heldBy = paymentChains.behind(
+    paymentChainsCfg, getPaymentChainScanState, paymentChains.cutFor(chainNow * 1000, paymentChainsCfg),
+  );
+  if (heldBy.length) {
+    for (const h of heldBy) {
+      const reached = h.reachedMs === null ? 'no block yet' : new Date(h.reachedMs).toISOString();
+      console.error(
+        `[oracle] payment chain ${h.chainId}: the scan has reached ${reached} and this epoch needs ` +
+        `${new Date(h.neededMs).toISOString()}; scoring nothing this epoch`,
+      );
+    }
+    metrics.inc('epochsHeldByPaymentChain');
+    metrics.inc('epochsFailed');
+    persistState();
+    return;
+  }
 
   // A link made on chain applies from the first snapshot after it, so two operators agree about
   // it once both have scanned past that snapshot. One that has not may be missing a link the
@@ -1065,12 +1226,26 @@ async function runEpochInner() {
         // enough to move no integer factor, large enough that the two were not computing
         // the same function. A divergence tolerance hid it rather than fixing it.
         const scoringNowMs = chainNow * 1000;
+        // The evidence this agent's score and root are over (ADR 0009). Without payment chains it is
+        // everything held, as before. With them it is what counted by a whole-minute cut-off before
+        // the chain's clock, read again for this agent so that the proposal lands within the half hour
+        // a checker searches, and only once every payment chain's scan has passed that cut-off.
+        let evidenceCutMs = scoringNowMs;
+        if (paymentChainsCfg.chains.length) {
+          evidenceCutMs = paymentChains.cutFor((await chain.getLatestBlockTimestamp()) * 1000, paymentChainsCfg);
+          const short = paymentChains.behind(paymentChainsCfg, getPaymentChainScanState, evidenceCutMs);
+          if (short.length) {
+            console.log(`[oracle]   ${didHash.slice(0, 10)}… payment chain ${short[0].chainId} not scanned far enough for this agent's cut-off, skipping`);
+            continue;
+          }
+        }
+        const held = evidenceAt(didHash, evidenceCutMs);
         // externalScore: only for agents linked to an ERC-8004 identity they own, and only from
         // the reviewers reviewers.js accepts. Ownership is re-verified inside externalScoreFor;
         // any failure yields 0.
-        const { score: externalScore } = await externalScoreOf(didHash, { operator, agentAddress }, scoringNowMs);
+        const { score: externalScore } = await externalScoreOf(didHash, { operator, agentAddress }, scoringNowMs, held);
         const inputs = { registeredAt, att, flagWeight, externalScore };
-        const { measured, scores } = await scoreAt(didHash, inputs, scoringNowMs);
+        const { measured, scores } = await scoreAt(didHash, inputs, scoringNowMs, held);
 
         // Checker mode: compare rather than compete. This oracle holds ORACLE_ROLE and a
         // bond like any other, so it *could* overwrite the primary's proposal — and must
@@ -1141,7 +1316,7 @@ async function runEpochInner() {
           if (freshPending.exists && freshPending.proposedAt > 0) {
             const atProposalMs = freshPending.proposedAt * 1000;
             asOf = payments.required(paymentCfg)
-              ? evidenceAsOf(getPaymentEvents(didHash), atProposalMs, freshPending.evidenceRoot ?? null)
+              ? evidenceAsOf(evidenceAt(didHash, atProposalMs), atProposalMs, freshPending.evidenceRoot ?? null, auditOptions(atProposalMs))
               : null;
             // The external factor too, as the primary would have read it at its proposal: same
             // snapshot, same evidence. Computed at this epoch's clock instead, a reviewer that
@@ -1150,7 +1325,7 @@ async function runEpochInner() {
               ? {
                 ...inputs,
                 externalScore: (await externalScoreOf(
-                  didHash, { operator, agentAddress }, atProposalMs, asOf?.events ?? getPaymentEvents(didHash),
+                  didHash, { operator, agentAddress }, atProposalMs, asOf?.events ?? evidenceAt(didHash, atProposalMs),
                 )).score,
               }
               : inputs;
@@ -1189,7 +1364,7 @@ async function runEpochInner() {
             // is the one the primary committed to on chain. Different roots mean different
             // evidence, which is diagnosable; identical roots with different scores would
             // mean an arithmetic disagreement, which is a much more serious finding.
-            const ownEvents = getPaymentEvents(didHash);
+            const ownEvents = held;
             recordDivergence(didHash, d, freshPending.proposedAt, Date.now(), {
               ownEvidenceRoot: payments.required(paymentCfg) ? merkle.rootFor(ownEvents) : null,
               proposedEvidenceRoot: freshPending.evidenceRoot ?? null,
@@ -1308,7 +1483,7 @@ async function runEpochInner() {
         // third party checking the arithmetic would have to take that on trust.
         // Worked out before the fee, because the fee now waits on a dry run of the proposal.
         const evidenceRoot = payments.required(paymentCfg)
-          ? merkle.rootFor(getPaymentEvents(didHash))
+          ? merkle.rootFor(held)
           : undefined;
 
         // Charge before proposing, not after. The coverage read above and the
@@ -1934,6 +2109,15 @@ function buildEvidenceBody(didHash, events) {
     // it as a boolean made it collide with a reported failure, which the score counts
     // very differently, so the root stopped covering the arithmetic it commits to.
     committedFields: ['txHash', 'payer', 'amount', 'settledAt', 'success'],
+    // A payment that settled on a payment chain (ADR 0009) commits to its chain first, and enters
+    // a score only once it is older than that chain's delay. Both are here so a verifier can rebuild
+    // the leaf and tell which payments a root made at a given time covers.
+    ...(paymentChainsCfg.chains.length ? {
+      paymentChainCommittedFields: ['chainId', 'txHash', 'payer', 'amount', 'settledAt', 'success'],
+      paymentChains: paymentChainsCfg.chains.map((c) => ({ chainId: c.chainId, delaySeconds: c.delayMs / 1000 })),
+      // A proposal's evidence is what counted by a whole minute at most this long before it (payment-chains.cutFor).
+      evidenceCut: { quantumSeconds: paymentChains.CUT_QUANTUM_MS / 1000, windowSeconds: paymentChains.AUDIT_WINDOW_MS / 1000 },
+    } : {}),
     // What each payer signed over, so a verifier can check a served payload without knowing
     // this deployment. outcomeSource is this oracle's own label, not part of the leaf.
     ...(payerOutcomeCfg.publish ? { payerOutcomeDomain: servedDomain() } : {}),
@@ -1946,6 +2130,7 @@ function buildEvidenceBody(didHash, events) {
     // The leaf is derivable from the payment, so a verifier rebuilds it rather than
     // trusting the one served here; it is included to make that comparison easy.
     evidence: events.map((e, i) => ({
+      ...(e.chainId != null ? { chainId: e.chainId } : {}),
       txHash: e.txHash ?? null,
       payer: e.payer,
       amount: e.amount,
@@ -2083,6 +2268,11 @@ async function handleRequest(req, res) {
       // 200,000 blocks behind both produce no new evidence, and only one is fine.
       paymentScan: paymentScanCfg.enabled ? 'enabled' : 'disabled',
       paymentScanBlock: (getPaymentScanState() || {}).lastBlock ?? null,
+      // Each payment chain (ADR 0009): its mode and delay, which both operators must share, how far
+      // its scan has reached, and what the last scan found. Absent when there are none.
+      ...(paymentChainsCfg.chains.length ? {
+        paymentChains: paymentChains.publicView(paymentChainsCfg, getPaymentChainScanState, lastPaymentChainScans),
+      } : {}),
       jobsFeed: jobs.enabled(jobsCfg) ? 'configured' : 'disabled',
       jobsRegistry: jobsCfg.registry || null,
       jobsChainId,
@@ -2514,7 +2704,7 @@ async function handleRequest(req, res) {
     if (!didHash) {
       return json(res, 400, { error: 'didHash must be a 32-byte hex string' });
     }
-    const events = getPaymentEvents(didHash);
+    const events = evidenceAt(didHash, paymentChains.cutFor(Date.now(), paymentChainsCfg));
     const body = evidenceCache.get(didHash, events, () => buildEvidenceBody(didHash, events));
 
     // Same bytes a miss would have produced, so a hit is indistinguishable to the

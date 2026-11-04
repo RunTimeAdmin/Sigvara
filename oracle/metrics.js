@@ -68,6 +68,11 @@ const counters = {
   // consult the same predicate, so anything here means they disagree, or a
   // pre-migration bare-hash entry is blocking a settlement.
   paymentScanRefused: 0,
+  // ADR 0009 payment chains. A held epoch is one that scored nothing because a payment chain's
+  // scan had not reached far enough; a run of them means that chain's RPC needs a look.
+  paymentChainScans: 0,
+  paymentChainScanErrors: 0,
+  epochsHeldByPaymentChain: 0,
   // ADR 0006 peer import. Imported is outcomes another operator took that this one now holds
   // too. Refused is ones it served that fail this oracle's own checks: a few are expected (a
   // payment this node cannot find), many mean a peer serving what it should not. Errors are
@@ -341,6 +346,21 @@ function toPrometheusText(extra = {}) {
   lines.push('# HELP sigvara_oracle_payment_scan_refused_total Planned credits the store refused');
   lines.push('# TYPE sigvara_oracle_payment_scan_refused_total counter');
   lines.push(`sigvara_oracle_payment_scan_refused_total ${counters.paymentScanRefused}`);
+
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_payment_chain_scans_total Payment chain scans completed (ADR 0009)');
+  lines.push('# TYPE sigvara_oracle_payment_chain_scans_total counter');
+  lines.push(`sigvara_oracle_payment_chain_scans_total ${counters.paymentChainScans}`);
+
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_payment_chain_scan_errors_total Payment chain scans that could not complete');
+  lines.push('# TYPE sigvara_oracle_payment_chain_scan_errors_total counter');
+  lines.push(`sigvara_oracle_payment_chain_scan_errors_total ${counters.paymentChainScanErrors}`);
+
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_epochs_held_by_payment_chain_total Epochs that scored nothing because a payment chain scan was behind');
+  lines.push('# TYPE sigvara_oracle_epochs_held_by_payment_chain_total counter');
+  lines.push(`sigvara_oracle_epochs_held_by_payment_chain_total ${counters.epochsHeldByPaymentChain}`);
 
   lines.push('');
   lines.push('# HELP sigvara_oracle_propose_throttled_total Proposals the RPC provider throttled');
