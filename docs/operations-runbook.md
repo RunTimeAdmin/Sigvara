@@ -2,8 +2,8 @@
 
 For the two oracle operators on the Arc testnet: keeping and restoring state, payer-signed
 outcomes that are slow to reach the other operator, the two operators disagreeing, the event
-index the explorer pages read (section 4), the ERC-8004 publisher (section 5), and payment
-chains (section 6). A stolen
+index the explorer pages read (section 4), the ERC-8004 publisher (section 5), payment
+chains (section 6), and the slash keeper (section 7). A stolen
 key is [incident-operator-key.md](incident-operator-key.md); bringing up an operator is
 [oracle/RUNBOOK-second-operator.md](../oracle/RUNBOOK-second-operator.md).
 
@@ -594,3 +594,82 @@ under `99801/shadow`, where only a later scan of that chain reads it.
 
 **Rolling back.** A shadow cursor leaves the state file at format 1, so a build from before payment chains still loads
 it. That build drops the cursor. A chain that has been `on` writes format 2, which such a build refuses.
+
+## 7. Slash keeper
+
+`oracle/keeper.js` calls `executeSlash` once a slash's challenge deadline has passed. Execution is
+permissionless, so the committee need not act twice, but nothing happens unless someone calls it, and
+a fortnight after the deadline anyone may let the slash lapse with `expireSlash`.
+
+| | |
+|---|---|
+| Where | Two copies, on separate hosts. The primary on `archipelago-standby` and the backup on `packrai-vps`, each in `/docker/sigvara-keeper`, from `docker-compose.keeper.vps.yml` and `oracle/.env.keeper.example` |
+| Container | `sigvara-keeper` |
+| State volume | `sigvara-keeper_keeper_state` (`/data/keeper-state.json`: the scan position, the slashes open and what has been alerted). It can be rebuilt from the chain, starting at `KEEPER_FROM_BLOCK` |
+| Key | Its own on each host, in `.env`, mode 0600. It holds no role and only a little gas: `executeSlash` is open to anyone, so all it can lose is that gas |
+
+**What it does each run.** It reads `SlashInitiated` to learn who to watch, then each proposal, at
+chain time. For a Pending proposal past its deadline it simulates `executeSlash` first, so the
+contract's own rules decide, then sends.
+
+**What it will not do, on purpose.**
+
+- **Execute past the lapse.** `executeSlash` has no lapse check, so the contract would still allow it
+  until someone calls `expireSlash`. A slash that has sat a fortnight is a person's decision, so the
+  keeper raises an alert instead. To carry one out, call `executeSlash` by hand.
+- **Call `expireSlash` or `expireDispute`.** Each reinstates an agent. It alerts when a dispute needs
+  a ruling, when nobody ruled on one, and when a slash has lapsed.
+- **Touch an agent on `KEEPER_SKIP_AGENTS`.** Live mode will not start until that is set, even if
+  only to `none`.
+
+**Agent C of the slash drill.** The drill leaves C
+(`0x30b95fc4473e5ea0f187d4955ab24bcfebd7a739a0a93c1beafd5d6445f1d93a`) to lapse on purpose
+([slash-drill.md](slash-drill.md)). Its window opens on 10 November 2026 and it lapses on 24 November.
+A keeper without C on its skip list would burn C's 750 SVR and spoil day 21, so keep it listed until
+day 21 is done. After that it is not Pending, and the entry does nothing.
+
+**Two copies.** `KEEPER_GRACE_SECONDS` is 0 on the primary and 3600 on the backup, so the primary goes
+first and only one pays the gas. If both act, the second simulates, finds nothing Pending and sends
+nothing. If its transaction was already in flight, it reverts, and all that costs is gas.
+
+**How it is watched.**
+
+- **From outside, on the outcome.** `scripts/check-live.mjs services`, which the Live checks workflow
+  runs on a schedule, fails when a Pending slash is more than six hours past its deadline, unless it
+  is on the list of slashes held on purpose. It fails too when a keeper named under `keepers` in
+  `deployments/5042002.json` is low on gas. This shares nothing with the keepers, so it is what
+  notices when both are down.
+- **From each keeper, by webhook.** `WEBHOOK_URL`, as the watcher uses, hears about every execution,
+  a slash that is refused, a send that did not confirm, a dispute, a lapse, low gas, and six failed
+  runs in a row.
+- **On the host.** `docker ps` shows the container unhealthy when its state file has not been written
+  for an hour.
+
+A stopped keeper is not noticed until a slash falls due. That is the gap this design accepts: with
+nothing due nothing is lost, and when one is due the check above fires with most of the fortnight left.
+
+**Reading the log.** Each run logs
+`[keeper] run at block N: 1 open, 0 waiting, 1 held, 0 lapsed, 0 disputed, 0 refused, 0 would execute, 0 executed, 0 failed, 0 blocked`.
+
+| What it says | What it means | What to do |
+|---|---|---|
+| `refused`, `ReporterNotAuthorized` | The reporter has left the committee, so the contract will not execute | A current member can `cancelSlash` it, or it lapses |
+| `failed`, `reverted` or `above KEEPER_MAX_FEE_GWEI` | It did not go through | It tries again every run. Raise the limit if gas has moved |
+| `failed`, `was sent, with no receipt` | It may still have landed | Look the transaction up. The next run sees what happened |
+| `blocked` | A transaction of its own is still pending | Wait. If it stays stuck, look at the nonce |
+| `lapsed` | Nobody executed it for a fortnight | Decide: execute by hand, or `expireSlash` |
+
+**Rolling it out.** Each step is David's go, and each host has to be named.
+
+1. On each host, make `/docker/sigvara-keeper`, and copy the compose file and the example `.env` there.
+   Set `SIGVARA_COMMIT`, `KEEPER_NAME` and, on the backup, `KEEPER_GRACE_SECONDS=3600`. Keep
+   `KEEPER_MODE=shadow`, and generate `KEEPER_PRIVATE_KEY` with the command in the example, so the
+   log names the address to fund. `chmod 600 .env`.
+2. `docker compose up -d`, and read the log. It should say `shadow mode`, and each run should hold or
+   wait for C and not name it as `would execute`.
+3. Add both addresses under `keepers` in `deployments/5042002.json`, in a PR, and send each a little
+   testnet USDC.
+4. Set `KEEPER_MODE=live` on the primary, `docker compose up -d`, and read the log. Then the backup.
+
+**Rehearsing.** Point it at a local fork of Arc, using Anvil's public keys, and move the fork's clock.
+Rewind the state file whenever you rewind the fork, or it remembers a slash the fork has forgotten.

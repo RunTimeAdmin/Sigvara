@@ -25,7 +25,7 @@
  * emails the repository owner, which makes it a second alert path beside the Discord
  * watcher: it does not depend on the three servers being up.
  *
- * Reads only. Every request is a GET to a public URL.
+ * Reads only. Every request is a GET to a public URL, or a read of the chain over the public RPC.
  */
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -39,6 +39,19 @@ const CHECKER = process.env.CHECKER_BASE || 'https://checker.sigvara.xyz';
 const INDEX = process.env.INDEX_BASE || 'https://index.sigvara.xyz';
 const EPOCH_STALE_MS = 3 * 3600 * 1000;       // the oracle runs hourly; three hours is a missed run
 const CERT_MIN_DAYS = 14;
+const RPC = process.env.RPC_URL || 'https://rpc.testnet.arc.io';
+// topic0 of SlashInitiated and the selector of getSlashProposal, as site/assets/explorer.js has them,
+// where scripts/check-docs.mjs checks each one against src/.
+export const SLASH_INITIATED = '0x68a6dcb0be51611092b43c97ef36088f9f1c0905c37d8170b379a590d8a50f01';
+export const GET_SLASH_PROPOSAL = '0xc984f6f8';
+// A keeper executes a slash within a run of its deadline and the backup within an hour and a bit.
+// Six hours past it, both have failed, with most of the fortnight left to do something about it.
+const SLASH_OVERDUE_SECONDS = 6 * 3600;
+// Slashes meant to sit past their deadline. The drill leaves agent C to lapse on 24 November 2026
+// (docs/slash-drill.md); once it is expired it is not Pending, and this entry does nothing.
+const SLASHES_HELD = new Set(['0x30b95fc4473e5ea0f187d4955ab24bcfebd7a739a0a93c1beafd5d6445f1d93a']);
+// What a keeper needs for several executions at today's gas price.
+const KEEPER_MIN_BALANCE_WEI = 2n * 10n ** 17n;
 const OUTCOMES_LAG_HOURS = process.env.OUTCOMES_LAG_HOURS ? Number(process.env.OUTCOMES_LAG_HOURS) : 2;
 // Repo-facing files under site/ that are never published, and the one file the host does not serve.
 const NOT_SERVED = new Set(['SECURITY.md', 'SECURITY_DEPLOYMENT_CHECKLIST.md', '.htaccess']);
@@ -206,6 +219,7 @@ async function checkServices() {
   } catch (e) {
     fail(`checker: /divergence unreachable or unreadable (${e.message})`);
   }
+  await checkSlashes();
   for (const host of new URL(SITE).host === 'sigvara.xyz' ? ['sigvara.xyz', 'oracle.sigvara.xyz', 'checker.sigvara.xyz', 'index.sigvara.xyz'] : []) {
     try {
       const days = await certDaysLeft(host);
@@ -215,6 +229,62 @@ async function checkServices() {
     }
   }
   console.log('services: oracle, checker and event index health, divergence list and certificate expiry checked');
+}
+
+/**
+ * Pending slashes past their deadline that nobody has executed, as { didHash, hoursLate, deadline }.
+ * Pure, so a test can hold it to the keeper's rules. `proposals` is what getSlashProposal returned.
+ */
+export function overdueSlashes(proposals, nowSec, { overdueSeconds = SLASH_OVERDUE_SECONDS, held = SLASHES_HELD } = {}) {
+  return proposals
+    .filter((p) => p.state === 1 && !held.has(p.didHash) && nowSec > p.challengeDeadline + overdueSeconds)
+    .map((p) => ({ didHash: p.didHash, deadline: p.challengeDeadline, hoursLate: Math.floor((nowSec - p.challengeDeadline) / 3600) }));
+}
+
+/** The words of an ABI-encoded getSlashProposal answer that matter here. */
+export function decodeSlashProposal(didHash, hex) {
+  const word = (i) => hex.slice(2 + i * 64, 2 + (i + 1) * 64);
+  // Word 0 is the offset to the struct. Then didHash, reporter, victim, initiatedAt, state, the offset
+  // of evidenceHash, challengeDeadline, disputedAt.
+  return { didHash, state: Number(BigInt('0x' + word(5))), challengeDeadline: Number(BigInt('0x' + word(7))) };
+}
+
+async function rpcCall(method, params) {
+  const res = await fetch(RPC, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, signal: AbortSignal.timeout(20_000),
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+  });
+  const j = await res.json();
+  if (j.error) throw new Error(j.error.message);
+  return j.result;
+}
+
+// A slash the keepers should have settled, whatever state the keepers think they are in. This
+// watches the outcome from a place that shares nothing with them, so it is what notices when both
+// are down, misconfigured or out of gas.
+async function checkSlashes() {
+  try {
+    const deployed = JSON.parse(readFileSync('deployments/5042002.json', 'utf8'));
+    const { res, body } = await get(`${INDEX}/events?address=${deployed.staking}&topic0=${SLASH_INITIATED}`);
+    if (res.status !== 200) throw new Error(`the event index answered ${res.status}`);
+    const filed = [...new Set(JSON.parse(body.toString('utf8')).logs.map((l) => l.topics[1].toLowerCase()))];
+    const proposals = [];
+    for (const didHash of filed) {
+      proposals.push(decodeSlashProposal(didHash, await rpcCall('eth_call', [{ to: deployed.staking, data: GET_SLASH_PROPOSAL + didHash.slice(2) }, 'latest'])));
+    }
+    const block = await rpcCall('eth_getBlockByNumber', ['latest', false]);
+    for (const o of overdueSlashes(proposals, Number(BigInt(block.timestamp)))) {
+      fail(`slashes: ${o.didHash} is ${o.hoursLate} hours past its deadline and nobody has executed it. See the runbook, section 7`);
+    }
+    const open = proposals.filter((p) => p.state === 1).length;
+    console.log(`slashes: ${filed.length} agent(s) ever filed against, ${open} pending, none overdue that is not held on purpose`);
+    for (const [name, address] of Object.entries(deployed.keepers ?? {})) {
+      const balance = BigInt(await rpcCall('eth_getBalance', [address, 'latest']));
+      if (balance < KEEPER_MIN_BALANCE_WEI) fail(`keeper ${name} (${address}) is low on gas: ${balance} wei`);
+    }
+  } catch (e) {
+    fail(`slashes: could not read them (${e.message})`);
+  }
 }
 
 /**
