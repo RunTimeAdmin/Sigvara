@@ -184,7 +184,8 @@ contract SigvaraReputation is Initializable, TimelockedGrants, UUPSUpgradeable, 
     /// Points of matured score per day. Appended, like everything after it.
     uint256 public maturityRatePerDay;
 
-    /// Matured score as at `maturedAt`, the anchor reads extrapolate from.
+    /// Matured score as at `maturedAt`, the anchor reads extrapolate from. `maturedAt` is not
+    /// when the score was last finalized: a finalize partway to the next point sets it earlier.
     mapping(bytes32 => uint8) public maturedScore;
     mapping(bytes32 => uint256) public maturedAt;
 
@@ -480,7 +481,7 @@ contract SigvaraReputation is Initializable, TimelockedGrants, UUPSUpgradeable, 
         // restart the clock from there. Taking the matured value rather than the
         // earned one is the whole point: a jump in the earned score is released from
         // where the agent actually stood, not from where it claimed to be.
-        uint8 anchor = getTotalScore(didHash);
+        (uint8 anchor, uint256 clock) = _maturity(didHash);
 
         ReputationData memory data = pending.data;
         data.lastUpdated = block.timestamp;
@@ -490,7 +491,7 @@ contract SigvaraReputation is Initializable, TimelockedGrants, UUPSUpgradeable, 
         delete pendingScores[didHash];
 
         maturedScore[didHash] = anchor;
-        maturedAt[didHash] = block.timestamp;
+        maturedAt[didHash] = clock;
 
         uint16 total = uint16(data.feeScore)
             + uint16(data.successScore)
@@ -693,7 +694,20 @@ contract SigvaraReputation is Initializable, TimelockedGrants, UUPSUpgradeable, 
      *         wall-clock time even if the oracle stops proposing, so an outage cannot
      *         hold an honest agent below its earned score indefinitely.
      */
-    function getTotalScore(bytes32 didHash) public view returns (uint8) {
+    function getTotalScore(bytes32 didHash) public view returns (uint8 spendable) {
+        (spendable, ) = _maturity(didHash);
+    }
+
+    /**
+     * @dev The spendable score, and where a finalize restarts the clock. That is now, unless the score
+     *      is partway to the next point, when it is the moment the agent reached this score, so a
+     *      finalize keeps the time built up toward that point. Dropping it would make the rate depend
+     *      on how often an agent is finalized, and a gap too short to release a point would release
+     *      nothing, ever. The time kept rounds down to a whole second, so it can lose a second a
+     *      finalize and never gain one. It counts from any sale before now, so the clock stays at or
+     *      after that sale.
+     */
+    function _maturity(bytes32 didHash) internal view returns (uint8 spendable, uint256 clock) {
         uint8 earned = getEarnedScore(didHash);
         uint8 anchor = maturedScore[didHash];
         uint256 since = maturedAt[didHash];
@@ -709,7 +723,7 @@ contract SigvaraReputation is Initializable, TimelockedGrants, UUPSUpgradeable, 
         // or one that had fallen below its anchor, went to the buyer whole.
         //
         // `>=`, not `>`. Arc timestamps have one second granularity and consecutive blocks
-        // can share one, so a sale accepted in the same second as a finalize has
+        // can share one, so a sale accepted in the same second as a finalize can have
         // operatorChangedAt == maturedAt. That finalize anchored what the SELLER had
         // matured. A finalize that runs after the sale re-anchors from the restarted value,
         // so treating equality as a handover costs nothing there and closes the other order.
@@ -737,18 +751,22 @@ contract SigvaraReputation is Initializable, TimelockedGrants, UUPSUpgradeable, 
 
         // A fall is not delayed, and a score that has fully matured has nothing left to
         // release. Either way the earned score is what is spendable.
-        if (earned <= anchor) return earned;
+        if (earned <= anchor) return (earned, block.timestamp);
 
         // Before the first finalize there is no anchor to grow from, and a zero
         // timestamp would extrapolate from 1970 and mature everything instantly.
-        if (since == 0 || maturityRatePerDay == 0) return earned;
+        if (since == 0 || maturityRatePerDay == 0) return (earned, block.timestamp);
 
-        uint256 released = uint256(anchor)
-            + ((block.timestamp - since) * maturityRatePerDay) / 1 days;
-        // Safe: this branch only runs when released < earned, and earned is a sum of
-        // capped factors that cannot exceed 100.
+        uint256 owed = (block.timestamp - since) * maturityRatePerDay;
+        uint256 released = uint256(anchor) + owed / 1 days;
+        // Time past full maturity is not kept: a later rise is released from its own finalize.
+        if (released >= earned) return (earned, block.timestamp);
+        // Safe: released < earned here, and earned is a sum of capped factors that cannot exceed 100.
         // forge-lint: disable-next-line(unsafe-typecast)
-        return released >= earned ? earned : uint8(released);
+        spendable = uint8(released);
+        // What is left of the last point, as time. Nothing is chosen by it, so this is no weak PRNG.
+        // slither-disable-next-line weak-prng
+        clock = block.timestamp - (owed % 1 days) / maturityRatePerDay;
     }
 
     /**

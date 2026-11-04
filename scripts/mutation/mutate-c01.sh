@@ -1,5 +1,5 @@
 #!/bin/bash
-# Deliberate breaks of the handover fix in SigvaraReputation.getTotalScore. Each must fail a test.
+# Deliberate breaks of the handover fix in SigvaraReputation._maturity. Each must fail a test.
 # Run only after the change is committed: files are restored with git checkout after every mutant.
 REPO_DEFAULT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "${REPO:-$REPO_DEFAULT}" || exit 1

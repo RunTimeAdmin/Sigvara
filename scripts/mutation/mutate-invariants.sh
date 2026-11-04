@@ -71,8 +71,8 @@ runl R18 $RS $R 'function _finalizableAt(' 'at = pending.finalizableAt;' 'pendin
 runl R19 $RS $R 'function finalizeReputation(' 'if (block.timestamp < finalizableAt)' 'block.timestamp < finalizableAt' 'false' 'a proposal finalizes inside its window'
 runl R20 $RS $R 'function finalizeReputation(' 'if (!_proposerStillAuthorized(pending.proposer))' '!_proposerStillAuthorized(pending.proposer)' 'false' 'a proposal finalizes after its proposer lost authority'
 runl R21 $RS $R 'function finalizeReputation(' '_requireScorable(didHash);' '_requireScorable(didHash);' '' 'finalize does not recheck the agent'
-runl R22 $RS $R 'function finalizeReputation(' 'uint8 anchor = getTotalScore(didHash);' 'getTotalScore' 'getEarnedScore' 'the anchor is the earned score, not the spendable one'
-runl R23 $RS $R 'function finalizeReputation(' 'maturedAt[didHash] = block.timestamp;' 'maturedAt.didHash. = block.timestamp;' '' 'finalize does not restart the maturity clock'
+runl R22 $RS $R 'function finalizeReputation(' '(uint8 anchor, uint256 clock) = _maturity(didHash);' '= _maturity(didHash)' '= (getEarnedScore(didHash), block.timestamp)' 'the anchor is the earned score, not the spendable one'
+runl R23 $RS $R 'function finalizeReputation(' 'maturedAt[didHash] = clock;' 'maturedAt.didHash. = clock;' '' 'finalize does not restart the maturity clock'
 runl R24 $RS $R 'function finalizeReputation(' 'maturedScore[didHash] = anchor;' 'maturedScore.didHash. = anchor;' '' 'finalize does not store the anchor'
 runl R25 $RS $R 'function finalizeReputation(' 'data.lastUpdated = block.timestamp;' 'data.lastUpdated = block.timestamp;' '' 'finalize keeps the date the proposer sent'
 runl R26 $RS $R 'function finalizeReputation(' 'delete pendingScores[didHash];' 'delete pendingScores.didHash.;' '' 'a finalized proposal stays pending'
@@ -85,9 +85,10 @@ runl R32 $RS $R 'function zeroReputation(' 'delete evidenceRoots[didHash];' 'del
 runl R33 $RS $R 'function zeroReputation(' 'maturedScore[didHash] = 0;' 'maturedScore.didHash. = 0;' '' 'a slash leaves the maturity anchor'
 
 # ---- SigvaraReputation: maturity ---------------------------------------------------------------------------------
-runl R34 $RS $R 'function getTotalScore(' 'anchor = 0;' 'anchor = 0;' '' 'a handover does not restart maturity'
-runl R35 $RS $R 'function getTotalScore(' '* maturityRatePerDay) / 1 days' '/ 1 days' '/ 1 hours' 'a score matures 24 times too fast'
-runl R36 $RS $R 'function getTotalScore(' 'if (earned <= anchor) return earned;' 'return earned;' 'return anchor;' 'a fall is held at the anchor'
+runl R34 $RS $R 'function _maturity(' 'anchor = 0;' 'anchor = 0;' '' 'a handover does not restart maturity'
+runl R35 $RS $R 'function _maturity(' 'uint256 released = uint256(anchor) + owed / 1 days;' '/ 1 days' '/ 1 hours' 'a score matures 24 times too fast'
+runl R36 $RS $R 'function _maturity(' 'if (earned <= anchor) return (earned, block.timestamp);' 'return (earned' 'return (anchor' 'a fall is held at the anchor'
+runl R36b $RS $R 'function _maturity(' 'clock = block.timestamp - (owed % 1 days) / maturityRatePerDay;' ' - (owed % 1 days) / maturityRatePerDay' '' 'a finalize drops the time built up toward the next point'
 runl R37 $RS $R 'function getEarnedScore(' '+ uint16(rep.propagationScore);' '+ uint16(rep.propagationScore);' '+ 0;' 'the earned score leaves out propagation'
 
 # ---- SigvaraReputation: the limits -------------------------------------------------------------------------------

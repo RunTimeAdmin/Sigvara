@@ -85,6 +85,10 @@ contract ReputationHandler is Test {
     mapping(bytes32 => bytes32) public finalizedRoot;
     mapping(bytes32 => uint8) public anchorOf;
     mapping(bytes32 => uint256) public anchoredAt;
+    // The last time maturity started over with nothing carried, and from what. A finalize that carries
+    // time does not move these, so the invariants can bound everything released across those finalizes.
+    mapping(bytes32 => uint8) public restartedFrom;
+    mapping(bytes32 => uint256) public restartedAt;
     /// The fastest the maturity rate has ever been, in points a day. The rate is applied to the whole
     /// time since the anchor when a score is read, so a raised rate lifts scores already maturing.
     uint256 public fastestRate;
@@ -107,6 +111,7 @@ contract ReputationHandler is Test {
     uint256 public okProposeIfEmpty;
     uint256 public okFinalize;
     uint256 public okFinalizeRise;
+    uint256 public okFinalizeCarried;
     uint256 public okReject;
     uint256 public okSlash;
     uint256 public okHandover;
@@ -253,11 +258,31 @@ contract ReputationHandler is Test {
     // Finalizing and rejecting
     // -------------------------------------------------------------------------
 
+    /// Where a finalize now restarts the maturity clock: now, less the time built up toward the next
+    /// point, when the score is partway to what was earned. The same sum as the contract's, from the
+    /// stored values, so it catches a slip in one of them and not a wrong design. restartedAt is for that.
+    function _clockIfFinalizedNow(bytes32 did) internal view returns (uint256) {
+        uint256 since = rep.maturedAt(did);
+        uint256 from = rep.maturedScore(did);
+        uint256 changed = identity.operatorChangedAt(did);
+        if (changed != 0 && changed >= since) {
+            since = changed;
+            from = 0;
+        }
+        uint256 rate = rep.maturityRatePerDay();
+        uint256 earned = rep.getEarnedScore(did);
+        if (earned <= from || since == 0 || rate == 0) return block.timestamp;
+        uint256 owed = (block.timestamp - since) * rate;
+        if (from + owed / 1 days >= earned) return block.timestamp;
+        return block.timestamp - (owed % 1 days) / rate;
+    }
+
     function finalize(uint256 didSeed) external {
         bytes32 did = dids[didSeed % dids.length];
         Pend memory p = pend[did];
         bool refuse = !p.exists || block.timestamp < p.finalizableAt || !_scorable(did) || !_mayPropose(p.proposer);
         uint8 anchor = rep.getTotalScore(did);
+        uint256 clock = _clockIfFinalizedNow(did);
 
         try rep.finalizeReputation(did) {
             if (refuse) aBadFinalizeWasAccepted = true;
@@ -267,7 +292,13 @@ contract ReputationHandler is Test {
             finalized[did] = d;
             finalizedRoot[did] = p.root;
             anchorOf[did] = anchor;
-            anchoredAt[did] = block.timestamp;
+            anchoredAt[did] = clock;
+            if (clock == block.timestamp) {
+                restartedFrom[did] = anchor;
+                restartedAt[did] = block.timestamp;
+            } else {
+                okFinalizeCarried++;
+            }
             delete pend[did];
 
             // A jump in the earned score is released from where the agent stood, and a fall applies at once.
@@ -322,6 +353,8 @@ contract ReputationHandler is Test {
                 finalizedRoot[did] = bytes32(0);
                 anchorOf[did] = 0;
                 anchoredAt[did] = block.timestamp;
+                restartedFrom[did] = 0;
+                restartedAt[did] = block.timestamp;
                 delete pend[did];
                 okSlash++;
             } catch {}
@@ -523,6 +556,12 @@ contract ReputationInvariantTest is StackFixture {
         assertEq(handler.okFinalize(), 1, "finalize");
         assertEq(handler.okFinalizeRise(), 1, "finalize with a rise");
 
+        // Another, partway to a point: this suite's rate releases one every 2.4 hours.
+        handler.propose(0, 0, s1);
+        handler.warp(3 hours);
+        handler.finalize(0);
+        assertEq(handler.okFinalizeCarried(), 1, "finalize that keeps the time built up");
+
         handler.handover(0); // offer (nothing is pending yet)
         handler.handover(0); // accept
         assertEq(handler.okHandover(), 1, "handover");
@@ -617,6 +656,20 @@ contract ReputationInvariantTest is StackFixture {
             // A fall is immediate: when the earned score is at or below the anchor, it is the earned score.
             if (earned <= anchor) ceiling = earned;
             assertLe(spendable, ceiling, "spendable rose faster than the maturity rate allows");
+
+            // The same over every finalize since maturity last started over, whatever the stored clock
+            // says: the time they carry must not add up to more time than has passed.
+            uint256 from = handler.restartedFrom(did);
+            uint256 at = handler.restartedAt(did);
+            if (changed != 0 && changed >= at) {
+                from = 0;
+                at = changed;
+            }
+            assertLe(
+                spendable,
+                from + (block.timestamp - at) * handler.fastestRate() / 1 days,
+                "carried time released more than the time that passed"
+            );
         }
     }
 
