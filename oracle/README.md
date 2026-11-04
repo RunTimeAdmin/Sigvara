@@ -1279,7 +1279,7 @@ cd oracle
 node --test
 ```
 
-1,035 tests (as of 3 November 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
+1041 tests (as of 3 November 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
 the trust weighting, Merkle evidence trees, HTTP helpers, store persistence and recovery,
 the streamed state file, chain access with backoff, scan checkpointing, fee caps and transaction replacement,
 metrics, and cooldown logic. Several of the files run the real `index.js` and `watcher.js`

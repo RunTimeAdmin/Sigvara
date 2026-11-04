@@ -93,6 +93,16 @@ test('appendLogs: moves forward without holes, sorts, and keeps a log once', () 
 
 // --- resumable ----------------------------------------------------------------------
 
+test('appendLogs: refuses two logs at one block and log index from different transactions', () => {
+  const index = ix.createIndex({ chainId: 7, fromBlock: 100, addresses: [A, B] });
+  const one = ix.normalizeLog(raw(110, 3), ctx);
+  const other = ix.normalizeLog({ ...raw(110, 3), transactionHash: TX(999) }, ctx);
+  assert.throws(() => ix.appendLogs(index, [one, other], 199), /two logs at block 110, log index 3/);
+  // The same log twice is kept once, as before.
+  ix.appendLogs(index, [one, one], 199);
+  assert.equal(index.logs.length, 1);
+});
+
 test('resumable: only an index for the same chain, start block and contracts', () => {
   const cfg = { chainId: 5, fromBlock: 100, addresses: [A, B] };
   const saved = ix.createIndex(cfg);
@@ -109,7 +119,10 @@ test('resumable: only an index for the same chain, start block and contracts', (
 test('parseQuery: optional filters, each shape-checked', () => {
   const indexed = new Set([A, B]);
   const q = (s) => ix.parseQuery(new URLSearchParams(s), indexed);
-  assert.deepEqual(q(''), { address: null, topic0: null, topic1: null, fromBlock: null });
+  assert.deepEqual(q(''), { address: null, topic0: null, topic1: null, fromBlock: null, limit: ix.PAGE_ROWS, after: null });
+  assert.equal(q('limit=1').limit, 1);
+  assert.equal(q(`limit=${ix.PAGE_ROWS}`).limit, ix.PAGE_ROWS);
+  assert.deepEqual(q('after=150-3').after, [150, 3]);
   const full = q(`address=${A.toUpperCase().replace('0X', '0x')}&topic0=${T0},${T1}&topic1=${DID}&fromBlock=150`);
   assert.deepEqual([...full.address], [A]);
   assert.deepEqual([...full.topic0], [T0, T1]);
@@ -118,6 +131,7 @@ test('parseQuery: optional filters, each shape-checked', () => {
   for (const bad of [
     `address=${'0x' + 'cc'.repeat(20)}`, 'topic0=0x12', `topic0=${Array(21).fill(T0).join(',')}`,
     `topic1=${T0},${T1}`, 'fromBlock=-1', 'fromBlock=1e3', 'fromBlock=abc',
+    'limit=0', `limit=${ix.PAGE_ROWS + 1}`, 'limit=1.5', 'limit=-1', 'after=150', 'after=0x96-3', 'after=150-3-1', 'after=',
   ]) assert.ok(q(bad) instanceof Error, bad);
 });
 
@@ -137,6 +151,54 @@ test('selectLogs and eventsBody: every filter applies, and the body says the blo
   assert.equal(body.toBlock, 199);
   assert.equal(body.toBlockTime, 1199);
   assert.equal(body.logs.length, 3);
+  assert.equal(body.next, null);
+});
+
+test('eventsBody: a long answer comes a page at a time, by rows or by bytes, and the pages join up', () => {
+  const index = ix.createIndex({ chainId: 7, fromBlock: 100, addresses: [A, B] });
+  const n = (b, i, over) => ix.normalizeLog(raw(b, i, over), { ...ctx, to: 1000 });
+  // Two logs share block 120, so a cursor must tell them apart by log index.
+  ix.appendLogs(index, [n(110, 0), n(120, 0), n(120, 1, { address: B }), n(130, 0), n(140, 2), n(150, 0, { address: B })], 199, 1199);
+  const indexed = new Set([A, B]);
+  const all = ix.eventsBody(index, ix.parseQuery(new URLSearchParams(''), indexed)).logs;
+  assert.equal(all.length, 6);
+
+  // Reads every page of `params`, each answer at most `maxBytes`, and returns the pages.
+  const pages = (params, maxBytes) => {
+    const out = [];
+    for (let after = null; ;) {
+      const p = new URLSearchParams(params);
+      if (after) p.set('after', after);
+      const body = ix.eventsBody(index, ix.parseQuery(p, indexed), maxBytes);
+      out.push(body);
+      if (body.next === null) return out;
+      assert.ok(out.length < 10, 'the pages end');
+      after = body.next;
+    }
+  };
+  const byRows = pages('limit=2');
+  assert.deepEqual(byRows.map((b) => b.logs.length), [2, 2, 2]);
+  assert.deepEqual(byRows.map((b) => b.next), ['120-0', '130-0', null]);
+  assert.deepEqual(byRows.flatMap((b) => b.logs), all);
+
+  // A byte cap that fits two logs splits the same way; one smaller than a log still gives one.
+  const size = JSON.stringify(all[0]).length + 1;
+  assert.deepEqual(pages('', size * 2).flatMap((b) => b.logs), all);
+  assert.deepEqual(pages('', size * 2).map((b) => b.logs.length), [2, 2, 2]);
+  assert.deepEqual(pages('', 10).map((b) => b.logs.length), [1, 1, 1, 1, 1, 1]);
+
+  // Filters hold across pages: B's logs, one at a time.
+  const bOnly = pages(`address=${B}&limit=1`);
+  assert.deepEqual(bOnly.flatMap((b) => b.logs).map((l) => [parseInt(l.blockNumber, 16), l.address]), [[120, B], [150, B]]);
+  // fromBlock and after together: the later of the two starts the answer.
+  const from = (s) => ix.eventsBody(index, ix.parseQuery(new URLSearchParams(s), indexed)).logs.map((l) => ix.cursorOf(l));
+  assert.deepEqual(from('fromBlock=125&after=110-0'), ['130-0', '140-2', '150-0']);
+  assert.deepEqual(from('fromBlock=115&after=120-0'), ['120-1', '130-0', '140-2', '150-0']);
+  assert.deepEqual(from('fromBlock=120'), ['120-0', '120-1', '130-0', '140-2', '150-0']);
+  // A cursor past the end answers no logs and no next.
+  assert.deepEqual(ix.eventsBody(index, ix.parseQuery(new URLSearchParams('after=150-0'), indexed)).logs, []);
+  // The default answer holds the whole of a short history.
+  assert.equal(ix.eventsBody(index, ix.parseQuery(new URLSearchParams(''), indexed)).next, null);
 });
 
 // --- redact -------------------------------------------------------------------------

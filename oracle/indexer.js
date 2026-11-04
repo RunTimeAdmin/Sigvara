@@ -266,17 +266,27 @@ function encode(body) {
 }
 
 // Each recent /events answer, kept until the index moves, so a burst of requests costs one
-// encoding per query rather than one per request, and slow readers share one buffer.
+// encoding per query rather than one per request, and slow readers share one buffer. At most
+// ANSWERS answers and ANSWERS_BYTES of them, encoded, are kept: the oldest goes first.
+const ANSWERS = 64;
+const ANSWERS_BYTES = 64 * 1024 * 1024;
 const answers = new Map();
+let answersBytes = 0;
 let answersAt = null;
+const sizeOf = (a) => a.json.length + (a.gzip ? a.gzip.length : 0);
 function eventsAnswer(q) {
-  if (answersAt !== index.toBlock) { answers.clear(); answersAt = index.toBlock; }
-  const key = JSON.stringify([q.address && [...q.address].sort(), q.topic0 && [...q.topic0].sort(), q.topic1, q.fromBlock]);
+  if (answersAt !== index.toBlock) { answers.clear(); answersBytes = 0; answersAt = index.toBlock; }
+  const key = JSON.stringify([q.address && [...q.address].sort(), q.topic0 && [...q.topic0].sort(), q.topic1, q.fromBlock, q.limit, q.after]);
   let a = answers.get(key);
   if (!a) {
     a = encode(ix.eventsBody(index, q));
-    if (answers.size >= 64) answers.delete(answers.keys().next().value);
     answers.set(key, a);
+    answersBytes += sizeOf(a);
+    while (answers.size > ANSWERS || (answers.size > 1 && answersBytes > ANSWERS_BYTES)) {
+      const [oldest, held] = answers.entries().next().value;
+      answers.delete(oldest);
+      answersBytes -= sizeOf(held);
+    }
   }
   return a;
 }

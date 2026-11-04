@@ -428,12 +428,12 @@ below are done is `the registration's agentWallet is 0x18CB...4811, not the publ
    - Write `keystore.json` once with
      `docker compose run --rm -e SIGNER_ARGS="new-keystore /secrets-rw/keystore.json" -v "$PWD/secrets:/secrets-rw" signer`.
      It prints only the new address, writes the file 0400, and refuses to overwrite one.
-   - Let only the publisher's host reach the port: `ufw allow from 72.62.41.138 to any port 28600 proto tcp`,
-     with nothing else allowing it. A provider firewall in front of the host must allow it too: Hostinger's VPS firewall (hPanel, Security, Firewall) drops what its group does not list before ufw sees it, so add an accept rule for TCP 28600 from `72.62.41.138` to the group `packrai-vps` is in, which `mcpshield-vps` shares (nothing listens on 28600 there). The signer also drops any other connection itself.
-   - Start it, and check its log names that address and `72.62.41.138` as the only caller. It
+   - Reach it only through SSH. The signer listens on `127.0.0.1:28600` and answers only `127.0.0.1` (`SIGNER_HOST`, `SIGNER_ALLOW_FROM`), so it opens no port of its own: the publisher's `signer-tunnel` service forwards to it over SSH, encrypted and to a pinned host key. On `packrai-vps`, make a user with no shell (`useradd --system --create-home --shell /usr/sbin/nologin sigvara-tunnel`) whose `~/.ssh/authorized_keys` (owned by root, mode 0644, so the account cannot change it) holds the publisher's tunnel key, usable only from the publisher's host and only for that forward:
+     `from="72.62.41.138",restrict,port-forwarding,permitopen="127.0.0.1:28600",command="/bin/false" ssh-ed25519 AAAA... sigvara-publisher-tunnel`. Those options alone re-enable remote forwarding (`-R`), which would let the key listen on the host's loopback ports, so also append `oracle/sshd_config.signer-tunnel` to the end of `/etc/ssh/sshd_config`, check it as that file says, and confirm a `-R` from the key is refused. On the publisher's host, `secrets/tunnel/` (owned by root, 0700) holds `id_ed25519` (`ssh-keygen -t ed25519 -N '' -C sigvara-publisher-tunnel -f secrets/tunnel/id_ed25519`, 0400) and `known_hosts`, one line `76.13.101.31 ssh-ed25519 AAAA...` built from `/etc/ssh/ssh_host_ed25519_key.pub` on `packrai-vps` (a new host key there stops the tunnel until this is updated). No firewall rule for 28600 is needed, in ufw or in the provider's firewall (Hostinger's VPS firewall, hPanel, Security, Firewall): remove any (`ufw delete allow from 72.62.41.138 to any port 28600 proto tcp`, and the hPanel rule) once the tunnel works.
+   - Start it, and check its log names that address and `127.0.0.1` as the only caller. It
      signs nothing in its first minute.
-   - On the publisher's host, set `PUBLISHER_ADDRESS` to that address, `PUBLISH_SIGNER_URL` to
-     `http://76.13.101.31:28600`, and `PUBLISH_SIGNER_SECRET` to the same secret. Keep
+   - On the publisher's host, set `PUBLISHER_ADDRESS` to that address, `SIGNER_SSH` to
+     `sigvara-tunnel@76.13.101.31` (the compose file points `PUBLISH_SIGNER_URL` at the tunnel), and `PUBLISH_SIGNER_SECRET` to the same secret. Keep
      `PUBLISH_MODE=shadow` until step 3.
    - Fund the address with testnet USDC above `PUBLISH_MIN_BALANCE`.
 
@@ -449,7 +449,7 @@ below are done is `the registration's agentWallet is 0x18CB...4811, not the publ
    across restarts. A compromised publisher host can make it post wrong scores at that rate, for as
    long as it is compromised, and nothing else: nothing can be signed ahead and kept for later.
 
-   **If the publisher's host is compromised**, rotate the key, not just the HMAC secret: a new
+   **If the publisher's host is compromised**, first delete the `sigvara-tunnel` line from that account's `authorized_keys` on `packrai-vps`, which cuts the host off the signer at once; then rotate the key, not just the HMAC secret: a new
    keystore, step 2 with the new address, and the old address's posts revoked by hand. Until then,
    the old key keeps posting whatever the host asks, at the capped rate.
 2. Make it the registration's `agentWallet`. The publisher key signs the EIP-712 message
@@ -496,7 +496,7 @@ that 8004 agent is set to 0 whatever the link says by then.
 
 **Rotating the key**: create a new key in the signer, repeat step 2 with it, and set
 `PUBLISHER_ADDRESS` to it. Consumers that read `getAgentWallet(897764)` follow at once. The new
-address has posted nothing, so the next daily refresh posts every linked agent's score from it.
+address has posted nothing, so the next daily refresh posts every linked agent's score from it. **Rotating the tunnel key**: make a new `secrets/tunnel/id_ed25519` as in step 1, replace the line in the `sigvara-tunnel` account's `authorized_keys`, and `docker compose up -d --force-recreate signer-tunnel`.
 
 **Backing up its state**, before going live: append this to the primary's
 `/root/backup-oracle-state.sh` (section 1), after the oracle copy's last line, so a failure here
@@ -516,7 +516,7 @@ if docker volume inspect "$pvol" >/dev/null 2>&1; then
 fi
 ```
 
-**Where the rollout stands**, on Arc testnet as of 3 November 2026 (each step David's go):
+**Where the rollout stands**, on Arc testnet as of 4 November 2026 (each step David's go):
 
 - The backup above is in the primary's script, and a test run passed at 21:14 UTC.
 - Step 1: the signer runs on `packrai-vps` from `bef1068`, as `0x787f30E64d212A1d90174A832a79489dca44FE92`,
@@ -530,6 +530,8 @@ fi
   the claim at their 23:06 UTC epoch. The publisher has run with `PUBLISH_MODE=live` and
   `PUBLISH_ALLOW_AGENT_IDS=897766` since 22:26 UTC, and its first run posted the agent's spendable score of 3 in
   `0xcb1fe00347d1fc852340744d4628e7dff7def6dc7f54d8b478cd209c793f7c0c` (block 70589310). `getSummary` returns a
-  count of 1 and 3. The revoke half comes when that agent's score next changes; step 4 waits for it.
-- On main, an agent's first link queues it, if it has had a score event since `PUBLISH_FROM_BLOCK`, so it is posted at the next run unless its 8004 agent was already posted to that day; a link that moves waits for the refresh.
-  The testnet publisher still runs `bef1068`, which waits for the next refresh for any link; the switch to live mode posted this one at once.
+  count of 1 and 3. The 00:02 UTC refresh on 4 November found it unchanged at 3, so the revoke half comes with
+  its next score event or a later refresh.
+- Step 4, ahead of that revoke: David had the allow list emptied at 00:29 UTC on 4 November. The publisher now
+  posts for every agent linked on chain, and 897766 is still the only one.
+- Since 00:21 UTC on 4 November the publisher runs `bd54f26`, where an agent's first link queues it, if it has had a score event since `PUBLISH_FROM_BLOCK`, so it is posted at the next run unless its 8004 agent was already posted to that day; a link that moves waits for the refresh.

@@ -161,6 +161,19 @@ test('indexer: backfills without holes, follows new blocks, filters, resumes, an
     assert.equal((await get(port, '/events?topic0=0x12')).status, 400);
     assert.equal((await get(port, '/nothing')).status, 404);
 
+    // A page at a time: `next` asks for the rest, and the pages join up to the whole answer.
+    const paged = [];
+    for (let after = null, page = 0; page < 10; page++) {
+      const body = (await get(port, `/events?limit=1${after ? `&after=${after}` : ''}`)).body;
+      paged.push(...body.logs);
+      if (body.next === null) break;
+      after = body.next;
+    }
+    assert.deepEqual(paged, all.body.logs);
+    assert.equal(all.body.next, null);
+    assert.equal((await get(port, '/events?limit=0')).status, 400);
+    assert.equal((await get(port, '/events?after=nonsense')).status, 400);
+
     // New blocks after the head are picked up on the next poll.
     rpc.add(rpc.chain.head + 500);
     rpc.chain.head += 1000;
