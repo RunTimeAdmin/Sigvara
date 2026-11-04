@@ -252,7 +252,8 @@ the public RPC on 4 November 2026:
   `getBlock` for each block with a payment.
 
 That last measurement is why a chain in shadow is scanned beside the epoch rather than in it. Anyone can send an agent
-many small payments on a testnet, and a shadow chain, which counts for nothing, must not be able to hold up a score.
+many small payments on a testnet, and a shadow chain, which counts for nothing, must not be able to hold up a score. So
+those payments must not spend the scored chain's RPC either: a scan reads a recipient's code there once an agent, not once a payment.
 
 Open before it could go `on`, and none of it matters in shadow:
 
