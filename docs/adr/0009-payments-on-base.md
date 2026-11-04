@@ -230,3 +230,38 @@ Both operators enable a payment chain from the same block, as they did with
 4. **Base mainnet is decided at the mainnet launch**, not now.
 5. **Each operator brings its own Base RPC provider.** No shared endpoint, so one provider's
    outage or wrong answer cannot hold back or mislead both operators at once.
+
+## Elysium testnet, in shadow (David, 4 November 2026)
+
+Elysium testnet (chain 99801, Kinetiq's Arbitrum Orbit L2 settling to HyperEVM) is added as a payment chain in
+shadow only, on the checker alone. It credits nothing and changes no score. It is configuration, as "What this does
+not do" says a new chain should be, and this is the check of its asset that section asks for. Measured against
+the public RPC on 4 November 2026:
+
+- **`Transfer` logs.** USDC at `0x7D29d8047B905000459c0E80c34a26CeedcB47b2` has 6 decimals and is Arbitrum's standard
+  gateway token, bridged from HyperEVM testnet. It emits ordinary ERC-20 `Transfer` logs, which `decodeTransfer` reads.
+- **Finality.** The `finalized` tag works and moves in jumps, 46 seconds to about 5 minutes behind the head. That is
+  well inside the default delay of an hour.
+- **Reads.** A block takes about 97 ms, so about 37,000 an hour. A recipient-filtered `eth_getLogs` over 2,000,000 blocks
+  answered in 0.3 seconds, one filter took 50 recipients, `eth_getCode` answered a million blocks back, and 90 calls
+  with no pause drew no refusal. The cap is 10,000 logs an answer. `CHUNK=50000` stays under it even if every USDC
+  transfer on the chain went to an agent, at the 1,127 per 10,000 blocks measured.
+- **The scan.** `scanChain` over 90,000 blocks for the 18 registered agents took about 1.5 seconds and found no payment.
+  With other addresses posing as agents, a contract had its 3,038 payments skipped as `contract_recipient`, and an
+  account with no code showed 2,993 it would credit, with nothing credited. That second scan took 11 minutes, one
+  `getBlock` for each block with a payment.
+
+That last measurement is why a chain in shadow is scanned beside the epoch rather than in it. Anyone can send an agent
+many small payments on a testnet, and a shadow chain, which counts for nothing, must not be able to hold up a score.
+
+Open before it could go `on`, and none of it matters in shadow:
+
+- **A flood of payments.** A chain that is `on` is still scanned inside the epoch, so payments to an agent across many
+  blocks slow that epoch by a read a block. This holds for Base Sepolia too, and needs a bound before either goes
+  `on`. Elysium's logs carry `blockTimestamp`, which would avoid those reads there.
+- **Whether bridged USDC counts.** It is a gateway token on this chain, not issued by Circle.
+- **A provider per operator.** The checker reads the public endpoint. A chain that counts needs both operators, each
+  with its own provider (decision 5).
+- **An endless answer.** ethers reads a whole response with no size limit, so a hostile endpoint might exhaust an
+  operator's memory. This has not been tested. It is one reason shadow runs on one operator.
+- **Mainnet.** Its chain id, RPC and contracts are published at launch, and decision 1's testnet-only posture holds.
