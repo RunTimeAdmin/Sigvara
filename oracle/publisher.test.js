@@ -342,6 +342,85 @@ test('the daily refresh reads every scored agent again, since maturity moves the
   assert.equal(w.sends[2].args[1], 49);
 });
 
+test('an agent linked during the day is posted at the next run, not at the next daily refresh', async () => {
+  const { w, publisher, deps } = setup({ mode: 'live' });
+  delete w.links[did(1)];
+  const r = await publisher.runOnce();
+  assert.equal(r.skipped[0].reason, 'not linked on chain');
+
+  // Later the same UTC day, the scan finds its link, and one for a registered agent never scored,
+  // which reads 0 and must not be posted as if it had been slashed.
+  w.head = 140;
+  w.links[did(1)] = '7';
+  w.links[did(9)] = '9';
+  w.operators[did(9)] = OPERATOR;
+  w.spendable[did(9)] = 0;
+  w.earned[did(9)] = 0;
+  deps.scanner.scan = async ({ onClaim }) => {
+    onClaim({ didHash: did(1), agentId: '7', block: 130, logIndex: 0 });
+    onClaim({ didHash: did(9), agentId: '9', block: 131, logIndex: 0 });
+    return 2;
+  };
+  const r2 = await publisher.runOnce();
+  assert.deepEqual(r2.sent.map((s) => [s.agentId, s.value, s.reason]), [['7', 47, 'linked']]);
+  assert.deepEqual(liveValues(w, '9'), [], 'an agent with no score has nothing to post');
+  const file = JSON.parse(Buffer.from(w.sends[0].args[6].split(',')[1], 'base64').toString('utf8'));
+  assert.equal(file.sigvara.event, null, 'a link is not a score event');
+});
+
+test('a first link found while a slash is pending leaves the slash to go out, with its event', async () => {
+  const { w, publisher, deps, state } = setup({ mode: 'live' });
+  delete w.links[did(1)];
+  await publisher.runOnce();
+  // Slashed while unlinked, in a run whose link scan is behind, so the zero waits.
+  w.head = 140;
+  w.spendable[did(1)] = 0;
+  w.earned[did(1)] = 0;
+  w.events.push({ kind: 'zeroed', didHash: did(1), block: 135, logIndex: 0, txHash: `0x${'ab'.repeat(32)}` });
+  w.covers = false;
+  await publisher.runOnce();
+  assert.equal(state().pending[did(1)].kind, 'zeroed');
+  // Then its first link is found.
+  w.covers = true;
+  w.links[did(1)] = '7';
+  deps.scanner.scan = async ({ onClaim }) => { onClaim({ didHash: did(1), agentId: '7', block: 138, logIndex: 0 }); return 1; };
+  await publisher.runOnce();
+  assert.deepEqual(w.sends.map((s) => [s.kind, s.args[1]]), [['post', 0]]);
+  const file = JSON.parse(Buffer.from(w.sends[0].args[6].split(',')[1], 'base64').toString('utf8'));
+  assert.equal(file.sigvara.event.kind, 'zeroed', 'the slash, not the link, is why it was posted');
+});
+
+test('a link that moves to another 8004 agent waits for the daily refresh', async () => {
+  const { w, publisher, deps } = setup({ mode: 'live' });
+  await publisher.runOnce();
+  w.head = 140;
+  w.links[did(1)] = '8';
+  deps.scanner.scan = async ({ onClaim }) => { onClaim({ didHash: did(1), agentId: '8', block: 130, logIndex: 0 }); return 1; };
+  await publisher.runOnce();
+  assert.deepEqual(kinds(w), ['post'], 'not a first link: nothing is sent for it today');
+  deps.scanner.scan = async () => 0;
+  nextDay(w, 160);
+  await publisher.runOnce();
+  assert.deepEqual(w.sends.map((s) => `${s.kind} ${s.agentId}`), ['post 7', 'revoke 7', 'post 8']);
+});
+
+test('a link found is saved before the run reads anything else', async () => {
+  const { w, publisher, deps } = setup({ mode: 'live' });
+  // A store that keeps copies, as the state file does, so a run that fails keeps only what it saved.
+  let saved = null;
+  deps.state.get = () => (saved ? JSON.parse(saved) : null);
+  deps.state.set = (s) => { saved = JSON.stringify(s); };
+  const state = () => JSON.parse(saved);
+  delete w.links[did(1)];
+  await publisher.runOnce();
+  w.head = 140;
+  w.links[did(1)] = '7';
+  deps.scanner.scan = async ({ onClaim }) => { onClaim({ didHash: did(1), agentId: '7', block: 130, logIndex: 0 }); return 1; };
+  deps.reads.reputationEvents = async () => { throw new Error('the node did not answer'); };
+  await assert.rejects(publisher.runOnce());
+  assert.equal(state().pending[did(1)]?.kind, 'linked', 'kept for the next run, though this one failed');
+});
+
 test('a link scan short of the read block posts nothing, and keeps the agent for next run', async () => {
   const { w, publisher, state, logs } = setup({ mode: 'live' });
   w.covers = false;

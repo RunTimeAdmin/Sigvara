@@ -19,7 +19,7 @@ const utcDay = (seconds) => Math.floor(seconds / DAY_SECONDS);
  * The spec's off-chain feedback file (EIP-8004, "Off-Chain Feedback File Structure"): its required
  * fields, the tags, and a `sigvara` object saying what the value was read from, so anyone can
  * check it against SigvaraReputation at that block. `event` is the ReputationUpdated or
- * ReputationZeroed that prompted the post, or null for a daily refresh.
+ * ReputationZeroed that prompted the post, or null for a daily refresh or a link just found.
  */
 function feedbackFile({
   chainId, identityRegistry, agentId, publisher, readAt, spendable, earned, didHash, reputation, event = null,

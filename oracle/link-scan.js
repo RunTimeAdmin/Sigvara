@@ -80,7 +80,7 @@ function createLinkScanner({ chain, external, fromBlock, chunkSize, getState, se
   /**
    * Reads the MetadataSet logs for the `sigvara` key since the last scan, up to the head or `upTo`,
    * and keeps the claims made by the operator of the Sigvara agent they name (claimMadeByOperator).
-   * Returns how many it kept.
+   * Returns how many it kept, and hands each one to `onClaim` when given.
    *
    * The operator test is made here, as of the log's block, and not only when a link is used: anyone
    * can set `sigvara` on an 8004 agent of their own, and enough such claims on one didHash would
@@ -90,7 +90,7 @@ function createLinkScanner({ chain, external, fromBlock, chunkSize, getState, se
    * didHashes, one naming any other agent costs no read; and the checkpoint moves after every log,
    * so a scan cut short resumes where it stopped.
    */
-  async function scan({ known = null, upTo = Infinity } = {}) {
+  async function scan({ known = null, upTo = Infinity, onClaim = null } = {}) {
     const state = getState() ?? { cursor: null, claims: {} };
     if (!state.cursor) state.cursor = startCursor();
     const head = await chain.readWithBackoff('head', () => external.latestBlock());
@@ -105,6 +105,7 @@ function createLinkScanner({ chain, external, fromBlock, chunkSize, getState, se
           if (claim && (!known || known.has(claim.didHash)) && await claimMadeByOperator(claim, cache)) {
             linkClaims.addClaim(state.claims, claim);
             found++;
+            if (onClaim) onClaim(claim);
           }
           state.cursor = { block: log.blockNumber, logIndex: log.logIndex + 1 };
         }

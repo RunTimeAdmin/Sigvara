@@ -1,7 +1,7 @@
 # ADR 0008: Publish finalized scores to ERC-8004 as feedback
 
 **Status:** Accepted · 2026-11-03, with David's decisions below. Built in `oracle/publisher.js`,
-which ran in shadow mode first and since 3 November 2026 posts on testnet for one agent, as the end-to-end check ([Rollout](#rollout)).
+which ran in shadow mode first, posted on testnet for one agent from 3 November 2026 as the end-to-end check, and since 4 November posts for every agent linked on chain ([Rollout](#rollout)).
 
 ## Context
 
@@ -120,7 +120,7 @@ operator wallet.
   (`getLastIndex`, `readFeedback`) and skips the post when that already holds the same value and is
   live. A restart, or a second copy started by mistake, then repeats nothing.
 - **On a change, at most once per agent per UTC day, and refreshed daily.** A finalized score
-  is a reason to look. The spendable score also changes with time alone, as a rise is released
+  is a reason to look, and so is an agent's first link found on chain. The spendable score also changes with time alone, as a rise is released
   over days, and no event announces that, so once per UTC day the publisher reads the spendable
   score of every linked agent again. If it has not moved since the last post, nothing is sent. A
   backlog collapses to the newest reading per agent.
@@ -160,7 +160,7 @@ operators' state files). Later that day the simulation's solo agent linked itsel
 2. **Posting, once three gates are met:** Sigvara's registration is on chain (done: agent 897764);
    `getAgentWallet(897764)` is the publisher's address (done: block 70587267, 3 November 2026), which the publisher checks before every
    run; and one successful end-to-end cycle on testnet, a revoke and a post on one agent, read
-   back with `getSummary` (begun on 3 November 2026: the first post, to agent 897766 in block 70589310; the revoke comes when its score next changes).
+   back with `getSummary` (begun on 3 November 2026: the first post, to agent 897766 in block 70589310; the revoke comes when its score next changes. By David's call, posting for every linked agent began on 4 November, before that revoke).
 3. **Mainnet** stays behind the audit and the launch gates, like the rest of the protocol.
 
 ## Options considered
