@@ -284,6 +284,74 @@ contract SigvaraReaderTest is StackFixture {
         assertTrue(reader.isTrusted(agent, 40), "trusted again once it tops up");
     }
 
+    // =========================================================================
+    // A bond the caller names
+    // =========================================================================
+
+    function test_isTrustedWithBond_acceptsTheBondHeldAndNotOneUnitMore() public {
+        bytes32 didHash = _registerAndBond(agentPk, 2 * MIN_STAKE);
+        _finalize(didHash, _score40());
+        assertTrue(reader.isTrusted(agent, 40, 2 * MIN_STAKE), "exactly the bond held");
+        assertFalse(reader.isTrusted(agent, 40, 2 * MIN_STAKE + 1), "one unit more than it holds");
+    }
+
+    /// It can only ask for more. A caller naming a small bond, or none, must not get past the
+    /// minimum the staking contract asks for now.
+    function test_isTrustedWithBond_aLowerBondNeverWeakensTheMinimum() public {
+        bytes32 didHash = _registerAndBond(agentPk, 2 * MIN_STAKE);
+        _finalize(didHash, _score40());
+        assertTrue(reader.isTrusted(agent, 40, 0), "no extra bond asked for");
+
+        vm.prank(admin);
+        staking.setMinimumStake(3 * MIN_STAKE);
+        assertFalse(reader.isTrusted(agent, 40, 0), "below the raised minimum");
+        assertFalse(reader.isTrusted(agent, 40, 2 * MIN_STAKE), "it holds this much, but the minimum is higher");
+
+        vm.prank(operator);
+        staking.depositStake(didHash, MIN_STAKE);
+        assertTrue(reader.isTrusted(agent, 40, 3 * MIN_STAKE), "trusted again once it tops up");
+    }
+
+    function test_isTrustedWithBond_isNeverTrueForAnAddressThatWasNeverRegistered() public {
+        address stranger = makeAddr("stranger");
+        assertFalse(reader.isTrusted(stranger, 0, 0));
+    }
+
+    function test_isTrustedWithBond_stillNeedsEverythingIsTrustedNeeds() public {
+        bytes32 didHash = _registerAndBond(agentPk, 2 * MIN_STAKE);
+        _finalize(didHash, _score40());
+        assertTrue(reader.isTrusted(agent, 40, MIN_STAKE));
+        assertFalse(reader.isTrusted(agent, 41, MIN_STAKE), "score below the threshold");
+
+        vm.prank(operator);
+        identity.updateStatus(didHash, SigvaraIdentity.AgentStatus.Suspended);
+        assertFalse(reader.isTrusted(agent, 40, MIN_STAKE), "suspended");
+    }
+
+    /// An amount queued for withdrawal is on its way out, so it does not count toward a floor a
+    /// consumer named. It stays slashable until claimed, which is a separate matter.
+    function test_isTrustedWithBond_anAmountQueuedForWithdrawalDoesNotCount() public {
+        bytes32 didHash = _registerAndBond(agentPk, 3 * MIN_STAKE);
+        _finalize(didHash, _score40());
+        assertTrue(reader.isTrusted(agent, 40, 3 * MIN_STAKE));
+
+        vm.prank(operator);
+        staking.initiateWithdrawal(didHash, MIN_STAKE);
+        assertFalse(reader.isTrusted(agent, 40, 3 * MIN_STAKE), "the queued part no longer counts");
+        assertTrue(reader.isTrusted(agent, 40, 2 * MIN_STAKE), "what is left does");
+    }
+
+    function testFuzz_isTrustedWithBond_isIsTrustedAndTheBondCheck(uint256 extra, uint256 minBond, uint8 minScore) public {
+        extra = bound(extra, 0, 5 * MIN_STAKE);
+        minScore = uint8(bound(minScore, 0, 100));
+        bytes32 didHash = _registerAndBond(agentPk, MIN_STAKE + extra);
+        _finalize(didHash, _score40());
+        assertEq(
+            reader.isTrusted(agent, minScore, minBond),
+            reader.isTrusted(agent, minScore) && minBond <= MIN_STAKE + extra
+        );
+    }
+
     /// The same fact, reported rather than only applied: a consumer that reads the struct can see
     /// why an Active agent is not trusted, and what it holds against what is asked.
     function test_trust_collateralizedReflectsTheCurrentMinimum() public {

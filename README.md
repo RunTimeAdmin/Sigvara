@@ -600,11 +600,11 @@ Everything below runs offline, with no deployed contracts, except three fork sui
 
 | Suite | Count | Command |
 |---|---|---|
-| Contracts: unit, fuzz, E2E, upgrade, deploy-script, handover and 21 invariants | 748 | `forge test` |
+| Contracts: unit, fuzz, E2E, upgrade, deploy-script, handover and 21 invariants | 754 | `forge test` |
 | Oracle | 1117 | `cd oracle && node --test` |
 | SDK | 300 | `cd packages/sdk && npx vitest run` |
 
-Counts are individual tests as measured on 4 November 2026, so each of the 21 invariants counts once. Without a fork URL, 736 of the contract tests run and 12 skip. Run after `npm run build`, 291 of the SDK's 300 pass and 9 skip: the 8 integration tests, which need a live deployment, and one check that runs only in CI. Without a build, the 8 built-package tests skip too. Vitest strips types without checking them, so `npm run typecheck` in `packages/sdk` checks the tests against the SDK's types as well as the sources. [`scripts/mutation`](scripts/mutation/README.md) holds the harnesses that measure whether these tests would catch a deliberate break in the contracts or deploy scripts.
+Counts are individual tests as measured on 4 November 2026, so each of the 21 invariants counts once. Without a fork URL, 742 of the contract tests run and 12 skip. Run after `npm run build`, 291 of the SDK's 300 pass and 9 skip: the 8 integration tests, which need a live deployment, and one check that runs only in CI. Without a build, the 8 built-package tests skip too. Vitest strips types without checking them, so `npm run typecheck` in `packages/sdk` checks the tests against the SDK's types as well as the sources. [`scripts/mutation`](scripts/mutation/README.md) holds the harnesses that measure whether these tests would catch a deliberate break in the contracts or deploy scripts.
 
 ### Unit Tests (default)
 
@@ -777,7 +777,7 @@ import {ISigvaraReader} from "sigvara/src/interfaces/ISigvara.sol";
 require(ISigvaraReader(READER).isTrusted(agent, 40), "agent not in good standing");
 ```
 
-`isTrusted` checks that the agent is Active, that the bond it holds now meets the current minimum stake, and that its spendable score is at least the threshold. `SigvaraReputation.meetsThreshold` compares the score alone, so a suspended agent passes it. The [integration guide](docs/integration.md) covers the full read, the registry interfaces and a worked example.
+`isTrusted` checks that the agent is Active, that the bond it holds now meets the current minimum stake, and that its spendable score is at least the threshold. `SigvaraReputation.meetsThreshold` compares the score alone, so a suspended agent passes it. The [integration guide](docs/integration.md) covers the full read, the registry interfaces and a worked example. `isTrusted(agent, minScore, minBond)` also asks for a bond of your own choosing, and can only ask for more than the minimum.
 
 ---
 

@@ -177,6 +177,12 @@ interface ISigvaraReader {
     ///         that was never registered, whatever the threshold.
     function isTrusted(address agent, uint8 minScore) external view returns (bool);
 
+    /// @notice isTrusted, and the bond held now is at least `minBond`, in the bond token's units, for a
+    ///         consumer with more at stake than the staking contract's minimum covers. It can only ask for
+    ///         more: a `minBond` under the current minimum still needs the minimum. The bond is the one
+    ///         `trust` reports, which excludes any amount queued for withdrawal.
+    function isTrusted(address agent, uint8 minScore, uint256 minBond) external view returns (bool);
+
     /// @notice isTrusted, and the score was written no more than `maxAgeSeconds` ago. False for an agent
     ///         that has never been scored, whatever the age: a score that was never written is not a
     ///         fresh one. A maximum age of zero asks for a score written in this very second. Use this

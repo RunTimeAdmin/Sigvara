@@ -74,7 +74,7 @@ shows a pattern that has drifted (`NO CHANGE APPLIED`) and a test that has since
 | `mutate-p4-payee.sh` | the slasher is never the payee | 10 | 10 |
 | `mutate-p4-ceilings.sh` | ceilings on periods, window and rate | 27 | 27 |
 | `mutate-p4-floors.sh` | mainnet launch floors | 8 | 8 |
-| `mutate-p4-reader.sh` | score age on the Reader | 9 | 9 |
+| `mutate-p4-reader.sh` | score age on the Reader, and the bond a caller names | 13 | 13 |
 | `mutate-p4-handover.sh` | fail-closed renounce, timelock and Safe policy it enforces, what it will not take on trust (a Safe that is not Safe's code, has a module or a guard, keeps the deployer as a module, or is a delegated account, a timelock whose code it does not know or that the deployer did not create), the reconciliation report it will not renounce without, recorded deploy block, upgrade shape check. How the Safe was created is checked by the fork suite, which these do not run, and the history rules by `check-before-renounce.mjs --self-test` | 55 | 55 |
 | `mutate-invariants.sh` | the Reputation, EpochFees and Identity invariant suites, without the unit tests (PRs 66 and 69) | 114 | 110 |
 

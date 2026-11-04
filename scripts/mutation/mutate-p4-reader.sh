@@ -1,5 +1,5 @@
 #!/bin/bash
-# Deliberate breaks of the Reader's freshness. Each must fail a test. Run only against a committed tree.
+# Deliberate breaks of the Reader's freshness, and of the bond a caller names. Each must fail a test. Run only against a committed tree.
 REPO_DEFAULT="$(cd "$(dirname "$0")/../.." && pwd)"
 REPO=${REPO:-$REPO_DEFAULT}
 cd "$REPO" || exit 1
@@ -32,4 +32,8 @@ runl E6 $F 'function _trust(' 't.scoreUpdatedAt = reputation.getReputation(didHa
 runl E7 $F 'function _trust(' 't.scoreUpdatedAt = reputation.getReputation(didHash).lastUpdated;' 'reputation.getReputation(didHash).lastUpdated' '0' 'the struct reports no time'
 runl E8 $F 'function _isTrusted(' 'return identity.isActive(didHash)' 'identity.isActive(didHash)' 'true' 'the shared check forgets status'
 runl E9 $F 'function _isTrusted(' '&& staking.hasMinimumStake(didHash)' 'staking.hasMinimumStake(didHash)' 'true' 'the shared check forgets the bond'
+runl B1 $F 'function isTrusted(address agent, uint8 minScore, uint256 minBond)' 'return _isTrusted(didHash, minScore) && staking.getStake(didHash) >= minBond;' '>= minBond' '> minBond' 'the bond held exactly no longer meets the floor'
+runl B2 $F 'function isTrusted(address agent, uint8 minScore, uint256 minBond)' 'return _isTrusted(didHash, minScore) && staking.getStake(didHash) >= minBond;' 'staking.getStake(didHash) >= minBond' 'true' 'the floor is not checked'
+runl B3 $F 'function isTrusted(address agent, uint8 minScore, uint256 minBond)' 'return _isTrusted(didHash, minScore) && staking.getStake(didHash) >= minBond;' '_isTrusted(didHash, minScore) \&\& ' '' 'only the bond is checked'
+runl B4 $F 'function isTrusted(address agent, uint8 minScore, uint256 minBond)' 'return _isTrusted(didHash, minScore) && staking.getStake(didHash) >= minBond;' 'staking.getStake(didHash)' 'staking.getStake(didHash) + minBond' 'the floor always passes'
 echo "DONE" >> "$OUT"

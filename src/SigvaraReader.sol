@@ -79,6 +79,12 @@ contract SigvaraReader is ISigvaraReader {
     }
 
     /// @inheritdoc ISigvaraReader
+    function isTrusted(address agent, uint8 minScore, uint256 minBond) external view returns (bool) {
+        bytes32 didHash = identity.computeDidHash(agent);
+        return _isTrusted(didHash, minScore) && staking.getStake(didHash) >= minBond;
+    }
+
+    /// @inheritdoc ISigvaraReader
     function isTrustedFresh(address agent, uint8 minScore, uint256 maxAgeSeconds) external view returns (bool) {
         bytes32 didHash = identity.computeDidHash(agent);
         if (!_isTrusted(didHash, minScore)) return false;

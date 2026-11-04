@@ -28,6 +28,7 @@ returning true for it until it tops up. `trust(agent).collateralized` reports th
 | You want | Call | Notes |
 |---|---|---|
 | A yes or no | `reader.isTrusted(agent, minScore)` | Status, current bond and score together |
+| A yes or no that also asks for a larger bond | `reader.isTrusted(agent, minScore, minBond)` | `isTrusted`, and the bond held now is at least `minBond`. It can only ask for more than the minimum |
 | A yes or no that refuses a stale score | `reader.isTrustedFresh(agent, minScore, maxAgeSeconds)` | `isTrusted`, and the score was written no more than `maxAgeSeconds` ago. See [How old the score is](#how-old-the-score-is) |
 | The standing behind it | `reader.trust(agent)`, or `trustByDid(didHash)` | One struct, described below |
 | One registry fact | the interfaces in `src/interfaces/ISigvara.sol` | Keyed by didHash, from `computeDidHash(agent)` |
@@ -56,8 +57,10 @@ move, though the code behind them does.
 2. The bond it holds now meets the staking contract's current `minimumStake`.
 3. Its spendable score is at least `minScore`.
 
-It does not ask for more stake than that minimum. If you need a higher floor, read `stake`
-from `trust()` and apply your own. The status is stored, so an agent that was Active when
+It does not ask for more stake than that minimum. If you have more at stake than the minimum
+covers, `isTrusted(agent, minScore, minBond)` adds a floor of your own, in the bond token's
+units. A `minBond` under the current minimum still needs the minimum, and an amount queued for
+withdrawal does not count toward it. The status is stored, so an agent that was Active when
 governance raised `minimumStake` stays Active until something else changes its status;
 the second check is what makes `isTrusted` false for it until it tops up, and the oracle
 cannot write a new score for an agent that sits below the minimum.
