@@ -13,9 +13,9 @@
 # the publisher, owned by uid 10001 (the user the signer runs as, which no account on the host
 # has) and readable by it alone; the signer refuses a secret anyone else can read. It signs only the publisher's two
 # Reputation Registry calls and its agentWallet message, and only for requests carrying that HMAC
-# from an address in SIGNER_ALLOW_FROM. It listens on this host's 127.0.0.1 and answers only it: the
-# publisher reaches it through an SSH forward only its key can open, so no port of its own is open
-# (runbook section 5). Host networking, so that loopback is the host's, where sshd forwards to.
+# from an address in SIGNER_ALLOW_FROM. It listens on this host's 127.0.0.1 and answers only it, set
+# below so a .env cannot widen it: the publisher reaches it through an SSH forward its key alone can
+# open, so no port of its own is open (runbook section 5). Host networking, so that loopback is the host's.
 # The record of what it signed, for the hourly cap, is kept in the state volume.
 #
 #   cd /docker/sigvara-signer && docker compose up -d
@@ -35,6 +35,8 @@ services:
       SIGNER_PASSWORD_FILE: /secrets/password
       SIGNER_SECRET_FILE: /secrets/hmac-secret
       SIGNER_STATE_FILE: /data/signer-state.json
+      SIGNER_HOST: 127.0.0.1
+      SIGNER_ALLOW_FROM: 127.0.0.1
     security_opt:
       - no-new-privileges:true
     # Root only to fetch the code and hand /data to uid 10001; then su-exec drops to it.

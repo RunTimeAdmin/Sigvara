@@ -1,0 +1,20 @@
+# Append to the END of /etc/ssh/sshd_config on the signer's host (runbook section 5, step 1).
+# A Match block lasts to the next Match or the end of the file, so it goes last, not in an
+# sshd_config.d include. Check with `sshd -t` and
+# `sshd -T -C user=sigvara-tunnel,host=x,addr=72.62.41.138` (and the same for root, unchanged),
+# then reload with an admin session kept open.
+#
+# The tunnel account's key options (restrict,port-forwarding,permitopen=...) re-enable remote
+# forwarding too, which would let the key listen on this host's loopback ports. This makes sshd
+# itself allow the one local forward to the signer and nothing else.
+Match User sigvara-tunnel
+    AuthenticationMethods publickey
+    AllowTcpForwarding local
+    PermitOpen 127.0.0.1:28600
+    AllowStreamLocalForwarding no
+    PermitTunnel no
+    X11Forwarding no
+    AllowAgentForwarding no
+    PermitTTY no
+    PermitUserRC no
+    ForceCommand /bin/false
