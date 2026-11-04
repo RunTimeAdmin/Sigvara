@@ -2,7 +2,8 @@
 
 For the two oracle operators on the Arc testnet: keeping and restoring state, payer-signed
 outcomes that are slow to reach the other operator, the two operators disagreeing, the event
-index the explorer pages read (section 4), and the ERC-8004 publisher (section 5). A stolen
+index the explorer pages read (section 4), the ERC-8004 publisher (section 5), and payment
+chains (section 6). A stolen
 key is [incident-operator-key.md](incident-operator-key.md); bringing up an operator is
 [oracle/RUNBOOK-second-operator.md](../oracle/RUNBOOK-second-operator.md).
 
@@ -540,3 +541,40 @@ fi
   port 22, a `-R` and a command were all refused. The signer moved to `127.0.0.1` at 01:40 UTC and the publisher
   to the tunnel at 01:42, both on `68fc9ff`; a request through `signer-tunnel:28600` returned the publisher's
   address. David then removed the 28600 rules from ufw and from the hPanel firewall, and the port answers no one.
+
+## 6. Payment chains
+
+A payment chain is a chain the oracle only reads payments from ([ADR 0009](adr/0009-payments-on-base.md)).
+In `shadow` mode, the default, it scans and reports what it would credit, and credits nothing: no score, proposal
+or evidence root changes. A shadow scan runs beside the epoch, so nothing on that chain can hold up a score.
+
+**Adding one in shadow.** Elysium testnet's settings, in each operator's `.env`, the same on both:
+
+```
+PAYMENT_CHAIN_IDS=99801
+PAYMENT_CHAIN_99801_RPC_URL=https://testnet-rpc.elysium.kinetiq.xyz
+PAYMENT_CHAIN_99801_ASSET=0x7D29d8047B905000459c0E80c34a26CeedcB47b2
+PAYMENT_CHAIN_99801_FROM_BLOCK=22900000
+PAYMENT_CHAIN_99801_FEE_UNIT=100000000
+PAYMENT_CHAIN_99801_MIN_AMOUNT=10000
+PAYMENT_CHAIN_99801_MODE=shadow
+PAYMENT_CHAIN_99801_CHUNK=50000
+PAYMENT_CHAIN_99801_MAX_BLOCKS=100000
+```
+
+Run `docker compose up -d` with the compose line from the table above; a plain restart does not read `.env`
+again. The next epoch scans from `FROM_BLOCK`. The operators need `PAYMENT_VERIFICATION=required`,
+`PAYMENT_SCAN_ENABLED=1` and `EXPECTED_CHAIN_ID`, or the process refuses to start.
+
+**Checking it.** `curl -s https://oracle.sigvara.xyz/health | jq .paymentChains`, and the same on
+`checker.sigvara.xyz`. Each chain reports `mode`, `lastBlock`, `lastBlockTs` and `lastScan`, which holds `from`,
+`to`, `wouldCredit`, `skipped`, `reasons` and `canary`. The two operators should report the same `wouldCredit` and
+`reasons` over the same blocks. `canary: "unavailable"` is what a shadow scan with nothing to credit reports,
+because the canary needs a payment already held on that chain.
+
+**When a scan fails.** The log says `payment chain 99801 scan failed`, and `/metrics` counts it as
+`paymentChainScanErrors`. In shadow, scoring carries on, and the next epoch resumes from the last block saved.
+`logs count limit exceeded` means one call covered more than the RPC will return, so lower `CHUNK`.
+
+**Removing one.** Delete its lines from both `.env` files and run `docker compose up -d`. Its cursor stays in the
+state file under `99801/shadow`, and nothing reads it.

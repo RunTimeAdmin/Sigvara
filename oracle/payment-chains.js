@@ -49,6 +49,10 @@ const DEFAULT_PACE_MS = 500;
 // Blocks one scan covers at most: two hours of Base Sepolia, twenty of Base. A catch-up then
 // advances a bounded step per epoch instead of retrying an ever larger range after one failed call.
 const DEFAULT_MAX_BLOCKS = 36_000;
+// How long one call to a payment chain may take. A chain that is on is scanned inside the epoch, before
+// scoring, and each read is tried four times, so ethers' default of 5 minutes would let one hung
+// endpoint hold an epoch for 20 minutes. At 30 seconds it costs about 2.
+const RPC_TIMEOUT_MS = 30_000;
 const MODES = ['shadow', 'on'];
 // A score's evidence is cut at a whole minute, one minute before the scoring operator's clock, so a
 // checker can find the cut from the proposal's time alone. It tries every whole minute in the half
@@ -164,6 +168,16 @@ function readConfig(env = process.env, { scoredChainId = null, paymentRequired =
     throw configError('PAYMENT_CHAIN_IDS needs PAYMENT_VERIFICATION=required');
   }
   return Object.freeze({ chains: Object.freeze(chains), byId });
+}
+
+/**
+ * A payment chain's provider. Its network is given so ethers does not ask for it on every call; the
+ * scan asks eth_chainId itself each time, because an endpoint can fail over onto another chain.
+ */
+function providerFor(chain, timeoutMs = RPC_TIMEOUT_MS) {
+  const request = new ethers.FetchRequest(chain.rpcUrl);
+  request.timeout = timeoutMs;
+  return new ethers.JsonRpcProvider(request, chain.chainId, { staticNetwork: true });
 }
 
 /** The state key for a chain's scan. A shadow scan keeps its own cursor, so turning a chain on starts at FROM_BLOCK. */
@@ -512,7 +526,9 @@ module.exports = {
   DEFAULT_MAX_BLOCKS,
   CUT_QUANTUM_MS,
   AUDIT_WINDOW_MS,
+  RPC_TIMEOUT_MS,
   readConfig,
+  providerFor,
   active,
   cutFor,
   coveredCut,

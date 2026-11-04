@@ -8,6 +8,7 @@
 const { test, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const net = require('node:net');
 const { ethers } = require('ethers');
 const { World, startOracle, wallet, ASSET } = require('./test-support/oracle-harness');
 const { TRANSFER_TOPIC } = require('./payments');
@@ -186,9 +187,30 @@ test('in shadow mode the scan reports what it would credit, and the epoch is not
   });
   oracle = await startOracle({ world, env: env(base.url, { [`PAYMENT_CHAIN_${BASE}_MODE`]: 'shadow' }) });
   await waitFor(/\[oracle\] epoch done/);
-  assert.match(oracle.logs(), new RegExp(`payment chain ${BASE} \\(shadow\\) .*: 1 would credit`));
+  await waitFor(new RegExp(`payment chain ${BASE} \\(shadow\\) .*: 1 would credit`));
   const ev = await oracle.call('GET', `/evidence/${agent.didHash}`);
   assert.equal(ev.body.count, 0, 'nothing was credited');
+});
+
+test('a chain in shadow runs beside the epoch, so a hung endpoint cannot hold up a score', async () => {
+  const world = new World();
+  world.addRegisteredAgent();
+  // Takes the connection and never answers. Scanned inside the epoch, this would hold it for two minutes.
+  const sockets = [];
+  const hung = net.createServer((s) => { s.on('error', () => {}); sockets.push(s); });
+  await new Promise((resolve) => hung.listen(0, '127.0.0.1', resolve));
+  try {
+    const url = `http://127.0.0.1:${hung.address().port}/v2/SECRET-KEY`;
+    oracle = await startOracle({ world, env: env(url, { [`PAYMENT_CHAIN_${BASE}_MODE`]: 'shadow' }) });
+    await waitFor(/\[oracle\] epoch done/);
+    assert.ok(sockets.length > 0, 'the scan had started');
+    assert.doesNotMatch(oracle.logs(), /SECRET-KEY/);
+  } finally {
+    if (oracle) await oracle.stop();
+    oracle = null;
+    sockets.forEach((s) => s.destroy());
+    hung.close();
+  }
 });
 
 test('a payment chain that is the scored chain, or set up without EXPECTED_CHAIN_ID, stops the process', async () => {

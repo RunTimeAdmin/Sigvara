@@ -196,11 +196,11 @@ if (paymentChains.active(paymentChainsCfg) && proposeMarginMs > paymentChains.AU
   console.error(`[oracle] TX_WAIT_SECONDS=${cfg.txWaitMs / 1000} is too long with a payment chain on: a proposal could land after the half hour a checker searches for its evidence.`);
   process.exit(1);
 }
-// One provider per payment chain. Its network is given so ethers does not ask for it on every call;
-// the scan asks eth_chainId itself each time, because an endpoint can fail over onto another chain.
-const paymentChainProviders = new Map(paymentChainsCfg.chains.map((c) => [
-  c.chainId, new (require('ethers').JsonRpcProvider)(c.rpcUrl, c.chainId, { staticNetwork: true }),
-]));
+// One provider per payment chain.
+const paymentChainProviders = new Map(paymentChainsCfg.chains.map((c) => [c.chainId, paymentChains.providerFor(c)]));
+const paymentChainsOn = paymentChainsCfg.chains.filter((c) => c.mode === 'on');
+const paymentChainsInShadow = paymentChainsCfg.chains.filter((c) => c.mode !== 'on');
+let shadowScansRunning = false;
 // The last scan of each payment chain, for /health.
 const lastPaymentChainScans = new Map();
 // How long one epoch spends catching a payment chain up, in steps of MAX_BLOCKS, before it leaves the
@@ -864,14 +864,14 @@ async function runPaymentScan(agents) {
 }
 
 /**
- * Scan each payment chain (ADR 0009), one after another. A chain that fails is logged and left at
+ * Scan these payment chains (ADR 0009), one after another. A chain that fails is logged and left at
  * its checkpoint; whether the epoch may still score is decided once the chain's clock is known
  * (paymentChains.behind, in runEpochInner).
  */
-async function runPaymentChainScans(agents) {
+async function runPaymentChainScans(agents, chains) {
   // When each agent registered, in ms, read once a run (scanChain's before_registration).
   const registered = new Map();
-  for (const pc of paymentChainsCfg.chains) {
+  for (const pc of chains) {
     const key = paymentChains.stateKey(pc);
     const startedAt = Date.now();
     // Steps of at most MAX_BLOCKS, each saved as it completes, until the scan reaches the finalized
@@ -930,6 +930,19 @@ async function runPaymentChainScans(agents) {
   }
 }
 
+/**
+ * Scan the chains in shadow beside the epoch, not in it. They only report, so nothing on such a chain,
+ * a hung endpoint or a flood of payments to an agent, may hold up a score. One run at a time: an epoch
+ * that finds the last run still going leaves it to finish.
+ */
+function startShadowScans(agents) {
+  if (!paymentChainsInShadow.length || shadowScansRunning) return;
+  shadowScansRunning = true;
+  runPaymentChainScans(agents, paymentChainsInShadow)
+    .catch(() => console.error('[oracle] payment chain shadow scans stopped unexpectedly'))
+    .finally(() => { shadowScansRunning = false; });
+}
+
 /** How far the scored chain's payment scan has reached, as its last block's time in ms, or 0 when unknown. */
 function scoredReachMs() {
   const ts = (getPaymentScanState() || {}).lastBlockTs;
@@ -955,7 +968,7 @@ async function evidenceCutFor(agents) {
       console.error('[oracle] payment scan failed:', err.message);
     }
   }
-  if (paymentChains.behind(paymentChainsCfg, getPaymentChainScanState, wantMs).length) await runPaymentChainScans(agents);
+  if (paymentChains.behind(paymentChainsCfg, getPaymentChainScanState, wantMs).length) await runPaymentChainScans(agents, paymentChainsOn);
   const cutMs = paymentChains.coveredCut(wantMs, scoredReachMs(), paymentChainsCfg, getPaymentChainScanState);
   if (cutMs === null || nowMs - cutMs > paymentChains.AUDIT_WINDOW_MS - proposeMarginMs) return { nowMs, cutMs: null };
   return { nowMs, cutMs };
@@ -1028,8 +1041,9 @@ async function runEpochInner() {
     metrics.inc('paymentScanErrors');
     console.error('[oracle] payment scan failed:', err.message);
   }
-  // Then each payment chain's (ADR 0009). runPaymentChainScans logs its own failures.
-  if (paymentChainsCfg.chains.length) await runPaymentChainScans(agents);
+  // Then each payment chain's that is on (ADR 0009). runPaymentChainScans logs its own failures.
+  if (paymentChainsOn.length) await runPaymentChainScans(agents, paymentChainsOn);
+  startShadowScans(agents);
   // Likewise the links made on chain since the last scan. A failure is logged here; what it
   // costs is decided once the chain's clock is known, below.
   if (linksOnChain()) {
