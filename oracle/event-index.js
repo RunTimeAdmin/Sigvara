@@ -93,9 +93,12 @@ function createIndex({ chainId, fromBlock, addresses }) {
 function appendLogs(index, logs, through, throughTime = null) {
   if (!Number.isSafeInteger(through) || through < index.toBlock) throw new Error(`cannot move the index back from ${index.toBlock} to ${through}`);
   const seen = new Set(index.logs.map((l) => `${l.transactionHash}:${l.logIndex}`));
+  // A block and log index name one log: an /events cursor relies on it.
+  const at = new Map(logs.map((l) => [orderOf(l).join('-'), l.transactionHash]));
   for (const l of logs) {
     const block = parseInt(l.blockNumber, 16);
     if (block <= index.toBlock || block > through) throw new Error(`a log from block ${block}, outside ${index.toBlock + 1} to ${through}`);
+    if (at.get(orderOf(l).join('-')) !== l.transactionHash) throw new Error(`two logs at block ${block}, log index ${parseInt(l.logIndex, 16)}`);
     const key = `${l.transactionHash}:${l.logIndex}`;
     if (!seen.has(key)) { seen.add(key); index.logs.push(l); }
   }
@@ -149,13 +152,36 @@ function parseQuery(params, indexed) {
 // Where a log sits in the chain, as a cursor.
 const cursorOf = (l) => orderOf(l).join('-');
 
-function selectLogs(index, q) {
+// The first log at or after `fromBlock` and past `after`, by binary search: the logs are in chain
+// order, so an answer starts there instead of filtering everything before it.
+function firstPosition(logs, q) {
+  const fromBlock = q.fromBlock ?? null;
   const after = q.after ?? null;
-  return index.logs.filter((l) => (!q.address || q.address.has(l.address))
-    && (!q.topic0 || q.topic0.has(l.topics[0]))
-    && (!q.topic1 || l.topics[1] === q.topic1)
-    && (q.fromBlock === null || q.fromBlock === undefined || parseInt(l.blockNumber, 16) >= q.fromBlock)
-    && (!after || (([b, i]) => b > after[0] || (b === after[0] && i > after[1]))(orderOf(l))));
+  const past = (l) => {
+    const [b, i] = orderOf(l);
+    return (fromBlock === null || b >= fromBlock) && (!after || b > after[0] || (b === after[0] && i > after[1]));
+  };
+  let lo = 0;
+  let hi = logs.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (past(logs[mid])) hi = mid; else lo = mid + 1;
+  }
+  return lo;
+}
+
+// The logs a query matches, in chain order, read forward from firstPosition.
+function* matching(index, q) {
+  for (let i = firstPosition(index.logs, q); i < index.logs.length; i++) {
+    const l = index.logs[i];
+    if ((!q.address || q.address.has(l.address))
+      && (!q.topic0 || q.topic0.has(l.topics[0]))
+      && (!q.topic1 || l.topics[1] === q.topic1)) yield l;
+  }
+}
+
+function selectLogs(index, q) {
+  return [...matching(index, q)];
 }
 
 /**
@@ -163,14 +189,16 @@ function selectLogs(index, q) {
  * It holds at most `q.limit` logs and `maxBytes` of them as JSON, though always one when one
  * matches, and `next` is the cursor of its last log when more match, or null. A reader asks again
  * with `after` set to `next` until it is null, then takes the blocks after the last answer's
- * toBlock from the chain itself.
+ * toBlock from the chain itself: toBlock says the history is whole only on an answer whose next
+ * is null. The work stops with the page, though a filter few logs match still reads forward
+ * until it finds them.
  */
 function eventsBody(index, q, maxBytes = PAGE_BYTES) {
   const limit = q.limit ?? PAGE_ROWS;
   const logs = [];
   let bytes = 0;
   let next = null;
-  for (const l of selectLogs(index, q)) {
+  for (const l of matching(index, q)) {
     const size = JSON.stringify(l).length + 1;
     if (logs.length === limit || (logs.length > 0 && bytes + size > maxBytes)) {
       next = cursorOf(logs[logs.length - 1]);
@@ -198,5 +226,5 @@ function redact(message, secrets = []) {
 }
 
 module.exports = {
-  LOG_SPAN, PAGE_ROWS, PAGE_BYTES, planSpans, normalizeLog, createIndex, appendLogs, resumable, parseQuery, selectLogs, eventsBody, redact,
+  LOG_SPAN, PAGE_ROWS, PAGE_BYTES, cursorOf, planSpans, normalizeLog, createIndex, appendLogs, resumable, parseQuery, selectLogs, eventsBody, redact,
 };

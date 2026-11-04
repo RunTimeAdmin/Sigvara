@@ -47,11 +47,18 @@ Optional filters, all checked before use (`parseQuery`):
 | `limit` | at most this many logs, from 1 to 5,000 (the default) |
 | `after` | the `next` cursor of an earlier answer: the logs after it |
 
-One answer holds at most 5,000 logs and 4 MiB of them as JSON (`PAGE_ROWS`, `PAGE_BYTES` in `oracle/event-index.js`). A longer history ends with `next`, a cursor naming its last log's block and log index; a reader asks again with `after` set to it until `next` is null. The whole testnet history, about 750 logs and 400 KB on 4 November 2026, fits in one answer, so `next` is null today. A reader takes the blocks after the last answer's `toBlock` from the chain itself, which is what the pages do (`indexLogs` in `site/assets/explorer.js`, which follows `next` for up to 20 answers). A page that gets a `toBlock` more than 100 blocks past the chain's newest does not use the answer.
+One answer holds at most 5,000 logs and 4 MiB of them as JSON, though always one log when one matches (`PAGE_ROWS`, `PAGE_BYTES` in `oracle/event-index.js`). A longer history ends with `next`, a cursor naming its last log's block and log index; a reader asks again with `after` set to it until `next` is null. `toBlock` says the history is whole only on the answer whose `next` is null: a reader that stops at an earlier page and reads the chain from its `toBlock` misses logs. The whole testnet history, about 750 logs and 400 KB on 4 November 2026, fits in one answer, so `next` is null today. A reader takes the blocks after the last answer's `toBlock` from the chain itself, which is what the pages do (`indexLogs` in `site/assets/explorer.js`, which follows `next` for up to 20 answers). A page that gets a `toBlock` more than 100 blocks past the chain's newest does not use the answer.
 
 A request never reaches the RPC. The index answers from memory, so traffic to the pages cannot spend the provider's credits. Each query's answer is encoded once and kept until the index moves on (`eventsAnswer`), so many requests for the same query share one copy. At most 64 answers and 64 MiB of them are kept, the oldest dropped first, so many different queries cannot make the cache grow without bound.
 
-What is not bounded: the index itself is held in memory and in its state file, about half a kilobyte a log, so a history of a million logs takes about half a gigabyte. The proxy in front of it (Caddy, below) passes only `GET`, `HEAD` and `OPTIONS` on the two paths and sets no request rate or connection limit; Caddy needs a plugin for one. Both are fine for the testnet history and are to be settled before the index serves a much larger one.
+What is not bounded:
+
+- **The index itself.** It is held in memory, about 920 bytes a log on the heap (half a kilobyte as JSON), and written whole to its state file after each poll that moves it. The VPS container's `mem_limit` of 256 MB therefore holds somewhere between 100,000 and 150,000 logs.
+- **The work for a filter few logs match.** An answer starts at its cursor or `fromBlock` by binary search and stops when the page is full, but a filter that matches few logs reads forward until it finds them. Distinct cursors are distinct cache entries, so they miss the cache.
+- **Answers still being sent.** The 64 MiB bounds the cache; an answer dropped from it stays in memory until a slow reader has it.
+- **Request rates.** The live Caddyfile passes only `GET`, `HEAD` and `OPTIONS` on the two paths (`docs/operations-runbook.md`), but sets no request rate or connection limit; Caddy needs a plugin for one. The example below is the plain `reverse_proxy`.
+
+All of these are fine for the testnet history, and are to be settled before the index serves a much larger one.
 
 `GET /health` answers 200 while the index has polled in the last few minutes and is at most 3,600 blocks (about half an hour) behind the finalized head, and 503 otherwise. It reports `toBlock`, `head`, `behind`, the number of logs, the last error with any URL removed, and the commit it runs.
 

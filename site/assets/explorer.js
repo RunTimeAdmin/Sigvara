@@ -383,10 +383,12 @@
     // answer's toBlock is where the chain takes over.
     const indexed = [];
     let j = null;
-    for (let page = 0, after = null; ; page++) {
+    let page = 0;
+    for (let after = null; ;) {
       if (page === INDEX_PAGES) throw new Error(`the event index has more than ${INDEX_PAGES} pages for this history`);
       if (after) q.set("after", after);
       j = await getJson(`${INDEX}/events?${q}`);
+      page++;
       if (j?.chainId !== CHAIN_ID || !Array.isArray(j?.logs) || !Number.isSafeInteger(Number(j?.toBlock))) {
         throw new Error("the event index gave an answer for something else");
       }
@@ -395,7 +397,9 @@
       if (j.next === after) throw new Error("the event index gave the same page twice");
       after = j.next;
     }
-    const head = await headRead;
+    // Read the head again after more than one page: the index moved on while they were read, and
+    // the last page's toBlock is compared with the chain's newest block below.
+    const head = page > 1 ? await blockNumber().then((value) => ({ status: "fulfilled", value }), (reason) => ({ status: "rejected", reason })) : await headRead;
     const toBlock = Number(j.toBlock);
     const indexHead = { block: toBlock, time: Number(j.toBlockTime) > 0 ? Number(j.toBlockTime) : null };
     // The index answered; a chain that does not is the chain's problem, said as such.

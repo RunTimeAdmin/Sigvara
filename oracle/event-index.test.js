@@ -93,6 +93,16 @@ test('appendLogs: moves forward without holes, sorts, and keeps a log once', () 
 
 // --- resumable ----------------------------------------------------------------------
 
+test('appendLogs: refuses two logs at one block and log index from different transactions', () => {
+  const index = ix.createIndex({ chainId: 7, fromBlock: 100, addresses: [A, B] });
+  const one = ix.normalizeLog(raw(110, 3), ctx);
+  const other = ix.normalizeLog({ ...raw(110, 3), transactionHash: TX(999) }, ctx);
+  assert.throws(() => ix.appendLogs(index, [one, other], 199), /two logs at block 110, log index 3/);
+  // The same log twice is kept once, as before.
+  ix.appendLogs(index, [one, one], 199);
+  assert.equal(index.logs.length, 1);
+});
+
 test('resumable: only an index for the same chain, start block and contracts', () => {
   const cfg = { chainId: 5, fromBlock: 100, addresses: [A, B] };
   const saved = ix.createIndex(cfg);
@@ -180,6 +190,11 @@ test('eventsBody: a long answer comes a page at a time, by rows or by bytes, and
   // Filters hold across pages: B's logs, one at a time.
   const bOnly = pages(`address=${B}&limit=1`);
   assert.deepEqual(bOnly.flatMap((b) => b.logs).map((l) => [parseInt(l.blockNumber, 16), l.address]), [[120, B], [150, B]]);
+  // fromBlock and after together: the later of the two starts the answer.
+  const from = (s) => ix.eventsBody(index, ix.parseQuery(new URLSearchParams(s), indexed)).logs.map((l) => ix.cursorOf(l));
+  assert.deepEqual(from('fromBlock=125&after=110-0'), ['130-0', '140-2', '150-0']);
+  assert.deepEqual(from('fromBlock=115&after=120-0'), ['120-1', '130-0', '140-2', '150-0']);
+  assert.deepEqual(from('fromBlock=120'), ['120-0', '120-1', '130-0', '140-2', '150-0']);
   // A cursor past the end answers no logs and no next.
   assert.deepEqual(ix.eventsBody(index, ix.parseQuery(new URLSearchParams('after=150-0'), indexed)).logs, []);
   // The default answer holds the whole of a short history.
