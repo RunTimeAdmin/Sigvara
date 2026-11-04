@@ -428,12 +428,12 @@ below are done is `the registration's agentWallet is 0x18CB...4811, not the publ
    - Write `keystore.json` once with
      `docker compose run --rm -e SIGNER_ARGS="new-keystore /secrets-rw/keystore.json" -v "$PWD/secrets:/secrets-rw" signer`.
      It prints only the new address, writes the file 0400, and refuses to overwrite one.
-   - Let only the publisher's host reach the port: `ufw allow from 72.62.41.138 to any port 28600 proto tcp`,
-     with nothing else allowing it. A provider firewall in front of the host must allow it too: Hostinger's VPS firewall (hPanel, Security, Firewall) drops what its group does not list before ufw sees it, so add an accept rule for TCP 28600 from `72.62.41.138` to the group `packrai-vps` is in, which `mcpshield-vps` shares (nothing listens on 28600 there). The signer also drops any other connection itself.
-   - Start it, and check its log names that address and `72.62.41.138` as the only caller. It
+   - Reach it only through SSH. The signer listens on `127.0.0.1:28600` and answers only `127.0.0.1` (`SIGNER_HOST`, `SIGNER_ALLOW_FROM`), so it opens no port of its own: the publisher's `signer-tunnel` service forwards to it over SSH, encrypted and to a pinned host key. On `packrai-vps`, make a user with no shell (`useradd --system --create-home --shell /usr/sbin/nologin sigvara-tunnel`) whose `~/.ssh/authorized_keys` (0600, owned by that user) holds the publisher's tunnel key, restricted to that one forward:
+     `restrict,port-forwarding,permitopen="127.0.0.1:28600",command="/bin/false" ssh-ed25519 AAAA... sigvara-publisher-tunnel`. On the publisher's host, `secrets/tunnel/` (0700) holds `id_ed25519` (`ssh-keygen -t ed25519 -N '' -C sigvara-publisher-tunnel`, 0400) and `known_hosts` with `packrai-vps`'s ed25519 host key, checked against `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` run there. No firewall rule for 28600 is needed, in ufw or in the provider's firewall (Hostinger's VPS firewall, hPanel, Security, Firewall), and neither should have one.
+   - Start it, and check its log names that address and `127.0.0.1` as the only caller. It
      signs nothing in its first minute.
-   - On the publisher's host, set `PUBLISHER_ADDRESS` to that address, `PUBLISH_SIGNER_URL` to
-     `http://76.13.101.31:28600`, and `PUBLISH_SIGNER_SECRET` to the same secret. Keep
+   - On the publisher's host, set `PUBLISHER_ADDRESS` to that address, `SIGNER_SSH` to
+     `sigvara-tunnel@76.13.101.31` (the compose file points `PUBLISH_SIGNER_URL` at the tunnel), and `PUBLISH_SIGNER_SECRET` to the same secret. Keep
      `PUBLISH_MODE=shadow` until step 3.
    - Fund the address with testnet USDC above `PUBLISH_MIN_BALANCE`.
 
