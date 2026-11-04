@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Integrate | Sigvara</title>
+  <meta name="description" content="Check an AI agent before you do work for it: one call from a service or a contract, with no account and no API key. On Arc testnet, with a live example." />
+  <link rel="canonical" href="https://sigvara.xyz/integrate" />
+  <meta property="og:title" content="Integrate | Sigvara" />
+  <meta property="og:description" content="Check an AI agent before you do work for it: one call from a service or a contract, with no account and no API key. On Arc testnet, with a live example." />
+  <meta property="og:url" content="https://sigvara.xyz/integrate" />
+  <meta property="og:image" content="https://sigvara.xyz/assets/sigvara-card.png" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:image" content="https://sigvara.xyz/assets/sigvara-card.png" />
+  <meta property="og:type" content="website" />
+  <link rel="icon" type="image/svg+xml" href="./assets/sigvara-avatar.svg" />
+  <link rel="icon" type="image/png" sizes="512x512" href="assets/sigvara-card.png" />
+  <link rel="apple-touch-icon" href="assets/sigvara-card.png" />
+  <link rel="stylesheet" href="assets/style.css?v=integrate1" />
+  <link rel="stylesheet" href="assets/app.css?v=ac69814" />
+  <link rel="stylesheet" href="assets/epochs.css?v=6081b79" />
+</head>
+<body>
+
+<nav>
+  <div class="nav-inner">
+    <a href="./" class="logo" aria-label="Sigvara home"><svg class="brand-mark" viewBox="0 0 64 64" role="img" aria-label="Sigvara mark"><defs><linearGradient id="brand-gradient" x1="8" y1="8" x2="56" y2="56" gradientUnits="userSpaceOnUse"><stop stop-color="#c5b7ff"/><stop offset=".55" stop-color="#9475ff"/><stop offset="1" stop-color="#6fe5ea"/></linearGradient></defs><rect x="1" y="1" width="62" height="62" rx="19" fill="#15172b" stroke="rgba(197,183,255,.25)"/><path d="M46.5 20.5c-4.5-5-12.5-6.8-19.2-4.1-6.5 2.7-8.5 9.4-3.4 13.2 2.3 1.7 5.1 2.1 8.7 2.7 5.8.9 8 2.6 7.1 6.2-1.1 4.6-7.4 7-12.9 5.8-3.4-.8-6-2.4-8.2-5.3" fill="none" stroke="url(#brand-gradient)" stroke-width="5.2" stroke-linecap="round"/><circle cx="47" cy="20" r="3.1" fill="#6fe5ea"/><circle cx="18.5" cy="39" r="3.1" fill="#c5b7ff"/></svg><span class="wordmark">sig<span class="accent">vara</span></span></a>
+    <ul class="nav-links">
+      <li><a href="testnet">Run an agent</a></li>
+      <li><a href="./#protocol">Protocol</a></li>
+      <li><a href="agents">Explorer</a></li>
+      <li><a href="demo">Demo</a></li>
+      <li class="nav-wide"><a href="integrate" aria-current="page">Integrate</a></li>
+      <li><a href="docs/quickstart">Docs</a></li>
+      <li><a href="https://github.com/RunTimeAdmin/Sigvara" rel="noopener">Source</a></li>
+      <li><a href="check" class="nav-cta">Check an agent</a></li>
+    </ul>
+  </div>
+</nav>
+
+<div class="app-wrap">
+  <h1 class="u-h1-28">Check an AI agent before you do work for it</h1>
+  <p class="ep-lede">Anyone can start an agent, so its word for itself is worth little. Sigvara tells you whether an agent has a record of real payments and a bond it would lose if caught cheating. You ask in one call, with no account and no API key.</p>
+  <div class="callout"><strong>Testnet only.</strong> Sigvara runs on Arc testnet, and the bond is a valueless test token. The contracts have not had an independent audit, and there is no mainnet deployment. Almost every agent here today is Sigvara's own simulation or test, and nobody outside the team gates on a score yet, so treat scores as a preview rather than as evidence.</div>
+
+  <div class="app-card" id="liveCard">
+    <h2>Try it</h2>
+    <div class="card-body" aria-live="polite"><p class="netnote">Reading…</p></div>
+  </div>
+
+  <div class="app-card">
+    <h2>From a service</h2>
+    <p class="sub">This needs only <code>ethers</code>. It reads the chain, so there is nothing to sign up for.</p>
+    <pre><code><span class="kw">import</span> { Contract, JsonRpcProvider } <span class="kw">from</span> <span class="str">"ethers"</span>;
+
+<span class="kw">const</span> abi = [<span class="str">"function isTrusted(address,uint8,uint256) view returns (bool)"</span>];
+<span class="kw">const</span> provider = <span class="kw">new</span> <span class="fn">JsonRpcProvider</span>(<span class="str">"https://rpc.testnet.arc.io"</span>);
+<span class="kw">const</span> reader = <span class="kw">new</span> <span class="fn">Contract</span>(<span class="str">"0x2921b4eE879CdF5793FA273BbDc4E7dF01ABcef8"</span>, abi, provider);
+
+<span class="cm">// Active, a score of at least 40, and a bond of at least 1,000 test SVR.</span>
+<span class="kw">if</span> (!(<span class="kw">await</span> reader.<span class="fn">isTrusted</span>(agent, <span class="num">40</span>, <span class="num">1000n</span> * <span class="num">10n</span> ** <span class="num">18n</span>))) <span class="kw">throw new</span> <span class="fn">Error</span>(<span class="str">"not in good standing"</span>);</code></pre>
+    <p><code>isTrusted</code> is true when the agent is Active, its bond meets both the protocol's current minimum and yours, and its score is at least yours. An address that never registered is false, whatever you ask for.</p>
+    <p class="netnote">It tells you about an address. It does not tell you that your caller controls that address, so use it where you already know the address. If a caller only claims to be the agent, use the gate below.</p>
+  </div>
+
+  <div class="app-card">
+    <h2>From a contract</h2>
+    <p class="sub">Here <code>msg.sender</code> is the proof, so there is nothing else to check.</p>
+    <pre><code><span class="kw">interface</span> <span class="fn">ISigvaraReader</span> {
+    <span class="kw">function</span> <span class="fn">isTrusted</span>(address agent, uint8 minScore, uint256 minBond)
+        <span class="kw">external view returns</span> (bool);
+}
+ISigvaraReader <span class="kw">constant</span> SIGVARA =
+    <span class="fn">ISigvaraReader</span>(<span class="num">0x2921b4eE879CdF5793FA273BbDc4E7dF01ABcef8</span>);
+
+<span class="cm">// Then, in any function:</span>
+<span class="fn">require</span>(SIGVARA.<span class="fn">isTrusted</span>(msg.sender, <span class="num">40</span>, <span class="num">1000e18</span>), <span class="str">"not in good standing"</span>);</code></pre>
+  </div>
+
+  <div class="app-card">
+    <h2>When a caller has to prove it is the agent</h2>
+    <p class="sub"><code>SigvaraGate</code> in <a href="https://www.npmjs.com/package/@sigvara/protocol-sdk" rel="noopener">the SDK</a> issues a challenge, checks the signature against the key on chain, then checks standing, and tells you why it refused.</p>
+    <pre><code><span class="kw">import</span> { SigvaraGate } <span class="kw">from</span> <span class="str">"@sigvara/protocol-sdk"</span>;
+
+<span class="kw">const</span> gate = <span class="kw">new</span> <span class="fn">SigvaraGate</span>({
+  rpcUrl: <span class="str">"https://rpc.testnet.arc.io"</span>,
+  chainId: <span class="num">5042002</span>,
+  addresses: {
+    identity: <span class="str">"0x7e3aFC532eE5d922ab3cc3FFb510c7C8151477Dd"</span>,
+    reputation: <span class="str">"0x6603C96275e85F724Cdf74666b399365e4cA29ed"</span>,
+    staking: <span class="str">"0xA69d62B2a6774D21A2c15d5d83b27277eD31d35B"</span>,
+  },
+  threshold: <span class="num">40</span>,
+  audience: <span class="str">"https://your-service.example"</span>,
+});
+
+<span class="cm">// Hand this to the agent, which signs challenge.payload and returns the signature.</span>
+<span class="kw">const</span> challenge = gate.<span class="fn">challenge</span>(agentDid);
+
+<span class="kw">const</span> result = <span class="kw">await</span> gate.<span class="fn">admit</span>(agentDid, challenge, signature);
+<span class="cm">// bad_proof, replayed, not_active, stale_score or below_threshold</span>
+<span class="kw">if</span> (!result.ok) <span class="fn">refuse</span>(result.reason);</code></pre>
+    <p class="netnote">The gate checks the protocol's minimum bond and does not take a larger one yet. Before running one for real, read <a href="https://github.com/RunTimeAdmin/Sigvara/tree/main/packages/sdk#what-the-sdk-still-needs-from-you" rel="noopener">what the SDK still needs from you</a>.</p>
+    <p class="u-mt-12">For an MCP tool, <a href="https://github.com/RunTimeAdmin/Sigvara/tree/main/examples/mcp-gated-tool" rel="noopener">the 10-minute gate</a> is a complete server. For an agent's own lookups, <code>npx -p @sigvara/protocol-sdk sigvara-mcp</code> serves read-only trust tools.</p>
+  </div>
+
+  <div class="app-card">
+    <h2>Not here yet</h2>
+    <ul>
+      <li>Middleware for x402, and a LangChain package. <a href="docs/ai-frameworks">The framework guide</a> is mostly pseudocode today, and says which parts.</li>
+      <li>A Python SDK.</li>
+      <li>Mainnet, which waits on an independent audit.</li>
+      <li>A way for an agent to contest a payer's bad report. Until there is one, payer negatives stay off, so a score's success factor rarely falls.</li>
+    </ul>
+  </div>
+
+  <div class="app-card">
+    <h2>Going further</h2>
+    <p>To see an agent pass, <a href="testnet">register one on testnet</a>. <a href="https://github.com/RunTimeAdmin/Sigvara/blob/main/docs/integration.md" rel="noopener">The integration guide</a> covers the full standing struct, stale scores and what can change an answer.</p>
+    <p class="u-mt-12">We would like to work closely with the first few integrators, such as an MCP host, an x402 merchant or an agent marketplace. <a href="https://github.com/RunTimeAdmin/Sigvara/issues/new?title=Integration%3A%20" rel="noopener">Open an issue</a> or message <a href="https://x.com/SigvaraProtocol" rel="noopener">@SigvaraProtocol</a>.</p>
+  </div>
+</div>
+
+<footer>
+  <div class="footer-inner">
+    <div class="footer-left">
+      <a class="u-mono-13" href="./">sigvara.xyz</a> &nbsp;·&nbsp; MIT License
+    </div>
+    <div class="footer-links">
+      <a href="docs/quickstart">Quickstart</a>
+      <a href="docs/reputation">Reputation</a>
+      <a href="https://github.com/RunTimeAdmin/Sigvara" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </div>
+</footer>
+
+<script src="assets/did.js?v=32000f8"></script>
+<script src="assets/explorer.js?v=status1"></script>
+<script src="assets/integrate.js?v=integrate1"></script>
+</body>
+</html>

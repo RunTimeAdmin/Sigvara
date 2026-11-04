@@ -2,7 +2,22 @@
 
 **Computed reputation and staked slashing for autonomous AI agents, on top of ERC-8004.**
 
-[Website](https://sigvara.xyz) · [Quickstart](docs/quickstart.md) · [Live demo](https://sigvara.xyz/demo) · [Check an agent](https://sigvara.xyz/check) · [Explorer](https://sigvara.xyz/agents) · [Status](https://sigvara.xyz/status) · [SDK on npm](https://www.npmjs.com/package/@sigvara/protocol-sdk) · [Wiki](https://github.com/RunTimeAdmin/Sigvara/wiki)
+[Website](https://sigvara.xyz) · [Quickstart](docs/quickstart.md) · [Live demo](https://sigvara.xyz/demo) · [Check an agent](https://sigvara.xyz/check) · [Integrate](https://sigvara.xyz/integrate) · [Explorer](https://sigvara.xyz/agents) · [Status](https://sigvara.xyz/status) · [SDK on npm](https://www.npmjs.com/package/@sigvara/protocol-sdk) · [Wiki](https://github.com/RunTimeAdmin/Sigvara/wiki)
+
+**Check an AI agent before you do work for it.** Anyone can start an agent, so its word for itself is worth little. Sigvara tells you whether an agent has a record of real payments and a bond it would lose if caught cheating, in one call, with no account and no API key. It runs on Arc testnet and has not had an independent audit.
+
+```ts
+import { Contract, JsonRpcProvider } from "ethers";
+
+const abi = ["function isTrusted(address,uint8,uint256) view returns (bool)"];
+const provider = new JsonRpcProvider("https://rpc.testnet.arc.io");
+const reader = new Contract("0x2921b4eE879CdF5793FA273BbDc4E7dF01ABcef8", abi, provider);
+
+// Active, a score of at least 40, and a bond of at least 1,000 test SVR.
+if (!(await reader.isTrusted(agent, 40, 1000n * 10n ** 18n))) throw new Error("not in good standing");
+```
+
+See the answer for [a live agent](https://sigvara.xyz/check?a=0xCc52Cd92963f8A86d04dB29a4810d1e01D193910). [sigvara.xyz/integrate](https://sigvara.xyz/integrate) has the same call from a contract, and a gate for a caller that has to prove it is the agent.
 
 As AI agents become independent economic actors, they need a trust score that means something and accountability that costs something. [ERC-8004](https://eips.ethereum.org/EIPS/eip-8004) gives agents a standard on-chain identity and a raw feedback ledger, but deliberately leaves out the hard parts: computing a trustworthy score from that feedback, and putting slashable stake behind it. Sigvara is that layer. It takes ERC-8004 as the identity and feedback substrate, computes a normalized reputation score with an oracle, and enforces bonds and slashing — the accountability the standard omits. (Ed25519 PKI challenge-response for agent-to-agent auth rides alongside.)
 
@@ -22,15 +37,9 @@ If you're looking for a hosted MCP server or React trust-badge components, those
 
 ## Documentation
 
-The [**wiki**](https://github.com/RunTimeAdmin/Sigvara/wiki) is the browsable reference: 73
-pages covering the contracts, the oracle, the scoring model, the SDK and operations, with
-every claim linked to the line of source it was derived from. It is generated from the tree
-and edited for publication, so where it disagrees with the code or the tables below, the
-code wins. Its home page names the commit of `main` it was last checked against. Anything
-merged since is in the documents below first.
+The [**wiki**](https://github.com/RunTimeAdmin/Sigvara/wiki) is the browsable reference: 73 pages covering the contracts, the oracle, the scoring model, the SDK and operations, with every claim linked to the line of source it was derived from. It is generated from the tree and edited for publication, so where it disagrees with the code or the tables below, the code wins. Its home page names the commit of `main` it was last checked against. Anything merged since is in the documents below first.
 
-The documents below are written by hand and are the authority on intent, trade-offs and
-what is not yet true.
+The documents below are written by hand and are the authority on intent, trade-offs and what is not yet true.
 
 | Guide | Audience |
 |---|---|
@@ -105,14 +114,9 @@ source is [`deployments/5042002.json`](deployments/5042002.json); the table belo
 | `SigvaraOracleBond` | `0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171` |
 | `SigvaraReader` (one read for a contract that gates on an agent's standing, not a registry) | `0x2921b4eE879CdF5793FA273BbDc4E7dF01ABcef8` |
 
-Every contract above, and the implementation behind each proxy, is source-verified on the
-[Arc explorer](https://explorer.testnet.arc.io) and reproduced byte for byte by a build of the
-commit tagged `arc-testnet-2026-11-04b`. To check it yourself: `git checkout arc-testnet-2026-11-04b`,
-then `sh scripts/fetch-deps.sh && forge build && node scripts/check-bytecode.mjs`
-([how](docs/arc.md#verifying-the-deployed-code)).
+Every contract above, and the implementation behind each proxy, is source-verified on the [Arc explorer](https://explorer.testnet.arc.io) and reproduced byte for byte by a build of the commit tagged `arc-testnet-2026-11-04b`. To check it yourself: `git checkout arc-testnet-2026-11-04b`, then `sh scripts/fetch-deps.sh && forge build && node scripts/check-bytecode.mjs` ([how](docs/arc.md#verifying-the-deployed-code)).
 
-Testnet assets have no economic value. The bond token above is a faucet ERC-20 that
-exists so the staking path can be exercised; it is unrelated to the mainnet SVR.
+Testnet assets have no economic value. The bond token above is a faucet ERC-20 that exists so the staking path can be exercised; it is unrelated to the mainnet SVR.
 
 ---
 
@@ -180,11 +184,7 @@ All four registries inherit two small shared contracts, neither deployed on its 
 
 ## DID Method
 
-> **Direction of travel.** ERC-8004 agent ids are the intended long-term identifier
-> ([ADR 0001](docs/adr/0001-erc8004-as-identity-layer.md)), and the `did:sigvara`
-> method below will become a view over one. That migration has not happened yet:
-> every agent registered today, on testnet and through the SDK, gets a
-> `did:sigvara` and is keyed by its `didHash`.
+> **Direction of travel.** ERC-8004 agent ids are the intended long-term identifier ([ADR 0001](docs/adr/0001-erc8004-as-identity-layer.md)), and the `did:sigvara` method below will become a view over one. That migration has not happened yet: every agent registered today, on testnet and through the SDK, gets a `did:sigvara` and is keyed by its `didHash`.
 
 **Format:** `did:sigvara:<chainId>:<agentAddress>`
 
