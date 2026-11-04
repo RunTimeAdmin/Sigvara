@@ -579,6 +579,41 @@ test("a recipient's code is asked at the payment's block and at registration, so
   assert.deepEqual([...new Set(asked.map(([who, tag]) => `${who} ${tag}`))].sort(), ['payment chain 1500', 'scored chain 77']);
 });
 
+test('a flood of payments reads the scored chain once an agent, however many blocks it spans', async () => {
+  const clean = { ...agent(), blockNumber: 77 };
+  const contract = { ...agent(), blockNumber: 78 };
+  const payer = ethers.Wallet.createRandom().address;
+  const logs = [clean, contract].flatMap((a) => Array.from({ length: 50 }, (_, i) => (
+    transferLog({ from: payer, to: a.agentAddress, amount: 1_000_000n, block: 1100 + i })
+  )));
+  const asked = [];
+  const answer = (code) => (tag) => { asked.push(tag); return code; };
+  const { deps: d } = deps({
+    provider: fakeChain({ logs }),
+    scoredProvider: scored({
+      [clean.agentAddress.toLowerCase()]: answer('0x'),
+      [contract.agentAddress.toLowerCase()]: answer('0x6080604052'),
+    }),
+    agents: [clean, contract],
+  });
+  const out = await pc.scanChain(config({ [`PAYMENT_CHAIN_${BASE_SEPOLIA}_MODE`]: 'shadow' }).chains[0], d);
+  assert.equal(out.credited, 50);
+  assert.equal(out.reasons.contract_recipient, 50);
+  assert.deepEqual(asked.sort(), [77, 78]);
+});
+
+test('a failed read of the scored chain fails that scan, and the next one asks again', async () => {
+  const a = { ...agent(), blockNumber: 77 };
+  const logs = [transferLog({ from: ethers.Wallet.createRandom().address, to: a.agentAddress, amount: 1_000_000n, block: 1500 })];
+  let down = true;
+  const scoredProvider = { getCode: async () => { if (down) throw new Error('scored chain is down'); return '0x'; } };
+  const { deps: d, credited } = deps({ provider: fakeChain({ logs }), scoredProvider, agents: [a] });
+  await assert.rejects(pc.scanChain(config().chains[0], d), /scored chain is down/);
+  assert.equal(credited.length, 0);
+  down = false;
+  assert.equal((await pc.scanChain(config().chains[0], d)).credited, 1);
+});
+
 test("a payment whose block's time cannot be read holds the cursor just before it", async () => {
   const a = agent();
   const chain = fakeChain({ logs: [transferLog({ from: ethers.Wallet.createRandom().address, to: a.agentAddress, amount: 1_000_000n, block: 1500 })] });

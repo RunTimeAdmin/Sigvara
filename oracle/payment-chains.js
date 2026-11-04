@@ -450,15 +450,24 @@ async function scanChain(chain, deps) {
 
   // The recipient's code on both chains, read for each payment and not for every agent. Two operators
   // scan at different times, so each must ask a question whose answer does not depend on that: on this
-  // chain at the payment's block, on the scored chain at the block the agent registered in.
+  // chain at the payment's block, on the scored chain at the block the agent registered in. That second
+  // answer is one per agent, so it is read once: a flood of payments here must not spend the scored
+  // chain's RPC, which scoring needs.
   const codeKey = (c) => `${c.didHash}:${c.blockNumber}`;
   const codeOk = new Map();
+  const scoredCode = new Map();
+  const scoredCodeOf = (a) => {
+    if (!scoredCode.has(a.didHash)) {
+      scoredCode.set(a.didHash, read('scored chain getCode', () => scoredProvider.getCode(a.agentAddress, a.blockNumber)));
+    }
+    return scoredCode.get(a.didHash);
+  };
   for (const c of plan.credits) {
     const a = byDid.get(c.didHash);
     if (!a?.agentAddress || codeOk.has(codeKey(c))) continue;
     const [here, scored] = await Promise.all([
       read('payment chain getCode', () => provider.getCode(a.agentAddress, c.blockNumber)),
-      read('scored chain getCode', () => scoredProvider.getCode(a.agentAddress, a.blockNumber)),
+      scoredCodeOf(a),
     ]);
     codeOk.set(codeKey(c), recipientCodeOk(here) && recipientCodeOk(scored));
   }

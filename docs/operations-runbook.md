@@ -555,8 +555,8 @@ fi
 
 A payment chain is a chain the oracle only reads payments from ([ADR 0009](adr/0009-payments-on-base.md)).
 In `shadow` mode, the default, it scans and reports what it would credit, and credits nothing: no score, proposal
-or evidence root changes. A shadow scan runs beside the epoch, so a hung endpoint or a flood of payments cannot
-hold up a score.
+or evidence root changes. A shadow scan runs beside the epoch, and its reads of the scored chain grow with the number of
+agents and not of payments, so a hung endpoint or a flood of payments cannot hold up a score.
 
 **Adding one in shadow.** One operator is enough, and the checker is the one to use: nothing needs the two to agree
 while a chain counts for nothing, and a bad endpoint then reaches only one of them. Both need the same values before a
