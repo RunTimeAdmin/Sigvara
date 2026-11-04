@@ -516,7 +516,7 @@ if docker volume inspect "$pvol" >/dev/null 2>&1; then
 fi
 ```
 
-**Where the rollout stands**, on Arc testnet as of 3 November 2026 (each step David's go):
+**Where the rollout stands**, on Arc testnet as of 4 November 2026 (each step David's go):
 
 - The backup above is in the primary's script, and a test run passed at 21:14 UTC.
 - Step 1: the signer runs on `packrai-vps` from `bef1068`, as `0x787f30E64d212A1d90174A832a79489dca44FE92`,
@@ -530,6 +530,8 @@ fi
   the claim at their 23:06 UTC epoch. The publisher has run with `PUBLISH_MODE=live` and
   `PUBLISH_ALLOW_AGENT_IDS=897766` since 22:26 UTC, and its first run posted the agent's spendable score of 3 in
   `0xcb1fe00347d1fc852340744d4628e7dff7def6dc7f54d8b478cd209c793f7c0c` (block 70589310). `getSummary` returns a
-  count of 1 and 3. The revoke half comes when that agent's score next changes; step 4 waits for it.
-- On main, an agent's first link queues it, if it has had a score event since `PUBLISH_FROM_BLOCK`, so it is posted at the next run unless its 8004 agent was already posted to that day; a link that moves waits for the refresh.
-  The testnet publisher still runs `bef1068`, which waits for the next refresh for any link; the switch to live mode posted this one at once.
+  count of 1 and 3. The 00:02 UTC refresh on 4 November found it unchanged at 3, so the revoke half comes with
+  its next score event or a later refresh.
+- Step 4, ahead of that revoke: David had the allow list emptied at 00:29 UTC on 4 November. The publisher now
+  posts for every agent linked on chain, and 897766 is still the only one.
+- Since 00:21 UTC on 4 November the publisher runs `bd54f26`, where an agent's first link queues it, if it has had a score event since `PUBLISH_FROM_BLOCK`, so it is posted at the next run unless its 8004 agent was already posted to that day; a link that moves waits for the refresh.
