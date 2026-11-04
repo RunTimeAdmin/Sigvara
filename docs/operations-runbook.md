@@ -428,12 +428,12 @@ below are done is `the registration's agentWallet is 0x18CB...4811, not the publ
    - Write `keystore.json` once with
      `docker compose run --rm -e SIGNER_ARGS="new-keystore /secrets-rw/keystore.json" -v "$PWD/secrets:/secrets-rw" signer`.
      It prints only the new address, writes the file 0400, and refuses to overwrite one.
-   - Let only the publisher's host reach the port: `ufw allow from 72.62.41.138 to any port 28600 proto tcp`,
-     with nothing else allowing it. A provider firewall in front of the host must allow it too: Hostinger's VPS firewall (hPanel, Security, Firewall) drops what its group does not list before ufw sees it, so add an accept rule for TCP 28600 from `72.62.41.138` to the group `packrai-vps` is in, which `mcpshield-vps` shares (nothing listens on 28600 there). The signer also drops any other connection itself.
-   - Start it, and check its log names that address and `72.62.41.138` as the only caller. It
+   - Reach it only through SSH. The signer listens on `127.0.0.1:28600` and answers only `127.0.0.1` (`SIGNER_HOST`, `SIGNER_ALLOW_FROM`), so it opens no port of its own: the publisher's `signer-tunnel` service forwards to it over SSH, encrypted and to a pinned host key. On `packrai-vps`, make a user with no shell (`useradd --system --create-home --shell /usr/sbin/nologin sigvara-tunnel`) whose `~/.ssh/authorized_keys` (owned by root, mode 0644, so the account cannot change it) holds the publisher's tunnel key, usable only from the publisher's host and only for that forward:
+     `from="72.62.41.138",restrict,port-forwarding,permitopen="127.0.0.1:28600",command="/bin/false" ssh-ed25519 AAAA... sigvara-publisher-tunnel`. Those options alone re-enable remote forwarding (`-R`), which would let the key listen on the host's loopback ports, so also append `oracle/sshd_config.signer-tunnel` to the end of `/etc/ssh/sshd_config`, check it as that file says, and confirm a `-R` from the key is refused. On the publisher's host, `secrets/tunnel/` (owned by root, 0700) holds `id_ed25519` (`ssh-keygen -t ed25519 -N '' -C sigvara-publisher-tunnel -f secrets/tunnel/id_ed25519`, 0400) and `known_hosts`, one line `76.13.101.31 ssh-ed25519 AAAA...` built from `/etc/ssh/ssh_host_ed25519_key.pub` on `packrai-vps` (a new host key there stops the tunnel until this is updated). No firewall rule for 28600 is needed, in ufw or in the provider's firewall (Hostinger's VPS firewall, hPanel, Security, Firewall): remove any (`ufw delete allow from 72.62.41.138 to any port 28600 proto tcp`, and the hPanel rule) once the tunnel works.
+   - Start it, and check its log names that address and `127.0.0.1` as the only caller. It
      signs nothing in its first minute.
-   - On the publisher's host, set `PUBLISHER_ADDRESS` to that address, `PUBLISH_SIGNER_URL` to
-     `http://76.13.101.31:28600`, and `PUBLISH_SIGNER_SECRET` to the same secret. Keep
+   - On the publisher's host, set `PUBLISHER_ADDRESS` to that address, `SIGNER_SSH` to
+     `sigvara-tunnel@76.13.101.31` (the compose file points `PUBLISH_SIGNER_URL` at the tunnel), and `PUBLISH_SIGNER_SECRET` to the same secret. Keep
      `PUBLISH_MODE=shadow` until step 3.
    - Fund the address with testnet USDC above `PUBLISH_MIN_BALANCE`.
 
@@ -449,7 +449,7 @@ below are done is `the registration's agentWallet is 0x18CB...4811, not the publ
    across restarts. A compromised publisher host can make it post wrong scores at that rate, for as
    long as it is compromised, and nothing else: nothing can be signed ahead and kept for later.
 
-   **If the publisher's host is compromised**, rotate the key, not just the HMAC secret: a new
+   **If the publisher's host is compromised**, first delete the `sigvara-tunnel` line from that account's `authorized_keys` on `packrai-vps`, which cuts the host off the signer at once; then rotate the key, not just the HMAC secret: a new
    keystore, step 2 with the new address, and the old address's posts revoked by hand. Until then,
    the old key keeps posting whatever the host asks, at the capped rate.
 2. Make it the registration's `agentWallet`. The publisher key signs the EIP-712 message
@@ -496,7 +496,7 @@ that 8004 agent is set to 0 whatever the link says by then.
 
 **Rotating the key**: create a new key in the signer, repeat step 2 with it, and set
 `PUBLISHER_ADDRESS` to it. Consumers that read `getAgentWallet(897764)` follow at once. The new
-address has posted nothing, so the next daily refresh posts every linked agent's score from it.
+address has posted nothing, so the next daily refresh posts every linked agent's score from it. **Rotating the tunnel key**: make a new `secrets/tunnel/id_ed25519` as in step 1, replace the line in the `sigvara-tunnel` account's `authorized_keys`, and `docker compose up -d --force-recreate signer-tunnel`.
 
 **Backing up its state**, before going live: append this to the primary's
 `/root/backup-oracle-state.sh` (section 1), after the oracle copy's last line, so a failure here

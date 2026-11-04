@@ -12,7 +12,7 @@
 # same key races the first for nonces, and one with another key is a second, unnamed provider.
 #
 # It holds no private key. In shadow mode (the default) it signs nothing at all; in live mode it
-# asks the remote signer at PUBLISH_SIGNER_URL, on another host (oracle/signer.js; on testnet an
+# asks the remote signer on another host, through the signer-tunnel service below (oracle/signer.js; on testnet an
 # encrypted keystore, on mainnet a KMS or HSM). A compromised publisher host can ask for signatures while it is compromised but cannot
 # take the key away. The state volume holds what it has read and posted. Its scan positions can
 # be rebuilt from the chain; its record of which 8004 agent each score went to cannot, and without
@@ -31,6 +31,7 @@ services:
     environment:
       SIGVARA_COMMIT: ${SIGVARA_COMMIT:?set SIGVARA_COMMIT in .env to the full 40-character commit hash}
       PUBLISH_STATE_PATH: /data/publisher-state.json
+      PUBLISH_SIGNER_URL: http://signer-tunnel:28600
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -68,6 +69,58 @@ services:
     volumes:
       - publisher_app:/app
       - publisher_state:/data
+
+  # The only way to the signer: an SSH local forward over the SSH port its host already opens, to
+  # the signer listening on that host's 127.0.0.1 alone. The key works only from this host, and
+  # that host's sshd lets its account open that one forward and nothing else (runbook section 5,
+  # step 1; oracle/sshd_config.signer-tunnel). The host key is pinned in known_hosts, so requests
+  # and the signed transactions they return are encrypted, and go to that host or nowhere. The
+  # publisher reaches it as signer-tunnel:28600 on this project's network; nothing is published on
+  # the host. ./secrets/tunnel holds id_ed25519 and known_hosts, owned by root and readable by it
+  # alone. A dropped link is retried in place, waiting longer each time it fails quickly, so a bad
+  # key does not hammer that host's sshd (and its fail2ban) from the address the backups use.
+  signer-tunnel:
+    image: alpine:3.22
+    container_name: sigvara-signer-tunnel
+    restart: unless-stopped
+    init: true
+    environment:
+      SIGNER_SSH: ${SIGNER_SSH:?set SIGNER_SSH in .env to user@host of the signer's tunnel account}
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - NET_RAW
+    mem_limit: 64m
+    pids_limit: 32
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+    command:
+      - sh
+      - -c
+      - |
+        set -eu
+        apk add --no-cache openssh-client >/dev/null
+        delay=60
+        while :; do
+          echo "[tunnel] forwarding signer-tunnel:28600 to 127.0.0.1:28600 on $$SIGNER_SSH"
+          started=$$(date +%s)
+          ssh -N -T -i /tunnel/id_ed25519 \
+            -o IdentitiesOnly=yes -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/tunnel/known_hosts \
+            -o GlobalKnownHostsFile=/dev/null -o HostKeyAlgorithms=ssh-ed25519 \
+            -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+            -L 0.0.0.0:28600:127.0.0.1:28600 "$$SIGNER_SSH" || true
+          # A link that held for five minutes was fine: start the wait over.
+          if [ $$(( $$(date +%s) - started )) -gt 300 ]; then delay=60; fi
+          echo "[tunnel] ssh ended; again in $$delay s"
+          sleep "$$delay"
+          delay=$$(( delay * 2 > 900 ? 900 : delay * 2 ))
+        done
+    volumes:
+      - ./secrets/tunnel:/tunnel:ro
 
 volumes:
   publisher_app:
