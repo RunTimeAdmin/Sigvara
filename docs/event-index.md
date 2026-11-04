@@ -33,7 +33,7 @@ How it keeps the history complete (`oracle/indexer.js`, `poll`):
 `GET /events` returns the logs in chain order, shaped as `eth_getLogs` returns them. Each carries `blockTimestamp`, and the answer says which blocks it covers:
 
 ```json
-{ "chainId": 5042002, "fromBlock": 62662196, "toBlock": 70445597, "toBlockTime": 1793671700, "logs": [ ... ] }
+{ "chainId": 5042002, "fromBlock": 62662196, "toBlock": 70445597, "toBlockTime": 1793671700, "logs": [ ... ], "next": null }
 ```
 
 Optional filters, all checked before use (`parseQuery`):
@@ -44,10 +44,14 @@ Optional filters, all checked before use (`parseQuery`):
 | `topic0` | up to 20 event topics, comma separated |
 | `topic1` | one 32-byte value, such as an agent's didHash |
 | `fromBlock` | leave out older blocks |
+| `limit` | at most this many logs, from 1 to 5,000 (the default) |
+| `after` | the `next` cursor of an earlier answer: the logs after it |
 
-A reader takes the blocks after `toBlock` from the chain itself, which is what the pages do (`indexLogs` in `site/assets/explorer.js`). A page that gets a `toBlock` more than 100 blocks past the chain's newest does not use the answer.
+One answer holds at most 5,000 logs and 4 MiB of them as JSON (`PAGE_ROWS`, `PAGE_BYTES` in `oracle/event-index.js`). A longer history ends with `next`, a cursor naming its last log's block and log index; a reader asks again with `after` set to it until `next` is null. The whole testnet history, about 750 logs and 400 KB on 4 November 2026, fits in one answer, so `next` is null today. A reader takes the blocks after the last answer's `toBlock` from the chain itself, which is what the pages do (`indexLogs` in `site/assets/explorer.js`, which follows `next` for up to 20 answers). A page that gets a `toBlock` more than 100 blocks past the chain's newest does not use the answer.
 
-A request never reaches the RPC. The index answers from memory, so traffic to the pages cannot spend the provider's credits. Each query's answer is encoded once and kept until the index moves on (`eventsAnswer`), so many requests for the same query share one copy.
+A request never reaches the RPC. The index answers from memory, so traffic to the pages cannot spend the provider's credits. Each query's answer is encoded once and kept until the index moves on (`eventsAnswer`), so many requests for the same query share one copy. At most 64 answers and 64 MiB of them are kept, the oldest dropped first, so many different queries cannot make the cache grow without bound.
+
+What is not bounded: the index itself is held in memory and in its state file, about half a kilobyte a log, so a history of a million logs takes about half a gigabyte. The proxy in front of it (Caddy, below) passes only `GET`, `HEAD` and `OPTIONS` on the two paths and sets no request rate or connection limit; Caddy needs a plugin for one. Both are fine for the testnet history and are to be settled before the index serves a much larger one.
 
 `GET /health` answers 200 while the index has polled in the last few minutes and is at most 3,600 blocks (about half an hour) behind the finalized head, and 503 otherwise. It reports `toBlock`, `head`, `behind`, the number of logs, the last error with any URL removed, and the commit it runs.
 

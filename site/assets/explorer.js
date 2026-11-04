@@ -30,6 +30,8 @@
   const EXPLORER = "https://explorer.testnet.arc.io";
   const EXPLORER_API = EXPLORER + "/api";
   const INDEX = "https://index.sigvara.xyz";
+  // The most /events answers one history is read in: 20 of up to 5,000 logs each.
+  const INDEX_PAGES = 20;
   const PRIMARY = "https://oracle.sigvara.xyz";
   const CHECKER = "https://checker.sigvara.xyz";
   const SOURCE = "https://github.com/RunTimeAdmin/Sigvara";
@@ -376,17 +378,29 @@
     if (topic0) q.set("topic0", topic0.join(","));
     if (topic1) q.set("topic1", topic1);
     if (fromBlock !== null) q.set("fromBlock", String(fromBlock));
-    const [answer, head] = await Promise.allSettled([getJson(`${INDEX}/events?${q}`), blockNumber()]);
-    if (answer.status === "rejected") throw answer.reason;
-    const j = answer.value;
-    const toBlock = Number(j?.toBlock);
-    if (j?.chainId !== CHAIN_ID || !Array.isArray(j?.logs) || !Number.isSafeInteger(toBlock)) {
-      throw new Error("the event index gave an answer for something else");
+    const headRead = blockNumber().then((value) => ({ status: "fulfilled", value }), (reason) => ({ status: "rejected", reason }));
+    // A long history comes a page at a time: each answer's `next` asks for the rest, and the last
+    // answer's toBlock is where the chain takes over.
+    const indexed = [];
+    let j = null;
+    for (let page = 0, after = null; ; page++) {
+      if (page === INDEX_PAGES) throw new Error(`the event index has more than ${INDEX_PAGES} pages for this history`);
+      if (after) q.set("after", after);
+      j = await getJson(`${INDEX}/events?${q}`);
+      if (j?.chainId !== CHAIN_ID || !Array.isArray(j?.logs) || !Number.isSafeInteger(Number(j?.toBlock))) {
+        throw new Error("the event index gave an answer for something else");
+      }
+      indexed.push(...j.logs);
+      if (typeof j.next !== "string" || j.next === "") break;
+      if (j.next === after) throw new Error("the event index gave the same page twice");
+      after = j.next;
     }
+    const head = await headRead;
+    const toBlock = Number(j.toBlock);
     const indexHead = { block: toBlock, time: Number(j.toBlockTime) > 0 ? Number(j.toBlockTime) : null };
     // The index answered; a chain that does not is the chain's problem, said as such.
     if (head.status === "rejected") {
-      return { rows: j.logs, tail: { source: "index", from: toBlock + 1, to: toBlock, missed: null, indexHead, error: String(head.reason?.message ?? head.reason) } };
+      return { rows: indexed, tail: { source: "index", from: toBlock + 1, to: toBlock, missed: null, indexHead, error: String(head.reason?.message ?? head.reason) } };
     }
     const latest = head.value;
     if (toBlock > latest + INDEX_AHEAD) throw new Error(`the event index claims block ${toBlock}, past the chain's newest, ${latest}`);
@@ -402,7 +416,7 @@
     } catch (e) {
       tail.error = String(e?.message ?? e);
     }
-    return { rows: [...j.logs, ...rows], tail };
+    return { rows: [...indexed, ...rows], tail };
   }
 
   // One contract's logs for one event set, oldest first: from the event index and the chain, or,

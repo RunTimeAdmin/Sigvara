@@ -15,6 +15,15 @@
 // The most blocks one eth_getLogs may span, inclusive, on Arc's public RPC and on Alchemy's.
 const LOG_SPAN = 10000;
 
+// One /events answer holds at most PAGE_ROWS logs and PAGE_BYTES of them as JSON. A longer one
+// ends with `next`, the cursor to ask for the rest with (`after`). The whole testnet history is a
+// few hundred kilobytes, so today it comes in one answer; the caps keep a long history from
+// becoming one unbounded answer, and the indexer from holding many of them.
+const PAGE_ROWS = 5000;
+const PAGE_BYTES = 4 * 1024 * 1024;
+// A cursor names the last log an answer held: its block and log index, in decimal.
+const CURSOR = /^(\d{1,12})-(\d{1,9})$/;
+
 const HEX = /^0x[0-9a-fA-F]*$/;
 const QUANTITY = /^0x[0-9a-fA-F]{1,16}$/;
 const WORD = /^0x[0-9a-fA-F]{64}$/;
@@ -107,7 +116,8 @@ function resumable(saved, { chainId, fromBlock, addresses }) {
 /**
  * The filter a /events request asks for, or an Error to answer 400 with. Every parameter is
  * optional: `address` (one or more of the indexed contracts), `topic0` (up to 20 event
- * topics), `topic1` (one 32-byte value), `fromBlock` (a block number).
+ * topics), `topic1` (one 32-byte value), `fromBlock` (a block number), `limit` (at most this
+ * many logs, up to PAGE_ROWS) and `after` (the `next` cursor of an earlier answer).
  */
 function parseQuery(params, indexed) {
   const list = (name) => (params.get(name) || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
@@ -120,30 +130,62 @@ function parseQuery(params, indexed) {
   const fromRaw = params.get('fromBlock');
   const fromBlock = fromRaw === null ? null : Number(fromRaw);
   if (fromRaw !== null && (!/^\d{1,12}$/.test(fromRaw) || !Number.isSafeInteger(fromBlock))) return new Error('fromBlock must be a block number');
+  const limitRaw = params.get('limit');
+  const limit = limitRaw === null ? PAGE_ROWS : Number(limitRaw);
+  if (limitRaw !== null && (!/^\d{1,5}$/.test(limitRaw) || limit < 1 || limit > PAGE_ROWS)) return new Error(`limit must be from 1 to ${PAGE_ROWS}`);
+  const afterRaw = params.get('after');
+  const cursor = afterRaw === null ? null : CURSOR.exec(afterRaw);
+  if (afterRaw !== null && !cursor) return new Error('after must be the next cursor of an earlier answer');
   return {
     address: address.length ? new Set(address) : null,
     topic0: topic0.length ? new Set(topic0) : null,
     topic1: topic1[0] || null,
     fromBlock,
+    limit,
+    after: cursor ? [Number(cursor[1]), Number(cursor[2])] : null,
   };
 }
 
+// Where a log sits in the chain, as a cursor.
+const cursorOf = (l) => orderOf(l).join('-');
+
 function selectLogs(index, q) {
+  const after = q.after ?? null;
   return index.logs.filter((l) => (!q.address || q.address.has(l.address))
     && (!q.topic0 || q.topic0.has(l.topics[0]))
     && (!q.topic1 || l.topics[1] === q.topic1)
-    && (q.fromBlock === null || parseInt(l.blockNumber, 16) >= q.fromBlock));
+    && (q.fromBlock === null || q.fromBlock === undefined || parseInt(l.blockNumber, 16) >= q.fromBlock)
+    && (!after || (([b, i]) => b > after[0] || (b === after[0] && i > after[1]))(orderOf(l))));
 }
 
-// The /events answer: the logs that match, and the blocks they were read over. A reader takes
-// the blocks after toBlock from the chain itself.
-function eventsBody(index, q) {
+/**
+ * The /events answer: the logs that match, from `after` on, and the blocks they were read over.
+ * It holds at most `q.limit` logs and `maxBytes` of them as JSON, though always one when one
+ * matches, and `next` is the cursor of its last log when more match, or null. A reader asks again
+ * with `after` set to `next` until it is null, then takes the blocks after the last answer's
+ * toBlock from the chain itself.
+ */
+function eventsBody(index, q, maxBytes = PAGE_BYTES) {
+  const limit = q.limit ?? PAGE_ROWS;
+  const logs = [];
+  let bytes = 0;
+  let next = null;
+  for (const l of selectLogs(index, q)) {
+    const size = JSON.stringify(l).length + 1;
+    if (logs.length === limit || (logs.length > 0 && bytes + size > maxBytes)) {
+      next = cursorOf(logs[logs.length - 1]);
+      break;
+    }
+    logs.push(l);
+    bytes += size;
+  }
   return {
     chainId: index.chainId,
     fromBlock: index.fromBlock,
     toBlock: index.toBlock,
     toBlockTime: index.toBlockTime,
-    logs: selectLogs(index, q),
+    logs,
+    next,
   };
 }
 
@@ -156,5 +198,5 @@ function redact(message, secrets = []) {
 }
 
 module.exports = {
-  LOG_SPAN, planSpans, normalizeLog, createIndex, appendLogs, resumable, parseQuery, selectLogs, eventsBody, redact,
+  LOG_SPAN, PAGE_ROWS, PAGE_BYTES, planSpans, normalizeLog, createIndex, appendLogs, resumable, parseQuery, selectLogs, eventsBody, redact,
 };
