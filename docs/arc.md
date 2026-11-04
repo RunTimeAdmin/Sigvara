@@ -39,7 +39,7 @@ fails at the fee-estimation step, retry with `--legacy`.
 **Explorer verification.** Every Arc testnet contract, each proxy and the implementation
 behind it, is source-verified on [explorer.testnet.arc.io](https://explorer.testnet.arc.io), and
 each is reproduced byte for byte by a build of the commit `deployments/5042002.json` names
-(`bytecode.reproducedAt`, tagged `arc-testnet-2026-11-02b`). See [Verifying the deployed code](#verifying-the-deployed-code)
+(`bytecode.reproducedAt`, tagged `arc-testnet-2026-11-04`). See [Verifying the deployed code](#verifying-the-deployed-code)
 below. Do not add `[etherscan]` entries for `5042` / `5042002` to `foundry.toml` until Foundry
 ships chain metadata for Arc; unknown chain IDs break `forge script`.
 
@@ -675,10 +675,10 @@ Proxy addresses never change; these are the implementations behind them, newest 
 | | `0x169f1ada8a3568e229d24e74515b4ef889b8a6bd` | 21 Sep |
 | | `0x3501f936f629dbc2e97ae0717c501456ca8215e0` | 19 Sep, narrowed coupling |
 | | `0x28c23b766c2dabb5f2930905a5eeb660919b71ef` | 19 Sep, PendingBond activation |
-| `reputation` | `0xd23fffa937cfe37bbc6ee1e14c3c844c78bfe3ca` | 26 Oct, `fdce1a7` (current) |
+| `reputation` | `0x26cf380314962f0c912b51b40a5c123c0683ac8a` | 4 Nov, `f35cbc6`, a finalize keeps the time built up toward the next point (current) |
+| | `0xd23fffa937cfe37bbc6ee1e14c3c844c78bfe3ca` | 26 Oct, `fdce1a7` |
 | | `0x87492399e34e5247740d0280c329e7553403404c` | recorded 21 Sep |
-| | `0x0dc80134817e6fea978c06497f48391371a8413d` | 19 Sep, evidence roots |
-| | `0xea5940bc23d7bf82113316dd03a3b1bb1bc2f084` | 18 Sep, maturity |
+| | `0x0dc80134817e6fea978c06497f48391371a8413d`, `0xea5940bc23d7bf82113316dd03a3b1bb1bc2f084` | 19 Sep, evidence roots; 18 Sep, maturity |
 | `oracleBond` | `0x722abaa614edd77cb5b31655eb1bfdb18e823a51` | 3 Nov, `0483a3c`, a signer key stays bound to the operator that named it (current) |
 | | `0x3c06a98ba5137e967af182e91f88729ca1880e83` | 2 Nov, `76bbc97`, exit time fixed at unbonding |
 | | `0xa33fc1b6ee82309bbf77fde4113a223742c53931` | 26 Oct, `fdce1a7` |
@@ -696,15 +696,15 @@ cast storage <proxy> 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505
 Anyone can check that the code on chain is this repository's, without trusting the explorer:
 
 ```bash
-git checkout arc-testnet-2026-11-02b
+git checkout arc-testnet-2026-11-04
 sh scripts/fetch-deps.sh && forge build
 node scripts/check-bytecode.mjs
 ```
 
 `check-bytecode.mjs` reads each proxy, the implementation it runs and the SVR token from the
 chain, blanks the immutables (a UUPS implementation stores its own address in one), and compares
-the rest with the build, byte for byte, source metadata included. On 2 November 2026, after the
-oracle bond upgrade, all nine matched the build of `76bbc97`; the tag sits on the commit that
+the rest with the build, byte for byte, source metadata included. On 4 November 2026, after the
+reputation upgrade, all nine matched the build of `f35cbc6`; the tag sits on the commit that
 records that upgrade, whose contract sources are the same. Build in an ordinary checkout: a `lib/` that is a symlink or
 junction changes the source paths solc records, and with them the metadata hash. CI runs the
 same check after every build; when main's sources have moved on since the recorded commit, a
