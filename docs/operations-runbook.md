@@ -535,3 +535,8 @@ fi
 - Step 4, ahead of that revoke: David had the allow list emptied at 00:29 UTC on 4 November. The publisher now
   posts for every agent linked on chain, and 897766 is still the only one.
 - Since 00:21 UTC on 4 November the publisher runs `bd54f26`, where an agent's first link queues it, if it has had a score event since `PUBLISH_FROM_BLOCK`, so it is posted at the next run unless its 8004 agent was already posted to that day; a link that moves waits for the refresh.
+- The tunnel (step 1, as it now reads), on 4 November: the `sigvara-tunnel` account and its sshd block went onto
+  `packrai-vps` (David), and from the publisher's host the key opened the forward to 28600 while a forward to
+  port 22, a `-R` and a command were all refused. The signer moved to `127.0.0.1` at 01:40 UTC and the publisher
+  to the tunnel at 01:42, both on `68fc9ff`; a request through `signer-tunnel:28600` returned the publisher's
+  address. David then removed the 28600 rules from ufw and from the hPanel firewall, and the port answers no one.
