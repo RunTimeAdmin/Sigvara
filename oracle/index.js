@@ -349,14 +349,17 @@ function evidenceAt(didHash, atMs) {
 }
 
 /**
- * How the checker reads a proposal's evidence once payment chains are configured: at each whole-minute
- * cut-off in the half hour before it (evidence-as-of.js, payment-chains.auditCuts), since the proposer
- * chose its evidence at one of them and its transaction landed later. Unset without payment chains,
- * so an operator on the scored chain alone audits exactly as before.
+ * How the checker reads a proposal's evidence (evidence-as-of.js). In this operator's stored order too,
+ * for a proposal made before evidence had a fixed order. With a payment chain on, at each whole-minute
+ * cut-off in the half hour before it (payment-chains.auditCuts), since the proposer chose its evidence
+ * at one of them and its transaction landed later.
  */
-const auditOptions = (atMs) => (paymentChains.active(paymentChainsCfg)
-  ? { eligibleAt: (e) => paymentChains.eligibleAtMs(e, paymentChainsCfg), cuts: paymentChains.auditCuts(atMs, paymentChainsCfg) }
-  : undefined);
+const auditOptions = (didHash, atMs) => ({
+  stored: getPaymentEvents(didHash).filter((e) => e.chainId == null),
+  ...(paymentChains.active(paymentChainsCfg)
+    ? { eligibleAt: (e) => paymentChains.eligibleAtMs(e, paymentChainsCfg), cuts: paymentChains.auditCuts(atMs, paymentChainsCfg) }
+    : {}),
+});
 
 /** Every agent's payments that settled on `chainId`, or on the scored chain when it is null. */
 function eventsOnChain(chainId) {
@@ -1456,7 +1459,7 @@ async function runEpochInner() {
               continue;
             }
             asOf = payments.required(paymentCfg)
-              ? evidenceAsOf(evidenceAt(didHash, atProposalMs), atProposalMs, freshPending.evidenceRoot ?? null, auditOptions(atProposalMs))
+              ? evidenceAsOf(evidenceAt(didHash, atProposalMs), atProposalMs, freshPending.evidenceRoot ?? null, auditOptions(didHash, atProposalMs))
               : null;
             // The external factor too, as the primary would have read it at its proposal: same
             // snapshot, same evidence. Computed at this epoch's clock instead, a reviewer that
