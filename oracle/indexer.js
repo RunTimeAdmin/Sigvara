@@ -4,8 +4,8 @@
  * Event index.
  *
  * Reads every log the Sigvara contracts emit, from the block they were deployed in, and serves
- * them over HTTP so a page can have a contract's whole history in one request. docs/event-index.md
- * says why it exists and how it is run.
+ * them over HTTP so a page can have a contract's whole history, in pages, without the RPC.
+ * docs/event-index.md says why it exists and how it is run.
  *
  * It holds no key that can sign and writes nothing to the chain. Its one secret is the RPC URL,
  * which for a provider such as Alchemy carries an API key; that is read from a file when

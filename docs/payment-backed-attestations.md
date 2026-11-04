@@ -251,6 +251,14 @@ procedure told a verifier to read seconds off the chain, so an honest oracle and
 verifier computed different roots. A commitment that refutes itself under inspection is
 worse than none, since the disagreement looks exactly like the oracle lying.
 
+A payment that settled on a payment chain ([ADR 0009](adr/0009-payments-on-base.md)) has a
+six-word leaf, with the chain first: `keccak256(keccak256(abi.encode(uint256 chainId, bytes32
+txHash, address payer, uint256 amount, uint256 settledAt, uint8 outcome)))`. The verifier reads
+the transaction from the chain `chainId` names, and every scored-chain leaf keeps the five words
+the published roots were made with (`oracle/merkle.js`). The explorer rebuilds both. The SDK's
+`evidenceLeaf`, and so `sigvara_verify_evidence` in `sigvara-mcp`, rebuilds only the five-word
+leaf. That is harmless until a chain is `on`, since a chain in shadow adds nothing to a root.
+
 `outcome` has three states for the same reason, and it was a `bool` until it caught the
 same trap. A payment found by scanning the chain carries no outcome, because whether the
 work was any good is not on chain, and the oracle records that as neither true nor false.

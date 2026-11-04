@@ -123,7 +123,7 @@ function rpcUrlProblem(raw) {
  *   PAYMENT_CHAIN_84532_FEE_UNIT=...       required: base units of this asset per point
  *   PAYMENT_CHAIN_84532_MODE=shadow|on     default shadow: scan and report, credit nothing
  *   PAYMENT_CHAIN_84532_DELAY_SECONDS=3600 how old a payment must be before it is scored
- *   PAYMENT_CHAIN_84532_MIN_AMOUNT=0, _CHUNK=200, _PACE_MS=500, _MAX_BLOCKS=36000
+ *   PAYMENT_CHAIN_84532_MIN_AMOUNT=...     required, at least 1. Also _CHUNK=200, _PACE_MS=500, _MAX_BLOCKS=36000
  *
  * Throws on anything it cannot use, without the RPC URL in the message.
  *
