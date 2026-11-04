@@ -87,6 +87,8 @@ let scanState = null;
 // Where the ERC-20 Transfer scan got to. Persisted for the same reason: a restart that
 // replayed from FROM_BLOCK would grow with the chain and eventually never finish.
 let paymentScanState = null;
+// The same for each payment chain (payment-chains.js, ADR 0009), by payment-chains.stateKey.
+let paymentChainScanState = {};
 // Where the ERC-8004 link scan got to, and the links it found (link-claims.js). These are
 // read from chain, but a restart that lost them would rescan from EXTERNAL_LINK_FROM_BLOCK.
 let linkScanState = null;
@@ -176,7 +178,19 @@ function pruneFlags(minWeight = 0.001, now = Date.now(), halfLifeMs = FLAG_HALF_
 // The format version of the state file. Written on every save and checked on load, so that
 // a build older than the file refuses it instead of reading what it understands and then
 // saving that over the rest. A file with no version predates this and is read as version 0.
-const STATE_SCHEMA_VERSION = 1;
+//
+// Version 2 is a file holding anything from a payment chain (ADR 0009): an event with a chainId or
+// a payment chain's scan cursor. A build before it would score those amounts as the scored chain's,
+// put them in the wrong leaf and drop the cursors on its next save, so it must refuse the file. A
+// file with nothing from a payment chain is still written as version 1, so rolling back stays
+// possible until a payment chain is used.
+const STATE_SCHEMA_VERSION = 2;
+
+function holdsPaymentChainData() {
+  if (Object.keys(paymentChainScanState).length) return true;
+  for (const list of paymentEvents.values()) if (list.some((e) => e.chainId != null)) return true;
+  return false;
+}
 
 // The previous good state, one save behind. persist() keeps it by linking the live file here
 // just before replacing it, which costs no copy.
@@ -249,6 +263,7 @@ function parseState(parsed) {
     divergences: new Map(),
     scanState: parsed.scanState || null,
     paymentScanState: parsed.paymentScanState || null,
+    paymentChainScanState: isObject(parsed.paymentChainScanState) ? parsed.paymentChainScanState : {},
     linkScanState: parsed.linkScanState || null,
     chainId: parsed.chainId ?? null,
   };
@@ -348,6 +363,7 @@ function applyState(next) {
   for (const [k, v] of next.divergences) divergences.set(k, v);
   scanState = next.scanState;
   paymentScanState = next.paymentScanState;
+  paymentChainScanState = next.paymentChainScanState;
   linkScanState = next.linkScanState;
   stateChainId = next.chainId;
 }
@@ -452,6 +468,10 @@ function paymentEventError(e) {
   if (!/^\d+$/.test(String(e.amount))) {
     return `amount is not an integer string (${JSON.stringify(e.amount)})`;
   }
+  // Present only on a payment that settled on a payment chain (ADR 0009). It goes into the leaf.
+  if (e.chainId !== undefined && !(Number.isSafeInteger(e.chainId) && e.chainId > 0)) {
+    return `chainId is not a chain id (${JSON.stringify(e.chainId)})`;
+  }
   return null;
 }
 
@@ -513,7 +533,7 @@ function persist() {
     try {
       // Written in pieces rather than as one string: see state-serialize.js for why.
       for (const piece of stateChunks({
-        schemaVersion: STATE_SCHEMA_VERSION,
+        schemaVersion: holdsPaymentChainData() ? 2 : 1,
         chainId: stateChainId,
         attestations: Object.fromEntries(attestations),
         flags: Object.fromEntries(flags),
@@ -524,6 +544,7 @@ function persist() {
         divergences: Object.fromEntries(divergences),
         scanState,
         paymentScanState,
+        paymentChainScanState,
         linkScanState,
         savedAt: new Date().toISOString(),
       })) writeAll(fd, piece);
@@ -592,8 +613,11 @@ function pruneExpiredCooldowns(now = Date.now()) {
  * be repointed, and planCredits takes the agent from the log's own `to` field. The pair
  * is still refused a second time, so a genuine replay gains nothing.
  */
-function creditKey(txHash, didHash, payer) {
-  return [txHash, didHash, payer].map((x) => String(x).toLowerCase()).join('|');
+function creditKey(txHash, didHash, payer, chainId = null) {
+  const key = [txHash, didHash, payer].map((x) => String(x).toLowerCase()).join('|');
+  // A payment chain's credits carry the chain, so that a hash is only ever compared with hashes
+  // from the chain it came from. The scored chain's keep the spelling they have always had.
+  return chainId == null ? key : `${Number(chainId)}:${key}`;
 }
 
 /**
@@ -605,8 +629,10 @@ function creditKey(txHash, didHash, payer) {
  * Refusing is the safe direction, and it only affects transactions credited before this
  * change.
  */
-function isCredited(txHash, didHash, payer) {
+function isCredited(txHash, didHash, payer, chainId = null) {
   const tx = String(txHash).toLowerCase();
+  // A payment chain has only ever had the full key, so none of the older spellings apply to it.
+  if (chainId != null) return usedPaymentTxs.has(creditKey(tx, didHash, payer, chainId));
   // Three generations of key, oldest first. A shorter one blocks everything below it,
   // because what it omits is not recoverable: prunePaymentEvents drops old records and
   // deliberately leaves this set alone, so the record naming the agent or the sender may
@@ -618,15 +644,15 @@ function isCredited(txHash, didHash, payer) {
 }
 
 function creditPayment(
-  didHash, txHash, amount, payer, success, now = Date.now(), packetId = null, blockNumber = null,
+  didHash, txHash, amount, payer, success, now = Date.now(), packetId = null, blockNumber = null, chainId = null,
 ) {
   const key = txHash.toLowerCase();
   // The same spelling isCredited uses. Filing under the caller's spelling while marking
   // the receipt used in lowercase let a mixed-case hash spend a payment where no score
   // would ever read it.
   const did = String(didHash).toLowerCase();
-  if (isCredited(key, did, payer)) return false;
-  usedPaymentTxs.add(creditKey(key, did, payer));
+  if (isCredited(key, did, payer, chainId)) return false;
+  usedPaymentTxs.add(creditKey(key, did, payer, chainId));
   const list = paymentEvents.get(did) ?? [];
   // The settlement hash is kept, not just used for dedupe: it is what lets a third
   // party pull the payment off the chain and check it for themselves, which is the
@@ -661,6 +687,9 @@ function creditPayment(
   // unreproducible. A verifier reads it off the chain anyway. Omitted rather than stored
   // as null when unknown, so the shape of an already-stored event does not change.
   if (Number.isInteger(blockNumber)) event.blockNumber = blockNumber;
+  // The chain it settled on, for a payment chain's payment only (ADR 0009). Unlike the block it is
+  // evidence: the leaf commits to it, so a verifier knows which chain to rebuild the payment from.
+  if (chainId != null) event.chainId = Number(chainId);
   // Frozen, not copied. The evidence cache treats the array's identity as the revision
   // token, so handing out copies would turn every request into a miss; freezing keeps one
   // array per version and makes the "never mutated in place" rule the cache depends on
@@ -696,7 +725,7 @@ function setPaymentOutcome(didHash, txHash, payer, success, packetId = null) {
   const tx = String(txHash).toLowerCase();
   const who = String(payer).toLowerCase();
   const list = paymentEvents.get(did) ?? [];
-  const i = list.findIndex((e) => e.txHash === tx && String(e.payer).toLowerCase() === who);
+  const i = list.findIndex((e) => e.chainId == null && e.txHash === tx && String(e.payer).toLowerCase() === who);
   if (i < 0) return 'not_found';
   if (typeof list[i].success === 'boolean') return 'already_set';
   // A new array, not an edit in place: the evidence cache treats the array's identity as
@@ -745,7 +774,7 @@ function recordPayerOutcome(
   const tx = String(txHash).toLowerCase();
   const who = String(payer).toLowerCase();
   const list = paymentEvents.get(did) ?? [];
-  const i = list.findIndex((e) => e.txHash === tx && String(e.payer).toLowerCase() === who);
+  const i = list.findIndex((e) => e.chainId == null && e.txHash === tx && String(e.payer).toLowerCase() === who);
   if (i < 0) return 'not_found';
   const event = list[i];
   if (event.payerOutcome) return 'already_set';
@@ -915,6 +944,10 @@ function setScanState(state) { scanState = state; }
 function getPaymentScanState() { return paymentScanState; }
 function setPaymentScanState(state) { paymentScanState = state; }
 
+/** A payment chain's scan cursor, by payment-chains.stateKey, or null. */
+function getPaymentChainScanState(key) { return paymentChainScanState[key] ?? null; }
+function setPaymentChainScanState(key, state) { paymentChainScanState = { ...paymentChainScanState, [key]: state }; }
+
 function getLinkScanState() { return linkScanState; }
 function setLinkScanState(state) { linkScanState = state; }
 
@@ -969,6 +1002,8 @@ module.exports = {
   setScanState,
   getPaymentScanState,
   setPaymentScanState,
+  getPaymentChainScanState,
+  setPaymentChainScanState,
   getLinkScanState,
   setLinkScanState,
   getPaymentEvents,

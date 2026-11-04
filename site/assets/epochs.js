@@ -397,18 +397,23 @@ function renderEvidence(didHash, evidence, chain) {
   html += "</p>";
 
   if (p) {
-    const after = list.filter(e => Number(e.settledAt) > p.proposedAt).length;
-    html += `<p>${list.length - after} settled before the pending proposal was made and ${after} after. `
-      + "A payment that settled after a proposal cannot be in it; it counts from a later one.</p>";
+    // A payment chain's payment (ADR 0009) counts its chain's delay after it settles.
+    const delays = Object.fromEntries((Array.isArray(j?.paymentChains) ? j.paymentChains : [])
+      .filter(c => c && Number.isSafeInteger(c.chainId)).map(c => [c.chainId, Number(c.delaySeconds) || 0]));
+    const countsAt = e => Number(e.settledAt) + (e.chainId != null ? (delays[e.chainId] ?? 0) : 0);
+    const after = list.filter(e => countsAt(e) > p.proposedAt).length;
+    html += `<p>${list.length - after} counted before the pending proposal was made and ${after} after. `
+      + "A payment that counted after a proposal cannot be in it; it counts from a later one."
+      + (Object.keys(delays).length ? " A payment on another chain counts its chain's delay after it settles." : "") + "</p>";
   }
 
   const rows = [...list].sort((a, b) => Number(b.settledAt) - Number(a.settledAt)).slice(0, 20);
   if (rows.length) {
     html += '<ul class="pay-list">' + rows.map(e => `<li>
       <span>${esc(fmtWhen(Number(e.settledAt)))}</span>
-      <span>${esc(fmtSvr(e.amount))} from ${addrLink(e.payer)}</span>
+      <span>${esc(e.chainId != null ? X.fmtAmount(e) : fmtSvr(e.amount))} from ${e.chainId != null ? X.paymentPayerLink(e) : addrLink(e.payer)}</span>
       <span class="${e.outcomeSource === "payer_signed" ? "pill-ok" : ""}">${esc(sourceLabel(e.outcomeSource))}${e.success === false ? ", failed" : ""}</span>
-      <span>${txLink(e.txHash)}</span>
+      <span>${e.chainId != null ? X.paymentTxLink(e) : txLink(e.txHash)}</span>
     </li>`).join("") + "</ul>";
     if (list.length > rows.length) html += `<p class="netnote">Newest ${rows.length} of ${list.length} shown.</p>`;
   }

@@ -98,7 +98,8 @@ async function load() {
         const j = await X.getJson(`${X.PRIMARY}/evidence/${a.didHash}`);
         const list = (Array.isArray(j?.evidence) ? j.evidence : []).filter((e) => e && typeof e === "object");
         a.payments = list.length;
-        a.paid = list.reduce((s, e) => { try { return s + BigInt(e.amount); } catch (_) { return s; } }, 0n);
+        // Test SVR on this chain only: a payment chain's amounts are in another asset (ADR 0009).
+        a.paid = list.filter((e) => e.chainId == null).reduce((s, e) => { try { return s + BigInt(e.amount); } catch (_) { return s; } }, 0n);
         a.signed = list.filter((e) => e.outcomeSource === "payer_signed").length;
       } catch (_) { a.payments = null; }
     }));

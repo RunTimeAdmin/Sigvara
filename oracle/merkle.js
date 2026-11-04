@@ -92,17 +92,30 @@ function leafByAbi(event) {
     );
   }
 
-  const inner = ethers.AbiCoder.defaultAbiCoder().encode(
-    ['bytes32', 'address', 'uint256', 'uint256', 'uint8'],
-    [
-      String(txHash).toLowerCase(),
-      ethers.getAddress(payer),
-      BigInt(amount),
-      BigInt(settledSeconds(event)),
-      outcomeCode(success),
-    ]
-  );
+  const fields = [
+    String(txHash).toLowerCase(),
+    ethers.getAddress(payer),
+    BigInt(amount),
+    BigInt(settledSeconds(event)),
+    outcomeCode(success),
+  ];
+  // A payment that settled on a payment chain (ADR 0009) puts the chain first, so a verifier knows
+  // which chain to read it from. Six words rather than five, so it cannot be mistaken for a scored
+  // chain's leaf, and every scored-chain leaf keeps the bytes the published roots were made with.
+  const inner = event.chainId == null
+    ? ethers.AbiCoder.defaultAbiCoder().encode(['bytes32', 'address', 'uint256', 'uint256', 'uint8'], fields)
+    : ethers.AbiCoder.defaultAbiCoder().encode(
+      ['uint256', 'bytes32', 'address', 'uint256', 'uint256', 'uint8'], [chainIdOf(event), ...fields],
+    );
   return ethers.keccak256(ethers.keccak256(inner));
+}
+
+function chainIdOf(event) {
+  const id = Number(event.chainId);
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    throw new Error(`payment event chainId ${JSON.stringify(event.chainId)} is not a chain id`);
+  }
+  return BigInt(id);
 }
 
 // ---- speed -------------------------------------------------------------------------------
@@ -127,7 +140,8 @@ const UINT256_LIMIT = 1n << 256n;
 
 function computeLeaf(event) {
   const { txHash, payer, amount, success } = event;
-  if (!txHash) return leafByAbi(event);
+  // A payment chain's leaf is rare enough to take the ABI path.
+  if (!txHash || event.chainId != null) return leafByAbi(event);
   const tx = String(txHash).toLowerCase();
   if (!TX_HASH.test(tx)) return leafByAbi(event);
 

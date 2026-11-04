@@ -978,7 +978,9 @@ test('persist: writes the format version and the chain, and load reads the chain
     console.log(JSON.stringify({ version: written.schemaVersion, chainId: written.chainId, back: s.getStateChainId(), current: s.STATE_SCHEMA_VERSION }));
   `);
   const r = lastJson(out);
-  assert.equal(r.version, r.current);
+  // Version 2 only once a payment chain's data is held (ADR 0009); see payment-chains.test.js.
+  assert.equal(r.version, 1);
+  assert.equal(r.current, 2);
   assert.equal(r.chainId, 5042);
   assert.equal(r.back, 5042);
 });

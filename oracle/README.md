@@ -1096,6 +1096,66 @@ So `/attest` keeps two jobs it alone can do: carrying the success flag, and acti
 hint when a caller does not want to wait for the next scan. Attestation becomes optional
 for fee and tenure, and stays required for success.
 
+### Payment chains (ADR 0009)
+
+Payments that settle on a chain other than the scored one, read by the same pull scan.
+Identities, bonds and scores stay on the scored chain. Unset, nothing changes. Base Sepolia
+(84532) is the first, on testnet only. Each setting below is per chain, with the chain id in
+its name.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `PAYMENT_CHAIN_IDS` | unset | Comma-separated chain ids, such as `84532`. Needs `PAYMENT_VERIFICATION=required`, `PAYMENT_SCAN_ENABLED=1` and `EXPECTED_CHAIN_ID`, and must not name the scored chain. |
+| `PAYMENT_CHAIN_<id>_RPC_URL` | required | The chain's RPC, https (http only to this host or a private network). Never logged or served. Bring your own: Base Sepolia's public endpoint limits `eth_getLogs` to 200 blocks and Base's rate-limits at once. |
+| `PAYMENT_CHAIN_<id>_ASSET` | required | The ERC-20 payments settle in (Base Sepolia USDC is `0x036CbD53842c5426634e7929541eC2318f3dCF7e`). |
+| `PAYMENT_CHAIN_<id>_FROM_BLOCK` | required | First block. Both operators use the same one, so neither credits a payment the other cannot see. |
+| `PAYMENT_CHAIN_<id>_FEE_UNIT` | required | Base units of this asset per point. Amounts are converted into the scored chain's fee units before they are added to its payments, and one per-payer cap covers all chains. Both operators use the same value. |
+| `PAYMENT_CHAIN_<id>_MODE` | `shadow` | `shadow` scans and reports what it would credit, and credits nothing. `on` credits. A shadow scan keeps its own cursor, so switching on starts at `FROM_BLOCK`. |
+| `PAYMENT_CHAIN_<id>_DELAY_SECONDS` | `3600` | How old a payment must be before it enters a score, at least 1800. Both operators must use the same value. It must be longer than the chain's finality lag (about 17 minutes on Base Sepolia), or every epoch is held. |
+| `PAYMENT_CHAIN_<id>_MIN_AMOUNT` | `0` | As `PAYMENT_MIN_AMOUNT`, in this asset's base units. Both operators use the same value. |
+| `PAYMENT_CHAIN_<id>_CHUNK` | `200` | Blocks per `getLogs` call. |
+| `PAYMENT_CHAIN_<id>_PACE_MS` | `500` | Milliseconds between `getLogs` calls. |
+| `PAYMENT_CHAIN_<id>_MAX_BLOCKS` | `36000` | Blocks one scan covers at most, so a catch-up moves forward a step an epoch (two hours of Base Sepolia). |
+
+What differs from the scored chain's scan:
+
+- **Finality by tag.** The scan reads up to the chain's `finalized` block. Six blocks is 1.2
+  seconds on Base Sepolia.
+- **The same key on both chains.** A payment counts only when the agent's address has no code,
+  or only an EIP-7702 delegation, on this chain and on the scored chain. A contract address may
+  belong to somebody else here, so its payments are skipped as `contract_recipient`.
+- **After registration.** A payment made before the agent registered is skipped as
+  `before_registration`, so whether it counts cannot depend on when an operator scanned its block.
+- **A delay, and a hold.** A payment counts once it is `DELAY_SECONDS` old, so two operators
+  hold the same evidence for any proposal time. An operator whose scan of a chain switched on
+  has passed that far scores nothing that epoch and says so; `/metrics` counts it as
+  `sigvara_oracle_epochs_held_by_payment_chain_total`.
+- **One cut-off.** With a payment chain on (shadow changes nothing), a score's evidence is
+  everything that counted by a whole-minute cut-off: one minute before the chain's clock, read again
+  for each agent, and brought down to where this operator's own scans of every chain have reached,
+  so that nothing scanned later could add to it. A scan that has fallen behind is run again first.
+  The evidence is the scored chain's payments settled by the cut-off, in stored order, then the
+  payment chains' payments at least their delay old, in a fixed order. A checker tries every whole
+  minute in the half hour before a proposal's time (`evidence-as-of.js`), so a primary can lag its
+  evidence by at most that, and `/evidence` serves the rule as `evidenceCut`.
+- **Landing in time.** A proposal is not made when its cut-off is too old to land within that half
+  hour, nor after a transaction in the same epoch was not seen mined, since everything sent after it
+  queues behind it. `TX_WAIT_SECONDS` must leave room for a charge and a proposal. A checker checks a
+  pending proposal only once its own scans have passed the proposal's time, and otherwise next epoch.
+- **Reviewers.** The external factor's reviewers are judged on the scored chain's payments only.
+- **The leaf names its chain.** A payment chain's evidence leaf is
+  `abi.encode(chainId, txHash, payer, amount, settledAt, outcome)`. The scored chain's is
+  unchanged. `/evidence` serves `chainId` on such a payment and each chain's delay.
+
+Payer-signed outcomes for a payment chain's payments are not taken yet: the outcome paths still
+look for the payment on the scored chain only.
+
+A state file that holds anything from a payment chain is written as format version 2, which a build
+from before this refuses to load; without payment chains it stays version 1, so a rollback is still
+possible until a chain is used. Turning a chain back on keeps its old cursor and credits.
+
+`/health` reports each chain's mode, asset, `FROM_BLOCK`, fee unit, minimum, delay, cursor and last scan under `paymentChains`, so two operators can compare what they must share.
+
 ### ERC-8183 job registry (read only)
 
 | Variable | Default | Meaning |
@@ -1219,7 +1279,7 @@ cd oracle
 node --test
 ```
 
-999 tests (as of 3 November 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
+1041 tests (as of 3 November 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
 the trust weighting, Merkle evidence trees, HTTP helpers, store persistence and recovery,
 the streamed state file, chain access with backoff, scan checkpointing, fee caps and transaction replacement,
 metrics, and cooldown logic. Several of the files run the real `index.js` and `watcher.js`
