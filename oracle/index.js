@@ -777,6 +777,7 @@ async function runPaymentScan(agents) {
     // Ask the store, so the scan's pre-check and creditPayment cannot drift apart.
     isUsed: (txHash, didHash, payer) => isCredited(txHash, didHash, payer),
     minAmount: paymentCfg.minAmount,
+    registeredBlockOf: (didHash) => byDid.get(didHash)?.blockNumber ?? null,
   });
 
   // The settlement time is the block's, not now. Crediting a back-scanned payment with
@@ -1780,6 +1781,15 @@ async function readBadgeState(address) {
   }
 }
 
+/**
+ * Whether a verified payment settled in a block before the one the agent registered in, which the scan
+ * skips too (planCredits). Asked of the chain at the payment's block, so a report and a scan draw the
+ * line in the same place. Throws when the chain cannot be read.
+ */
+async function paidBeforeRegistration(didHash, credited) {
+  return Number((await chain.getAgentInfo(didHash, credited.blockNumber)).registeredAt) === 0;
+}
+
 // Repeated bad signatures for one payment leg. A leg's payer can run its account's code here as
 // often as it likes, so after a few failures the leg waits.
 const BAD_SIGNATURE_LIMIT = 5;
@@ -2057,6 +2067,12 @@ async function importOne({ didHash, txHash, checkedAtBlock, signed, packetId }, 
     // not the outcome's fault.
     if (['rpc_error', 'unconfirmed', 'not_found'].includes(err.code)) return { kind: 'retry', code: err.code };
     return { kind: 'refused', code: err.code || 'payment_invalid' };
+  }
+  try {
+    if (await paidBeforeRegistration(didHash, credited)) return { kind: 'refused', code: 'before_registration' };
+  } catch (err) {
+    console.warn(`[oracle] payer outcome import: chain read failed for ${didHash}: ${err.message}`);
+    return { kind: 'retry', code: 'rpc_error' };
   }
   const r = await admitPayerOutcome({ didHash, credited, info, signed, packetId }, { peerBlock: checkedAtBlock });
   if (r.status === 200) return { kind: 'imported' };
@@ -2547,6 +2563,18 @@ async function handleRequest(req, res) {
             return json(res, 502, { error: 'could not read the chain', code: 'rpc_error' });
           }
           return json(res, 402, { error: err.message, code: err.code || 'payment_invalid' });
+        }
+        let beforeRegistration;
+        try {
+          beforeRegistration = await paidBeforeRegistration(didHash, credited);
+        } catch (err) {
+          metrics.inc('paymentRpcErrors');
+          console.warn(`[oracle] /attest chain read failed for ${didHash}: ${err.message}`);
+          return json(res, 502, { error: 'could not read the chain', code: 'rpc_error' });
+        }
+        if (beforeRegistration) {
+          metrics.inc('attestRejectedPayment');
+          return json(res, 402, { error: 'this payment was made before the agent registered', code: 'before_registration' });
         }
         // A payer-signed outcome is checked on the signer's own leg (admitPayerOutcome), so an
         // operator's larger leg in the same transaction cannot block its customer's outcome.

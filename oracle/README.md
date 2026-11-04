@@ -351,7 +351,7 @@ This is fine for local testing and worthless as a trust signal in public.
 | 200 | Accepted and saved |
 | 202 | Accepted, but the state file could not be written, so a restart before the next good save loses it. The body has `"durable": false`. Do not resend: it is recorded here, and a resend is refused (409 for a settlement already credited, 429 inside the cooldown). A payer-signed outcome sent again gets a 409 with `sameOutcome: true`, and `durable: false` until a save works. `/health` is 503 until a save works |
 | 400 | Malformed body, unknown agent, or a `success` that is not a boolean |
-| 402 | The payment did not check out; `code` says why (`self_payment`, `no_transfer`, `below_minimum`) |
+| 402 | The payment did not check out; `code` says why (`self_payment`, `no_transfer`, `below_minimum`, `before_registration`) |
 | 409 | `replayed`: this settlement was already credited. `outcome_recorded`: it already has an outcome, which is final. For a payer-signed outcome both also carry `sameOutcome`, and `outcome_recorded` the held outcome's `heldOutcomeHash` when the payer signed the outcome held (a token holder's held outcome gives only `sameOutcome: false`) |
 | 413 | The body is over 1 MB. `/flag`, `/flag/resolve` and `/link` answer the same way |
 | 429 | Cooldown active for this (attester, didHash) — `remainingSeconds` says how long. Applies to callers without a token; a token holder reporting on a verified payment is not throttled |
@@ -1124,8 +1124,9 @@ What differs from the scored chain's scan:
 - **The same key on both chains.** A payment counts only when the agent's address has no code,
   or only an EIP-7702 delegation, on this chain and on the scored chain. A contract address may
   belong to somebody else here, so its payments are skipped as `contract_recipient`.
-- **After registration.** A payment made before the agent registered is skipped as
-  `before_registration`, so whether it counts cannot depend on when an operator scanned its block.
+- **After registration, by time.** As on the scored chain, a payment made before the agent registered
+  is skipped as `before_registration`, so whether it counts cannot depend on when an operator scanned
+  its block. Here that goes by the block's time, since the two chains' blocks are unrelated.
 - **A delay, and a hold.** A payment counts once it is `DELAY_SECONDS` old, so two operators
   hold the same evidence for any proposal time. An operator whose scan of a chain switched on
   has passed that far scores nothing that epoch and says so; `/metrics` counts it as
@@ -1279,7 +1280,7 @@ cd oracle
 node --test
 ```
 
-1041 tests (as of 3 November 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
+1045 tests (as of 3 November 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
 the trust weighting, Merkle evidence trees, HTTP helpers, store persistence and recovery,
 the streamed state file, chain access with backoff, scan checkpointing, fee caps and transaction replacement,
 metrics, and cooldown logic. Several of the files run the real `index.js` and `watcher.js`

@@ -12,7 +12,9 @@
 //     head:      the block number
 //     blockTimes: { "<block number>": seconds } a block's time, where it is not nowSec - 60
 //     receipts:  { "<txhash>": { status, blockNumber, logs: [{ address, topics, data }] } }
-//     agents:    { "<didhash>": { operator, agentAddress, registeredAt, status } }
+//     agents:    { "<didhash>": { operator, agentAddress, registeredAt, status, registeredBlock } }
+//                registeredBlock: the block it registered in, before which a read at a block finds no
+//                such agent (default 1)
 //     standing:  { "<address>": hard score of a counterparty }
 //     standingFails: { "<address>": true } counterparties the node cannot answer for: the read is throttled
 //     explodeHealth: when true, the /health route throws
@@ -139,7 +141,9 @@ const chain = {
   getProvider: () => provider,
   getAgentInfo: async (didHash, blockTag) => {
     const agent = world().agents[String(didHash).toLowerCase()];
-    if (!agent) return { operator: ZERO, agentAddress: ZERO, registeredAt: 0, status: 0 };
+    if (!agent || (blockTag !== undefined && blockTag < (agent.registeredBlock ?? 1))) {
+      return { operator: ZERO, agentAddress: ZERO, registeredAt: 0, status: 0 };
+    }
     const changed = agent.operators && asOf(agent.operators, blockTag);
     return changed ? { ...agent, operator: changed.operator } : agent;
   },
@@ -147,7 +151,7 @@ const chain = {
     const w = world();
     if (!w.registered) throw new Error('stub: epochs are off in end-to-end tests');
     return w.registered.map((didHash) => ({
-      didHash, agentAddress: w.agents[didHash]?.agentAddress ?? null, blockNumber: 1,
+      didHash, agentAddress: w.agents[didHash]?.agentAddress ?? null, blockNumber: w.agents[didHash]?.registeredBlock ?? 1,
     }));
   },
   getScanState: () => (world().registryScannedTo === undefined ? null : { lastScannedBlock: world().registryScannedTo, agents: [] }),
