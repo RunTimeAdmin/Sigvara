@@ -613,9 +613,9 @@ hardware from the primary and a separate RPC provider, with its own 25,000 SVR b
 its own state; and the divergence watcher that consumes its output, on a third host with
 no key and no state. `activeCount` on `SigvaraOracleBond` is 2. The checker exposes
 `/health`, `/divergence`, `/evidence` and `/outcomes` publicly at `checker.sigvara.xyz`;
-every write path 404s before reaching the service.
+every write path 404s before reaching the service. `SigvaraReader`, one read for a contract that gates on an agent's standing, was deployed on 4 November 2026 at `0x2921b4eE879CdF5793FA273BbDc4E7dF01ABcef8`.
 
-**Not deployed:** `SigvaraEpochFees` and `SigvaraReader`. Scoring on Arc testnet is free and nothing is
+**Not deployed:** `SigvaraEpochFees`. Scoring on Arc testnet is free and nothing is
 charged. The app disables every fee control rather than pointing at an address with no
 code.
 

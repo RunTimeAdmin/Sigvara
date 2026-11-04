@@ -3,8 +3,8 @@
  *
  *   forge build && node scripts/check-bytecode.mjs
  *
- * For every proxy in deployments/<chain>.json, the implementation it runs, the SVR token and the
- * proxies themselves, it reads the runtime code from the chain and compares it with the artifact
+ * For every proxy in deployments/<chain>.json, the implementation it runs, the SVR token, the reader
+ * and the proxies themselves, it reads the runtime code from the chain and compares it with the artifact
  * forge built from this checkout, byte for byte, after blanking the immutables (forge's
  * immutableReferences say where they are; a UUPS implementation stores its own address in one).
  * A match means the deployed code is exactly what this checkout compiles to, down to the source
@@ -104,6 +104,7 @@ for (const [name, contract] of Object.entries(IMPLEMENTATIONS)) {
   await compare(`${name} proxy`, deployed[name], 'ERC1967Proxy');
 }
 if (deployed.svrToken) await compare('svrToken', deployed.svrToken, 'SVRToken');
+if (deployed.reader) await compare('reader', deployed.reader, 'SigvaraReader');
 
 for (const r of rows) console.log(`${r.ok ? 'ok  ' : 'FAIL'} ${r.label.padEnd(26)} ${r.address}  ${r.text}`);
 const failed = rows.filter((r) => !r.ok).length;

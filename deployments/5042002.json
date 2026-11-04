@@ -6,6 +6,7 @@
   "staking": "0xA69d62B2a6774D21A2c15d5d83b27277eD31d35B",
   "svrToken": "0x41De2D6D55318e197a00E8f5B496eA2790e23E6c",
   "oracleBond": "0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171",
+  "reader": "0x2921b4eE879CdF5793FA273BbDc4E7dF01ABcef8",
   "implementations": {
     "identity": {
       "current": "0xfB54a76f5347d8898E950C1FC3c28e22B0F224af",
@@ -95,9 +96,9 @@
     }
   },
   "bytecode": {
-    "note": "Every contract here, each implementation, each proxy and the SVR token, is reproduced byte for byte (immutables aside) by building reproducedAt; scripts/check-bytecode.mjs checks it. The tag marks the commit that records this, whose contract sources are those of reproducedAt. All are verified on the Arc explorer.",
-    "reproducedAt": "f35cbc6",
-    "tag": "arc-testnet-2026-11-04",
+    "note": "Every contract here, each implementation, each proxy, the SVR token and the reader, is reproduced byte for byte (immutables aside) by building reproducedAt; scripts/check-bytecode.mjs checks it. The tag marks the commit that records this, whose contract sources are those of reproducedAt. All are verified on the Arc explorer.",
+    "reproducedAt": "7e461f4",
+    "tag": "arc-testnet-2026-11-04b",
     "checkedAt": "2026-11-04"
   }
 }
