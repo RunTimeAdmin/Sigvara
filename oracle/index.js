@@ -107,6 +107,9 @@ const cfg = {
   // Optional: SigvaraEpochFees address. When set (and its on-chain epochFee > 0),
   // the oracle only scores agents with fee coverage and charges them per epoch.
   feeRegistryAddress: process.env.FEE_REGISTRY_ADDRESS || '',
+  // Optional: SigvaraRewardDistributor. When set, scores are finalized through it, which
+  // credits the operator that proposed each one; unset, they are finalized directly.
+  rewardDistributorAddress: process.env.REWARD_DISTRIBUTOR_ADDRESS || '',
   // Optional: ERC-8004 registries (typically Base Sepolia) for the externalScore
   // factor. When all three are set, linked agents get an external-trust score from
   // their 8004 feedback; unset leaves externalScore at 0. See external.js.
@@ -2903,6 +2906,16 @@ server.listen(cfg.port, cfg.host, () => {
       );
     }
   }).catch(() => {});
+  // A distributor wired to another registry would revert every finalize, and no score would go
+  // live, so that ends the process. One that cannot be read yet is tried again by every finalize.
+  chain.distributorMismatch().then((other) => {
+    if (!other) return;
+    console.error(
+      `[oracle] REWARD_DISTRIBUTOR_ADDRESS finalizes on ${other}, not on REPUTATION_ADDRESS. ` +
+      'Every finalize through it would revert.',
+    );
+    process.exit(1);
+  }).catch((err) => console.warn(`[oracle] could not read the reward distributor yet (${err.message})`));
   // Which chain, now and not only at the first epoch, so a wrong one ends the process instead
   // of waiting to be noticed. A node that cannot be reached yet is not a wrong chain: the
   // epochs wait for the answer.

@@ -962,7 +962,7 @@ and then its silence means nothing.
 | `ORACLE_SCOPES_<NAME>` | (all) | Restricts the credential `ORACLE_TOKEN_<NAME>` to a list of `attest`, `flag`, `link`, `epoch` |
 | `FROM_BLOCK` | `0` | Block to start scanning AgentRegistered events from |
 | `LOG_CHUNK_SIZE` | `2000` | Max blocks per eth_getLogs call |
-| `FEE_REGISTRY_ADDRESS` | (empty) | SigvaraEpochFees address for fee-gated scoring |
+| `FEE_REGISTRY_ADDRESS` | (empty) | SigvaraEpochFees address for fee-gated scoring. Beside it, `REWARD_DISTRIBUTOR_ADDRESS` (empty) names a SigvaraRewardDistributor to finalize through, which credits the proposing operator; startup refuses one wired to another registry |
 | `EXTERNAL_RPC` | (empty) | RPC for ERC-8004 external score lookups |
 | `EXTERNAL_IDENTITY_ADDRESS` | (empty) | ERC-8004 Identity contract. `EXTERNAL_LINK_FROM_BLOCK` (empty: off) is the block its scan for links made on chain, under the `sigvara` metadata key, starts from; every operator must set the same block, the registry must be on this chain, and the RPC must serve state at blocks back to it |
 | `EXTERNAL_REPUTATION_ADDRESS` | (empty) | ERC-8004 Reputation contract. Its feedback counts only from reviewers `reviewers.js` accepts; `EXTERNAL_PUBLIC_FUNDERS` lists wallets that fund everyone (a faucet, an exchange), which end a funding trace instead of joining every reviewer they funded |

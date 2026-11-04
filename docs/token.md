@@ -78,9 +78,14 @@ Treasury SVR is spent only on:
 
 1. **Oracle operator bonds** — posting and topping up bonds under
    `SigvaraOracleBond`, including for operators that are not the team.
-2. **Operator incentives** — paying admitted operators for epochs served, once
-   a distribution mechanism exists. Today `distributeFees()` sends the
-   non-burned fee share to a plain address and the spend is manual.
+2. **Operator incentives** — paying admitted operators for the scores they
+   serve, through [`SigvaraRewardDistributor`](../src/SigvaraRewardDistributor.sol).
+   Treasury SVR for this purpose is sent to the distributor, which pays it out by
+   its own rule: each period is split by the scores each operator proposed that
+   went live, claimable by the bond owner while it is an active operator. Where
+   epoch fees run, the fee registry's `rewardPool` points at it too. It is built
+   and tested and not yet deployed; until it is, `distributeFees()` sends the
+   non-burned share to a plain address and the spend is manual.
 3. **Slashing-committee costs** — the operational cost of reviewing reports and
    filing slashes.
 4. **Staking rewards**, under the rules in the next section, and only those.

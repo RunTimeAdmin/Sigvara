@@ -52,6 +52,14 @@ const FEE_ABI = [
   'error AlreadyCharged(bytes32 didHash, uint256 epoch)',
 ];
 
+// The reward distributor, when REWARD_DISTRIBUTOR_ADDRESS names one. Scores are finalized
+// through it, so the operator behind each is credited for it (src/SigvaraRewardDistributor.sol).
+// Its finalize reverts with SigvaraReputation's own errors, so they are named as before.
+const DISTRIBUTOR_ABI = [
+  'function finalize(bytes32 didHash)',
+  'function reputation() view returns (address)',
+];
+
 // Every custom error declared above, to name a revert from its data. See namedError.
 const REVERT_NAMES = new ethers.Interface(
   [...REPUTATION_ABI, ...FEE_ABI].filter((fragment) => fragment.startsWith('error ')),
@@ -163,7 +171,7 @@ function capsFromConfig(cfg) {
   };
 }
 
-let provider, wallet, identityContract, reputationContract, feeContract, cfg_;
+let provider, wallet, identityContract, reputationContract, feeContract, distributorContract, cfg_;
 let txWaitMs = DEFAULT_TX_WAIT_MS;
 let txPollMs = DEFAULT_TX_POLL_MS;
 let lastScannedBlock = null;
@@ -184,6 +192,8 @@ function init(cfg, deps = {}) {
   // absent, the oracle scores every agent as before (testnet default).
   feeContract = deps.feeContract ??
     (cfg.feeRegistryAddress ? new ethers.Contract(cfg.feeRegistryAddress, FEE_ABI, wallet) : null);
+  distributorContract = deps.distributorContract ??
+    (cfg.rewardDistributorAddress ? new ethers.Contract(cfg.rewardDistributorAddress, DISTRIBUTOR_ABI, wallet) : null);
 }
 
 // Clears in-memory scan state — used between tests, not called in production.
@@ -951,8 +961,21 @@ function isRateLimited(err) {
 }
 
 async function finalizeScore(didHash) {
-  const tx = await reputationContract.finalizeReputation(didHash);
+  const tx = distributorContract
+    ? await distributorContract.finalize(didHash)
+    : await reputationContract.finalizeReputation(didHash);
   return (await settle(tx)).hash;
+}
+
+/**
+ * The registry the configured reward distributor finalizes on, when it is not the one this
+ * oracle proposes to; null when it is, or when no distributor is configured. A distributor
+ * wired to another registry would revert every finalize, and no score would go live.
+ */
+async function distributorMismatch() {
+  if (!distributorContract) return null;
+  const target = await readWithBackoff('distributor registry', () => distributorContract.reputation());
+  return String(target).toLowerCase() === String(cfg_.reputationAddress).toLowerCase() ? null : target;
 }
 
 // Returns { exists, proposedAt, finalizableAt, data, evidenceRoot }; proposedAt is 0 when no proposal is pending.
@@ -1074,6 +1097,7 @@ module.exports = {
   operatorStanding,
   proposeScore,
   finalizeScore,
+  distributorMismatch,
   getPendingScore,
   getTotalScore,
   getChallengeWindow,

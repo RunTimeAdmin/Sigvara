@@ -531,8 +531,8 @@ Stated because they are true, not because they are solved.
 7. **Common ownership in the integration loop.** CounterAudit both consumes the score and
    writes attestations into it, and both are operated by the same party. This is
    disclosed rather than hidden, and a second independent operator is the fix.
-8. **`rewardPool` is a plain address.** `distributeFees()` sends the non-burned share
-   there, and the onward spend is manual rather than a protocol path.
+8. **`rewardPool` is a plain address until the distributor is deployed.** `distributeFees()` sends the non-burned share
+   there; `SigvaraRewardDistributor`, built and tested but not deployed, pays it out by served scores instead.
 
 ---
 
@@ -695,8 +695,8 @@ Ordered by what unblocks what, not by difficulty.
    after it. Six contract tests, including that a losing writer does not restart a live
    proposal's challenge window. Verified against the live chain by simulating the call
    from the checker's address onto an occupied slot and decoding the revert.
-5. **A reward distributor.** Replaces `rewardPool` as a plain address with a contract
-   paying operators for epochs served.
+5. **A reward distributor.** Built, not deployed: `SigvaraRewardDistributor` pays operators
+   by the scores they proposed that went live, period by period, with no owner and no upgrade.
 6. **External audit**, then Arc mainnet with a committee multisig.
 7. **Delivery and disputes for x402 payments.** Partly built. Outcomes bound to the settled
    payment by a payer signature are built ([ADR 0006](adr/0006-payer-signed-outcomes.md))

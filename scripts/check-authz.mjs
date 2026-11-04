@@ -35,7 +35,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const MATRIX = 'docs/authorisation-matrix.md';
-const CONTRACTS = ['SigvaraIdentity', 'SigvaraReputation', 'SigvaraStaking', 'SigvaraOracleBond', 'SigvaraEpochFees', 'SVRToken'];
+const CONTRACTS = ['SigvaraIdentity', 'SigvaraReputation', 'SigvaraStaking', 'SigvaraOracleBond', 'SigvaraEpochFees', 'SigvaraRewardDistributor', 'SVRToken'];
 // Abstract bases in src/ whose functions each heir exposes.
 const SRC_BASES = { InflowGuard: 'InflowGuard', TimelockedGrants: 'TimelockedGrants' };
 // OpenZeppelin bases and the state-changing entry points each adds. TimelockedGrants is
