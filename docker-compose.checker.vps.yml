@@ -40,7 +40,7 @@
 # confirm step 4 landed rather than assuming a clean start means a working one.
 services:
   checker:
-    image: node:20-alpine
+    image: node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53
     container_name: sigvara-checker
     restart: unless-stopped
     working_dir: /app
