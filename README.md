@@ -596,7 +596,7 @@ FOUNDRY_PROFILE=ci forge test
 
 ## Testing
 
-Everything below runs offline, with no deployed contracts, except two fork suites. `test/SlashDrillFork.t.sol` forks Arc testnet on every run, so it needs the `arc_testnet` endpoint in `foundry.toml` to answer. `test/SplitAuthorityFork.t.sol` skips its twelve tests unless you pass `--fork-url https://rpc.testnet.arc.io`.
+Everything below runs offline, with no deployed contracts, except three fork suites. `test/SlashDrillFork.t.sol` and `test/SlashDrillAdversarialFork.t.sol` fork Arc testnet on every run, so they need the `arc_testnet` endpoint in `foundry.toml` to answer. `test/SplitAuthorityFork.t.sol` skips its twelve tests unless you pass `--fork-url https://rpc.testnet.arc.io`.
 
 | Suite | Count | Command |
 |---|---|---|
