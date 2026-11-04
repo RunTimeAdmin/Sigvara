@@ -441,3 +441,19 @@ test('an attestation is not called saved while the state file cannot be written,
     await o.stop();
   }
 });
+
+test('a payment made before the agent registered is refused, however it is reported', async () => {
+  const registeredBlock = world.data.head - 100;
+  const agent = world.addAgent({ registeredBlock });
+  const pay = (blockNumber) => world.addTx([{ from: wallet(), to: agent.agentAddress, value: 5n * USDC }], { blockNumber });
+  const report = (txHash) => oracle.call('POST', '/attest', { didHash: agent.didHash, success: true, payment: { txHash } }, AUDITOR);
+
+  const early = await report(pay(registeredBlock - 1));
+  assert.equal(early.status, 402, early.text);
+  assert.equal(early.body.code, 'before_registration');
+  assert.equal((await oracle.call('GET', `/evidence/${agent.didHash}`)).body.count, 0);
+
+  const sameBlock = await report(pay(registeredBlock));
+  assert.equal(sameBlock.status, 200, sameBlock.text);
+  assert.equal((await oracle.call('GET', `/evidence/${agent.didHash}`)).body.count, 1);
+});
