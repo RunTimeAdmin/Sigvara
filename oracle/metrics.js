@@ -68,8 +68,8 @@ const counters = {
   // consult the same predicate, so anything here means they disagree, or a
   // pre-migration bare-hash entry is blocking a settlement.
   paymentScanRefused: 0,
-  // ADR 0009 payment chains. A held epoch is one that scored nothing because a payment chain's
-  // scan had not reached far enough; a run of them means that chain's RPC needs a look.
+  // ADR 0009 payment chains. A held epoch scored nothing, or left agents unscored, because a scan of a
+  // payment chain or the scored chain had not got far enough; a run of them means its RPC needs a look.
   paymentChainScans: 0,
   paymentChainScanErrors: 0,
   epochsHeldByPaymentChain: 0,

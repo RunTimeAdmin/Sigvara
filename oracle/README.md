@@ -473,7 +473,7 @@ order — so a verifier need not read this source to know what is covered.
 
 Payments are served in the order the root is built over: by settlement time, then transaction and
 payer, with a payment chain's after the scored chain's. Two operators credit the same payments in
-different orders, and the order of the leaves changes the root, so the order they were credited in
+different orders, and the order of the leaves can change the root, so the order they were credited in
 does not count. Two operators serve the same root once they hold the same payments and outcomes. A
 payer-signed outcome one has taken and the other has not yet imported is a real difference until the
 next import. A root committed before this order was fixed, over payments stored in another order,
@@ -1107,9 +1107,9 @@ for fee and tenure, and stays required for success.
 ### Payment chains (ADR 0009)
 
 Payments that settle on a chain other than the scored one, read by the same pull scan.
-Identities, bonds and scores stay on the scored chain. Unset, nothing changes. Base Sepolia
-(84532) is the first, on testnet only. Each setting below is per chain, with the chain id in
-its name.
+Identities, bonds and scores stay on the scored chain. Unset, none of this runs, and only the
+fixed order of the evidence (see `/evidence`) applies. Base Sepolia (84532) is the first, on
+testnet only. Each setting below is per chain, with the chain id in its name.
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -1143,8 +1143,8 @@ What differs from the scored chain's scan:
   of the scored chain is too far behind for a proposal to land in time. It says so in the log and under
   `paymentChainHold` on `/health`, and `/metrics` counts it as a failed epoch and in
   `sigvara_oracle_epochs_held_by_payment_chain_total`. Scans that fall behind while an epoch runs bring
-  the cut-off down, below, and past that leave the remaining agents unscored, which is counted the same way
-  and shown as `paymentChainHold.agents`.
+  the cut-off down, below, and past that leave the remaining agents unscored. That epoch still counts as
+  succeeded: only the held counter moves, and `paymentChainHold.agents` says how many.
 - **One cut-off.** With a payment chain on (shadow changes nothing), a score's evidence is
   everything that counted by a whole-minute cut-off: one minute before the chain's clock, read again
   for each agent, and brought down to where this operator's own scans of every chain have reached,
