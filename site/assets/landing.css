@@ -133,6 +133,7 @@ footer { padding: 26px 0 34px; border-top: 1px solid var(--line); color: #6d7691
 .footer-links a:hover { color: var(--text); }
 
 @media (max-width: 860px) {
+  .nav-links a.nav-wide { display: none; }
   .hero { padding-top: 62px; }
   .hero-grid { grid-template-columns: 1fr; gap: 35px; }
   .visual { min-height: 390px; }

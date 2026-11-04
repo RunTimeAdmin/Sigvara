@@ -230,6 +230,17 @@ for (const f of docFiles()) {
 }
 
 // ---------------------------------------------------------------------------
+// 3b. What an integrator copies. A snippet naming an old reader still compiles and answers, so
+//     nothing else would notice, and it must call a function the reader's interface has.
+// ---------------------------------------------------------------------------
+for (const file of ['README.md', 'site/integrate.html', 'site/assets/integrate.js']) {
+  if (!read(file).includes(deployed.reader)) fail(file, `does not name the deployed reader ${deployed.reader}`);
+}
+if (!read('src/interfaces/ISigvara.sol').includes('function isTrusted(address agent, uint8 minScore, uint256 minBond)')) {
+  fail('src/interfaces/ISigvara.sol', 'no longer has the isTrusted that the integration snippets call');
+}
+
+// ---------------------------------------------------------------------------
 // 4. Claims that were true once and are now false. Regression guards: each of these
 //    shipped to the public site and had to be corrected by hand.
 // ---------------------------------------------------------------------------

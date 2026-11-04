@@ -133,6 +133,7 @@ footer { padding: 26px 0 34px; border-top: 1px solid var(--line); color: #6d7691
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 
 @media (max-width: 960px) { .layout { grid-template-columns: 1fr; } .side { position: static; } }
+@media (max-width: 860px) { .nav-links a.nav-wide { display: none; } }
 @media (max-width: 650px) {
   .wrap { width: min(100% - 30px, 560px); }
   .nav-links a:not(.nav-cta) { display: none; }
