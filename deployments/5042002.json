@@ -20,16 +20,22 @@
       "reproducedAt": "53d3a89"
     },
     "reputation": {
-      "current": "0xd23fffA937CFE37BbC6eE1e14C3c844c78BFE3CA",
+      "current": "0x26CF380314962F0C912b51b40a5c123C0683ac8a",
       "history": [
         {
           "implementation": "0x87492399E34e5247740d0280C329e7553403404c",
           "replacedAt": "2026-10-27T01:19:27.000Z",
           "note": "replaced by the in-place upgrade to fdce1a7: upgradeToAndCall in block 69256858, tx 0x853c5325bd9bc1a9e6a75370dd5bf53739a2c1dc3773a0954535e0d4dc7cde3b"
+        },
+        {
+          "implementation": "0xd23fffA937CFE37BbC6eE1e14C3c844c78BFE3CA",
+          "replacedAt": "2026-11-04T20:01:43.006Z",
+          "reproducedAt": "53d3a89",
+          "note": "replaced by the in-place upgrade to f35cbc6: upgradeToAndCall in block 70741942, tx 0x5776f75bac38eab8e4ec2755df0bd3cf90adf274bc2e09d636ecc4ddb5eebebf"
         }
       ],
-      "recordedAt": "2026-10-27T01:36:51.565Z",
-      "reproducedAt": "53d3a89"
+      "recordedAt": "2026-11-04T20:01:43.006Z",
+      "reproducedAt": "f35cbc6"
     },
     "staking": {
       "current": "0x347D01d33bc07120c67BCaDB5C32fe0D8AF6C943",
@@ -90,8 +96,8 @@
   },
   "bytecode": {
     "note": "Every contract here, each implementation, each proxy and the SVR token, is reproduced byte for byte (immutables aside) by building reproducedAt; scripts/check-bytecode.mjs checks it. The tag marks the commit that records this, whose contract sources are those of reproducedAt. All are verified on the Arc explorer.",
-    "reproducedAt": "0483a3c",
-    "tag": "arc-testnet-2026-11-03",
-    "checkedAt": "2026-11-03"
+    "reproducedAt": "f35cbc6",
+    "tag": "arc-testnet-2026-11-04",
+    "checkedAt": "2026-11-04"
   }
 }
