@@ -633,7 +633,7 @@ roles, and administers `UPGRADER_ROLE`), and the timelocked role grants describe
 apply to a fresh deployment, not to the testnet.
 `node scripts/record-implementations.mjs --check` shows what is live.
 
-**Test coverage**, as of 4 November 2026: 748 contract tests across 33 Foundry test files
+**Test coverage**, as of 4 November 2026: 754 contract tests across 33 Foundry test files
 including fuzz and invariant tests (three fork suites need an RPC, and the twelve in
 `SplitAuthorityFork` skip without `--fork-url`), 1117 oracle tests and 300 in the SDK (9 skip
 outside CI and without a live deployment; every test that runs passes). CI runs Foundry, the oracle and
