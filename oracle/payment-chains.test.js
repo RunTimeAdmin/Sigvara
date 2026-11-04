@@ -530,9 +530,22 @@ test("that holds for the scored chain's payments too: one pushed before an older
   assert.notEqual(merkle.rootFor(pushedFirst), merkle.rootFor(scanned), 'in storage order they differ');
   assert.equal(merkle.rootFor(pc.eventsAt(pushedFirst, NOW, cfg)), merkle.rootFor(pc.eventsAt(scanned, NOW, cfg)));
   assert.equal(pc.eventsAt(scanned, NOW, cfg), scanned, 'already in order: the very same array, so caches hit');
-  // With no chain on the stored order stands, so published roots still verify.
-  const off = pc.readConfig({}, { scoredChainId: ARC });
-  assert.equal(pc.eventsAt(pushedFirst, NOW, off), pushedFirst);
+});
+
+test('with no payment chain the order is fixed too, and every stored payment still counts whatever the time', () => {
+  for (const cfg of [pc.readConfig({}, { scoredChainId: ARC }), config({ [`PAYMENT_CHAIN_${BASE_SEPOLIA}_MODE`]: 'shadow' })]) {
+    const older = arcEvent(NOW - 5 * HOUR);
+    const newer = arcEvent(NOW - 2 * HOUR);
+    const later = arcEvent(NOW + HOUR);
+    const pushedFirst = Object.freeze([later, older, newer]);
+    const scanned = Object.freeze([older, newer, later]);
+    assert.notEqual(merkle.rootFor(pushedFirst), merkle.rootFor(scanned), 'in storage order they differ');
+    const got = pc.eventsAt(pushedFirst, NOW, cfg);
+    assert.deepEqual(got, scanned);
+    assert.ok(Object.isFrozen(got));
+    assert.equal(pc.eventsAt(pushedFirst, NOW, cfg), got, 'the same array each time, so the evidence and root caches hit');
+    assert.equal(pc.eventsAt(scanned, NOW, cfg), scanned, 'already in order: the very same array');
+  }
 });
 
 test('when no cut-off matches the root, a checker scores what counted by the newest one a proposer could use', () => {
@@ -700,7 +713,7 @@ test('a chain in shadow changes nothing about scoring: no cut-off, no reordering
   assert.equal(pc.active(shadow), false);
   assert.equal(pc.cutFor(NOW + 25_000, shadow), NOW + 25_000);
   assert.deepEqual(pc.auditCuts(NOW, shadow), []);
-  const arc = Object.freeze([arcEvent(NOW + 5_000), arcEvent(NOW - 10)]);
+  const arc = Object.freeze([arcEvent(NOW - 10), arcEvent(NOW + 5_000)]);
   assert.equal(pc.eventsAt(arc, NOW, shadow), arc, 'the stored array, even with a payment after the time');
   assert.equal(pc.active(config()), true);
 });

@@ -18,8 +18,9 @@
  *   - When that is asked. Code on this chain is read at the payment's block, and on the scored chain
  *     at the block the agent registered in, so the answer does not depend on when an operator scanned.
  *   - Registration. A payment made before the agent registered is skipped as
- *     `before_registration`. Otherwise whether it counted would depend on whether an operator
- *     happened to scan its block before or after the registration.
+ *     `before_registration`, as on the scored chain, though by the block's time and not its number,
+ *     since a payment chain's blocks are not the scored chain's. Otherwise whether it counted would
+ *     depend on whether an operator happened to scan its block before or after the registration.
  *   - Units. Each chain names its own asset and fee unit, and amounts are converted into the
  *     scored chain's fee units before evidence from different chains is added up (forScoring).
  *   - Timing. A payment chain's evidence enters a score only once it is older than the chain's
@@ -33,7 +34,9 @@
  *     the evidence root depends on the order of its leaves. A checker tries the whole-minute cut-offs
  *     in the half hour before a proposal (auditCuts).
  *
- * With PAYMENT_CHAIN_IDS unset nothing here runs and the oracle behaves as it did before.
+ * With PAYMENT_CHAIN_IDS unset none of that runs. Only the fixed order in eventsAt applies, which holds
+ * with or without a payment chain, since two operators credit the scored chain's payments in different
+ * orders too.
  */
 
 const net = require('net');
@@ -284,37 +287,36 @@ const memo = new WeakMap();
 /**
  * The evidence that counts by the cut-off `atMs`, in milliseconds, in the order the root is built over.
  *
- * With no payment chain on: every stored payment of the scored chain in the order it is stored, the
- * very same array when that is all it holds, as before; payments from a chain removed or put back in
- * shadow do not count. With one on: the scored chain's payments settled by `atMs`, then the payment
- * chains' payments at least their delay old by `atMs`, each in a fixed order (evidenceOrder). Nothing
- * from a chain this oracle no longer reads, or reads in shadow: there is no fee unit to convert it
- * with, and an operator that dropped a chain must not keep scoring from it. What counts, and its
- * order, depends only on the cut-off, never on what an operator holds beyond it or when it credited it.
+ * With no payment chain on: every stored payment of the scored chain; payments from a chain removed or
+ * put back in shadow do not count. With one on: the scored chain's payments settled by `atMs`, then the
+ * payment chains' payments at least their delay old by `atMs`. Each in a fixed order (evidenceOrder),
+ * and the very same array when that is what is stored. Nothing from a chain this oracle no longer
+ * reads, or reads in shadow: there is no fee unit to convert it with, and an operator that dropped a
+ * chain must not keep scoring from it. What counts, and its order, depends only on the cut-off, never
+ * on what an operator holds beyond it or when it credited it.
  */
 function eventsAt(events, atMs, cfg) {
-  if (!active(cfg)) {
-    return events.some((e) => e.chainId != null) ? Object.freeze(events.filter((e) => e.chainId == null)) : events;
-  }
+  const on = active(cfg);
   const scored = [];
   const fromChains = [];
   for (const e of events) {
     if (e.chainId == null) {
-      if (Number(e.ts) <= atMs) scored.push(e);
+      if (!on || Number(e.ts) <= atMs) scored.push(e);
     } else if (eligibleAtMs(e, cfg) <= atMs) {
       fromChains.push(e);
     }
   }
-  scored.sort(evidenceOrder);
-  fromChains.sort(evidenceOrder);
-  if (!fromChains.length && scored.length === events.length && scored.every((e, i) => e === events[i])) return events;
   const size = scored.length + fromChains.length;
+  const frozen = Object.isFrozen(events);
   let byArray = memo.get(cfg);
   if (!byArray) { byArray = new WeakMap(); memo.set(cfg, byArray); }
-  const hit = Object.isFrozen(events) ? byArray.get(events) : undefined;
+  const hit = frozen ? byArray.get(events) : undefined;
   if (hit && hit.length === size) return hit;
-  const result = Object.freeze([...scored, ...fromChains]);
-  if (Object.isFrozen(events)) byArray.set(events, result);
+  scored.sort(evidenceOrder);
+  fromChains.sort(evidenceOrder);
+  const unchanged = size === events.length && !fromChains.length && scored.every((e, i) => e === events[i]);
+  const result = unchanged ? events : Object.freeze([...scored, ...fromChains]);
+  if (frozen) byArray.set(events, result);
   return result;
 }
 

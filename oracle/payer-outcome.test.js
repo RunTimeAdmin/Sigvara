@@ -842,6 +842,22 @@ describe('importing payer-signed outcomes from other operators', () => {
     assert.equal(e.counterauditPacketId, packetId);
   });
 
+  test('an outcome on a payment made before the agent registered is neither taken nor imported', async () => {
+    const payer = ethers.Wallet.createRandom();
+    const agent = world.addAgent({ registeredBlock: world.data.head });
+    const txHash = world.addTx([{ from: payer.address, to: agent.agentAddress, value: 5n * USDC }]);
+    const signed = await signOutcome(agent.didHash, txHash, payer);
+
+    const taken = await post(a, agent.didHash, txHash, signed);
+    assert.equal(taken.status, 402, taken.text);
+    assert.equal(taken.body.code, 'before_registration');
+
+    c.serve([served(agent, txHash, signed, { acceptedAt: Date.now() + 1 })]);
+    await runImport();
+    assert.match(lastRun(c.url), /0 imported, 1 refused/);
+    assert.equal((await evidence(b, agent.didHash)).length, 0);
+  });
+
   test('refuses what a peer serves that is forged, malformed or checked before its payment, and takes what is genuine', async () => {
     const payer = ethers.Wallet.createRandom();
     const forgedFor = paid(payer);

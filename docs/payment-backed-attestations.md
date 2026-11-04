@@ -186,13 +186,18 @@ would otherwise grow the state file without bound.
 
 ## Counterparty checks
 
-Two rules apply once a payment verifies.
+Three rules apply once a payment verifies.
 
 **Self-payments are refused.** If the payer is the agent's own operator or its
 agent address, the attestation is rejected with `self_payment`. Paying yourself
 costs only gas, because the money comes back, and the resulting attestation is
 otherwise indistinguishable from a customer's. This does not stop someone funding
 a second wallet, but it raises the floor from free to deliberate.
+
+**A payment before registration is refused.** A payment in a block before the one the
+agent registered in is rejected with `before_registration`, and the payment scan skips
+it the same way, so whether it counts cannot depend on who reported it or when an
+operator scanned its block. The registration's own block counts.
 
 **One counterparty's evidence is capped.** Without a cap, a single wallet paying
 ten times is worth exactly as much as ten wallets paying once, so a small ring is

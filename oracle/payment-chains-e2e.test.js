@@ -232,6 +232,10 @@ test('a chain in shadow runs beside the epoch, so a hung endpoint cannot hold up
     const url = `http://127.0.0.1:${hung.address().port}/v2/SECRET-KEY`;
     oracle = await startOracle({ world, env: env(url, { [`PAYMENT_CHAIN_${BASE}_MODE`]: 'shadow' }) });
     await waitFor(/\[oracle\] epoch done/);
+    // The scan runs beside the epoch, and ethers holds a request back briefly to batch it, so a quick
+    // epoch can end before the connection arrives.
+    const deadline = Date.now() + 5_000;
+    while (!sockets.length && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
     const opened = sockets.length;
     assert.ok(opened > 0, 'the scan had started');
     // It is still waiting, so another epoch leaves it to finish rather than starting a second.

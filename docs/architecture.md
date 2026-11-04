@@ -95,8 +95,9 @@ finalizing checks is the proposer: a proposal from an operator that has since be
 removed cannot be made live, and its successor replaces it.
 
 The evidence root is what makes the off-chain half checkable: the oracle serves the
-leaves it counted, and anyone can re-verify each payment against the chain, rebuild the
-root, and compare it with what the contract holds.
+leaves it counted, in a fixed order that does not depend on when each was credited, and anyone can
+re-verify each payment against the chain, rebuild the root, and compare it with what the contract
+holds.
 
 ## Who checks the checker
 
