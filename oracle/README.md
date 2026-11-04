@@ -1106,11 +1106,11 @@ its name.
 | Variable | Default | Meaning |
 |---|---|---|
 | `PAYMENT_CHAIN_IDS` | unset | Comma-separated chain ids, such as `84532`. Needs `PAYMENT_VERIFICATION=required`, `PAYMENT_SCAN_ENABLED=1` and `EXPECTED_CHAIN_ID`, and must not name the scored chain. |
-| `PAYMENT_CHAIN_<id>_RPC_URL` | required | The chain's RPC, https (http only to this host or a private network). Never logged or served. Bring your own: Base Sepolia's public endpoint limits `eth_getLogs` to 200 blocks and Base's rate-limits at once. |
+| `PAYMENT_CHAIN_<id>_RPC_URL` | required | The chain's RPC, https (http only to this host or a private network). Never logged or served. Bring your own: Base Sepolia's public endpoint limits `eth_getLogs` to 200 blocks and Base's rate-limits at once. A read that takes more than 30 seconds fails. |
 | `PAYMENT_CHAIN_<id>_ASSET` | required | The ERC-20 payments settle in (Base Sepolia USDC is `0x036CbD53842c5426634e7929541eC2318f3dCF7e`). |
 | `PAYMENT_CHAIN_<id>_FROM_BLOCK` | required | First block. Both operators use the same one, so neither credits a payment the other cannot see. |
 | `PAYMENT_CHAIN_<id>_FEE_UNIT` | required | Base units of this asset per point. Amounts are converted into the scored chain's fee units before they are added to its payments, and one per-payer cap covers all chains. Both operators use the same value. |
-| `PAYMENT_CHAIN_<id>_MODE` | `shadow` | `shadow` scans and reports what it would credit, and credits nothing. `on` credits. A shadow scan keeps its own cursor, so switching on starts at `FROM_BLOCK`. |
+| `PAYMENT_CHAIN_<id>_MODE` | `shadow` | `shadow` scans beside the epoch and reports what it would credit, and credits nothing. `on` is scanned in the epoch, before scoring, and credits. A shadow scan keeps its own cursor, so switching on starts at `FROM_BLOCK`. |
 | `PAYMENT_CHAIN_<id>_DELAY_SECONDS` | `3600` | How old a payment must be before it enters a score, at least 1800. Both operators must use the same value. It must be longer than the chain's finality lag (about 17 minutes on Base Sepolia), or every epoch is held. |
 | `PAYMENT_CHAIN_<id>_MIN_AMOUNT` | `0` | As `PAYMENT_MIN_AMOUNT`, in this asset's base units. Both operators use the same value. |
 | `PAYMENT_CHAIN_<id>_CHUNK` | `200` | Blocks per `getLogs` call. |
@@ -1280,7 +1280,7 @@ cd oracle
 node --test
 ```
 
-1045 tests (as of 3 November 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
+1049 tests (as of 4 November 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
 the trust weighting, Merkle evidence trees, HTTP helpers, store persistence and recovery,
 the streamed state file, chain access with backoff, scan checkpointing, fee caps and transaction replacement,
 metrics, and cooldown logic. Several of the files run the real `index.js` and `watcher.js`

@@ -9,6 +9,8 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
+const http = require('node:http');
+const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const { ethers } = require('ethers');
@@ -75,6 +77,51 @@ test('a payment chain refuses anything it cannot use, and never says the RPC URL
   }
   assert.throws(() => config({ PAYMENT_CHAIN_IDS: String(ARC) }), /scored chain/);
   assert.throws(() => pc.readConfig(env(), { scoredChainId: ARC, paymentRequired: false }), /PAYMENT_VERIFICATION=required/);
+});
+
+test('an endpoint that hangs gives up in time, so a payment chain cannot hold an epoch for long', async () => {
+  assert.equal(pc.providerFor(config().chains[0])._getConnection().timeout, pc.RPC_TIMEOUT_MS);
+  // Takes the connection and never answers, which no refusal or rate limit looks like.
+  const sockets = [];
+  const server = net.createServer((s) => { s.on('error', () => {}); sockets.push(s); });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const url = `http://127.0.0.1:${server.address().port}/v2/SECRET-KEY`;
+  const provider = pc.providerFor({ rpcUrl: url, chainId: BASE_SEPOLIA }, 100);
+  const started = Date.now();
+  try {
+    await assert.rejects(provider.send('eth_chainId', []), (err) => {
+      assert.equal(err.code, 'TIMEOUT');
+      assert.ok(!pc.rpcError(err, url).message.includes('SECRET-KEY'));
+      return true;
+    });
+    assert.ok(Date.now() - started < 5000, 'gave up on the timeout it was given');
+  } finally {
+    provider.destroy();
+    sockets.forEach((s) => s.destroy());
+    server.close();
+  }
+});
+
+test('an endpoint that answers a byte at a time still runs out of time', async () => {
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    const drip = setInterval(() => res.write(' '), 20);
+    res.on('close', () => clearInterval(drip));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const provider = pc.providerFor({ rpcUrl: `http://127.0.0.1:${server.address().port}/`, chainId: BASE_SEPOLIA }, 100);
+  const started = Date.now();
+  try {
+    await assert.rejects(pc.withDeadline(() => provider.send('eth_chainId', []), 200), (err) => {
+      assert.equal(err.code, 'TIMEOUT');
+      return true;
+    });
+    assert.ok(Date.now() - started < 5000, 'gave up on the deadline it was given');
+  } finally {
+    provider.destroy();
+    server.closeAllConnections();
+    server.close();
+  }
 });
 
 test('a shadow scan keeps its own cursor, so turning a chain on starts at FROM_BLOCK', () => {
@@ -560,6 +607,19 @@ test('the state file says format 2 only once it holds a payment chain\'s data', 
     console.log(JSON.stringify({ before, after }));
   `);
   assert.deepEqual(out, { before: 1, after: 2 });
+});
+
+test('a shadow scan\'s cursor leaves the state file at format 1, so rolling back stays possible', () => {
+  const out = inChild(`
+    const fs = require('fs');
+    const s = require('./store');
+    const written = () => { s.persist(); return JSON.parse(fs.readFileSync(process.env.ORACLE_STATE_PATH, 'utf8')).schemaVersion; };
+    s.setPaymentChainScanState('${pc.stateKey({ chainId: BASE_SEPOLIA, mode: 'shadow' })}', { lastBlock: 5, lastBlockTs: 1 });
+    const shadow = written();
+    s.setPaymentChainScanState('${pc.stateKey({ chainId: BASE_SEPOLIA, mode: 'on' })}', { lastBlock: 5, lastBlockTs: 1 });
+    console.log(JSON.stringify({ shadow, on: written() }));
+  `);
+  assert.deepEqual(out, { shadow: 1, on: 2 });
 });
 
 // ---- the third review: a cut-off this operator can stand behind ----------------------------------
