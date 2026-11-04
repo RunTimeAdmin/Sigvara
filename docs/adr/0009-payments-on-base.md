@@ -228,9 +228,9 @@ Both operators enable a payment chain from the same block, as they did with
 ## Elysium testnet, in shadow (David, 4 November 2026)
 
 Elysium testnet (chain 99801, Kinetiq's Arbitrum Orbit L2 settling to HyperEVM) is added as a payment chain in
-shadow only. It credits nothing and changes no score. It is configuration, as "What this does not do" says a
-new chain should be, and this is the check of its asset that section asks for. Measured against the
-public RPC on 4 November 2026:
+shadow only, on the checker alone. It credits nothing and changes no score. It is configuration, as "What this does
+not do" says a new chain should be, and this is the check of its asset that section asks for. Measured against
+the public RPC on 4 November 2026:
 
 - **`Transfer` logs.** USDC at `0x7D29d8047B905000459c0E80c34a26CeedcB47b2` has 6 decimals and is Arbitrum's standard
   gateway token, bridged from HyperEVM testnet. It emits ordinary ERC-20 `Transfer` logs, which `decodeTransfer` reads.
@@ -254,6 +254,8 @@ Open before it could go `on`, and none of it matters in shadow:
   blocks slow that epoch by a read a block. This holds for Base Sepolia too, and needs a bound before either goes
   `on`. Elysium's logs carry `blockTimestamp`, which would avoid those reads there.
 - **Whether bridged USDC counts.** It is a gateway token on this chain, not issued by Circle.
-- **Its own provider per operator.** Both operators read one public endpoint, which decision 5 rules out for a
-  chain that counts.
+- **A provider per operator.** The checker reads the public endpoint. A chain that counts needs both operators, each
+  with its own provider (decision 5).
+- **An endless answer.** ethers reads a whole response with no size limit, so a hostile endpoint might exhaust an
+  operator's memory. This has not been tested. It is one reason shadow runs on one operator.
 - **Mainnet.** Its chain id, RPC and contracts are published at launch, and decision 1's testnet-only posture holds.

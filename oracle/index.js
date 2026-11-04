@@ -892,7 +892,7 @@ async function runPaymentChainScans(agents, chains) {
             return registered.get(didHash);
           },
           // Every error leaves here without the URL, which carries the provider's key (paymentChains.rpcError).
-          read: (label, fn) => chain.readWithBackoff(label, fn).catch((err) => { throw paymentChains.rpcError(err, pc.rpcUrl); }),
+          read: (label, fn) => chain.readWithBackoff(label, () => paymentChains.withDeadline(fn)).catch((err) => { throw paymentChains.rpcError(err, pc.rpcUrl); }),
         });
         if (summary.state) setPaymentChainScanState(key, summary.state);
         metrics.inc('paymentChainScans');
@@ -931,9 +931,9 @@ async function runPaymentChainScans(agents, chains) {
 }
 
 /**
- * Scan the chains in shadow beside the epoch, not in it. They only report, so nothing on such a chain,
- * a hung endpoint or a flood of payments to an agent, may hold up a score. One run at a time: an epoch
- * that finds the last run still going leaves it to finish.
+ * Scan the chains in shadow beside the epoch, not in it. They only report, so neither a hung endpoint
+ * nor a flood of payments to an agent may hold up a score. One run at a time: an epoch that finds the
+ * last run still going leaves it to finish.
  */
 function startShadowScans(agents) {
   if (!paymentChainsInShadow.length || shadowScansRunning) return;

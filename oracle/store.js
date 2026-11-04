@@ -180,14 +180,15 @@ function pruneFlags(minWeight = 0.001, now = Date.now(), halfLifeMs = FLAG_HALF_
 // saving that over the rest. A file with no version predates this and is read as version 0.
 //
 // Version 2 is a file holding anything from a payment chain (ADR 0009): an event with a chainId or
-// a payment chain's scan cursor. A build before it would score those amounts as the scored chain's,
-// put them in the wrong leaf and drop the cursors on its next save, so it must refuse the file. A
-// file with nothing from a payment chain is still written as version 1, so rolling back stays
-// possible until a payment chain is used.
+// the scan cursor of a chain that is on. A build before it would score those amounts as the scored
+// chain's, put them in the wrong leaf and drop the cursors on its next save, so it must refuse the
+// file. A file with nothing from a payment chain is still written as version 1, so rolling back stays
+// possible until a payment chain is used. A chain in shadow does not count as used: an older build
+// drops its cursor, and all that costs is a report scanned again.
 const STATE_SCHEMA_VERSION = 2;
 
 function holdsPaymentChainData() {
-  if (Object.keys(paymentChainScanState).length) return true;
+  if (Object.keys(paymentChainScanState).some((key) => !key.endsWith('/shadow'))) return true;
   for (const list of paymentEvents.values()) if (list.some((e) => e.chainId != null)) return true;
   return false;
 }

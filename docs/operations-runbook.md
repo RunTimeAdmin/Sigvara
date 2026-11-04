@@ -546,9 +546,12 @@ fi
 
 A payment chain is a chain the oracle only reads payments from ([ADR 0009](adr/0009-payments-on-base.md)).
 In `shadow` mode, the default, it scans and reports what it would credit, and credits nothing: no score, proposal
-or evidence root changes. A shadow scan runs beside the epoch, so nothing on that chain can hold up a score.
+or evidence root changes. A shadow scan runs beside the epoch, so a hung endpoint or a flood of payments cannot
+hold up a score.
 
-**Adding one in shadow.** Elysium testnet's settings, in each operator's `.env`, the same on both:
+**Adding one in shadow.** One operator is enough, and the checker is the one to use: nothing needs the two to agree
+while a chain counts for nothing, and a bad endpoint then reaches only one of them. Both need the same values before a
+chain goes `on`. Elysium testnet's settings, in the checker's `.env`:
 
 ```
 PAYMENT_CHAIN_IDS=99801
@@ -563,18 +566,22 @@ PAYMENT_CHAIN_99801_MAX_BLOCKS=100000
 ```
 
 Run `docker compose up -d` with the compose line from the table above; a plain restart does not read `.env`
-again. The next epoch scans from `FROM_BLOCK`. The operators need `PAYMENT_VERIFICATION=required`,
-`PAYMENT_SCAN_ENABLED=1` and `EXPECTED_CHAIN_ID`, or the process refuses to start.
+again. The next epoch scans from `FROM_BLOCK`. The operator must run a commit with payment chains. It also needs
+`PAYMENT_VERIFICATION=required`, `PAYMENT_SCAN_ENABLED=1` and `EXPECTED_CHAIN_ID`, or the process refuses to start.
 
-**Checking it.** `curl -s https://oracle.sigvara.xyz/health | jq .paymentChains`, and the same on
-`checker.sigvara.xyz`. Each chain reports `mode`, `lastBlock`, `lastBlockTs` and `lastScan`, which holds `from`,
-`to`, `wouldCredit`, `skipped`, `reasons` and `canary`. The two operators should report the same `wouldCredit` and
-`reasons` over the same blocks. `canary: "unavailable"` is what a shadow scan with nothing to credit reports,
-because the canary needs a payment already held on that chain.
+**Checking it.** `curl -s https://checker.sigvara.xyz/health | jq .paymentChains`. Each chain reports `mode`,
+`lastBlock`, `lastBlockTs` and `lastScan`, which holds `from`, `to`, `wouldCredit`, `skipped`, `reasons` and `canary`.
+`canary: "unavailable"` is what a shadow scan with nothing to credit reports, because the canary needs a payment
+already held on that chain. A long run says nothing in `/health` until it ends, so also check that `lastBlockTs` moves
+between epochs.
 
-**When a scan fails.** The log says `payment chain 99801 scan failed`, and `/metrics` counts it as
-`paymentChainScanErrors`. In shadow, scoring carries on, and the next epoch resumes from the last block saved.
-`logs count limit exceeded` means one call covered more than the RPC will return, so lower `CHUNK`.
+**When a scan fails.** The log says `payment chain 99801 scan failed`, and `/metrics` counts it in
+`sigvara_oracle_payment_chain_scan_errors_total`. In shadow, scoring carries on, and the next epoch resumes from the
+last block saved. On Elysium, `could not coalesce error (rpc -32005)` means one call would return more than 10,000
+logs. The scan asks for the same range each time, so it keeps failing until `CHUNK` is lowered.
 
-**Removing one.** Delete its lines from both `.env` files and run `docker compose up -d`. Its cursor stays in the
-state file under `99801/shadow`, and nothing reads it.
+**Removing one.** Delete its lines from the `.env` and run `docker compose up -d`. Its cursor stays in the state file
+under `99801/shadow`, where only a later scan of that chain reads it.
+
+**Rolling back.** A shadow cursor leaves the state file at format 1, so a build from before payment chains still loads
+it. That build drops the cursor. A chain that has been `on` writes format 2, which such a build refuses.

@@ -49,7 +49,7 @@ const DEFAULT_PACE_MS = 500;
 // Blocks one scan covers at most: two hours of Base Sepolia, twenty of Base. A catch-up then
 // advances a bounded step per epoch instead of retrying an ever larger range after one failed call.
 const DEFAULT_MAX_BLOCKS = 36_000;
-// How long one call to a payment chain may take. A chain that is on is scanned inside the epoch, before
+// How long one read of a payment chain may take. A chain that is on is scanned inside the epoch, before
 // scoring, and each read is tried four times, so ethers' default of 5 minutes would let one hung
 // endpoint hold an epoch for 20 minutes. At 30 seconds it costs about 2.
 const RPC_TIMEOUT_MS = 30_000;
@@ -178,6 +178,18 @@ function providerFor(chain, timeoutMs = RPC_TIMEOUT_MS) {
   const request = new ethers.FetchRequest(chain.rpcUrl);
   request.timeout = timeoutMs;
   return new ethers.JsonRpcProvider(request, chain.chainId, { staticNetwork: true });
+}
+
+/**
+ * `fn`, limited in how long it may take. The provider's timeout only covers a socket gone quiet, so an
+ * endpoint sending a byte at a time would otherwise never end, and neither would the scan waiting on it.
+ */
+function withDeadline(fn, ms = RPC_TIMEOUT_MS) {
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(Object.assign(new Error('request timeout'), { code: 'TIMEOUT' })), ms);
+  });
+  return Promise.race([fn(), deadline]).finally(() => clearTimeout(timer));
 }
 
 /** The state key for a chain's scan. A shadow scan keeps its own cursor, so turning a chain on starts at FROM_BLOCK. */
@@ -529,6 +541,7 @@ module.exports = {
   RPC_TIMEOUT_MS,
   readConfig,
   providerFor,
+  withDeadline,
   active,
   cutFor,
   coveredCut,

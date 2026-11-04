@@ -9,6 +9,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
+const http = require('node:http');
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
@@ -97,6 +98,28 @@ test('an endpoint that hangs gives up in time, so a payment chain cannot hold an
   } finally {
     provider.destroy();
     sockets.forEach((s) => s.destroy());
+    server.close();
+  }
+});
+
+test('an endpoint that answers a byte at a time still runs out of time', async () => {
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    const drip = setInterval(() => res.write(' '), 20);
+    res.on('close', () => clearInterval(drip));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const provider = pc.providerFor({ rpcUrl: `http://127.0.0.1:${server.address().port}/`, chainId: BASE_SEPOLIA }, 100);
+  const started = Date.now();
+  try {
+    await assert.rejects(pc.withDeadline(() => provider.send('eth_chainId', []), 200), (err) => {
+      assert.equal(err.code, 'TIMEOUT');
+      return true;
+    });
+    assert.ok(Date.now() - started < 5000, 'gave up on the deadline it was given');
+  } finally {
+    provider.destroy();
+    server.closeAllConnections();
     server.close();
   }
 });
@@ -584,6 +607,19 @@ test('the state file says format 2 only once it holds a payment chain\'s data', 
     console.log(JSON.stringify({ before, after }));
   `);
   assert.deepEqual(out, { before: 1, after: 2 });
+});
+
+test('a shadow scan\'s cursor leaves the state file at format 1, so rolling back stays possible', () => {
+  const out = inChild(`
+    const fs = require('fs');
+    const s = require('./store');
+    const written = () => { s.persist(); return JSON.parse(fs.readFileSync(process.env.ORACLE_STATE_PATH, 'utf8')).schemaVersion; };
+    s.setPaymentChainScanState('${pc.stateKey({ chainId: BASE_SEPOLIA, mode: 'shadow' })}', { lastBlock: 5, lastBlockTs: 1 });
+    const shadow = written();
+    s.setPaymentChainScanState('${pc.stateKey({ chainId: BASE_SEPOLIA, mode: 'on' })}', { lastBlock: 5, lastBlockTs: 1 });
+    console.log(JSON.stringify({ shadow, on: written() }));
+  `);
+  assert.deepEqual(out, { shadow: 1, on: 2 });
 });
 
 // ---- the third review: a cut-off this operator can stand behind ----------------------------------

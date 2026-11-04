@@ -190,6 +190,15 @@ test('in shadow mode the scan reports what it would credit, and the epoch is not
   await waitFor(new RegExp(`payment chain ${BASE} \\(shadow\\) .*: 1 would credit`));
   const ev = await oracle.call('GET', `/evidence/${agent.didHash}`);
   assert.equal(ev.body.count, 0, 'nothing was credited');
+  // That run has ended, so a later epoch scans again.
+  const asked = () => base.calls.filter((c) => c === 'eth_chainId').length;
+  const before = asked();
+  const deadline = Date.now() + 10_000;
+  while (asked() === before) {
+    if (Date.now() > deadline) throw new Error('no later epoch scanned the chain');
+    await oracle.call('POST', '/epoch', {}, ADMIN);
+    await new Promise((r) => setTimeout(r, 200));
+  }
 });
 
 test('a chain in shadow runs beside the epoch, so a hung endpoint cannot hold up a score', async () => {
@@ -203,8 +212,12 @@ test('a chain in shadow runs beside the epoch, so a hung endpoint cannot hold up
     const url = `http://127.0.0.1:${hung.address().port}/v2/SECRET-KEY`;
     oracle = await startOracle({ world, env: env(url, { [`PAYMENT_CHAIN_${BASE}_MODE`]: 'shadow' }) });
     await waitFor(/\[oracle\] epoch done/);
-    assert.ok(sockets.length > 0, 'the scan had started');
-    assert.doesNotMatch(oracle.logs(), /SECRET-KEY/);
+    const opened = sockets.length;
+    assert.ok(opened > 0, 'the scan had started');
+    // It is still waiting, so another epoch leaves it to finish rather than starting a second.
+    assert.equal((await oracle.call('POST', '/epoch', {}, ADMIN)).status, 202);
+    await waitFor(/\[oracle\] epoch done[\s\S]*\[oracle\] epoch done/);
+    assert.equal(sockets.length, opened);
   } finally {
     if (oracle) await oracle.stop();
     oracle = null;
