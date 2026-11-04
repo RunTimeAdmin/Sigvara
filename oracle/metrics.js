@@ -358,7 +358,7 @@ function toPrometheusText(extra = {}) {
   lines.push(`sigvara_oracle_payment_chain_scan_errors_total ${counters.paymentChainScanErrors}`);
 
   lines.push('');
-  lines.push('# HELP sigvara_oracle_epochs_held_by_payment_chain_total Epochs that scored nothing because a payment chain scan was behind');
+  lines.push('# HELP sigvara_oracle_epochs_held_by_payment_chain_total Epochs held back by a scan that was behind, wholly or for some agents');
   lines.push('# TYPE sigvara_oracle_epochs_held_by_payment_chain_total counter');
   lines.push(`sigvara_oracle_epochs_held_by_payment_chain_total ${counters.epochsHeldByPaymentChain}`);
 

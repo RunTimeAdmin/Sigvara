@@ -32,9 +32,10 @@ const merkle = require('./merkle');
  * With payment chains configured (ADR 0009), an operator chooses its evidence at a whole-minute
  * cut-off before its clock, and its proposal is dated by its transaction's block a little later.
  * `cuts` lists those cut-offs, newest first (payment-chains.auditCuts); both readings are tried at
- * each after the proposal's time, and the first whose root matches is used. `eligibleAt` says when a
- * payment started to count: its settlement, or on a payment chain its settlement plus the chain's
- * delay. Without `cuts` only the proposal's time is tried, as before.
+ * each after the proposal's time, and the first whose root matches is used. When none does, reading 1
+ * is taken at the newest cut-off, since a proposer can have counted nothing later. `eligibleAt` says
+ * when a payment started to count: its settlement, or on a payment chain its settlement plus the
+ * chain's delay. Without `cuts` only the proposal's time is tried, as before.
  *
  * @param {object[]} events   one agent's payment events, as the store holds them
  * @param {number} atMs       the proposal's time, in ms
@@ -57,7 +58,7 @@ function evidenceAsOf(events, atMs, committedRoot, { eligibleAt = (e) => Number(
       }
     }
   }
-  return { events: settled, matchedRoot: false };
+  return { events: cuts.length ? countedBy(Math.min(atMs, cuts[0])) : settled, matchedRoot: false };
 }
 
 function signedAfter(event, atMs) {

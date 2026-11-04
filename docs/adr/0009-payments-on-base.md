@@ -91,7 +91,8 @@ undeployed or deployed by somebody else. Whoever controls it there could pay it 
 and lift the agent's fee score, and once negative outcomes are on (ADR 0006 keeps them off), sign
 "not delivered" outcomes against an agent they never paid. So a payment on a payment chain to an
 address with code other than a delegation designator, on either chain, is skipped with the reason
-`contract_recipient`. A later
+`contract_recipient`. The code is read at the payment's block there and at the agent's registration
+block on the scored chain, so the answer does not depend on when an operator scanned. A later
 change can let such an agent bind an address on Base with a signature checked there.
 
 The x402 seller must take payment at its registered address. A `payTo` that differs from it is a
@@ -209,7 +210,12 @@ Both operators enable a payment chain from the same block, as they did with
    as ADR 0006 has for its outcomes.
 2. **Shadow on both operators.** Scan Base Sepolia, report what would be credited and skipped, and
    credit nothing. Compare the two operators' reports.
-3. **Enable on both at one block.** Base Sepolia evidence counts from the next epoch.
+3. **Enable on both from one block.** Both operators set the same `FROM_BLOCK`, older than the
+   chain's finality lag and younger than its delay, and restart within what is left of the delay,
+   the checker first. Nothing from the chain counts until the delay has passed, so neither disputes the
+   other while they differ. Switching back has no safe order with a checker running: stop the checker,
+   put the primary in shadow, wait out the challenge window, and start the checker in shadow
+   (`oracle/README.md`).
 4. **End to end.** A Wallet MCP x402 payment on Base Sepolia to a registered agent, its credit on
    both operators, then a payer outcome signed on Base and accepted by both.
 
