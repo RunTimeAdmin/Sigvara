@@ -275,9 +275,76 @@
     }
     return out;
   }
-  // eth_calls: the result of each, as hex.
+
+  // Multicall3, deployed at this address on most EVM chains, so that many reads cost one request.
+  // It has no owner and nothing to upgrade, and it makes only the calls it is given, so each answer
+  // is the named contract's own. On Arc its code is the same, byte for byte, as on Base and Optimism.
+  const MULTICALL3 = "0xcA11bde05977b3631167028862bE2a173976CA11";
+  // aggregate3((address target, bool allowFailure, bytes callData)[]). Not in SEL, because
+  // scripts/check-docs.mjs checks SEL against src/ and this contract is not ours.
+  const AGGREGATE3 = "0x82ad56cb";
+  // The most reads in one call. The RPC gives an eth_call 30,000,000 gas. Measured on 4 November
+  // 2026, it takes 2,000 score reads, or 1,000 verifyEvidence calls with proofs of 13 hashes. It
+  // refuses 5,000 of the first and 2,000 of the second.
+  const MULTICALL_READS = 500;
+
+  // The calldata for aggregate3, with every read allowed to fail.
+  function aggregate3Call(calls) {
+    const offsets = [], items = [];
+    let at = calls.length * 32;
+    for (const c of calls) {
+      const data = strip(c.data);
+      const padded = data.padEnd(Math.ceil(data.length / 64) * 64, "0");
+      offsets.push(pad32(at.toString(16)));
+      items.push(pad32(c.to) + pad32("1") + pad32("60") + pad32((data.length / 2).toString(16)) + padded);
+      at += 128 + padded.length / 2;
+    }
+    return AGGREGATE3 + pad32("20") + pad32(calls.length.toString(16)) + offsets.join("") + items.join("");
+  }
+
+  // Its answers in order, each as hex, or null for a read that reverted. An answer that does not
+  // parse throws: it came over the network, and its own offsets say where to read next.
+  function aggregate3Answers(answer, count) {
+    const hex = strip(String(answer));
+    if (!/^[0-9a-fA-F]*$/.test(hex)) throw new Error("the multicall answer is not hex");
+    // The number in the word at a byte offset. A word past the end, or one too large to be an
+    // offset or a length, means this is not an answer.
+    const num = (at) => {
+      const w = hex.slice(at * 2, at * 2 + 64);
+      const n = w.length === 64 ? Number(BigInt("0x" + w)) : NaN;
+      if (!Number.isSafeInteger(n)) throw new Error("the multicall answer does not parse");
+      return n;
+    };
+    const array = num(0);
+    if (num(array) !== count) throw new Error("the multicall answer has the wrong number of results");
+    const first = array + 32;
+    const out = [];
+    for (let i = 0; i < count; i++) {
+      const item = first + num(first + i * 32);
+      const data = item + num(item + 32);
+      const from = data + 32;
+      const to = from + num(data);
+      if (to * 2 > hex.length) throw new Error("the multicall answer does not parse");
+      out.push(num(item) === 1 ? "0x" + hex.slice(from * 2, to * 2) : null);
+    }
+    return out;
+  }
+
+  async function multicall(calls) {
+    const sets = [];
+    for (let i = 0; i < calls.length; i += MULTICALL_READS) sets.push(calls.slice(i, i + MULTICALL_READS));
+    const raw = await rpcMany(sets.map((set) => ["eth_call", [{ to: MULTICALL3, data: aggregate3Call(set) }, "latest"]]), { batch: 1 });
+    return raw.flatMap((r, i) => aggregate3Answers(r, sets[i].length));
+  }
+
+  // eth_calls: the result of each, as hex. Two or more go through Multicall3. If that fails, or a
+  // read in it reverted, the whole set is asked directly, so the caller gets the RPC's own answer
+  // or its own error.
   async function ethCalls(calls) {
-    const out = await rpcMany(calls.map((c) => ["eth_call", [{ to: c.to, data: c.data }, "latest"]]));
+    const bundled = calls.length > 1 ? await multicall(calls).catch(() => null) : null;
+    const out = bundled && !bundled.includes(null)
+      ? bundled
+      : await rpcMany(calls.map((c) => ["eth_call", [{ to: c.to, data: c.data }, "latest"]]));
     for (const r of out) if (typeof r !== "string") throw new Error("a contract read came back empty");
     return out;
   }
@@ -650,7 +717,7 @@
     fmtWhen, fmtSvr, txLink, addrLink, rootCode, commitLink, whoIs, failed,
     PAYMENT_CHAINS, fmtAmount, paymentTxLink, paymentPayerLink,
     loadSimulation, simAgent, simWallet,
-    getJson, rpcMany, ethCalls, blockNumber, cached, chainLogs, addTimes, tailRange, indexLogs, contractLogs, historyNote,
+    getJson, rpcMany, ethCalls, MULTICALL3, aggregate3Call, aggregate3Answers, blockNumber, cached, chainLogs, addTimes, tailRange, indexLogs, contractLogs, historyNote,
     outcomeCode, leafOf, hashPair, layersOf, rootOf, proofOf, matchRoot, verifyEvidenceCall,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
