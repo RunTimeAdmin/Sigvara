@@ -1,6 +1,6 @@
 # ADR 0009: Count payments that settle on Base, starting with Base Sepolia
 
-**Status:** Proposed · 2026-11-03. Not built. The questions for David are at the end.
+**Status:** Accepted · 2026-11-03, with David's decisions below. Not built.
 
 ## Context
 
@@ -43,7 +43,7 @@ scans for and the case ADR 0006 says the payer rule reads correctly. Read from t
 | `finalized` behind `latest` | 5,157 blocks, about 17 minutes | 435 blocks, about 14.5 minutes |
 | Public RPC `eth_getLogs` | limited to a 200-block range | rate-limited on the first call ("request limit reached") |
 
-## Decision (proposed)
+## Decision
 
 ### 1. A scored chain and payment chains
 
@@ -210,12 +210,14 @@ Both operators enable a payment chain from the same block, as they did with
 4. **End to end.** A Wallet MCP x402 payment on Base Sepolia to a registered agent, its credit on
    both operators, then a payer outcome signed on Base and accepted by both.
 
-## Questions for David
+## Decisions (David, 3 November 2026)
 
-1. **Base Sepolia as the first payment chain, on testnet only?** Recommended: yes.
-2. **Agents registered at a contract address:** skip their Base payments until a binding exists
-   (recommended), or count them and accept that somebody else may control the address on Base.
-3. **An operator whose Base scan is behind:** it does not propose or finalize that epoch
-   (recommended), or it scores without Base and the checker tolerates the gap.
-4. **Base mainnet:** decide at the mainnet launch (recommended), or now.
-5. **RPC:** each operator brings its own Base RPC provider (recommended), or one shared endpoint.
+1. **Base Sepolia is the first payment chain, on testnet only.**
+2. **Agents registered at a contract address are skipped on Base** (`contract_recipient`) until
+   they can bind a Base address with a signature checked there. Counting them would accept that
+   somebody else may control the address on Base.
+3. **An operator whose Base scan is behind the snapshot neither proposes nor finalizes** that
+   epoch, rather than scoring without Base and asking the checker to tolerate the gap.
+4. **Base mainnet is decided at the mainnet launch**, not now.
+5. **Each operator brings its own Base RPC provider.** No shared endpoint, so one provider's
+   outage or wrong answer cannot hold back or mislead both operators at once.
