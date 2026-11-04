@@ -11,6 +11,7 @@ const http = require('node:http');
 const { ethers } = require('ethers');
 const { World, startOracle, wallet, ASSET } = require('./test-support/oracle-harness');
 const { TRANSFER_TOPIC } = require('./payments');
+const merkle = require('./merkle');
 
 const BASE = 84532;
 const USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
@@ -78,6 +79,10 @@ const env = (url, over = {}) => ({
   PAYMENT_VERIFICATION: 'required',
   PAYMENT_ASSET: ASSET,
   PAYMENT_MIN_AMOUNT: '10000',
+  // The scored chain's own scan, which payment chains require.
+  PAYMENT_SCAN_ENABLED: '1',
+  PAYMENT_SCAN_FROM_BLOCK: String(1_000_000 - 100),
+  PAYMENT_SCAN_PACE_MS: '0',
   ORACLE_ADMIN_TOKEN: ADMIN,
   PAYMENT_CHAIN_IDS: String(BASE),
   [`PAYMENT_CHAIN_${BASE}_RPC_URL`]: url,
@@ -193,4 +198,41 @@ test('a payment chain that is the scored chain, or set up without EXPECTED_CHAIN
     /scored chain/,
   );
   await assert.rejects(startOracle({ world, env: env('http://127.0.0.1:1', { EXPECTED_CHAIN_ID: '' }) }), /needs EXPECTED_CHAIN_ID/);
+  await assert.rejects(startOracle({ world, env: env('http://127.0.0.1:1', { PAYMENT_SCAN_ENABLED: '0' }) }), /needs PAYMENT_SCAN_ENABLED=1/);
+  await assert.rejects(startOracle({ world, env: env('http://127.0.0.1:1', { TX_WAIT_SECONDS: '600' }) }), /TX_WAIT_SECONDS=600 is too long/);
+});
+
+test('the proposal commits to what counted by its cut-off, Base payment included', async () => {
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  const now = world.data.nowSec;
+  const payer = wallet();
+  const block = FINALIZED - 100;
+  base = await startBase({
+    blockTime: (n) => (n === FINALIZED ? now - 900 : n === block ? now - 7200 : now - 1800),
+    logs: [transfer({ from: payer, to: agent.agentAddress, amount: 3_000_000n, block })],
+  });
+  oracle = await startOracle({ world, env: env(base.url) });
+  await waitFor(/\[oracle\] epoch done/);
+  const proposal = oracle.calls().find((c) => c.name === 'proposeScore');
+  assert.ok(proposal, `no proposal:\n${oracle.logs()}`);
+  const expected = merkle.leafFor({
+    chainId: BASE, txHash: ethers.id(`tx-${block}-${agent.agentAddress}`), payer,
+    amount: '3000000', ts: (now - 7200) * 1000, success: null,
+  });
+  // One payment, so the root is its leaf.
+  assert.equal(proposal.args[2], expected);
+});
+
+test('after a transaction is not seen mined, the epoch proposes nothing more', async () => {
+  const world = new World();
+  world.addRegisteredAgent();
+  world.addRegisteredAgent();
+  world.data.propose = 'unconfirmed';
+  const now = world.data.nowSec;
+  base = await startBase({ blockTime: (n) => (n === FINALIZED ? now - 900 : now - 7200) });
+  oracle = await startOracle({ world, env: env(base.url) });
+  await waitFor(/\[oracle\] epoch done/);
+  assert.equal(oracle.calls().filter((c) => c.name === 'proposeScore').length, 1);
+  assert.match(oracle.logs(), /a transaction this epoch was not seen mined; proposing next epoch/);
 });

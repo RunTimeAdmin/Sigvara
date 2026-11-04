@@ -1105,8 +1105,8 @@ its name.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `PAYMENT_CHAIN_IDS` | unset | Comma-separated chain ids, such as `84532`. Needs `PAYMENT_VERIFICATION=required` and `EXPECTED_CHAIN_ID`, and must not name the scored chain. |
-| `PAYMENT_CHAIN_<id>_RPC_URL` | required | The chain's RPC, https (http only to this host). Never logged or served. Bring your own: Base Sepolia's public endpoint limits `eth_getLogs` to 200 blocks and Base's rate-limits at once. |
+| `PAYMENT_CHAIN_IDS` | unset | Comma-separated chain ids, such as `84532`. Needs `PAYMENT_VERIFICATION=required`, `PAYMENT_SCAN_ENABLED=1` and `EXPECTED_CHAIN_ID`, and must not name the scored chain. |
+| `PAYMENT_CHAIN_<id>_RPC_URL` | required | The chain's RPC, https (http only to this host or a private network). Never logged or served. Bring your own: Base Sepolia's public endpoint limits `eth_getLogs` to 200 blocks and Base's rate-limits at once. |
 | `PAYMENT_CHAIN_<id>_ASSET` | required | The ERC-20 payments settle in (Base Sepolia USDC is `0x036CbD53842c5426634e7929541eC2318f3dCF7e`). |
 | `PAYMENT_CHAIN_<id>_FROM_BLOCK` | required | First block. Both operators use the same one, so neither credits a payment the other cannot see. |
 | `PAYMENT_CHAIN_<id>_FEE_UNIT` | required | Base units of this asset per point. Amounts are converted into the scored chain's fee units before they are added to its payments, and one per-payer cap covers all chains. Both operators use the same value. |
@@ -1130,13 +1130,18 @@ What differs from the scored chain's scan:
   hold the same evidence for any proposal time. An operator whose scan of a chain switched on
   has passed that far scores nothing that epoch and says so; `/metrics` counts it as
   `sigvara_oracle_epochs_held_by_payment_chain_total`.
-- **One cut-off.** With payment chains configured, a score's evidence is everything that counted by
-  a whole-minute cut-off one minute before the operator's clock, read again for each agent: the
-  scored chain's payments settled by then, in stored order, then the payment chains' payments at
-  least their delay old, in a fixed order. An agent whose payment chain scans have not passed its
-  cut-off is skipped. A checker tries every whole minute in the half hour before a proposal's time
-  (`evidence-as-of.js`), so a proposal has half an hour to land and a primary can lag its evidence
-  by at most that. `/evidence` serves this as `evidenceCut`.
+- **One cut-off.** With a payment chain on (shadow changes nothing), a score's evidence is
+  everything that counted by a whole-minute cut-off: one minute before the chain's clock, read again
+  for each agent, and brought down to where this operator's own scans of every chain have reached,
+  so that nothing scanned later could add to it. A scan that has fallen behind is run again first.
+  The evidence is the scored chain's payments settled by the cut-off, in stored order, then the
+  payment chains' payments at least their delay old, in a fixed order. A checker tries every whole
+  minute in the half hour before a proposal's time (`evidence-as-of.js`), so a primary can lag its
+  evidence by at most that, and `/evidence` serves the rule as `evidenceCut`.
+- **Landing in time.** A proposal is not made when its cut-off is too old to land within that half
+  hour, nor after a transaction in the same epoch was not seen mined, since everything sent after it
+  queues behind it. `TX_WAIT_SECONDS` must leave room for a charge and a proposal. A checker checks a
+  pending proposal only once its own scans have passed the proposal's time, and otherwise next epoch.
 - **Reviewers.** The external factor's reviewers are judged on the scored chain's payments only.
 - **The leaf names its chain.** A payment chain's evidence leaf is
   `abi.encode(chainId, txHash, payer, amount, settledAt, outcome)`. The scored chain's is

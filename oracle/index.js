@@ -183,6 +183,19 @@ if (paymentChainsCfg.chains.length && !cfg.expectedChainId) {
   console.error('[oracle] PAYMENT_CHAIN_IDS needs EXPECTED_CHAIN_ID, so that the scored chain is known.');
   process.exit(1);
 }
+// A score's evidence is cut where this operator's scans have reached, on every chain (evidenceCutFor),
+// so the scored chain's payments must be found by its own scan, not only as somebody reports them.
+if (paymentChainsCfg.chains.length && !paymentScanCfg.enabled) {
+  console.error('[oracle] PAYMENT_CHAIN_IDS needs PAYMENT_SCAN_ENABLED=1, so that both operators hold the same scored-chain payments.');
+  process.exit(1);
+}
+// How long a proposal may take to land after its evidence was chosen: a charge and a proposal, each
+// waited for and replaced once. It has to fit well inside the half hour a checker searches.
+const proposeMarginMs = 2 * 2 * cfg.txWaitMs + 60_000;
+if (paymentChains.active(paymentChainsCfg) && proposeMarginMs > paymentChains.AUDIT_WINDOW_MS / 2) {
+  console.error(`[oracle] TX_WAIT_SECONDS=${cfg.txWaitMs / 1000} is too long with a payment chain on: a proposal could land after the half hour a checker searches for its evidence.`);
+  process.exit(1);
+}
 // One provider per payment chain. Its network is given so ethers does not ask for it on every call;
 // the scan asks eth_chainId itself each time, because an endpoint can fail over onto another chain.
 const paymentChainProviders = new Map(paymentChainsCfg.chains.map((c) => [
@@ -336,7 +349,7 @@ function evidenceAt(didHash, atMs) {
  * chose its evidence at one of them and its transaction landed later. Unset without payment chains,
  * so an operator on the scored chain alone audits exactly as before.
  */
-const auditOptions = (atMs) => (paymentChainsCfg.chains.length
+const auditOptions = (atMs) => (paymentChains.active(paymentChainsCfg)
   ? { eligibleAt: (e) => paymentChains.eligibleAtMs(e, paymentChainsCfg), cuts: paymentChains.auditCuts(atMs, paymentChainsCfg) }
   : undefined);
 
@@ -728,7 +741,14 @@ async function runPaymentScan(agents) {
     ? checkpoint.lastBlock + 1
     : paymentScanCfg.fromBlock;
 
-  if (from > to) return { from, to, credited: 0, skipped: 0, upToDate: true };
+  if (from > to) {
+    // Nothing new, but a reach recorded before its time was kept still needs one (scoredReachMs).
+    if (paymentChains.active(paymentChainsCfg) && checkpoint && !Number.isFinite(checkpoint.lastBlockTs)) {
+      const block = await chain.readWithBackoff('payment-scan getBlock', () => provider.getBlock(checkpoint.lastBlock));
+      if (block) setPaymentScanState({ ...checkpoint, lastBlockTs: Number(block.timestamp) });
+    }
+    return { from, to, credited: 0, skipped: 0, upToDate: true };
+  }
 
   const byAddress = new Map();
   const byDid = new Map();
@@ -819,7 +839,16 @@ async function runPaymentScan(agents) {
   // Never past a block still unresolved, and not at all after a failed canary. The scan only moves
   // forward, so advancing over either would lose a payment for good.
   const nextCheckpoint = paymentScan.checkpointAfter(unresolved, from, to, canary);
-  if (nextCheckpoint !== null) setPaymentScanState({ lastBlock: nextCheckpoint, at: Date.now() });
+  if (nextCheckpoint !== null) {
+    // With a payment chain on, also the block's time: a score's evidence is cut no later than this
+    // scan has reached (evidenceCutFor). Unrecorded otherwise, so the state is as it always was.
+    let lastBlockTs;
+    if (paymentChains.active(paymentChainsCfg)) {
+      const block = await chain.readWithBackoff('payment-scan getBlock', () => provider.getBlock(nextCheckpoint));
+      if (block) lastBlockTs = Number(block.timestamp);
+    }
+    setPaymentScanState({ lastBlock: nextCheckpoint, at: Date.now(), ...(lastBlockTs !== undefined ? { lastBlockTs } : {}) });
+  }
   metrics.inc('paymentScans');
   if (credited) metrics.inc('paymentsPulled', credited);
 
@@ -899,6 +928,37 @@ async function runPaymentChainScans(agents) {
       console.error(`[oracle] payment chain ${pc.chainId} scan failed: ${paymentChains.rpcError(err, pc.rpcUrl).message}`);
     }
   }
+}
+
+/** How far the scored chain's payment scan has reached, as its last block's time in ms, or 0 when unknown. */
+function scoredReachMs() {
+  const ts = (getPaymentScanState() || {}).lastBlockTs;
+  return Number.isFinite(ts) ? ts * 1000 : 0;
+}
+
+/**
+ * The cut-off for the agent about to be scored, with a payment chain on (ADR 0009), and the clock it
+ * was read at: a whole minute before the chain's clock, brought down to where every scan of this
+ * operator has reached, so that the evidence holds everything that counted by it and nothing an
+ * operator scanned later could add. A scan that has fallen behind the cut-off this agent wants is run
+ * again first, so a long epoch neither cuts its last agents short nor leaves them stale. Null when the
+ * cut-off would be too old for a proposal to land within the half hour a checker searches.
+ */
+async function evidenceCutFor(agents) {
+  const nowMs = (await chain.getLatestBlockTimestamp()) * 1000;
+  const wantMs = paymentChains.cutFor(nowMs, paymentChainsCfg);
+  if (scoredReachMs() <= wantMs) {
+    try {
+      await runPaymentScan(agents);
+    } catch (err) {
+      metrics.inc('paymentScanErrors');
+      console.error('[oracle] payment scan failed:', err.message);
+    }
+  }
+  if (paymentChains.behind(paymentChainsCfg, getPaymentChainScanState, wantMs).length) await runPaymentChainScans(agents);
+  const cutMs = paymentChains.coveredCut(wantMs, scoredReachMs(), paymentChainsCfg, getPaymentChainScanState);
+  if (cutMs === null || nowMs - cutMs > paymentChains.AUDIT_WINDOW_MS - proposeMarginMs) return { nowMs, cutMs: null };
+  return { nowMs, cutMs };
 }
 
 async function runEpochInner() {
@@ -985,6 +1045,9 @@ async function runEpochInner() {
     }
   }
   let proposed = 0;
+  // Set when a transaction this epoch was sent and not seen mined, with a payment chain on: everything
+  // sent after it queues behind it, so a proposal could land after the half hour a checker searches.
+  let proposalsStopped = false;
   let finalized = 0;
   let diverged = 0;
 
@@ -1225,19 +1288,19 @@ async function runEpochInner() {
         // each machine: 0.982146 against 0.982148 on the day the checker went live. Small
         // enough to move no integer factor, large enough that the two were not computing
         // the same function. A divergence tolerance hid it rather than fixing it.
-        const scoringNowMs = chainNow * 1000;
-        // The evidence this agent's score and root are over (ADR 0009). Without payment chains it is
-        // everything held, as before. With them it is what counted by a whole-minute cut-off before
-        // the chain's clock, read again for this agent so that the proposal lands within the half hour
-        // a checker searches, and only once every payment chain's scan has passed that cut-off.
+        let scoringNowMs = chainNow * 1000;
+        // The evidence this agent's score and root are over (ADR 0009). With no payment chain on it is
+        // everything held, as before. With one on it is what counted by the cut-off evidenceCutFor
+        // gives, read again for this agent, and the score is measured at that same reading of the clock.
         let evidenceCutMs = scoringNowMs;
-        if (paymentChainsCfg.chains.length) {
-          evidenceCutMs = paymentChains.cutFor((await chain.getLatestBlockTimestamp()) * 1000, paymentChainsCfg);
-          const short = paymentChains.behind(paymentChainsCfg, getPaymentChainScanState, evidenceCutMs);
-          if (short.length) {
-            console.log(`[oracle]   ${didHash.slice(0, 10)}… payment chain ${short[0].chainId} not scanned far enough for this agent's cut-off, skipping`);
+        if (paymentChains.active(paymentChainsCfg)) {
+          const cut = await evidenceCutFor(agents);
+          if (cut.cutMs === null) {
+            console.log(`[oracle]   ${didHash.slice(0, 10)}… this operator's scans have not reached a recent enough cut-off, skipping`);
             continue;
           }
+          scoringNowMs = cut.nowMs;
+          evidenceCutMs = cut.cutMs;
         }
         const held = evidenceAt(didHash, evidenceCutMs);
         // externalScore: only for agents linked to an ERC-8004 identity they own, and only from
@@ -1315,6 +1378,14 @@ async function runEpochInner() {
           let asOf = null;
           if (freshPending.exists && freshPending.proposedAt > 0) {
             const atProposalMs = freshPending.proposedAt * 1000;
+            // With a payment chain on, a proposal's evidence is only checked once this operator's own
+            // scans have passed its time on every chain; before that it could lack a payment the
+            // proposer had, and a missing payment is not a disagreement. It is checked next epoch.
+            if (paymentChains.active(paymentChainsCfg) && (scoredReachMs() <= atProposalMs
+                || paymentChains.behind(paymentChainsCfg, getPaymentChainScanState, atProposalMs).length)) {
+              console.log(`[oracle]   ${didHash.slice(0, 10)}… this operator's scans have not passed the pending proposal's time; checking it next epoch`);
+              continue;
+            }
             asOf = payments.required(paymentCfg)
               ? evidenceAsOf(evidenceAt(didHash, atProposalMs), atProposalMs, freshPending.evidenceRoot ?? null, auditOptions(atProposalMs))
               : null;
@@ -1499,6 +1570,21 @@ async function runEpochInner() {
         // epoch, and on a current one it would race the primary for the single charge.
         // Startup already refuses checker + FEE_REGISTRY_ADDRESS; this is the second lock on
         // a path that moves real value.
+        // With a payment chain on, a proposal must land within the half hour a checker searches for its
+        // cut-off. Not proposed behind a stuck transaction, nor when what is left of that half hour is
+        // shorter than a charge and a proposal can take; the next epoch proposes afresh.
+        if (paymentChains.active(paymentChainsCfg)) {
+          if (proposalsStopped) {
+            console.log(`[oracle]   ${didHash.slice(0, 10)}… a transaction this epoch was not seen mined; proposing next epoch`);
+            continue;
+          }
+          const lateMs = (await chain.getLatestBlockTimestamp()) * 1000 - evidenceCutMs;
+          if (lateMs > paymentChains.AUDIT_WINDOW_MS - proposeMarginMs) {
+            console.log(`[oracle]   ${didHash.slice(0, 10)}… its evidence was chosen too long ago to propose; proposing next epoch`);
+            continue;
+          }
+        }
+
         if (gatingActive && !cfg.checkerMode) {
           // Ask the contract whether this proposal would be accepted before taking the fee
           // for it. Charging first is still right, for the reason above, but it used to be
@@ -1533,6 +1619,7 @@ async function runEpochInner() {
               // the agent may have paid for an epoch that is not scored.
               if (chain.isTxUnconfirmed(chargeErr)) {
                 metrics.inc('txUnconfirmed');
+                proposalsStopped = true;
                 console.error(`[oracle]   ${didHash.slice(0, 10)}… epoch-fee charge not confirmed, not scoring: ${chargeErr.message}`);
               } else {
                 console.error(`[oracle]   ${didHash.slice(0, 10)}… epoch-fee charge failed, not scoring: ${chargeErr.message}`);
@@ -1592,6 +1679,7 @@ async function runEpochInner() {
         if (chain.isTxUnconfirmed(err)) {
           console.error(`[oracle]   ${didHash.slice(0, 10)}… ${err.message}`);
           metrics.inc('txUnconfirmed');
+          proposalsStopped = true;
           continue;
         }
         console.error(`[oracle]   ${didHash.slice(0, 10)}… error: ${err.message}`);
@@ -2115,8 +2203,11 @@ function buildEvidenceBody(didHash, events) {
     ...(paymentChainsCfg.chains.length ? {
       paymentChainCommittedFields: ['chainId', 'txHash', 'payer', 'amount', 'settledAt', 'success'],
       paymentChains: paymentChainsCfg.chains.map((c) => ({ chainId: c.chainId, delaySeconds: c.delayMs / 1000 })),
-      // A proposal's evidence is what counted by a whole minute at most this long before it (payment-chains.cutFor).
-      evidenceCut: { quantumSeconds: paymentChains.CUT_QUANTUM_MS / 1000, windowSeconds: paymentChains.AUDIT_WINDOW_MS / 1000 },
+      // With a chain on, a proposal's evidence is what counted by a whole minute at most this long
+      // before it (payment-chains.cutFor). Absent while every chain is in shadow, which changes nothing.
+      ...(paymentChains.active(paymentChainsCfg) ? {
+        evidenceCut: { quantumSeconds: paymentChains.CUT_QUANTUM_MS / 1000, windowSeconds: paymentChains.AUDIT_WINDOW_MS / 1000 },
+      } : {}),
     } : {}),
     // What each payer signed over, so a verifier can check a served payload without knowing
     // this deployment. outcomeSource is this oracle's own label, not part of the leaf.

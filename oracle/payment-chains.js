@@ -34,6 +34,7 @@
  * With PAYMENT_CHAIN_IDS unset nothing here runs and the oracle behaves as it did before.
  */
 
+const net = require('net');
 const { ethers } = require('ethers');
 const paymentScan = require('./payment-scan');
 
@@ -96,8 +97,10 @@ function rpcUrlProblem(raw) {
   if (url.protocol === 'https:') return null;
   if (url.protocol !== 'http:') return 'must be https (http only to a private host)';
   const h = url.hostname.toLowerCase();
-  const privateHost = ['localhost', '[::1]'].includes(h) || !h.includes('.')
-    || /^127\./.test(h) || /^10\./.test(h) || /^192\.168\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h);
+  // Address ranges only for an address: 10.attacker.example is a public name.
+  const privateAddress = net.isIP(h) === 4
+    && (/^127\./.test(h) || /^10\./.test(h) || /^192\.168\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h));
+  const privateHost = ['localhost', '[::1]'].includes(h) || (!h.includes('.') && !h.includes(':')) || privateAddress;
   return privateHost ? null : 'must be https (http only to a private host)';
 }
 
@@ -186,15 +189,45 @@ function eligibleAtMs(event, cfg) {
 
 const lower = (x) => String(x ?? '').toLowerCase();
 
-/** The cut-off for a score made at `nowMs`: a whole minute, one before. `nowMs` itself without payment chains. */
+/**
+ * Whether any payment chain is switched on. Only then do a payment chain's payments count, and only
+ * then does evidence follow the cut-off rule below: a chain in shadow changes nothing about scoring.
+ */
+function active(cfg) {
+  return cfg.chains.some((c) => c.mode === 'on');
+}
+
+/** The cut-off for a score made at `nowMs`: a whole minute, one before. `nowMs` itself when no chain is on. */
 function cutFor(nowMs, cfg) {
-  if (!cfg.chains.length) return nowMs;
+  if (!active(cfg)) return nowMs;
   return Math.floor(nowMs / CUT_QUANTUM_MS) * CUT_QUANTUM_MS - CUT_QUANTUM_MS;
+}
+
+/**
+ * The cut-off this operator can stand behind: `wantMs` (from cutFor), brought down to a whole minute
+ * before each scan's reach, so that it holds every payment that counted by it, on every chain. The
+ * scored chain's scan must have passed it, and each payment chain's scan must have passed it less
+ * that chain's delay, strictly, since blocks share whole-second timestamps. Null when a chain that is
+ * on has never been scanned.
+ *
+ * @param {number} scoredReachMs the scored chain's scan's last block time, in ms
+ * @param {(key: string) => ({ lastBlockTs: number }|null)} stateOf
+ */
+function coveredCut(wantMs, scoredReachMs, cfg, stateOf) {
+  let cap = Math.min(wantMs, scoredReachMs - 1);
+  for (const chain of cfg.chains) {
+    if (chain.mode !== 'on') continue;
+    const state = stateOf(stateKey(chain));
+    if (!state || !Number.isFinite(state.lastBlockTs)) return null;
+    cap = Math.min(cap, state.lastBlockTs * 1000 + chain.delayMs - 1);
+  }
+  if (!Number.isFinite(cap) || cap <= 0) return null;
+  return Math.floor(cap / CUT_QUANTUM_MS) * CUT_QUANTUM_MS;
 }
 
 /** The cut-offs a checker tries for a proposal dated `atMs`, newest first: every whole minute in the half hour before. */
 function auditCuts(atMs, cfg) {
-  if (!cfg.chains.length) return [];
+  if (!active(cfg)) return [];
   const out = [];
   for (let t = Math.floor(atMs / CUT_QUANTUM_MS) * CUT_QUANTUM_MS; t > atMs - AUDIT_WINDOW_MS; t -= CUT_QUANTUM_MS) out.push(t);
   return out;
@@ -219,8 +252,8 @@ const memo = new WeakMap();
 /**
  * The evidence that counts by the cut-off `atMs`, in milliseconds, in the order the root is built over.
  *
- * Without payment chains: every stored payment of the scored chain, the very same array when that is
- * all it holds, as before; payments left from a chain since removed from the config do not count. With them: the
+ * With no payment chain on: every stored payment of the scored chain, the very same array when that
+ * is all it holds, as before; payments from a chain removed or put back in shadow do not count. With one on: the
  * scored chain's payments settled by `atMs`, in the order they are stored, then the payment chains'
  * payments at least their delay old by `atMs`, in a fixed order (evidenceOrder). Nothing from a chain
  * this oracle no longer reads, or reads in shadow: there is no fee unit to convert it with, and an
@@ -228,7 +261,7 @@ const memo = new WeakMap();
  * cut-off, never on what an operator happens to hold beyond it.
  */
 function eventsAt(events, atMs, cfg) {
-  if (!cfg.chains.length) {
+  if (!active(cfg)) {
     return events.some((e) => e.chainId != null) ? Object.freeze(events.filter((e) => e.chainId == null)) : events;
   }
   const scored = [];
@@ -480,7 +513,9 @@ module.exports = {
   CUT_QUANTUM_MS,
   AUDIT_WINDOW_MS,
   readConfig,
+  active,
   cutFor,
+  coveredCut,
   auditCuts,
   stateKey,
   recipientCodeOk,

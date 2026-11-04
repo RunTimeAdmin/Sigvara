@@ -492,7 +492,8 @@ test('an RPC URL is https, or http only to this host or a private network', () =
   for (const url of ['http://127.0.0.1:8545', 'http://localhost:8545', 'http://base-node:8545', 'http://10.0.0.5:8545', 'http://192.168.1.9', 'http://172.20.0.3:8545']) {
     assert.doesNotThrow(ok(url), url);
   }
-  for (const url of ['http://base.example.com/KEY', 'http://8.8.8.8:8545', 'http://172.32.0.1']) {
+  for (const url of ['http://base.example.com/KEY', 'http://8.8.8.8:8545', 'http://172.32.0.1',
+    'http://10.attacker.example/KEY', 'http://127.0.0.1.nip.io/KEY', 'http://192.168.evil.com/KEY']) {
     assert.throws(ok(url), /must be https/, url);
   }
 });
@@ -559,4 +560,31 @@ test('the state file says format 2 only once it holds a payment chain\'s data', 
     console.log(JSON.stringify({ before, after }));
   `);
   assert.deepEqual(out, { before: 1, after: 2 });
+});
+
+// ---- the third review: a cut-off this operator can stand behind ----------------------------------
+
+test('a chain in shadow changes nothing about scoring: no cut-off, no reordering', () => {
+  const shadow = config({ [`PAYMENT_CHAIN_${BASE_SEPOLIA}_MODE`]: 'shadow' });
+  assert.equal(pc.active(shadow), false);
+  assert.equal(pc.cutFor(NOW + 25_000, shadow), NOW + 25_000);
+  assert.deepEqual(pc.auditCuts(NOW, shadow), []);
+  const arc = Object.freeze([arcEvent(NOW + 5_000), arcEvent(NOW - 10)]);
+  assert.equal(pc.eventsAt(arc, NOW, shadow), arc, 'the stored array, even with a payment after the time');
+  assert.equal(pc.active(config()), true);
+});
+
+test("the cut-off comes down to where this operator's scans have reached", () => {
+  const cfg = config();
+  const key = pc.stateKey(cfg.chains[0]);
+  const want = pc.cutFor(NOW + 25_000, cfg); // NOW - 60 s
+  const baseReached = (tsSec) => (k) => (k === key ? { lastBlock: 1, lastBlockTs: tsSec } : null);
+  // Both scans well past it: the cut stands.
+  assert.equal(pc.coveredCut(want, NOW, cfg, baseReached(NOW / 1000 - 900)), want);
+  // The scored chain's scan reached only NOW - 3 min, to the second: the minute before that.
+  assert.equal(pc.coveredCut(want, NOW - 180_000, cfg, baseReached(NOW / 1000 - 900)), NOW - 240_000);
+  // Base reached NOW - 75 min, with an hour's delay: a payment counting after NOW - 15 min is unseen.
+  assert.equal(pc.coveredCut(want, NOW, cfg, baseReached(NOW / 1000 - 75 * 60)), NOW - 16 * 60_000);
+  // A chain that is on and was never scanned: no cut at all.
+  assert.equal(pc.coveredCut(want, NOW, cfg, () => null), null);
 });
