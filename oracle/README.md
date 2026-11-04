@@ -471,6 +471,14 @@ evidence nobody can fetch is evidence nobody can audit.
 The response names `committedFields` — the exact fields the root commits to, in leaf
 order — so a verifier need not read this source to know what is covered.
 
+Payments are served in the order the root is built over: by settlement time, then transaction and
+payer, with a payment chain's after the scored chain's. Two operators credit the same payments in
+different orders, and the order of the leaves changes the root, so the order they were credited in
+does not count. Two operators serve the same root once they hold the same payments and outcomes. A
+payer-signed outcome one has taken and the other has not yet imported is a real difference until the
+next import. A root committed before this order was fixed, over payments stored in another order,
+cannot be rebuilt from what is served; the agent's next proposal can.
+
 `counterauditPacketId` appears on an event when the attestation carried one, and the
 response lists it under `unverifiedFields`. It is **not evidence, is not in the leaf, and
 is not verified here**: the token holder supplied it, or whoever carried a payer-signed
@@ -1170,10 +1178,6 @@ What differs from the scored chain's scan:
 Payer-signed outcomes for a payment chain's payments are not taken yet: the outcome paths still
 look for the payment on the scored chain only.
 
-Scored-chain roots are in the stored order while no chain is on, and in the fixed order once one is. A
-proposal made before the switch, over payments stored in another order, can no longer be rebuilt from
-what `/evidence` serves; the next proposal for that agent can.
-
 A state file that holds anything from a payment chain is written as format version 2, which a build
 from before this refuses to load; without payment chains it stays version 1, so a rollback is still
 possible until a chain is used. Turning a chain back on keeps its old cursor and credits.
@@ -1303,7 +1307,7 @@ cd oracle
 node --test
 ```
 
-1070 tests (as of 3 November 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
+1074 tests (as of 3 November 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
 the trust weighting, Merkle evidence trees, HTTP helpers, store persistence and recovery,
 the streamed state file, chain access with backoff, scan checkpointing, fee caps and transaction replacement,
 metrics, and cooldown logic. Several of the files run the real `index.js` and `watcher.js`

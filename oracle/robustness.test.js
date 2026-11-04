@@ -28,6 +28,8 @@ const PAYMENT_ENV = {
   PAYMENT_MAX_PER_PAYER: '4',
 };
 
+const merkle = require('./merkle');
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const names = (calls) => calls.map((c) => c.name);
 
@@ -974,6 +976,50 @@ test('a checker agrees with a proposal made before payments it now holds', async
     assert.doesNotMatch(logs, /DIVERGENCE/);
     assert.equal(counter(text, DIVERGED), 0, 'payments after the proposal are not held against it');
     assert.equal(counter(text, AGREED), 1);
+  });
+});
+
+test('two operators holding the same payments in different orders commit to the same root', async () => {
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  const [a, b, c, d] = paymentsAt(world, 4, 40 * 86_400, 'order');
+  const orders = [[a, b, c, d], [b, c, a, d]];
+  assert.notEqual(merkle.rootFor(orders[0]), merkle.rootFor(orders[1]), 'in storage order they differ');
+  const seen = [];
+  for (const stored of orders) {
+    world.file = null;
+    await inEpoch({
+      world, env: PAYMENT_ENV, files: { 'state.json': JSON.stringify({ schemaVersion: 1, paymentEvents: { [agent.didHash]: stored } }) },
+    }, async ({ oracle, calls }) => {
+      const ev = await oracle.call('GET', `/evidence/${agent.didHash}`);
+      seen.push({ proposed: calls.find((call) => call.name === 'proposeScore').args[2], served: ev.body.evidenceRoot, txs: ev.body.evidence.map((e) => e.txHash) });
+    });
+  }
+  assert.equal(seen[0].proposed, seen[1].proposed);
+  assert.equal(seen[0].served, seen[1].served);
+  assert.equal(seen[0].served, seen[0].proposed);
+  assert.deepEqual(seen[0].txs, seen[1].txs, 'served in the order the root is built over');
+});
+
+test('a checker on this build matches a proposal over the order a primary stored, with an outcome signed since', async () => {
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  // A second apart, so that the fixed order is this one.
+  const [a, b, c, d] = paymentsAt(world, 4, 40 * 86_400, 'transition').map((e, i) => ({ ...e, success: null, ts: e.ts + i * 1000 }));
+  const stored = [b, c, a, d];
+  assert.notEqual(merkle.rootFor(stored), merkle.rootFor([a, b, c, d]), 'the stored order and the fixed one give different roots');
+  const proposedAt = world.data.nowSec - 100;
+  const data = await proposedFor(world, stored);
+  world.setFor('pending', agent.didHash, pendingProposal(world, { data, evidenceRoot: merkle.rootFor(stored) }));
+  // Since then the checker has taken a payer's positive outcome, which would move the score if it counted.
+  const signedSince = { ...d, success: true, payerOutcome: { outcome: 1, acceptedAt: (proposedAt + 60) * 1000 } };
+  await inEpoch({
+    world,
+    env: { ...CHECKER_PAYMENT_ENV, DIVERGENCE_TOLERANCE: '0' },
+    files: { 'state.json': JSON.stringify({ schemaVersion: 1, paymentEvents: { [agent.didHash]: [b, c, a, signedSince] } }) },
+  }, ({ text, logs }) => {
+    assert.doesNotMatch(logs, /DIVERGENCE/);
+    assert.equal(counter(text, AGREED), 1, logs);
   });
 });
 

@@ -37,28 +37,35 @@ const merkle = require('./merkle');
  * when a payment started to count: its settlement, or on a payment chain its settlement plus the
  * chain's delay. Without `cuts` only the proposal's time is tried, as before.
  *
+ * Evidence is in a fixed order (payment-chains.eventsAt), and `stored` is the same payments in the
+ * order this operator credited them. A proposal made before the order was fixed committed to its
+ * proposer's stored order, so the readings are tried over `stored` too, or an outcome signed after such
+ * a proposal would read as a disagreement. It only matters for proposals still pending when a primary
+ * takes this build, so it can go once none can be.
+ *
  * @param {object[]} events   one agent's payment events, as the store holds them
  * @param {number} atMs       the proposal's time, in ms
  * @param {string|null} committedRoot the proposal's evidenceRoot, or null when it has none
- * @param {{ eligibleAt?: (e: object) => number, cuts?: number[] }} [options]
+ * @param {{ eligibleAt?: (e: object) => number, cuts?: number[], stored?: object[] }} [options]
  * @returns {{ events: object[], matchedRoot: boolean }}
  */
-function evidenceAsOf(events, atMs, committedRoot, { eligibleAt = (e) => Number(e.ts), cuts = [] } = {}) {
+function evidenceAsOf(events, atMs, committedRoot, { eligibleAt = (e) => Number(e.ts), cuts = [], stored = null } = {}) {
   if (!Number.isFinite(atMs)) throw new TypeError('evidenceAsOf: atMs (ms) is required');
-  const countedBy = (cut) => events.filter((e) => eligibleAt(e) <= cut);
-  const settled = countedBy(atMs);
+  const countedBy = (list, cut) => list.filter((e) => eligibleAt(e) <= cut);
   const committed = typeof committedRoot === 'string' ? committedRoot.toLowerCase() : null;
   if (committed) {
-    for (const cut of [atMs, ...cuts.filter((c) => c < atMs)]) {
-      const set = cut === atMs ? settled : countedBy(cut);
-      if (merkle.rootFor(set).toLowerCase() === committed) return { events: set, matchedRoot: true };
-      const unset = set.map((e) => (signedAfter(e, atMs) ? withoutPayerOutcome(e) : e));
-      if (unset.some((e, i) => e !== set[i]) && merkle.rootFor(unset).toLowerCase() === committed) {
-        return { events: unset, matchedRoot: true };
+    for (const list of stored ? [events, stored] : [events]) {
+      for (const cut of [atMs, ...cuts.filter((c) => c < atMs)]) {
+        const set = countedBy(list, cut);
+        if (merkle.rootFor(set).toLowerCase() === committed) return { events: set, matchedRoot: true };
+        const unset = set.map((e) => (signedAfter(e, atMs) ? withoutPayerOutcome(e) : e));
+        if (unset.some((e, i) => e !== set[i]) && merkle.rootFor(unset).toLowerCase() === committed) {
+          return { events: unset, matchedRoot: true };
+        }
       }
     }
   }
-  return { events: cuts.length ? countedBy(Math.min(atMs, cuts[0])) : settled, matchedRoot: false };
+  return { events: countedBy(events, cuts.length ? Math.min(atMs, cuts[0]) : atMs), matchedRoot: false };
 }
 
 function signedAfter(event, atMs) {
