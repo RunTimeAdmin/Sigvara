@@ -450,7 +450,7 @@ below are done is `the registration's agentWallet is 0x18CB...4811, not the publ
    across restarts. A compromised publisher host can make it post wrong scores at that rate, for as
    long as it is compromised, and nothing else: nothing can be signed ahead and kept for later.
 
-   **If the publisher's host is compromised**, first delete the `sigvara-tunnel` line from that account's `authorized_keys` on `packrai-vps`, which cuts the host off the signer at once; then rotate the key, not just the HMAC secret: a new
+   **If the publisher's host is compromised**, first delete the `sigvara-tunnel` line from that account's `authorized_keys` on `packrai-vps` and run `pkill -u sigvara-tunnel` there, since sshd reads the key only when a connection authenticates and an open tunnel otherwise stays up. That cuts the host off the signer. Then rotate the key, not just the HMAC secret: a new
    keystore, step 2 with the new address, and the old address's posts revoked by hand. Until then,
    the old key keeps posting whatever the host asks, at the capped rate.
 2. Make it the registration's `agentWallet`. The publisher key signs the EIP-712 message
