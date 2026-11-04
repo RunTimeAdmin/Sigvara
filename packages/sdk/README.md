@@ -164,7 +164,7 @@ oracle outage keeps passing a threshold. Set `maxScoreAgeSeconds` to refuse a sc
 longer ago than that, or never, with `stale_score`; choose a few times your oracle's epoch,
 and it is measured against your host's clock. Unset, a score is trusted however old it is.
 It costs one more read per admission. The same check exists on chain as
-`SigvaraReader.isTrustedFresh`, which is not deployed anywhere yet.
+`SigvaraReader.isTrustedFresh`, on Arc testnet at `0x2921b4eE879CdF5793FA273BbDc4E7dF01ABcef8`.
 
 The constructor refuses a `threshold` that is not a finite number of 0 or more, and a
 `ttlSeconds` or `maxScoreAgeSeconds` that is not a positive number. A `NaN` threshold, for example

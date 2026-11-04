@@ -89,13 +89,12 @@ what is not yet true.
 > and administers `UPGRADER_ROLE`, and the timelocked role grants described below do not apply to
 > them. A withdrawal queued before the upgrade follows the live unbonding period until it is
 > claimed; one queued after it is fixed when queued.
-> `SigvaraReader` has not been deployed anywhere. `test/SlashDrillFork.t.sol` rehearses the
+> `SigvaraReader` is deployed too, and holds no roles. `test/SlashDrillFork.t.sol` rehearses the
 > deployed behaviour.
 
 
 Chain ID `5042002`, RPC `https://rpc.testnet.arc.io`, USDC as native gas. Canonical
-source is [`deployments/5042002.json`](deployments/5042002.json); the table below is a
-convenience copy.
+source is [`deployments/5042002.json`](deployments/5042002.json); the table below is a convenience copy.
 
 | Contract | Address |
 |---|---|
@@ -104,10 +103,11 @@ convenience copy.
 | `SigvaraStaking` | `0xA69d62B2a6774D21A2c15d5d83b27277eD31d35B` |
 | `SVRToken` (testnet faucet token, **not** the SVR of [docs/token.md](docs/token.md)) | `0x41De2D6D55318e197a00E8f5B496eA2790e23E6c` |
 | `SigvaraOracleBond` | `0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171` |
+| `SigvaraReader` (one read for a contract that gates on an agent's standing, not a registry) | `0x2921b4eE879CdF5793FA273BbDc4E7dF01ABcef8` |
 
 Every contract above, and the implementation behind each proxy, is source-verified on the
 [Arc explorer](https://explorer.testnet.arc.io) and reproduced byte for byte by a build of the
-commit tagged `arc-testnet-2026-11-04`. To check it yourself: `git checkout arc-testnet-2026-11-04`,
+commit tagged `arc-testnet-2026-11-04b`. To check it yourself: `git checkout arc-testnet-2026-11-04b`,
 then `sh scripts/fetch-deps.sh && forge build && node scripts/check-bytecode.mjs`
 ([how](docs/arc.md#verifying-the-deployed-code)).
 
