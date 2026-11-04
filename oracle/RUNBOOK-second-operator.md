@@ -241,11 +241,11 @@ it costs: the key then exists in two places and in a second shell history. The d
 is thinner than it sounds either way, because the key has to end up in `.env` on that box
 regardless; generating there makes it one copy instead of two.
 
-If you would rather not install a toolchain, the `node:20-alpine` image the oracle already
+If you would rather not install a toolchain, the `node:24-alpine` image the oracle already
 uses can generate the pair without one. It does not solve the signing problem in step 3:
 
 ```bash
-docker run --rm node:20-alpine sh -c   "npm i -q ethers@6.17.0 >/dev/null 2>&1 && node -e \"const w=require('ethers').Wallet.createRandom();console.log(w.address);console.log(w.privateKey)\""
+docker run --rm node:24-alpine sh -c   "npm i -q ethers@6.17.0 >/dev/null 2>&1 && node -e \"const w=require('ethers').Wallet.createRandom();console.log(w.address);console.log(w.privateKey)\""
 ```
 
 This key is a distinct operator. It must not be the primary's key: two processes signing

@@ -508,7 +508,7 @@ the same off-box folder, where the same 90-day cleanup applies.
 pvol=sigvara-publisher_publisher_state
 if docker volume inspect "$pvol" >/dev/null 2>&1; then
   p=publisher-$(date -u +%F).tgz
-  docker run --rm -v "$pvol":/data:ro -v "$out":/out node:20-alpine tar czf "/out/$p" -C /data .
+  docker run --rm -v "$pvol":/data:ro -v "$out":/out node:24-alpine tar czf "/out/$p" -C /data .
   tar tzf "$out/$p" | grep -qx './publisher-state.json'
   age -r <recipient-public-key> -o "$out/$p.age" "$out/$p"
   rsync -t -e "ssh <the oracle copy's options>" "$out/$p.age" <backup-host>:/
