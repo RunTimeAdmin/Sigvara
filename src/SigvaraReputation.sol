@@ -763,7 +763,10 @@ contract SigvaraReputation is Initializable, TimelockedGrants, UUPSUpgradeable, 
         if (released >= earned) return (earned, block.timestamp);
         // Safe: released < earned here, and earned is a sum of capped factors that cannot exceed 100.
         // forge-lint: disable-next-line(unsafe-typecast)
-        return (uint8(released), block.timestamp - (owed % 1 days) / maturityRatePerDay);
+        spendable = uint8(released);
+        // What is left of the last point, as time. Nothing is chosen by it, so this is no weak PRNG.
+        // slither-disable-next-line weak-prng
+        clock = block.timestamp - (owed % 1 days) / maturityRatePerDay;
     }
 
     /**

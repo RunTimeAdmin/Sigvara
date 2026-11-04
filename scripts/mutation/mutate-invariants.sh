@@ -88,7 +88,7 @@ runl R33 $RS $R 'function zeroReputation(' 'maturedScore[didHash] = 0;' 'matured
 runl R34 $RS $R 'function _maturity(' 'anchor = 0;' 'anchor = 0;' '' 'a handover does not restart maturity'
 runl R35 $RS $R 'function _maturity(' 'uint256 released = uint256(anchor) + owed / 1 days;' '/ 1 days' '/ 1 hours' 'a score matures 24 times too fast'
 runl R36 $RS $R 'function _maturity(' 'if (earned <= anchor) return (earned, block.timestamp);' 'return (earned' 'return (anchor' 'a fall is held at the anchor'
-runl R36b $RS $R 'function _maturity(' 'return (uint8(released), block.timestamp - (owed % 1 days) / maturityRatePerDay);' ' - (owed % 1 days) / maturityRatePerDay' '' 'a finalize drops the time built up toward the next point'
+runl R36b $RS $R 'function _maturity(' 'clock = block.timestamp - (owed % 1 days) / maturityRatePerDay;' ' - (owed % 1 days) / maturityRatePerDay' '' 'a finalize drops the time built up toward the next point'
 runl R37 $RS $R 'function getEarnedScore(' '+ uint16(rep.propagationScore);' '+ uint16(rep.propagationScore);' '+ 0;' 'the earned score leaves out propagation'
 
 # ---- SigvaraReputation: the limits -------------------------------------------------------------------------------
