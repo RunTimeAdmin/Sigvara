@@ -203,6 +203,11 @@ const paymentChainProviders = new Map(paymentChainsCfg.chains.map((c) => [
 ]));
 // The last scan of each payment chain, for /health.
 const lastPaymentChainScans = new Map();
+// What held back the last epoch, for /health: the chains whose scans held all of it, or how many agents
+// were left unscored when the scans fell behind while it ran. Null when it was not held.
+let lastEpochHold = null;
+// The cut-off the scans were last run again for (evidenceCutFor).
+let lastRescanForMs = null;
 // How long one epoch spends catching a payment chain up, in steps of MAX_BLOCKS, before it leaves the
 // rest to the next epoch.
 const PAYMENT_CHAIN_SCAN_BUDGET_MS = 10 * 60_000;
@@ -936,29 +941,47 @@ function scoredReachMs() {
   return Number.isFinite(ts) ? ts * 1000 : 0;
 }
 
+/** Whether a cut-off is missing, or too old for a proposal to land within the half hour a checker searches. */
+function cutTooOld(nowMs, cutMs) {
+  return cutMs === null || nowMs - cutMs > paymentChains.AUDIT_WINDOW_MS - proposeMarginMs;
+}
+
 /**
  * The cut-off for the agent about to be scored, with a payment chain on (ADR 0009), and the clock it
  * was read at: a whole minute before the chain's clock, brought down to where every scan of this
  * operator has reached, so that the evidence holds everything that counted by it and nothing an
  * operator scanned later could add. A scan that has fallen behind the cut-off this agent wants is run
- * again first, so a long epoch neither cuts its last agents short nor leaves them stale. Null when the
- * cut-off would be too old for a proposal to land within the half hour a checker searches.
+ * again first, so a long epoch neither cuts its last agents short nor leaves them stale; only once per
+ * cut-off, so a scan that cannot move costs one pass a minute and not one per agent. Null when the
+ * cut-off would be too old to use (cutTooOld).
  */
-async function evidenceCutFor(agents) {
+async function evidenceCutFor() {
   const nowMs = (await chain.getLatestBlockTimestamp()) * 1000;
   const wantMs = paymentChains.cutFor(nowMs, paymentChainsCfg);
-  if (scoredReachMs() <= wantMs) {
+  const scoredStale = scoredReachMs() <= wantMs;
+  const chainsStale = paymentChains.behind(paymentChainsCfg, getPaymentChainScanState, wantMs).length > 0;
+  if ((scoredStale || chainsStale) && wantMs !== lastRescanForMs) {
+    lastRescanForMs = wantMs;
+    // The registry is read again first. A scan moves its cursor past every block in its range, so with
+    // the list this epoch started from, a payment to an agent registered since would be lost for good.
+    let agents = null;
     try {
-      await runPaymentScan(agents);
+      agents = await chain.getRegisteredAgents();
     } catch (err) {
-      metrics.inc('paymentScanErrors');
-      console.error('[oracle] payment scan failed:', err.message);
+      console.error(`[oracle] could not read the registry again, so the scans stay where they are: ${err.message}`);
     }
+    if (agents && scoredStale) {
+      try {
+        await runPaymentScan(agents);
+      } catch (err) {
+        metrics.inc('paymentScanErrors');
+        console.error('[oracle] payment scan failed:', err.message);
+      }
+    }
+    if (agents && chainsStale) await runPaymentChainScans(agents);
   }
-  if (paymentChains.behind(paymentChainsCfg, getPaymentChainScanState, wantMs).length) await runPaymentChainScans(agents);
   const cutMs = paymentChains.coveredCut(wantMs, scoredReachMs(), paymentChainsCfg, getPaymentChainScanState);
-  if (cutMs === null || nowMs - cutMs > paymentChains.AUDIT_WINDOW_MS - proposeMarginMs) return { nowMs, cutMs: null };
-  return { nowMs, cutMs };
+  return { nowMs, cutMs: cutTooOld(nowMs, cutMs) ? null : cutMs };
 }
 
 async function runEpochInner() {
@@ -974,8 +997,9 @@ async function runEpochInner() {
   // Epochs run one at a time, so a pending transaction from this wallet at this point is
   // left over from an earlier one, and everything sent now queues behind it. Informational:
   // chain.settle already replaces a transaction that does not land.
+  let stuck = 0;
   try {
-    const stuck = await chain.getNonceGap();
+    stuck = await chain.getNonceGap();
     if (stuck > 0) {
       console.warn(
         `[oracle] WARNING: ${stuck} transaction(s) from this wallet are still pending from before this epoch. ` +
@@ -1019,6 +1043,10 @@ async function runEpochInner() {
 
   console.log(`[oracle] ${agents.length} agent(s) found`);
 
+  // Each payment chain first (ADR 0009), however long that takes, so that the scored chain's scan stays
+  // the last thing read before scoring, as it is with none. runPaymentChainScans logs its own failures.
+  if (paymentChainsCfg.chains.length) await runPaymentChainScans(agents);
+
   // Before scoring, so this epoch scores what the chain shows rather than what happened
   // to be posted to this operator. Failure is logged and swallowed: scoring from the
   // payments already known beats not scoring at all.
@@ -1028,8 +1056,6 @@ async function runEpochInner() {
     metrics.inc('paymentScanErrors');
     console.error('[oracle] payment scan failed:', err.message);
   }
-  // Then each payment chain's (ADR 0009). runPaymentChainScans logs its own failures.
-  if (paymentChainsCfg.chains.length) await runPaymentChainScans(agents);
   // Likewise the links made on chain since the last scan. A failure is logged here; what it
   // costs is decided once the chain's clock is known, below.
   if (linksOnChain()) {
@@ -1045,9 +1071,12 @@ async function runEpochInner() {
     }
   }
   let proposed = 0;
-  // Set when a transaction this epoch was sent and not seen mined, with a payment chain on: everything
-  // sent after it queues behind it, so a proposal could land after the half hour a checker searches.
-  let proposalsStopped = false;
+  // Set when a transaction from this wallet was sent and not seen mined, this epoch or before it, with a
+  // payment chain on: everything sent after it queues behind it, so a proposal could land after the half
+  // hour a checker searches.
+  let proposalsStopped = stuck > 0;
+  // Agents left unscored because this operator's scans fell behind while the epoch ran.
+  let agentsHeld = 0;
   let finalized = 0;
   let diverged = 0;
 
@@ -1073,10 +1102,15 @@ async function runEpochInner() {
   // that has not reached that far may be missing a payment the other operator holds, so this
   // operator neither proposes nor finalizes until it has (ADR 0009, decision 3). Saved first, so the
   // scans' progress survives a restart while it waits.
-  const heldBy = paymentChains.behind(
-    paymentChainsCfg, getPaymentChainScanState, paymentChains.cutFor(chainNow * 1000, paymentChainsCfg),
-  );
-  if (heldBy.length) {
+  // The scored chain's scan the same way. Far enough behind, every agent's cut-off would be too old to use,
+  // and an epoch that skipped them all one by one would pass for one that ran.
+  const chainNowMs = chainNow * 1000;
+  const wantCutMs = paymentChains.cutFor(chainNowMs, paymentChainsCfg);
+  const heldBy = paymentChains.behind(paymentChainsCfg, getPaymentChainScanState, wantCutMs);
+  const scoredHeld = paymentChains.active(paymentChainsCfg) && !heldBy.length
+    && cutTooOld(chainNowMs, paymentChains.coveredCut(wantCutMs, scoredReachMs(), paymentChainsCfg, getPaymentChainScanState));
+  lastEpochHold = null;
+  if (heldBy.length || scoredHeld) {
     for (const h of heldBy) {
       const reached = h.reachedMs === null ? 'no block yet' : new Date(h.reachedMs).toISOString();
       console.error(
@@ -1084,6 +1118,17 @@ async function runEpochInner() {
         `${new Date(h.neededMs).toISOString()}; scoring nothing this epoch`,
       );
     }
+    if (scoredHeld) {
+      const reach = scoredReachMs();
+      console.error(
+        `[oracle] the scored chain's payment scan has reached ${reach ? new Date(reach).toISOString() : 'no block yet'}, ` +
+        'too far behind for a proposal to land in time; scoring nothing this epoch',
+      );
+    }
+    lastEpochHold = {
+      at: new Date().toISOString(),
+      chains: [...heldBy.map((h) => h.chainId), ...(scoredHeld ? [Number(cfg.expectedChainId)] : [])],
+    };
     metrics.inc('epochsHeldByPaymentChain');
     metrics.inc('epochsFailed');
     persistState();
@@ -1239,6 +1284,13 @@ async function runEpochInner() {
         }
 
         if (action === 'finalize-then-propose') {
+          // Neither proposes nor finalizes while behind (ADR 0009, decision 3). The epoch's start checked
+          // that, and a long epoch can have fallen behind since.
+          if (paymentChains.active(paymentChainsCfg) && (await evidenceCutFor()).cutMs === null) {
+            console.log(`[oracle]   ${didHash.slice(0, 10)}… this operator's scans have not reached a recent enough cut-off, skipping`);
+            agentsHeld++;
+            continue;
+          }
           metrics.inc('finalizeAttempts');
           try {
             const finalizeTx = await chain.finalizeScore(didHash);
@@ -1294,9 +1346,10 @@ async function runEpochInner() {
         // gives, read again for this agent, and the score is measured at that same reading of the clock.
         let evidenceCutMs = scoringNowMs;
         if (paymentChains.active(paymentChainsCfg)) {
-          const cut = await evidenceCutFor(agents);
+          const cut = await evidenceCutFor();
           if (cut.cutMs === null) {
             console.log(`[oracle]   ${didHash.slice(0, 10)}… this operator's scans have not reached a recent enough cut-off, skipping`);
+            agentsHeld++;
             continue;
           }
           scoringNowMs = cut.nowMs;
@@ -1575,11 +1628,10 @@ async function runEpochInner() {
         // shorter than a charge and a proposal can take; the next epoch proposes afresh.
         if (paymentChains.active(paymentChainsCfg)) {
           if (proposalsStopped) {
-            console.log(`[oracle]   ${didHash.slice(0, 10)}… a transaction this epoch was not seen mined; proposing next epoch`);
+            console.log(`[oracle]   ${didHash.slice(0, 10)}… a transaction from this wallet has not been seen mined; proposing next epoch`);
             continue;
           }
-          const lateMs = (await chain.getLatestBlockTimestamp()) * 1000 - evidenceCutMs;
-          if (lateMs > paymentChains.AUDIT_WINDOW_MS - proposeMarginMs) {
+          if (cutTooOld((await chain.getLatestBlockTimestamp()) * 1000, evidenceCutMs)) {
             console.log(`[oracle]   ${didHash.slice(0, 10)}… its evidence was chosen too long ago to propose; proposing next epoch`);
             continue;
           }
@@ -1706,6 +1758,12 @@ async function runEpochInner() {
   }
   if (pruned > 0) console.log(`[oracle] pruned ${pruned} fully decayed payment event(s)`);
   persistState();
+
+  if (agentsHeld) {
+    console.error(`[oracle] ${agentsHeld} agent(s) left unscored: this operator's scans fell behind while the epoch ran`);
+    metrics.inc('epochsHeldByPaymentChain');
+    lastEpochHold = { at: new Date().toISOString(), agents: agentsHeld };
+  }
 
   console.log(
     `[oracle] epoch done — ${proposed} proposed, ${finalized} finalized` +
@@ -2360,9 +2418,11 @@ async function handleRequest(req, res) {
       paymentScan: paymentScanCfg.enabled ? 'enabled' : 'disabled',
       paymentScanBlock: (getPaymentScanState() || {}).lastBlock ?? null,
       // Each payment chain (ADR 0009): its mode and delay, which both operators must share, how far
-      // its scan has reached, and what the last scan found. Absent when there are none.
+      // its scan has reached, and what the last scan found; and what held back the last epoch, if
+      // anything did. Absent when there are none.
       ...(paymentChainsCfg.chains.length ? {
         paymentChains: paymentChains.publicView(paymentChainsCfg, getPaymentChainScanState, lastPaymentChainScans),
+        paymentChainHold: lastEpochHold,
       } : {}),
       jobsFeed: jobs.enabled(jobsCfg) ? 'configured' : 'disabled',
       jobsRegistry: jobsCfg.registry || null,

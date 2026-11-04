@@ -28,6 +28,7 @@ const env = (over = {}) => ({
   [`PAYMENT_CHAIN_${BASE_SEPOLIA}_ASSET`]: USDC,
   [`PAYMENT_CHAIN_${BASE_SEPOLIA}_FROM_BLOCK`]: '1000',
   [`PAYMENT_CHAIN_${BASE_SEPOLIA}_FEE_UNIT`]: '100000000',
+  [`PAYMENT_CHAIN_${BASE_SEPOLIA}_MIN_AMOUNT`]: '10000',
   [`PAYMENT_CHAIN_${BASE_SEPOLIA}_MODE`]: 'on',
   ...over,
 });
@@ -46,7 +47,7 @@ test('a payment chain is read with its defaults', () => {
   assert.equal(c.asset, ethers.getAddress(USDC));
   assert.equal(c.fromBlock, 1000);
   assert.equal(c.feeUnit, 100_000_000n);
-  assert.equal(c.minAmount, 0n);
+  assert.equal(c.minAmount, 10_000n);
   assert.equal(c.delayMs, 3_600_000);
   assert.equal(c.chunkSize, 200);
   assert.equal(c.mode, 'on');
@@ -60,6 +61,8 @@ test('a payment chain refuses anything it cannot use, and never says the RPC URL
     [{ [`${p}RPC_URL`]: 'wss://x' }, /must be https/],
     [{ [`${p}ASSET`]: 'usdc' }, /ASSET must be an address/],
     [{ [`${p}FROM_BLOCK`]: '' }, /FROM_BLOCK is required/],
+    [{ [`${p}MIN_AMOUNT`]: '' }, /MIN_AMOUNT is required/],
+    [{ [`${p}MIN_AMOUNT`]: '0' }, /MIN_AMOUNT must be at least 1/],
     [{ [`${p}FEE_UNIT`]: '' }, /FEE_UNIT is required/],
     [{ [`${p}FEE_UNIT`]: '0' }, /FEE_UNIT must be at least 1/],
     [{ [`${p}FEE_UNIT`]: '1.5' }, /whole number/],
@@ -113,7 +116,7 @@ test("a payment chain's payment counts once it is older than the chain's delay",
   const young = baseEvent(NOW - HOUR + 1);
   const arc = arcEvent(NOW);
   const got = pc.eventsAt([arc, old, edge, young], NOW, config());
-  // The scored chain's payments in stored order, then the payment chain's in a fixed order.
+  // The scored chain's payments, then the payment chain's, each in a fixed order.
   assert.deepEqual(got, [arc, old, edge]);
   assert.ok(Object.isFrozen(got));
 });
@@ -155,7 +158,7 @@ test('/health shows the mode, the delay and the cursor, and never the RPC URL', 
   const view = pc.publicView(cfg, () => ({ lastBlock: 7, lastBlockTs: 99 }), new Map());
   assert.deepEqual(view, [{
     chainId: BASE_SEPOLIA, mode: 'on', asset: ethers.getAddress(USDC),
-    fromBlock: 1000, feeUnit: '100000000', minAmount: '0', delaySeconds: 3600,
+    fromBlock: 1000, feeUnit: '100000000', minAmount: '10000', delaySeconds: 3600,
     lastBlock: 7, lastBlockTs: 99, lastScan: null,
   }]);
   assert.ok(!JSON.stringify(view).includes('SECRET-KEY'));
@@ -189,10 +192,18 @@ function fakeChain({ chainId = BASE_SEPOLIA, finalized = 2000, head = 2500, logs
         && l.blockNumber >= f.fromBlock && l.blockNumber <= f.toBlock
         && wanted.has(l.topics[2].toLowerCase()));
     },
-    getCode: async (address) => code[address.toLowerCase()] ?? '0x',
+    getCode: async (address, tag) => {
+      const held = code[address.toLowerCase()];
+      return (typeof held === 'function' ? held(tag) : held) ?? '0x';
+    },
   };
 }
-const scored = (code = {}) => ({ getCode: async (address) => code[address.toLowerCase()] ?? '0x' });
+const scored = (code = {}) => ({
+  getCode: async (address, tag) => {
+    const held = code[address.toLowerCase()];
+    return (typeof held === 'function' ? held(tag) : held) ?? '0x';
+  },
+});
 
 function agent() {
   return { didHash: ethers.hexlify(ethers.randomBytes(32)), agentAddress: ethers.Wallet.createRandom().address, operator: ethers.Wallet.createRandom().address };
@@ -453,12 +464,72 @@ test('two operators that credited the same payments in a different order commit 
   const cfg = config();
   const old = arcEvent(NOW - 5 * HOUR);
   const y = baseEvent(NOW - 3 * HOUR);
+  const z = baseEvent(NOW - 4 * HOUR);
   const x = arcEvent(NOW - 2 * HOUR);
-  const a = Object.freeze([old, y, x]);
-  const b = Object.freeze([old, x, y]);
+  const a = Object.freeze([old, y, z, x]);
+  const b = Object.freeze([old, x, z, y]);
   assert.notEqual(merkle.rootFor(a), merkle.rootFor(b), 'in storage order they differ');
   assert.deepEqual(pc.eventsAt(a, NOW, cfg), pc.eventsAt(b, NOW, cfg));
   assert.equal(merkle.rootFor(pc.eventsAt(a, NOW, cfg)), merkle.rootFor(pc.eventsAt(b, NOW, cfg)));
+});
+
+test("that holds for the scored chain's payments too: one pushed before an older one is scanned changes nothing", () => {
+  const cfg = config();
+  const older = arcEvent(NOW - 5 * HOUR);
+  const newer = arcEvent(NOW - 2 * HOUR);
+  const later = arcEvent(NOW - HOUR);
+  const pushedFirst = Object.freeze([later, older, newer]);
+  const scanned = Object.freeze([older, newer, later]);
+  assert.notEqual(merkle.rootFor(pushedFirst), merkle.rootFor(scanned), 'in storage order they differ');
+  assert.equal(merkle.rootFor(pc.eventsAt(pushedFirst, NOW, cfg)), merkle.rootFor(pc.eventsAt(scanned, NOW, cfg)));
+  assert.equal(pc.eventsAt(scanned, NOW, cfg), scanned, 'already in order: the very same array, so caches hit');
+  // With no chain on the stored order stands, so published roots still verify.
+  const off = pc.readConfig({}, { scoredChainId: ARC });
+  assert.equal(pc.eventsAt(pushedFirst, NOW, off), pushedFirst);
+});
+
+test('when no cut-off matches the root, a checker scores what counted by the newest one a proposer could use', () => {
+  const { evidenceAsOf } = require('./evidence-as-of');
+  const cfg = config();
+  const P = NOW + 25_000;
+  const old = arcEvent(NOW - 5 * HOUR);
+  const pastTheCut = arcEvent(NOW - 30_000); // after the newest cut-off, NOW - 60 s, and before P
+  const options = { eligibleAt: (e) => pc.eligibleAtMs(e, cfg), cuts: pc.auditCuts(P, cfg) };
+  assert.equal(options.cuts[0], pc.cutFor(P, cfg));
+  const got = evidenceAsOf(pc.eventsAt(Object.freeze([old, pastTheCut]), P, cfg), P, `0x${'ab'.repeat(32)}`, options);
+  assert.equal(got.matchedRoot, false);
+  assert.deepEqual(got.events, [old]);
+});
+
+test("a recipient's code is asked at the payment's block and at registration, so the time of the scan cannot decide it", async () => {
+  const a = { ...agent(), blockNumber: 77 };
+  const payer = ethers.Wallet.createRandom().address;
+  const address = a.agentAddress.toLowerCase();
+  // A contract appears at this address on both chains after the payment and after registration.
+  const logs = [transferLog({ from: payer, to: a.agentAddress, amount: 1_000_000n, block: 1500 })];
+  const asked = [];
+  const later = (who, from) => (tag) => { asked.push([who, tag]); return tag >= from ? '0x6080604052' : '0x'; };
+  for (const finalized of [1600, 1900]) {
+    const provider = fakeChain({ finalized, logs, code: { [address]: later('payment chain', 1800) } });
+    const { deps: d, credited } = deps({ provider, scoredProvider: scored({ [address]: later('scored chain', 100) }), agents: [a] });
+    const out = await pc.scanChain(config().chains[0], d);
+    assert.equal(out.skipped, 0, `scanned to ${finalized}`);
+    assert.equal(credited.length, 1, `scanned to ${finalized}`);
+  }
+  assert.deepEqual([...new Set(asked.map(([who, tag]) => `${who} ${tag}`))].sort(), ['payment chain 1500', 'scored chain 77']);
+});
+
+test("a payment whose block's time cannot be read holds the cursor just before it", async () => {
+  const a = agent();
+  const chain = fakeChain({ logs: [transferLog({ from: ethers.Wallet.createRandom().address, to: a.agentAddress, amount: 1_000_000n, block: 1500 })] });
+  const getBlock = chain.getBlock;
+  chain.getBlock = async (tag) => (tag === 1500 ? null : getBlock(tag));
+  const { deps: d, credited } = deps({ provider: chain, agents: [a] });
+  const out = await pc.scanChain(config().chains[0], d);
+  assert.equal(credited.length, 0);
+  assert.equal(out.unresolved, 1);
+  assert.equal(out.state.lastBlock, 1499);
+  assert.equal(out.state.lastBlockTs, 1_700_000_000 + 1499);
 });
 
 test('the same stored array and the same counted set give back the same array, so caches hit', () => {
@@ -517,7 +588,7 @@ test('a score is cut at a whole minute, and a checker finds that cut from the pr
   assert.equal(atP.length, 3);
   assert.equal(evidenceAsOf(atP, P, root).matchedRoot, false, 'one cut at the proposal time misses it');
   const options = { eligibleAt: (e) => pc.eligibleAtMs(e, cfg), cuts: pc.auditCuts(P, cfg) };
-  assert.equal(options.cuts.length, 30, 'every whole minute in the half hour');
+  assert.equal(options.cuts.length, 29, 'every whole minute in the half hour, from the cut-off of a score made at P');
   const found = evidenceAsOf(atP, P, root, options);
   assert.equal(found.matchedRoot, true);
   assert.deepEqual(found.events, [old]);

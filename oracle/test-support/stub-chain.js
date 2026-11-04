@@ -43,8 +43,16 @@
 //     operatorStanding: { enforced, allowed, operatorBond } what the boot check finds (default not enforced)
 //     jobs:      { head, logs } what the ERC-8183 job registry's node answers, when the oracle
 //                is given JOBS_REGISTRY_ADDRESS (head defaults to `head`, logs to none)
-//     scanLogs, canaryLogs: what the payment scan's getLogs finds. A range is the scan, a single
-//                block is its canary (the block a known settlement sits in); each defaults to none
+//     scanLogs, canaryLogs: what the payment scan's getLogs finds. A range is the scan, finding the logs
+//                in it, and a single block is its canary (the block a known settlement sits in); each
+//                defaults to none
+//     clockSteps: { "<stub method>": seconds } how far the chain's clock and head move each time the oracle
+//                calls that method, such as proposeScore or getAgentScore: what a slow transaction or a long
+//                run of reads does to the rest of an epoch (default none)
+//     hostClockSteps: { "<stub method>": ms } how far this host's clock moves each time the oracle calls that
+//                method, for what is measured against it, such as a scan's time budget (default none)
+//     proposeDelayMs: how long a proposal really takes, for a test whose next read must not be answered
+//                from the 250 ms cache ethers keeps of identical requests (default none)
 //   }
 //
 // Keys are lowercase. Unless the world lists agents to score, epochs are switched off: the
@@ -53,6 +61,7 @@
 //
 //   {
 //     registered:      [ "<didhash>" ]  agents the registry returns (each also needs an `agents` entry)
+//     registeredLater: [ "<didhash>" ]  agents it returns too, once clockSteps has moved the chain
 //     challengeWindow: seconds (default 21600)
 //     feeGating:       true to configure the epoch fee; epochFee: its size, as a decimal string
 //     pending:         { "<didhash>": { exists, proposedAt, finalizableAt, data, evidenceRoot, proposerDead } }  (default none)
@@ -93,6 +102,13 @@ const record = (name, ...args) => {
 };
 const fakeHash = (tag) => `0x${tag.repeat(32)}`;
 
+// How far world.clockSteps has moved the chain since this process started.
+let moved = 0;
+const step = (name) => { moved += world().clockSteps?.[name] ?? 0; };
+const hostNow = Date.now;
+let hostAhead = 0;
+Date.now = () => hostNow() + hostAhead;
+
 // The entry of a [{ fromBlock, ... }] history in force at `block` (the latest when undefined).
 const asOf = (history, block) => [...history].reverse().find((h) => block === undefined || h.fromBlock <= block);
 // An 8004 agent's owner and `sigvara` value at `block`, from world.linkHistory.
@@ -104,9 +120,12 @@ function linkAt(agentId, block) {
 
 const provider = {
   getTransactionReceipt: async (hash) => world().receipts[String(hash).toLowerCase()] ?? null,
-  getBlockNumber: async () => world().head,
-  getBlock: async (n) => ({ number: n, timestamp: world().blockTimes?.[n] ?? world().nowSec - 60 }),
-  getLogs: async (filter) => (filter.fromBlock === filter.toBlock ? world().canaryLogs : world().scanLogs) ?? [],
+  getBlockNumber: async () => world().head + moved,
+  getBlock: async (n) => ({ number: n, timestamp: world().blockTimes?.[n] ?? world().nowSec + moved - 60 }),
+  getLogs: async (filter) => {
+    if (filter.fromBlock === filter.toBlock) return world().canaryLogs ?? [];
+    return (world().scanLogs ?? []).filter((l) => l.blockNumber >= filter.fromBlock && l.blockNumber <= filter.toBlock);
+  },
   // Smart accounts for payer-signed outcomes: world().accounts maps an address to the key that
   // may sign for it, by block ({ owners: [{ fromBlock, owner }] }). An address listed there has
   // code; any other has none.
@@ -138,6 +157,7 @@ const chain = {
   STATUS_SLASHED: 2,
   getProvider: () => provider,
   getAgentInfo: async (didHash, blockTag) => {
+    hostAhead += world().hostClockSteps?.getAgentInfo ?? 0;
     const agent = world().agents[String(didHash).toLowerCase()];
     if (!agent) return { operator: ZERO, agentAddress: ZERO, registeredAt: 0, status: 0 };
     const changed = agent.operators && asOf(agent.operators, blockTag);
@@ -146,7 +166,7 @@ const chain = {
   getRegisteredAgents: async () => {
     const w = world();
     if (!w.registered) throw new Error('stub: epochs are off in end-to-end tests');
-    return w.registered.map((didHash) => ({
+    return [...w.registered, ...(moved ? w.registeredLater ?? [] : [])].map((didHash) => ({
       didHash, agentAddress: w.agents[didHash]?.agentAddress ?? null, blockNumber: 1,
     }));
   },
@@ -154,8 +174,9 @@ const chain = {
   restoreScanState: () => false,
   verifyDidHashDerivation: async () => false,
   operatorStanding: async () => world().operatorStanding ?? ({ enforced: false }),
-  getLatestBlockTimestamp: async () => world().nowSec,
+  getLatestBlockTimestamp: async () => world().nowSec + moved,
   getAgentScore: async (address) => {
+    step('getAgentScore');
     const key = String(address).toLowerCase();
     if (world().standingFails?.[key]) {
       throw Object.assign(new Error('429 too many requests'), { code: 'SERVER_ERROR' });
@@ -236,6 +257,8 @@ const chain = {
   },
   proposeScore: async (didHash, scores, evidenceRoot, ifEmpty) => {
     record('proposeScore', didHash, scores, evidenceRoot ?? null, ifEmpty);
+    step('proposeScore');
+    if (world().proposeDelayMs) await new Promise((resolve) => setTimeout(resolve, world().proposeDelayMs));
     const mode = world().propose ?? 'ok';
     if (mode === 'revert') throw new Error('stub: execution reverted: the proposal was refused');
     if (mode === 'fee_cap') throw new real.FeeCapError('stub: the fee is above the cap');

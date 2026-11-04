@@ -15,6 +15,8 @@
  *   - Whose address it is. An address derived from a key is the same account on every chain; a
  *     contract is not, so a payment to an agent registered at a contract is skipped as
  *     `contract_recipient` (see recipientCodeOk).
+ *   - When that is asked. Code on this chain is read at the payment's block, and on the scored chain
+ *     at the block the agent registered in, so the answer does not depend on when an operator scanned.
  *   - Registration. A payment made before the agent registered is skipped as
  *     `before_registration`. Otherwise whether it counted would depend on whether an operator
  *     happened to scan its block before or after the registration.
@@ -26,10 +28,10 @@
  *     finality lag of a quarter of an hour would otherwise make them disagree about.
  *   - One cut-off. With payment chains configured, a score's evidence is everything that counted by
  *     a whole-minute cut-off just before the scoring operator's clock (cutFor), on both chains, so
- *     what it holds beyond that cannot change it. The scored chain's payments keep their stored
- *     order and a payment chain's follow in a fixed one (eventsAt), because two operators credit the
- *     two chains at different times and the evidence root depends on the order of its leaves. A
- *     checker tries the whole-minute cut-offs in the half hour before a proposal (auditCuts).
+ *     what it holds beyond that cannot change it. Each chain's payments follow in a fixed order
+ *     (eventsAt), because two operators credit them at different times and in different orders, and
+ *     the evidence root depends on the order of its leaves. A checker tries the whole-minute cut-offs
+ *     in the half hour before a proposal (auditCuts).
  *
  * With PAYMENT_CHAIN_IDS unset nothing here runs and the oracle behaves as it did before.
  */
@@ -146,7 +148,8 @@ function readConfig(env = process.env, { scoredChainId = null, paymentRequired =
       asset: ethers.getAddress(assetRaw),
       fromBlock: wholeNumber(env[`${p}FROM_BLOCK`], `${p}FROM_BLOCK`),
       feeUnit: bigUnits(env[`${p}FEE_UNIT`], `${p}FEE_UNIT`, { min: 1n }),
-      minAmount: bigUnits(env[`${p}MIN_AMOUNT`], `${p}MIN_AMOUNT`, { fallback: 0n }),
+      // Required and above zero, as PAYMENT_MIN_AMOUNT is: at zero, a transfer of one unit counts as a payment.
+      minAmount: bigUnits(env[`${p}MIN_AMOUNT`], `${p}MIN_AMOUNT`, { min: 1n }),
       delayMs: wholeNumber(env[`${p}DELAY_SECONDS`], `${p}DELAY_SECONDS`, {
         min: MIN_DELAY_SECONDS, fallback: DEFAULT_DELAY_SECONDS,
       }) * 1000,
@@ -225,17 +228,20 @@ function coveredCut(wantMs, scoredReachMs, cfg, stateOf) {
   return Math.floor(cap / CUT_QUANTUM_MS) * CUT_QUANTUM_MS;
 }
 
-/** The cut-offs a checker tries for a proposal dated `atMs`, newest first: every whole minute in the half hour before. */
+/**
+ * The cut-offs a checker tries for a proposal dated `atMs`, newest first: every whole minute in the half
+ * hour before, from the cut-off of a score made at that very time, since none can be newer.
+ */
 function auditCuts(atMs, cfg) {
   if (!active(cfg)) return [];
   const out = [];
-  for (let t = Math.floor(atMs / CUT_QUANTUM_MS) * CUT_QUANTUM_MS; t > atMs - AUDIT_WINDOW_MS; t -= CUT_QUANTUM_MS) out.push(t);
+  for (let t = cutFor(atMs, cfg); t > atMs - AUDIT_WINDOW_MS; t -= CUT_QUANTUM_MS) out.push(t);
   return out;
 }
 
 /**
- * The fixed order of a payment chain's payments in an agent's evidence: by settlement time, then
- * chain, transaction and payer, which together identify a credit.
+ * The fixed order of each chain's payments in an agent's evidence: by settlement time, then chain,
+ * transaction and payer, which together identify a credit.
  */
 function evidenceOrder(a, b) {
   return (Number(a.ts) - Number(b.ts))
@@ -252,13 +258,13 @@ const memo = new WeakMap();
 /**
  * The evidence that counts by the cut-off `atMs`, in milliseconds, in the order the root is built over.
  *
- * With no payment chain on: every stored payment of the scored chain, the very same array when that
- * is all it holds, as before; payments from a chain removed or put back in shadow do not count. With one on: the
- * scored chain's payments settled by `atMs`, in the order they are stored, then the payment chains'
- * payments at least their delay old by `atMs`, in a fixed order (evidenceOrder). Nothing from a chain
- * this oracle no longer reads, or reads in shadow: there is no fee unit to convert it with, and an
- * operator that dropped a chain must not keep scoring from it. What counts depends only on the
- * cut-off, never on what an operator happens to hold beyond it.
+ * With no payment chain on: every stored payment of the scored chain in the order it is stored, the
+ * very same array when that is all it holds, as before; payments from a chain removed or put back in
+ * shadow do not count. With one on: the scored chain's payments settled by `atMs`, then the payment
+ * chains' payments at least their delay old by `atMs`, each in a fixed order (evidenceOrder). Nothing
+ * from a chain this oracle no longer reads, or reads in shadow: there is no fee unit to convert it
+ * with, and an operator that dropped a chain must not keep scoring from it. What counts, and its
+ * order, depends only on the cut-off, never on what an operator holds beyond it or when it credited it.
  */
 function eventsAt(events, atMs, cfg) {
   if (!active(cfg)) {
@@ -273,13 +279,15 @@ function eventsAt(events, atMs, cfg) {
       fromChains.push(e);
     }
   }
-  if (!fromChains.length && scored.length === events.length) return events;
+  scored.sort(evidenceOrder);
+  fromChains.sort(evidenceOrder);
+  if (!fromChains.length && scored.length === events.length && scored.every((e, i) => e === events[i])) return events;
   const size = scored.length + fromChains.length;
   let byArray = memo.get(cfg);
   if (!byArray) { byArray = new WeakMap(); memo.set(cfg, byArray); }
   const hit = Object.isFrozen(events) ? byArray.get(events) : undefined;
   if (hit && hit.length === size) return hit;
-  const result = Object.freeze([...scored, ...fromChains.sort(evidenceOrder)]);
+  const result = Object.freeze([...scored, ...fromChains]);
   if (Object.isFrozen(events)) byArray.set(events, result);
   return result;
 }
@@ -412,21 +420,23 @@ async function scanChain(chain, deps) {
   const skipped = [...plan.skipped];
   const skip = (c, reason) => skipped.push({ txHash: c.txHash, didHash: c.didHash, payer: c.payer, amount: c.amount, reason });
 
-  // The recipient's code on both chains. Read for each recipient that has a payment, not for every
-  // agent, and at the scanned block on the payment chain so that two operators ask the same question.
+  // The recipient's code on both chains, read for each payment and not for every agent. Two operators
+  // scan at different times, so each must ask a question whose answer does not depend on that: on this
+  // chain at the payment's block, on the scored chain at the block the agent registered in.
+  const codeKey = (c) => `${c.didHash}:${c.blockNumber}`;
   const codeOk = new Map();
-  for (const address of new Set(plan.credits.map((c) => byDid.get(c.didHash)?.agentAddress))) {
-    if (!address) continue;
+  for (const c of plan.credits) {
+    const a = byDid.get(c.didHash);
+    if (!a?.agentAddress || codeOk.has(codeKey(c))) continue;
     const [here, scored] = await Promise.all([
-      read('payment chain getCode', () => provider.getCode(address, to)),
-      read('scored chain getCode', () => scoredProvider.getCode(address)),
+      read('payment chain getCode', () => provider.getCode(a.agentAddress, c.blockNumber)),
+      read('scored chain getCode', () => scoredProvider.getCode(a.agentAddress, a.blockNumber)),
     ]);
-    codeOk.set(address.toLowerCase(), recipientCodeOk(here) && recipientCodeOk(scored));
+    codeOk.set(codeKey(c), recipientCodeOk(here) && recipientCodeOk(scored));
   }
   const kept = [];
   for (const c of plan.credits) {
-    const address = String(byDid.get(c.didHash)?.agentAddress || '').toLowerCase();
-    if (codeOk.get(address) === false) skip(c, 'contract_recipient');
+    if (codeOk.get(codeKey(c)) === false) skip(c, 'contract_recipient');
     else kept.push(c);
   }
 

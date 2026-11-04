@@ -1106,13 +1106,13 @@ its name.
 | Variable | Default | Meaning |
 |---|---|---|
 | `PAYMENT_CHAIN_IDS` | unset | Comma-separated chain ids, such as `84532`. Needs `PAYMENT_VERIFICATION=required`, `PAYMENT_SCAN_ENABLED=1` and `EXPECTED_CHAIN_ID`, and must not name the scored chain. |
-| `PAYMENT_CHAIN_<id>_RPC_URL` | required | The chain's RPC, https (http only to this host or a private network). Never logged or served. Bring your own: Base Sepolia's public endpoint limits `eth_getLogs` to 200 blocks and Base's rate-limits at once. |
+| `PAYMENT_CHAIN_<id>_RPC_URL` | required | The chain's RPC, https (http only to this host or a private network). Never logged or served. It must answer `eth_getCode` at a payment's own block, so a catch-up needs a node that keeps state that far back. Bring your own: Base Sepolia's public endpoint limits `eth_getLogs` to 200 blocks and Base's rate-limits at once. |
 | `PAYMENT_CHAIN_<id>_ASSET` | required | The ERC-20 payments settle in (Base Sepolia USDC is `0x036CbD53842c5426634e7929541eC2318f3dCF7e`). |
 | `PAYMENT_CHAIN_<id>_FROM_BLOCK` | required | First block. Both operators use the same one, so neither credits a payment the other cannot see. |
 | `PAYMENT_CHAIN_<id>_FEE_UNIT` | required | Base units of this asset per point. Amounts are converted into the scored chain's fee units before they are added to its payments, and one per-payer cap covers all chains. Both operators use the same value. |
 | `PAYMENT_CHAIN_<id>_MODE` | `shadow` | `shadow` scans and reports what it would credit, and credits nothing. `on` credits. A shadow scan keeps its own cursor, so switching on starts at `FROM_BLOCK`. |
 | `PAYMENT_CHAIN_<id>_DELAY_SECONDS` | `3600` | How old a payment must be before it enters a score, at least 1800. Both operators must use the same value. It must be longer than the chain's finality lag (about 17 minutes on Base Sepolia), or every epoch is held. |
-| `PAYMENT_CHAIN_<id>_MIN_AMOUNT` | `0` | As `PAYMENT_MIN_AMOUNT`, in this asset's base units. Both operators use the same value. |
+| `PAYMENT_CHAIN_<id>_MIN_AMOUNT` | required | As `PAYMENT_MIN_AMOUNT`, in this asset's base units, and above 0: at 0 a transfer of a single unit counts as a payment. Both operators use the same value. |
 | `PAYMENT_CHAIN_<id>_CHUNK` | `200` | Blocks per `getLogs` call. |
 | `PAYMENT_CHAIN_<id>_PACE_MS` | `500` | Milliseconds between `getLogs` calls. |
 | `PAYMENT_CHAIN_<id>_MAX_BLOCKS` | `36000` | Blocks one scan covers at most, so a catch-up moves forward a step an epoch (two hours of Base Sepolia). |
@@ -1123,25 +1123,45 @@ What differs from the scored chain's scan:
   seconds on Base Sepolia.
 - **The same key on both chains.** A payment counts only when the agent's address has no code,
   or only an EIP-7702 delegation, on this chain and on the scored chain. A contract address may
-  belong to somebody else here, so its payments are skipped as `contract_recipient`.
+  belong to somebody else here, so its payments are skipped as `contract_recipient`. The code is read
+  at the payment's block here and at the block the agent registered in on the scored chain, so the
+  answer does not depend on when an operator scanned.
 - **After registration.** A payment made before the agent registered is skipped as
   `before_registration`, so whether it counts cannot depend on when an operator scanned its block.
 - **A delay, and a hold.** A payment counts once it is `DELAY_SECONDS` old, so two operators
   hold the same evidence for any proposal time. An operator whose scan of a chain switched on
-  has passed that far scores nothing that epoch and says so; `/metrics` counts it as
-  `sigvara_oracle_epochs_held_by_payment_chain_total`.
+  has not passed that far scores nothing that epoch, finalizing nothing either. So does one whose scan
+  of the scored chain is too far behind for a proposal to land in time. It says so in the log and under
+  `paymentChainHold` on `/health`, and `/metrics` counts it as a failed epoch and in
+  `sigvara_oracle_epochs_held_by_payment_chain_total`. Scans that fall behind while an epoch runs bring
+  the cut-off down, below, and past that leave the remaining agents unscored, which is counted the same way
+  and shown as `paymentChainHold.agents`.
 - **One cut-off.** With a payment chain on (shadow changes nothing), a score's evidence is
   everything that counted by a whole-minute cut-off: one minute before the chain's clock, read again
   for each agent, and brought down to where this operator's own scans of every chain have reached,
-  so that nothing scanned later could add to it. A scan that has fallen behind is run again first.
-  The evidence is the scored chain's payments settled by the cut-off, in stored order, then the
-  payment chains' payments at least their delay old, in a fixed order. A checker tries every whole
-  minute in the half hour before a proposal's time (`evidence-as-of.js`), so a primary can lag its
-  evidence by at most that, and `/evidence` serves the rule as `evidenceCut`.
+  so that nothing scanned later could add to it. A scan that has fallen behind is run again first, at
+  most once a minute, with the registry read again so that a payment to an agent registered meanwhile
+  is not passed over. The evidence is the scored chain's payments settled by the cut-off, then the
+  payment chains' payments at least their delay old, each in a fixed order, so the order an operator
+  credited them in cannot change the root. A checker tries every whole minute in the half hour before
+  a proposal's time (`evidence-as-of.js`), so a primary can lag its evidence by at most that. When no
+  cut-off gives the proposal's root, it scores what counted by the newest one. `/evidence` serves what
+  counted by a cut-off at this host's clock, and the rule as `evidenceCut`.
 - **Landing in time.** A proposal is not made when its cut-off is too old to land within that half
-  hour, nor after a transaction in the same epoch was not seen mined, since everything sent after it
-  queues behind it. `TX_WAIT_SECONDS` must leave room for a charge and a proposal. A checker checks a
-  pending proposal only once its own scans have passed the proposal's time, and otherwise next epoch.
+  hour, nor while a transaction from this wallet has not been seen mined, in this epoch or an earlier
+  one, since everything sent after it queues behind it. `TX_WAIT_SECONDS` must leave room for a charge
+  and a proposal. A checker checks a pending proposal only once its own scans have passed the
+  proposal's time, and otherwise next epoch.
+- **Switching on.** Both operators set the same `FROM_BLOCK`, older than the chain's finality lag and
+  younger than its delay (half an hour old, on Base Sepolia at the default delay), and restart within
+  what is left of the delay, the checker first. An operator scans from there at once, and nothing from
+  the chain counts for either until the delay has passed, so they agree while they differ. A
+  `FROM_BLOCK` older than the delay, such as the one shadow used, counts payments at once for whichever
+  switched first, and a checker then disputes honest proposals.
+- **Switching back.** No order is safe with a checker running, because an `on` proposal and a shadow
+  operator disagree about any agent with evidence on the chain, in both directions. Stop the checker,
+  put the primary in shadow, wait out the challenge window so that no `on` proposal is pending, and
+  start the checker in shadow.
 - **Reviewers.** The external factor's reviewers are judged on the scored chain's payments only.
 - **The leaf names its chain.** A payment chain's evidence leaf is
   `abi.encode(chainId, txHash, payer, amount, settledAt, outcome)`. The scored chain's is
@@ -1149,6 +1169,10 @@ What differs from the scored chain's scan:
 
 Payer-signed outcomes for a payment chain's payments are not taken yet: the outcome paths still
 look for the payment on the scored chain only.
+
+Scored-chain roots are in the stored order while no chain is on, and in the fixed order once one is. A
+proposal made before the switch, over payments stored in another order, can no longer be rebuilt from
+what `/evidence` serves; the next proposal for that agent can.
 
 A state file that holds anything from a payment chain is written as format version 2, which a build
 from before this refuses to load; without payment chains it stays version 1, so a rollback is still
@@ -1279,7 +1303,7 @@ cd oracle
 node --test
 ```
 
-1041 tests (as of 3 November 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
+1070 tests (as of 3 November 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
 the trust weighting, Merkle evidence trees, HTTP helpers, store persistence and recovery,
 the streamed state file, chain access with backoff, scan checkpointing, fee caps and transaction replacement,
 metrics, and cooldown logic. Several of the files run the real `index.js` and `watcher.js`
