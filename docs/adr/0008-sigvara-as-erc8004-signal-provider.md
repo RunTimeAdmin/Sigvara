@@ -160,7 +160,7 @@ operators' state files). Later that day the simulation's solo agent linked itsel
 2. **Posting, once three gates are met:** Sigvara's registration is on chain (done: agent 897764);
    `getAgentWallet(897764)` is the publisher's address (done: block 70587267, 3 November 2026), which the publisher checks before every
    run; and one successful end-to-end cycle on testnet, a revoke and a post on one agent, read
-   back with `getSummary` (begun on 3 November 2026: the first post, to agent 897766 in block 70589310; the revoke comes when its score next changes. By David's call, posting for every linked agent began on 4 November, before that revoke).
+   back with `getSummary` (done on 4 November 2026: after the first post, to agent 897766 in block 70589310, the publisher revoked it in block 70637306 and posted again in block 70637324, and `getSummary` returned a count of 1 and 4. By David's call, posting for every linked agent began earlier that day, before the revoke).
 3. **Mainnet** stays behind the audit and the launch gates, like the rest of the protocol.
 
 ## Options considered

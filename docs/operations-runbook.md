@@ -450,7 +450,7 @@ below are done is `the registration's agentWallet is 0x18CB...4811, not the publ
    across restarts. A compromised publisher host can make it post wrong scores at that rate, for as
    long as it is compromised, and nothing else: nothing can be signed ahead and kept for later.
 
-   **If the publisher's host is compromised**, first delete the `sigvara-tunnel` line from that account's `authorized_keys` on `packrai-vps`, which cuts the host off the signer at once; then rotate the key, not just the HMAC secret: a new
+   **If the publisher's host is compromised**, first delete the `sigvara-tunnel` line from that account's `authorized_keys` on `packrai-vps` and run `pkill -u sigvara-tunnel` there, since sshd reads the key only when a connection authenticates and an open tunnel otherwise stays up. That cuts the host off the signer. Then rotate the key, not just the HMAC secret: a new
    keystore, step 2 with the new address, and the old address's posts revoked by hand. Until then,
    the old key keeps posting whatever the host asks, at the capped rate.
 2. Make it the registration's `agentWallet`. The publisher key signs the EIP-712 message
@@ -531,8 +531,8 @@ fi
   the claim at their 23:06 UTC epoch. The publisher has run with `PUBLISH_MODE=live` and
   `PUBLISH_ALLOW_AGENT_IDS=897766` since 22:26 UTC, and its first run posted the agent's spendable score of 3 in
   `0xcb1fe00347d1fc852340744d4628e7dff7def6dc7f54d8b478cd209c793f7c0c` (block 70589310). `getSummary` returns a
-  count of 1 and 3. The 00:02 UTC refresh on 4 November found it unchanged at 3, so the revoke half comes with
-  its next score event or a later refresh.
+  count of 1 and 3. The 00:02 UTC refresh on 4 November found it unchanged at 3, and the revoke half came at
+  05:15 UTC (below).
 - Step 4, ahead of that revoke: David had the allow list emptied at 00:29 UTC on 4 November. The publisher now
   posts for every agent linked on chain, and 897766 is still the only one.
 - Since 00:21 UTC on 4 November the publisher runs `bd54f26`, where an agent's first link queues it, if it has had a score event since `PUBLISH_FROM_BLOCK`, so it is posted at the next run unless its 8004 agent was already posted to that day; a link that moves waits for the refresh.
@@ -541,6 +541,15 @@ fi
   port 22, a `-R` and a command were all refused. The signer moved to `127.0.0.1` at 01:40 UTC and the publisher
   to the tunnel at 01:42, both on `68fc9ff`; a request through `signer-tunnel:28600` returned the publisher's
   address. David then removed the 28600 rules from ufw and from the hPanel firewall, and the port answers no one.
+- On 4 November the publisher, its tunnel and the signer moved to `d7f2215`: the signer at 02:21 UTC, the publisher
+  and tunnel at about 02:24. Both Node processes run on 24.22.1, and the tunnel's shell and `ssh` run as uid 10002
+  with no capabilities. A request through `signer-tunnel:28600` returned the publisher's address, and the publisher
+  kept its state.
+- Step 3, finished: the primary's 05:06 UTC epoch on 4 November finalized agent 897766's score, and at 05:15 UTC the
+  publisher revoked its first feedback in
+  `0xea811f75fca7f6be85beb8ce4fbb6d21494a5d37927ca19a62fbe9e36a5f5a1e` (block 70637306) and posted 4 in
+  `0x7039099ea6952df5aeab9feac4383dd134e0e8e3316ae36a16cdefe1cee5268d` (block 70637324). Read back: `getLastIndex`
+  is 2, `readFeedback` index 1 is 3 and revoked, index 2 is 4 and live, and `getSummary` returns a count of 1 and 4.
 
 ## 6. Payment chains
 
