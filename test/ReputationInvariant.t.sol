@@ -253,11 +253,30 @@ contract ReputationHandler is Test {
     // Finalizing and rejecting
     // -------------------------------------------------------------------------
 
+    /// Where a finalize now restarts the maturity clock: now, less the time built up toward the next
+    /// point, when the score is partway to what was earned. Worked out here and not read from the contract.
+    function _clockIfFinalizedNow(bytes32 did) internal view returns (uint256) {
+        uint256 since = rep.maturedAt(did);
+        uint256 from = rep.maturedScore(did);
+        uint256 changed = identity.operatorChangedAt(did);
+        if (changed != 0 && changed >= since) {
+            since = changed;
+            from = 0;
+        }
+        uint256 rate = rep.maturityRatePerDay();
+        uint256 earned = rep.getEarnedScore(did);
+        if (earned <= from || since == 0 || rate == 0) return block.timestamp;
+        uint256 owed = (block.timestamp - since) * rate;
+        if (from + owed / 1 days >= earned) return block.timestamp;
+        return block.timestamp - (owed % 1 days) / rate;
+    }
+
     function finalize(uint256 didSeed) external {
         bytes32 did = dids[didSeed % dids.length];
         Pend memory p = pend[did];
         bool refuse = !p.exists || block.timestamp < p.finalizableAt || !_scorable(did) || !_mayPropose(p.proposer);
         uint8 anchor = rep.getTotalScore(did);
+        uint256 clock = _clockIfFinalizedNow(did);
 
         try rep.finalizeReputation(did) {
             if (refuse) aBadFinalizeWasAccepted = true;
@@ -267,7 +286,7 @@ contract ReputationHandler is Test {
             finalized[did] = d;
             finalizedRoot[did] = p.root;
             anchorOf[did] = anchor;
-            anchoredAt[did] = block.timestamp;
+            anchoredAt[did] = clock;
             delete pend[did];
 
             // A jump in the earned score is released from where the agent stood, and a fall applies at once.

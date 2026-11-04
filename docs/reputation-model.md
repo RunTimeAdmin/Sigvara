@@ -272,7 +272,8 @@ counterparty, and scoring on it would lower the proposal for the wrong reason.
 A score is earned as soon as it finalizes, but it becomes spendable only over time.
 `getTotalScore` returns the matured value, which climbs toward the earned one at a
 fixed number of points per day, and `getEarnedScore` returns the raw figure. Threshold
-checks use the matured value.
+checks use the matured value. A finalize keeps the time built up toward the next point, so
+how often an agent is finalized does not change how fast it matures.
 
 The attack this addresses is farm-and-cash-out: build a score quickly, get trusted at
 the peak, leave. Decay already makes a farmed score perishable, but perishable is not

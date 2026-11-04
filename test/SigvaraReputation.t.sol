@@ -1003,6 +1003,132 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
         assertEq(rep.getTotalScore(DID), 20);
     }
 
+    /// Proposes the same perfect score again and finalizes it `gap` seconds later.
+    function _finalizeAfter(uint256 gap) internal {
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
+        vm.warp(block.timestamp + gap);
+        rep.finalizeReputation(DID);
+    }
+
+    /// A finalize every seven hours, which a six-hour window and hourly epochs give, has to release
+    /// what the same time releases with no finalize at all. Each one threw away the fraction of a
+    /// point built up since the last, so four points a day came out as 3.4.
+    function test_maturity_finalizingKeepsTheFractionBuiltUp() public {
+        _finalizeWithMaturity(4);
+        for (uint256 i = 0; i < 6; i++) _finalizeAfter(7 hours);
+        assertEq(rep.getTotalScore(DID), 7, "42 hours at 4 a day");
+    }
+
+    /// A gap shorter than one point released nothing, so a score finalized that often never matured
+    /// at all. The one-hour window Deploy.s.sol allows, with hourly epochs, does that at 4 a day.
+    function test_maturity_finalizingFasterThanAPointStillReleases() public {
+        _finalizeWithMaturity(4);
+        for (uint256 i = 0; i < 24; i++) _finalizeAfter(2 hours);
+        assertEq(rep.getTotalScore(DID), 8, "two days at 4 a day");
+    }
+
+    /// How often an agent is finalized does not change how fast it matures, and a finalize never
+    /// moves what is spendable. The carried time rounds down to a whole second, so each finalize can
+    /// cost up to a second, and never gives one.
+    function testFuzz_maturity_finalizingDoesNotChangeTheRate(uint256 rate, uint256 gap, uint256 count) public {
+        rate = bound(rate, 1, 100);
+        gap = bound(gap, CHALLENGE_WINDOW, 3 days);
+        count = bound(count, 1, 30);
+        _finalizeWithMaturity(rate);
+
+        for (uint256 i = 0; i < count; i++) {
+            vm.prank(oracle);
+            rep.proposeReputation(DID, maxScore, bytes32(0));
+            vm.warp(block.timestamp + gap);
+            uint256 before = rep.getTotalScore(DID);
+            rep.finalizeReputation(DID);
+            assertEq(rep.getTotalScore(DID), before, "a finalize moved what is spendable");
+        }
+
+        uint256 spendable = rep.getTotalScore(DID);
+        uint256 most = (gap * count * rate) / 1 days;
+        uint256 least = ((gap * count - count) * rate) / 1 days;
+        assertLe(spendable, most > 100 ? 100 : most, "released faster than the rate");
+        assertGe(spendable, least > 100 ? 100 : least, "lost more than a second a finalize");
+    }
+
+    /// Time past the point a score has fully matured is not banked. A later rise is released from
+    /// its own finalize, or waiting at a low score would buy a jump.
+    function test_maturity_noTimeIsCarriedPastFullMaturity() public {
+        SigvaraReputation.ReputationData memory low = maxScore;
+        low.feeScore = 0; low.successScore = 0; low.ageScore = 0;
+        low.externalScore = 0; low.propagationScore = 0; // leaves communityScore 5
+        vm.prank(admin);
+        rep.initializeV4(4);
+        _proposeAndFinalize(DID, low);
+        vm.warp(block.timestamp + 2 days);
+        assertEq(rep.getTotalScore(DID), 5, "matured in full, with time to spare");
+
+        _proposeAndFinalize(DID, maxScore);
+        assertEq(rep.maturedAt(DID), block.timestamp, "the clock starts at this finalize");
+        assertEq(rep.getTotalScore(DID), 5, "no jump from the time spent at the low score");
+        vm.warp(block.timestamp + 6 hours - 1);
+        assertEq(rep.getTotalScore(DID), 5);
+        vm.warp(block.timestamp + 1);
+        assertEq(rep.getTotalScore(DID), 6);
+    }
+
+    /// The carried time counts from a sale that came before the finalize, and stays after it. A clock
+    /// reaching back past the sale would make the sale look newer than the finalize, and zero the buyer.
+    function test_maturity_aCarriedClockNeverReachesBackPastASale() public {
+        _finalizeWithMaturity(4);
+        vm.warp(block.timestamp + 20 days);
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
+        _sellTo(makeAddr("buyer"));
+        uint256 sold = block.timestamp;
+        assertEq(rep.getTotalScore(DID), 0, "the buyer starts from nothing");
+
+        vm.warp(sold + 7 hours);
+        rep.finalizeReputation(DID);
+        assertEq(rep.maturedScore(DID), 1, "seven hours since the sale");
+        assertEq(rep.maturedAt(DID), sold + 6 hours, "the odd hour is kept");
+        assertEq(rep.getTotalScore(DID), 1, "not zeroed by the sale again");
+
+        vm.warp(sold + 12 hours);
+        assertEq(rep.getTotalScore(DID), 2, "the odd hour counts toward the next point");
+    }
+
+    /// A finalize too soon after a sale to release a point keeps the sale as its clock. Equal to the
+    /// handover, so it reads as one, and from the same zero.
+    function test_maturity_aFinalizeBeforeTheFirstPointAfterASaleLosesNothing() public {
+        _finalizeWithMaturity(4);
+        vm.warp(block.timestamp + 20 days);
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
+        _sellTo(makeAddr("buyer"));
+        uint256 sold = block.timestamp;
+
+        vm.warp(sold + 2 hours);
+        rep.finalizeReputation(DID);
+        assertEq(rep.maturedScore(DID), 0);
+        assertEq(rep.maturedAt(DID), sold, "two hours kept");
+        assertEq(rep.getTotalScore(DID), 0);
+
+        vm.warp(sold + 6 hours);
+        assertEq(rep.getTotalScore(DID), 1, "six hours since the sale, one point");
+    }
+
+    /// A sale after a finalize restarts maturity, however far back that finalize's clock was carried.
+    function test_maturity_aSaleAfterACarriedFinalizeStillRestarts() public {
+        _finalizeWithMaturity(4);
+        _finalizeAfter(7 hours);
+        assertEq(rep.getTotalScore(DID), 1);
+        assertLt(rep.maturedAt(DID), block.timestamp, "the clock was carried");
+
+        vm.warp(block.timestamp + 30 minutes);
+        _sellTo(makeAddr("buyer"));
+        assertEq(rep.getTotalScore(DID), 0, "the buyer starts from nothing");
+        vm.warp(block.timestamp + 6 hours);
+        assertEq(rep.getTotalScore(DID), 1, "and gets nothing from the carried time");
+    }
+
     /// A fall is not delayed. Slowing bad news would protect the agent rather than
     /// whoever is relying on it.
     function test_maturity_dropsApplyImmediately() public {
@@ -1133,7 +1259,8 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
     /// the anchor the seller had matured.
     function test_maturity_restartsWhenTheSaleSharesTheFinalizeTimestamp() public {
         _finalizeWithMaturity(4);
-        vm.warp(block.timestamp + 20 days);
+        // Twenty days and six hours in all, a whole number of points, so nothing is carried.
+        vm.warp(block.timestamp + 20 days + 6 hours - CHALLENGE_WINDOW - 1);
 
         address buyer = makeAddr("buyer");
         vm.prank(operator);
@@ -1147,6 +1274,28 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
         vm.prank(buyer);
         identity.acceptOperatorTransfer(DID);
         assertEq(identity.operatorChangedAt(DID), rep.maturedAt(DID), "the same second");
+
+        assertEq(rep.getTotalScore(DID), 0, "the buyer still starts from nothing");
+        vm.warp(block.timestamp + 5 days);
+        assertEq(rep.getTotalScore(DID), 20);
+    }
+
+    /// The same sale, partway to a point: the clock is carried back, so it sits before the sale.
+    function test_maturity_restartsWhenTheSaleSharesACarriedFinalize() public {
+        _finalizeWithMaturity(4);
+        vm.warp(block.timestamp + 20 days);
+
+        address buyer = makeAddr("buyer");
+        vm.prank(operator);
+        identity.offerOperatorTransfer(DID, buyer);
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
+        vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
+        rep.finalizeReputation(DID);
+        assertLt(rep.maturedAt(DID), block.timestamp, "the clock was carried");
+
+        vm.prank(buyer);
+        identity.acceptOperatorTransfer(DID);
 
         assertEq(rep.getTotalScore(DID), 0, "the buyer still starts from nothing");
         vm.warp(block.timestamp + 5 days);
