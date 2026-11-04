@@ -531,5 +531,5 @@ fi
   `PUBLISH_ALLOW_AGENT_IDS=897766` since 22:26 UTC, and its first run posted the agent's spendable score of 3 in
   `0xcb1fe00347d1fc852340744d4628e7dff7def6dc7f54d8b478cd209c793f7c0c` (block 70589310). `getSummary` returns a
   count of 1 and 3. The revoke half comes when that agent's score next changes; step 4 waits for it.
-- An agent linked during the day is first posted at the next daily refresh, a switch of mode, or its next score
-  event: finding a link does not queue the agent. The switch to live mode is what posted this one at once.
+- On main, an agent's first link queues it, if it has had a score event since `PUBLISH_FROM_BLOCK`, so it is posted at the next run unless its 8004 agent was already posted to that day; a link that moves waits for the refresh.
+  The testnet publisher still runs `bef1068`, which waits for the next refresh for any link; the switch to live mode posted this one at once.

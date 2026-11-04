@@ -94,14 +94,28 @@ function createPublisher({ cfg, chain, scanner, reads, signer, state, log = cons
     const readAt = { block: head, time: await reads.blockTime(head) };
     const out = { planned: [], sent: [], skipped: [], blocked: [] };
 
+    const linkedNow = new Set();
     try {
       // No further than the block this run reads at, so every link it uses was checked against
       // the same chain the run reads.
-      const found = await scanner.scan({ upTo: head });
+      const found = await scanner.scan({ upTo: head, onClaim: (claim) => linkedNow.add(claim.didHash) });
       if (found) log(`[publisher] ${found} link(s) made on chain found`);
     } catch (err) {
       log(`[publisher] link scan failed: ${err.message}`);
     }
+
+    // An agent's first link is a reason to read it now, not at the next daily refresh, which could
+    // be most of a day away. Only an agent that has been scored has anything to post. A link that
+    // moves is left to the refresh, so re-linking to fresh 8004 agents all day cannot make the
+    // publisher pay for a revoke and a post each time. Saved at once: the scan has already moved
+    // past these links, and will not hand them over again.
+    const postedByNow = cfg.mode === 'shadow' ? s.shadowPostedBy : s.postedBy;
+    for (const didHash of linkedNow) {
+      if (s.tracked.includes(didHash) && postedByNow[didHash] === undefined) {
+        s.pending[didHash] ??= { kind: 'linked', txHash: null, block: null, evidenceRoot: null };
+      }
+    }
+    if (linkedNow.size) persistAs(s);
     await foldEvents(s, head);
 
     // Once per UTC day, every agent ever scored is read again: a rise is released over days, and
@@ -177,7 +191,7 @@ function createPublisher({ cfg, chain, scanner, reads, signer, state, log = cons
 
     const fileFor = (agentId, didHash, spendable, earned, why) => policy.encodeFeedback(policy.feedbackFile({
       chainId: cfg.chainId, identityRegistry: cfg.identityRegistry, agentId, publisher: cfg.publisher,
-      readAt, spendable, earned, didHash, reputation: cfg.reputation, event: why.kind === 'refresh' ? null : why,
+      readAt, spendable, earned, didHash, reputation: cfg.reputation, event: why.kind === 'updated' || why.kind === 'zeroed' ? why : null,
     }));
     const postArgsFor = (agentId, value, file) => [agentId, value, 0, policy.TAG1, policy.TAG2, '', file.uri, file.hash];
 
