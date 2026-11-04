@@ -120,7 +120,7 @@ operator wallet.
   (`getLastIndex`, `readFeedback`) and skips the post when that already holds the same value and is
   live. A restart, or a second copy started by mistake, then repeats nothing.
 - **On a change, at most once per agent per UTC day, and refreshed daily.** A finalized score
-  is a reason to look. The spendable score also changes with time alone, as a rise is released
+  is a reason to look, and so is an agent's first link found on chain. The spendable score also changes with time alone, as a rise is released
   over days, and no event announces that, so once per UTC day the publisher reads the spendable
   score of every linked agent again. If it has not moved since the last post, nothing is sent. A
   backlog collapses to the newest reading per agent.
