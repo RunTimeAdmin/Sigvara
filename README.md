@@ -87,12 +87,12 @@ The documents below are written by hand and are the authority on intent, trade-o
 > `node scripts/record-implementations.mjs --check` fails if the file and the chain
 > disagree.
 >
-> **The testnet runs this repository's contracts as of `f35cbc6`, with older role administrators.**
+> **The testnet runs this repository's contracts as of `dcad617`, except staking, with older role administrators.**
 > The four proxies were upgraded in place on 26 October 2026 with `script/Upgrade.s.sol`, to the
 > contracts at `fdce1a7`, the staking proxy again on 28 October 2026, to `f89b3b9`, and on
-> 2 November 2026, to `25c2d59`, and the oracle bond proxy later that day, to `76bbc97`, and the reputation proxy on 4 November 2026, to `f35cbc6`. `SigvaraReader`, deployed the same day at `7e461f4`, is the one later change to `src/`. `--check` confirms the file matches the chain. A contract change merged after it is not on the testnet until the next upgrade. The guardian pause, admin-ruled disputes with a veto, a lapse and a bound on late upholds,
+> 2 November 2026, to `25c2d59`, and the oracle bond proxy later that day, to `76bbc97`, and the reputation proxy on 4 November 2026, to `f35cbc6`. `SigvaraReader` was deployed the same day at `7e461f4`. On 5 November 2026 the reputation and oracle bond proxies moved to `dcad617`; the staking changes in that commit wait for the slash drill to end, so that proxy stays at `25c2d59`. `--check` confirms the file matches the chain. A contract change merged after it is not on the testnet until the next upgrade. The guardian pause, admin-ruled disputes with a veto, a lapse and a bound on late upholds,
 > launch floors and ceilings, operator signers, the reporter check at slash execution, a
-> withdrawal's claim time fixed when it is queued, an oracle operator's exit time fixed when it starts to leave, the refusal of evidence the admin rejected,
+> withdrawal's claim time fixed when it is queued, an oracle operator's exit time fixed when it starts to leave, the refusal of evidence the admin rejected, a score's age counted from its proposal,
 > and a slash that pays the committee nothing are live. An upgrade does not rewrite role administrators, so the proxies keep what the
 > 21 September code set up: the admin still grants the slasher, committee and staking-core roles
 > and administers `UPGRADER_ROLE`, and the timelocked role grants described below do not apply to
@@ -114,7 +114,7 @@ source is [`deployments/5042002.json`](deployments/5042002.json); the table belo
 | `SigvaraOracleBond` | `0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171` |
 | `SigvaraReader` (one read for a contract that gates on an agent's standing, not a registry) | `0x2921b4eE879CdF5793FA273BbDc4E7dF01ABcef8` |
 
-Every contract above, and the implementation behind each proxy, is source-verified on the [Arc explorer](https://explorer.testnet.arc.io) and reproduced byte for byte by a build of the commit tagged `arc-testnet-2026-11-04b`. To check it yourself: `git checkout arc-testnet-2026-11-04b`, then `sh scripts/fetch-deps.sh && forge build && node scripts/check-bytecode.mjs` ([how](docs/arc.md#verifying-the-deployed-code)).
+Every contract above, and the implementation behind each proxy, is source-verified on the [Arc explorer](https://explorer.testnet.arc.io) and reproduced byte for byte by a build of the commit tagged `arc-testnet-2026-11-05`, except staking, whose new source waits for the slash drill (`arc-testnet-2026-11-04b` builds what runs). To check it yourself: `git checkout arc-testnet-2026-11-05`, then `sh scripts/fetch-deps.sh && forge build && node scripts/check-bytecode.mjs` ([how](docs/arc.md#verifying-the-deployed-code)).
 
 Testnet assets have no economic value. The bond token above is a faucet ERC-20 that exists so the staking path can be exercised; it is unrelated to the mainnet SVR.
 

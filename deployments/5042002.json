@@ -28,7 +28,7 @@
       "reproducedAt": "53d3a89"
     },
     "reputation": {
-      "current": "0x26CF380314962F0C912b51b40a5c123C0683ac8a",
+      "current": "0x4BBCB51Fa8Edac8ab3d3dc9757614b55cfFBA837",
       "history": [
         {
           "implementation": "0x87492399E34e5247740d0280C329e7553403404c",
@@ -40,10 +40,16 @@
           "replacedAt": "2026-11-04T20:01:43.006Z",
           "reproducedAt": "53d3a89",
           "note": "replaced by the in-place upgrade to f35cbc6: upgradeToAndCall in block 70741942, tx 0x5776f75bac38eab8e4ec2755df0bd3cf90adf274bc2e09d636ecc4ddb5eebebf"
+        },
+        {
+          "implementation": "0x26CF380314962F0C912b51b40a5c123C0683ac8a",
+          "replacedAt": "2026-11-05T20:42:05.239Z",
+          "reproducedAt": "f35cbc6",
+          "note": "replaced by the upgrade to dcad617 (a score's age runs from its proposal, pull request 218): upgradeToAndCall in block 70916733, tx 0x945de5888c9e95e87961b64cd9705fe70fb42c1d2c48d320faa6d37506fccf69"
         }
       ],
-      "recordedAt": "2026-11-04T20:01:43.006Z",
-      "reproducedAt": "f35cbc6"
+      "recordedAt": "2026-11-05T20:42:05.239Z",
+      "reproducedAt": "dcad617"
     },
     "staking": {
       "current": "0x347D01d33bc07120c67BCaDB5C32fe0D8AF6C943",
@@ -73,7 +79,7 @@
       "reproducedAt": "53d3a89"
     },
     "oracleBond": {
-      "current": "0x722AbaA614Edd77Cb5b31655eb1bfdb18e823A51",
+      "current": "0x875e285Ab8c75be29739a25d25d8EAbFDa41F335",
       "history": [
         {
           "implementation": "0xf8464144726850d222a06b85a230c8030673b933",
@@ -96,16 +102,22 @@
           "replacedAt": "2026-11-03T15:58:54.000Z",
           "reproducedAt": "76bbc97",
           "note": "replaced by the upgrade of the oracle bond proxy to 0483a3c (a signer key stays bound to the operator that named it, pull request 167): upgradeToAndCall in block 70543553, tx 0xf95adf655b15050910d338cd01683d4218e073892db8eddf5bc1540ddfa55be6"
+        },
+        {
+          "implementation": "0x722AbaA614Edd77Cb5b31655eb1bfdb18e823A51",
+          "replacedAt": "2026-11-05T20:42:05.239Z",
+          "reproducedAt": "0483a3c",
+          "note": "replaced by the upgrade to dcad617 (a named signer can step down, pull request 218): upgradeToAndCall in block 70916843, tx 0x5dd4afa882e8927481615e65f3b2b2debc6d40eb3c6c8fe4175300bcd24e7584"
         }
       ],
-      "recordedAt": "2026-11-03T15:59:30.548Z",
-      "reproducedAt": "0483a3c"
+      "recordedAt": "2026-11-05T20:42:05.239Z",
+      "reproducedAt": "dcad617"
     }
   },
   "bytecode": {
     "note": "Every contract here, each implementation, each proxy, the SVR token and the reader, is reproduced byte for byte (immutables aside) by building reproducedAt; scripts/check-bytecode.mjs checks it. The tag marks the commit that records this, whose contract sources are those of reproducedAt. All are verified on the Arc explorer.",
-    "reproducedAt": "7e461f4",
-    "tag": "arc-testnet-2026-11-04b",
-    "checkedAt": "2026-11-04"
+    "reproducedAt": "dcad617",
+    "tag": "arc-testnet-2026-11-05",
+    "checkedAt": "2026-11-05"
   }
 }

@@ -17,9 +17,9 @@ As of 5 November 2026. Everything runs on Arc testnet, and nothing is on mainnet
 
 **Open before mainnet.**
 - An external audit, and fixing what it finds (Phase 2).
-- A contract upgrade batch, on testnet first: how a score's age reads after a late finalize, a cap on the
-  challenge period below the dispute period, refusing the admin as a slash's victim, a zero-amount
-  withdrawal, an address being named as a signer without its consent, and stale NatSpec on the slash paths.
+- The staking half of the contract upgrade batch, on testnet after the drill: a cap on the challenge period
+  below the dispute period, refusing the admin as a slash's victim and a zero-amount withdrawal. The
+  reputation and oracle bond halves went in on 5 November.
 - The handover: moving testnet roles to a Safe and a timelock, after the drill, since `executeSlash` needs
   the reporter still on the committee. Before it, more checks in the renounce gate (the Safe's history, the
   initializers consumed, every proxy the deployer created) and passing the role replay only the settings it needs.
