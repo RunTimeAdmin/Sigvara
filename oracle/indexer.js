@@ -83,7 +83,7 @@ const cfg = {
   maxLogs: intSetting('INDEX_MAX_LOGS', 100_000, 1),
 };
 let isTrustedProxy;
-try { isTrustedProxy = parseTrustedProxies(process.env.TRUSTED_PROXIES); } catch (e) { fail(e.message); }
+try { isTrustedProxy = parseTrustedProxies(process.env.TRUSTED_PROXIES); } catch { fail('TRUSTED_PROXIES must be comma-separated addresses or CIDR ranges (the value is not shown)'); }
 // One poll reads at most this many spans (a million blocks) before it saves and starts the next,
 // so a first run's backfill is saved as it goes.
 const SPANS_PER_POLL = 100;
