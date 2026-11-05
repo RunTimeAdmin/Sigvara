@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { id } from 'ethers';
 import { SigvaraGate, atomicNonceStore } from '../src/gate';
 import { signChallenge } from '../src/challenge';
 import { seedToKeyPair } from '../src/keys';
@@ -190,7 +191,8 @@ describe('SigvaraGate', () => {
 
     const c = gate.challenge(DID);
     await gate.admit(DID, c, 'sig');
-    expect(spent.has(c.nonce)).toBe(true);
+    expect(spent.size).toBe(1);
+    expect(spent.has(c.nonce)).toBe(false);
     expect((await gate.admit(DID, c, 'sig')).reason).toBe('replayed');
   });
 });
@@ -221,7 +223,7 @@ describe('SigvaraGate — what the wrapper cannot be trusted for', () => {
 
     const store = (gate as any).nonces;
     const signedNonce = c.payload.match(/nonce: (\w+)/)![1];
-    expect(store.seen(signedNonce)).toBe(true);
+    expect(store.seen(id([DID, AUDIENCE, signedNonce].join('\n')))).toBe(true);
   });
 
   it('refuses a payload that does not parse, without throwing', async () => {
@@ -668,5 +670,184 @@ describe('SigvaraGate across instances', () => {
       const r = await gate.admit(DID, c, signChallenge(c.payload, kp.secretKey));
       expect(r).toMatchObject({ ok: false, reason: 'stale_score', score: 50 });
     });
+  });
+});
+
+describe('SigvaraGate: a bond larger than the minimum', () => {
+  const VICTIM_KEY = seedToKeyPair(new Uint8Array(32).fill(7));
+
+  function withBond(minBond: bigint | string | undefined, stake: bigint, over: { active?: boolean; bonded?: boolean; score?: number } = {}) {
+    const gate = new SigvaraGate({
+      rpcUrl: 'http://unused', addresses: ADDRESSES, chainId: 5042002, threshold: 40, audience: AUDIENCE,
+      ...(minBond === undefined ? {} : { minBond }),
+    });
+    const v = (gate as any).verifier;
+    v.verifySignature = vi.fn(async () => true);
+    v.isActive = vi.fn(async () => over.active ?? true);
+    v.hasMinimumStake = vi.fn(async () => over.bonded ?? true);
+    v.getTotalScore = vi.fn(async () => over.score ?? 50);
+    v.getStake = vi.fn(async () => stake);
+    return { gate, v };
+  }
+  const admit = (gate: SigvaraGate) => {
+    const c = gate.challenge(DID);
+    return gate.admit(DID, c, signChallenge(c.payload, VICTIM_KEY.secretKey));
+  };
+
+  it('admits at the floor, and refuses below it, with the score', async () => {
+    expect((await admit(withBond(1000n, 1000n).gate)).ok).toBe(true);
+    expect(await admit(withBond(1000n, 999n).gate)).toEqual({ ok: false, reason: 'below_bond', score: 50, threshold: 40, did: DID });
+  });
+
+  it('takes a string of digits, for a floor past what a number can hold', async () => {
+    const floor = '2500000000000000000000000';
+    expect((await admit(withBond(floor, BigInt(floor)).gate)).ok).toBe(true);
+    expect((await admit(withBond(floor, BigInt(floor) - 1n).gate)).reason).toBe('below_bond');
+  });
+
+  it('says not_active first, as a larger stake would not fix that', async () => {
+    expect((await admit(withBond(1000n, 1n, { active: false }).gate)).reason).toBe('not_active');
+    expect((await admit(withBond(1000n, 1n, { bonded: false }).gate)).reason).toBe('not_active');
+  });
+
+  it('says below_bond before below_threshold', async () => {
+    expect((await admit(withBond(1000n, 1n, { score: 1 }).gate)).reason).toBe('below_bond');
+  });
+
+  it('makes no extra read without a floor', async () => {
+    const { gate, v } = withBond(undefined, 0n);
+    expect((await admit(gate)).ok).toBe(true);
+    expect(v.getStake).not.toHaveBeenCalled();
+  });
+
+  it('refuses a floor it could not apply, rather than build a gate without one', () => {
+    for (const minBond of [5, NaN, '', '1e18', '-1', -1n]) {
+      expect(() => new SigvaraGate({
+        rpcUrl: 'http://unused', addresses: ADDRESSES, threshold: 40, audience: AUDIENCE, minBond: minBond as any,
+      }), String(minBond)).toThrow(/minBond/);
+    }
+  });
+});
+
+describe('SigvaraGate: whose nonce is spent', () => {
+  const OTHER = 'did:sigvara:5042002:0x0000000000000000000000000000000000000002';
+  const key = seedToKeyPair(new Uint8Array(32).fill(9));
+
+  const carrying = (did: string, nonce: string) => [
+    'SIGVARA-VERIFY-V2', `did: ${did}`, `aud: ${AUDIENCE}`, `nonce: ${nonce}`, `ts: ${Math.floor(Date.now() / 1000)}`,
+  ].join('\n');
+
+  it('another agent signing the same nonce does not spend it for the first', async () => {
+    const gate = gateWith({ score: 50 });
+    const c = gate.challenge(DID);
+    const header = c.payload.split('\n')[0];
+    const theirs = carrying(OTHER, c.nonce).replace('SIGVARA-VERIFY-V2', header);
+    const attempt = await gate.admit(OTHER, { ...c, payload: theirs }, signChallenge(theirs, key.secretKey));
+    expect(attempt.ok).toBe(true);
+    const real = await gate.admit(DID, c, signChallenge(c.payload, key.secretKey));
+    expect(real.ok).toBe(true);
+  });
+
+  it('still refuses the same agent using a nonce twice, in a new payload', async () => {
+    const gate = gateWith({ score: 50 });
+    const c = gate.challenge(DID);
+    await gate.admit(DID, c, signChallenge(c.payload, key.secretKey));
+    const again = c.payload.replace(/ts: \d+/, `ts: ${c.timestamp + 1}`);
+    const second = await gate.admit(DID, { ...c, payload: again }, signChallenge(again, key.secretKey));
+    expect(second.reason).toBe('replayed');
+  });
+
+  it('a differently written DID on the wrapper does not make a replay look new', async () => {
+    const gate = gateWith({ score: 50 });
+    const c = gate.challenge(DID);
+    const sig = signChallenge(c.payload, key.secretKey);
+    await gate.admit(DID, c, sig);
+    expect((await gate.admit(DID.toUpperCase(), c, sig)).reason).toBe('replayed');
+  });
+});
+
+describe('SigvaraGate: only challenges it issued', () => {
+  const SECRET = 'x'.repeat(32);
+  const key = seedToKeyPair(new Uint8Array(32).fill(11));
+
+  function issuing(secret: string | null = SECRET) {
+    const gate = new SigvaraGate({
+      rpcUrl: 'http://unused', addresses: ADDRESSES, chainId: 5042002, threshold: 40, audience: AUDIENCE,
+      ...(secret === null ? {} : { challengeSecret: secret }),
+    });
+    const v = (gate as any).verifier;
+    v.verifySignature = vi.fn(async () => true);
+    v.isActive = vi.fn(async () => true);
+    v.hasMinimumStake = vi.fn(async () => true);
+    v.getTotalScore = vi.fn(async () => 50);
+    return { gate, v };
+  }
+  const answer = (gate: SigvaraGate, c: any) => gate.admit(DID, c, signChallenge(c.payload, key.secretKey));
+
+  it('admits one it issued', async () => {
+    const { gate } = issuing();
+    expect((await answer(gate, gate.challenge(DID))).ok).toBe(true);
+  });
+
+  it('refuses one the agent wrote itself, before any chain read', async () => {
+    const { gate, v } = issuing();
+    const own = issuing(null).gate.challenge(DID);
+    expect((await answer(gate, own)).reason).toBe('bad_proof');
+    expect(v.verifySignature).not.toHaveBeenCalled();
+  });
+
+  it('refuses one issued under another secret', async () => {
+    const { gate } = issuing();
+    const elsewhere = issuing('y'.repeat(32)).gate.challenge(DID);
+    expect((await answer(gate, elsewhere)).reason).toBe('bad_proof');
+  });
+
+  it('refuses one altered after it was issued', async () => {
+    const { gate } = issuing();
+    const c = gate.challenge(DID);
+    const altered = [
+      c.payload.replace(/ts: \d+/, `ts: ${c.timestamp + 1}`),
+      c.payload.replace(DID, 'did:sigvara:5042002:0x0000000000000000000000000000000000000002'),
+      c.payload.replace(c.nonce, (c.nonce[0] === 'f' ? '0' : 'f') + c.nonce.slice(1)),
+      c.payload.replace(c.nonce, 'abc'),
+      // The same mark with more after it would be a new nonce to the replay check.
+      c.payload.replace(c.nonce, `${c.nonce}00`),
+    ];
+    for (const payload of altered) {
+      expect((await answer(gate, { ...c, payload })).reason, payload).toBe('bad_proof');
+    }
+  });
+
+  it('refuses one for another audience', async () => {
+    const { gate } = issuing();
+    const c = gate.challenge(DID);
+    const payload = c.payload.replace(AUDIENCE, 'https://other.example');
+    expect((await answer(gate, { ...c, payload })).reason).toBe('bad_proof');
+  });
+
+  it('accepts one from another instance sharing the secret, with nothing shared but that', async () => {
+    const a = issuing().gate;
+    const b = issuing().gate;
+    expect((await answer(b, a.challenge(DID))).ok).toBe(true);
+  });
+
+  it('is still single use', async () => {
+    const { gate } = issuing();
+    const c = gate.challenge(DID);
+    expect((await answer(gate, c)).ok).toBe(true);
+    expect((await answer(gate, c)).reason).toBe('replayed');
+  });
+
+  it('refuses a secret too short to be one', () => {
+    for (const challengeSecret of ['', 'short', 'x'.repeat(31), 5]) {
+      expect(() => new SigvaraGate({
+        rpcUrl: 'http://unused', addresses: ADDRESSES, threshold: 40, audience: AUDIENCE, challengeSecret: challengeSecret as any,
+      }), String(challengeSecret)).toThrow(/challengeSecret/);
+    }
+  });
+
+  it('a gate with no secret still takes one written elsewhere, as it always has', async () => {
+    const { gate } = issuing(null);
+    expect((await answer(gate, issuing(null).gate.challenge(DID))).ok).toBe(true);
   });
 });

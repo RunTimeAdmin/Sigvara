@@ -167,3 +167,16 @@ describe('the build the key check depends on', () => {
     expect(built, 'run `npm run build` before the tests').toBe(true);
   });
 });
+
+describe.skipIf(!built)('the built package has the checks that guard a payment', () => {
+  it('exports them from the main entry', () => {
+    const sdk = createRequire(__filename)(dist);
+    for (const name of [
+      'SigvaraTrustCheck', 'standingDecision', 'sigvaraX402Fetch', 'x402OffersFrom', 'X402SellerRefused',
+      'sigvaraTrustTool', 'requireTrustedAgent', 'UntrustedAgentError',
+    ]) {
+      expect(sdk[name], name).toBeTypeOf('function');
+    }
+    expect(sdk.TRUST_TOOL_SCHEMA.required).toEqual(['agent']);
+  });
+});

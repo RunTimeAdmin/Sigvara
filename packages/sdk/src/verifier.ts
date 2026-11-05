@@ -41,7 +41,9 @@ export class SigvaraVerifier {
     }
     const connection = new FetchRequest(config.rpcUrl);
     connection.timeout = timeoutMs;
-    this.provider = new ethers.JsonRpcProvider(connection);
+    // ethers folds what is asked in one tick into one batch, of up to 100 calls by default. Arc's public
+    // RPC answers 20 and refuses the rest with a rate limit, so a busy gate would refuse agents over it.
+    this.provider = new ethers.JsonRpcProvider(connection, undefined, { batchMaxCount: 20 });
     this.addresses = config.addresses;
     this._chainId = config.chainId;
   }

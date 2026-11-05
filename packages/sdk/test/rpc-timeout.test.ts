@@ -57,3 +57,40 @@ describe('RPC timeout', () => {
     }
   });
 });
+
+describe('SigvaraVerifier: batches a node accepts', () => {
+  it('keeps to 20 calls in a batch, however many reads are asked for at once', async () => {
+    const batches: number[] = [];
+    const server = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (c) => { body += c; });
+      req.on('end', () => {
+        const j = JSON.parse(body);
+        const calls = Array.isArray(j) ? j : [j];
+        batches.push(calls.length);
+        const answers = calls.map((c: { id: number; method: string }) => ({
+          jsonrpc: '2.0',
+          id: c.id,
+          result: c.method === 'eth_chainId' ? '0x4cef52' : `0x${'0'.repeat(63)}1`,
+        }));
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(Array.isArray(j) ? answers : answers[0]));
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    try {
+      const { port } = server.address() as { port: number };
+      const verifier = new SigvaraVerifier({
+        rpcUrl: `http://127.0.0.1:${port}`,
+        addresses: { identity: `0x${'11'.repeat(20)}`, reputation: `0x${'22'.repeat(20)}`, staking: `0x${'33'.repeat(20)}` },
+        chainId: 5042002,
+      });
+      const did = `did:sigvara:5042002:0x${'44'.repeat(20)}`;
+      await Promise.all(Array.from({ length: 50 }, () => verifier.hasMinimumStake(did)));
+      expect(Math.max(...batches)).toBe(20);
+    } finally {
+      server.closeAllConnections();
+      server.close();
+    }
+  });
+});

@@ -73,6 +73,9 @@ exposed and rotate it ([Key Rotation](https://github.com/RunTimeAdmin/Sigvara#ke
 - **A gate.** `SigvaraGate` turns the reads above into one decision: issue a
   challenge, admit or refuse, and say which reason applies. It owns
   the nonce, so replay protection is not left to the caller.
+- **A check before paying or hiring.** `SigvaraTrustCheck` asks the gate's question
+  about a bare address. `sigvaraX402Fetch` puts it in front of an x402 payment, and
+  `sigvaraTrustTool` and `requireTrustedAgent` put it in an agent framework's tools.
 - **Payment outcomes.** After paying an agent, sign whether the work was
   delivered (`signPaymentOutcome`), so the oracle can count it without a token,
   and check such a signature the way the oracle does (`verifyPaymentOutcome`).
@@ -144,7 +147,7 @@ const challenge = gate.challenge(agentDid);
 // 3. decide
 const result = await gate.admit(agentDid, challenge, signature);
 if (!result.ok) {
-  // 'bad_proof' | 'replayed' | 'not_active' | 'stale_score' | 'below_threshold'
+  // 'bad_proof' | 'replayed' | 'not_active' | 'below_bond' | 'stale_score' | 'below_threshold'
   return refuse(result.reason);
 }
 ```
@@ -155,16 +158,24 @@ means a real, proven agent that is unbonded, suspended or slashed, and telling t
 caller to earn more points would be wrong. "Unbonded" is the bond held now against the
 minimum stake in force now, not the status stored when the agent was admitted: a minimum
 raised since leaves an agent marked Active while it holds less than the contract asks, and
-the gate reads the bond for that reason. `stale_score` appears only if you set
-`maxScoreAgeSeconds`. Only `below_threshold` is about reputation, and it carries the score
-so you can say how short they were.
+the gate reads the bond for that reason. `below_bond` appears only if you set `minBond`, and
+`stale_score` only if you set `maxScoreAgeSeconds`. Only `below_threshold` is about reputation,
+and it carries the score so you can say how short they were.
 
 **A score nobody has refreshed.** Nothing on chain ages a score, so one left over from an
 oracle outage keeps passing a threshold. Set `maxScoreAgeSeconds` to refuse a score written
-longer ago than that, or never, with `stale_score`; choose a few times your oracle's epoch,
-and it is measured against your host's clock. Unset, a score is trusted however old it is.
+longer ago than that, or never, with `stale_score`. A healthy score gets to about two of your
+oracle's proposals apart before the next one lands (15 hours on Arc testnet, two days on a daily
+epoch), so choose more than that. It is measured against your host's clock. Unset, a score is trusted however old it is.
 It costs one more read per admission. The same check exists on chain as
 `SigvaraReader.isTrustedFresh`, on Arc testnet at `0x2921b4eE879CdF5793FA273BbDc4E7dF01ABcef8`.
+
+**More at stake than the minimum covers.** Set `minBond` to refuse an agent holding less, with
+`below_bond`, whatever its score (from 1.0.0-alpha.16). It is in the bond token's base units, as
+a bigint or a string of digits. A number is refused, because a floor past what a double can hold
+would quietly become another floor. A floor under the protocol's minimum still needs the minimum,
+and an amount queued for withdrawal does not count. It compares the same number as
+`SigvaraReader.isTrusted(agent, minScore, minBond)`, and costs one more read per admission.
 
 The constructor refuses a `threshold` that is not a finite number of 0 or more, and a
 `ttlSeconds` or `maxScoreAgeSeconds` that is not a positive number. A `NaN` threshold, for example
@@ -184,7 +195,7 @@ const gate = new SigvaraGate({
   profile: 'production',
   instances: 'multiple',      // or 'single' if exactly one process serves this gate
   nonceStore,                 // shared and atomic, required with 'multiple' (see below)
-  maxScoreAgeSeconds: 7_200,  // a few times your oracle's epoch
+  maxScoreAgeSeconds: 86_400, // more than two of your oracle's proposals apart
 });
 ```
 
@@ -242,6 +253,14 @@ type asks for them. In SQL, make the nonce the primary key, have `consume` retur
 `expiresAt`. Give every instance the same store. If the store throws, `admit` throws and has
 admitted nothing: answer that as a refusal.
 
+**Only challenges this gate issued.** A gate remembers what was spent, not what it issued, so by
+default it accepts any challenge for its audience that the agent signed in the last `ttlSeconds`,
+including one the agent wrote itself. Set `challengeSecret` (from 1.0.0-alpha.16, at least 32
+characters) and the gate marks each nonce it issues with a keyed hash and refuses any other with
+`bad_proof`, before any read. It keeps no state: give every instance the same secret, and they
+accept each other's challenges. It adds to the nonce store and does not replace it, because a
+challenge the gate did issue can still be presented twice.
+
 Full protocol documentation, the reputation model and the contract addresses live in the
 repository.
 
@@ -268,6 +287,75 @@ out (from 1.0.0-alpha.14).
 **Using `verifySignature` directly still leaves the nonce to you.** It has no memory by
 design, so if you are not going through the gate, store the nonces you issue, reject one
 you have seen, and drop them past the TTL.
+
+## Before paying or hiring: `SigvaraTrustCheck`
+
+From 1.0.0-alpha.16. The gate asks a caller to prove who it is. To decide whether to pay an address,
+what matters is who the money goes to, so there is no proof to ask for and the rest of the rule is the
+same:
+
+```typescript
+import { SigvaraTrustCheck } from '@sigvara/protocol-sdk';
+
+const trust = new SigvaraTrustCheck({
+  rpcUrl: RPC, addresses, chainId: CHAIN_ID,
+  minScore: 40,
+  minBond: 5_000_000_000n,    // optional, as on the gate
+  maxScoreAgeSeconds: 86_400, // optional, as on the gate
+});
+
+const verdict = await trust.check('0x...');
+// { ok: true, agent, score } or { ok: false, agent, reason, detail, score? }
+// reason: 'not_an_address' | 'not_active' | 'below_bond' | 'stale_score' | 'below_threshold'
+```
+
+A read that fails throws, with any URL taken out of the message. It says nothing about the agent, so it
+is neither a yes nor a no, and whatever this guards should not go ahead.
+
+### x402: `sigvaraX402Fetch`
+
+An x402 client wraps `fetch`: it sees a 402, picks an offer, signs a payment and retries. Nothing in that
+asks whether the party being paid has any standing, and an `exact` payment is final once settled. Wrap the
+`fetch` underneath the client, so the check sees the 402 first:
+
+```typescript
+import { wrapFetchWithPayment, x402Client } from '@x402/fetch';
+import { registerExactEvmScheme } from '@x402/evm/exact/client';
+import { SigvaraTrustCheck, sigvaraX402Fetch, X402SellerRefused } from '@sigvara/protocol-sdk';
+
+const trust = new SigvaraTrustCheck({ rpcUrl: RPC, addresses, chainId: CHAIN_ID, minScore: 40 });
+
+const client = new x402Client();
+registerExactEvmScheme(client, { signer: account });
+
+const pay = wrapFetchWithPayment(sigvaraX402Fetch(fetch, trust), client);
+
+try {
+  const res = await pay('https://seller.example/resource');
+} catch (err) {
+  if (err instanceof X402SellerRefused) {
+    // err.refused[0].reason: why this seller was not paid
+  } else {
+    throw err;
+  }
+}
+```
+
+It takes the older `x402-fetch` the same way, `wrapFetchWithPayment(sigvaraX402Fetch(fetch, trust), wallet)`. Both
+were run against a test seller and the real chain for this release. A seller without standing rejects the request
+with `X402SellerRefused`, whose `refused` lists each verdict, and the client never gets anything to sign. Anything else, including a 402 whose sellers all pass, comes back
+exactly as it arrived. Every address offered must pass, because the client chooses among them. It reads the v2
+`PAYMENT-REQUIRED` header and the v1 JSON body, and a server sending both is held to both. A 402 it cannot read
+is refused, since a client that can read it would then pay unchecked.
+
+A seller has to be paid at the agent's registered address for this to find it. One paid at another address, or
+on a chain with its own addresses, reads as having no standing, and is refused. This is a check on who is paid.
+It does not say the work will be delivered.
+
+### Agent frameworks: `sigvaraTrustTool` and `requireTrustedAgent`
+
+See [the LangChain section](https://github.com/RunTimeAdmin/Sigvara/blob/main/docs/ai-frameworks.md#langchain-typescript) of the
+framework guide. You pass in LangChain's `tool`, so it does not become a dependency of this package.
 
 ## Payment outcomes: `signPaymentOutcome`
 

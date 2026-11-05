@@ -2,7 +2,7 @@
 
 This guide shows how to add Sigvara identity to agents built with common AI frameworks. The pattern is the same in every framework: generate a DID at startup, sign challenges when asked to authenticate, and include `agent_did` in every audit call.
 
-> **There is no Python SDK.** Three of the four sections below are Python and import
+> **There is no Python SDK.** The LangChain (Python), AutoGen and CrewAI sections below import
 > `sigvara`, a package that is not published and does not exist. They are **pseudocode
 > showing the shape of the integration**, not code that runs. Only the
 > [TypeScript section](#typescript--nodejs-framework-agnostic) uses a real package,
@@ -274,6 +274,47 @@ checking yourself that the payload names the verifier you mean to prove yourself
 
 `verifySignature` requires the audience from 1.0.0-alpha.11. On alpha.10 and earlier, leaving it
 out compiled and skipped the check of who the agent had signed for.
+
+### LangChain (TypeScript)
+
+From 1.0.0-alpha.16. There are two pieces. You pass in LangChain's own `tool`, so LangChain does not become a
+dependency of the SDK:
+
+```typescript
+import { tool } from '@langchain/core/tools';
+import { z } from 'zod';
+import { SigvaraTrustCheck, sigvaraTrustTool, requireTrustedAgent } from '@sigvara/protocol-sdk';
+
+const trust = new SigvaraTrustCheck({ rpcUrl, addresses, chainId: 5042002, minScore: 40 });
+
+// A tool the model can call before dealing with another agent.
+const checkAgent = sigvaraTrustTool(tool, trust);
+
+// A tool of yours that refuses to act for an agent without standing, whatever the model decided.
+const hireAgent = tool(
+  requireTrustedAgent(
+    async ({ agent, task }: { agent: string; task: string }) => hire(agent, task),
+    trust,
+    (input) => input.agent,
+  ),
+  {
+    name: 'hire_agent',
+    description: 'Hire another agent for a task',
+    schema: z.object({ agent: z.string(), task: z.string() }),
+  },
+);
+```
+
+`requireTrustedAgent` is the one to rely on. A model can be talked out of calling a check, and cannot be
+talked out of a refusal in the code it calls. A refusal throws `UntrustedAgentError`, whose `verdict` says why.
+A chain read that fails throws too, and the function does not run. `sigvaraTrustTool` answers in JSON: `ok`, and
+`reason` and `detail` when it is false, so the model can say why it will not go ahead.
+
+Both check an address, not who is on the other end: they say what the chain holds about that agent, and do not
+prove that the party you are talking to controls it. For that, use `SigvaraGate`.
+
+The check takes a 0x address. To stop an agent paying a seller without standing over x402, see
+[`sigvaraX402Fetch`](../packages/sdk/README.md#x402-sigvarax402fetch).
 
 ---
 
