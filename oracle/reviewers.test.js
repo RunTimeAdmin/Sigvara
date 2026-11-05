@@ -251,6 +251,96 @@ test('chain.firstFunder: dust below the floor does not make its sender the funde
   assert.deepEqual(await chain.firstFunder(reviewer, 1000), { funder: treasury, block: 200 });
 });
 
+test('findFirstFunder: a transfer too small to cross the floor by itself names nobody', async () => {
+  const at = (value) => ({ touched: async (b) => b >= 40, inbound: async () => [{ from: addr(5), value }] });
+  assert.deepEqual(await findFirstFunder(at(FUNDING_FLOOR - 1n), addr(1), 100), { funder: null, block: 40 });
+  assert.deepEqual(await findFirstFunder(at(FUNDING_FLOOR), addr(1), 100), { funder: addr(5), block: 40 });
+  // Two small ones in the block do not add up to a funder either.
+  const two = { touched: async (b) => b >= 40, inbound: async () => [{ from: addr(5), value: FUNDING_FLOOR / 2n }, { from: addr(6), value: FUNDING_FLOOR / 2n }] };
+  assert.equal((await findFirstFunder(two, addr(1), 100)).funder, null);
+});
+
+/** Native transfers as Arc logs them, and funderOf reading them through the real search. */
+function ledger(transfers) {
+  const of = (a, b) => {
+    const mine = transfers.filter((t) => t.block <= b);
+    const balance = mine.reduce((sum, t) => sum + (t.to === a ? t.value : 0n) - (t.from === a ? t.value : 0n), 0n);
+    return { balance, sent: mine.some((t) => t.from === a) };
+  };
+  return async (a, cap) => findFirstFunder({
+    touched: async (b) => { const s = of(a, b); return s.balance >= FUNDING_FLOOR || s.sent; },
+    inbound: async (b) => transfers.filter((t) => t.to === a && t.block === b),
+  }, a, cap);
+}
+const CENT = FUNDING_FLOOR / 100n;
+
+test('one treasury topping its reviewers up through throwaway wallets is not five independent reviewers', async () => {
+  // Each reviewer gets 0.99 from the treasury, which never counts, and 0.02 from a throwaway the
+  // treasury gave 0.05. The throwaway used to be named the funder, its own funder came back empty as
+  // its first touched block is its own send, and the treasury was in no cluster: 25 of 25.
+  const { clients, ctx, deps } = world(5);
+  const treasury = addr(0x7e);
+  deps.publicFunders = new Set();
+  const transfers = [];
+  clients.forEach((c, i) => {
+    const helper = addr(0x500 + i);
+    transfers.push(
+      { from: treasury, to: helper, value: 5n * CENT, block: 10 + i },
+      { from: treasury, to: c, value: 99n * CENT, block: 20 + i },
+      { from: helper, to: c, value: 2n * CENT, block: 30 + i },
+    );
+  });
+  deps.funderOf = ledger(transfers);
+  const r = await scoreFeedback(rated(clients), ctx, deps);
+  assert.equal(r.score, 0);
+  assert.deepEqual(r.excluded, { 'unknown-funder': 5 });
+});
+
+test('the same treasury funding them directly is one cluster, as it always was', async () => {
+  const { clients, ctx, deps } = world(5);
+  const treasury = addr(0x7e);
+  deps.publicFunders = new Set();
+  deps.funderOf = ledger(clients.map((c, i) => ({ from: treasury, to: c, value: FUNDING_FLOOR, block: 20 + i })));
+  const r = await scoreFeedback(rated(clients), ctx, deps);
+  assert.equal(r.clusters, 1);
+  assert.equal(r.score, Math.round(MAX_EXTERNAL_SCORE / FULL_WEIGHT_CLUSTERS));
+});
+
+test('a throwaway given enough to count leads back to the treasury, so they are still one cluster', async () => {
+  const { clients, ctx, deps } = world(5);
+  const treasury = addr(0x7e);
+  deps.publicFunders = new Set();
+  const transfers = [];
+  clients.forEach((c, i) => {
+    const helper = addr(0x500 + i);
+    transfers.push(
+      { from: treasury, to: helper, value: 2n * FUNDING_FLOOR, block: 10 + i },
+      { from: helper, to: c, value: FUNDING_FLOOR, block: 30 + i },
+    );
+  });
+  deps.funderOf = ledger(transfers);
+  assert.equal((await scoreFeedback(rated(clients), ctx, deps)).clusters, 1);
+});
+
+test('reviewers funded straight from a faucet with no funder of its own still count', async () => {
+  // Arc's faucet wallets are like this: 20 USDC a drip, and no transfer in that their first touched
+  // block shows. A rule against any trace ending with no funder would have excluded all of these.
+  const { clients, ctx, deps } = world(5);
+  const faucet = addr(0xfb);
+  deps.publicFunders = new Set();
+  deps.funderOf = ledger([
+    { from: addr(0xee), to: faucet, value: 0n, block: 1 },
+    { from: faucet, to: addr(0xdd), value: 1n, block: 2 },
+    ...clients.map((c, i) => ({ from: faucet, to: c, value: 20n * FUNDING_FLOOR, block: 20 + i })),
+  ]);
+  const r = await scoreFeedback(rated(clients), ctx, deps);
+  assert.deepEqual(r.excluded, {});
+  assert.equal(r.reviewers, 5);
+  assert.equal(r.clusters, 1, 'one faucet wallet, until it is listed as a public funder');
+  deps.publicFunders = new Set([faucet]);
+  assert.equal((await scoreFeedback(rated(clients), ctx, deps)).clusters, 5);
+});
+
 test('parsePublicFunders: a list of addresses, and nothing else', () => {
   assert.deepEqual([...parsePublicFunders(undefined).set], []);
   assert.deepEqual([...parsePublicFunders(' , ').set], []);

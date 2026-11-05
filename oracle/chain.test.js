@@ -383,6 +383,77 @@ test('getRegisteredAgents: a chunk the node refuses for its size is read in halv
   assert.equal(chain.getScanState().lastScannedBlock, 1199);
 });
 
+test('getRegisteredAgents: follows an operator change, and an agent with none stays as it was', async () => {
+  chain.reset();
+  const registered = (n, block, operator) => ({ args: { didHash: `0xdid${n}`, agentAddress: `0xagent${n}`, operator }, blockNumber: block, eventName: 'AgentRegistered' });
+  const changed = (n, block, from, to) => ({ args: { didHash: `0xdid${n}`, from, to }, blockNumber: block, eventName: 'OperatorTransferred' });
+  const logs = [
+    registered(1, 110, '0xa'),
+    registered(2, 120, '0xb'),
+    changed(1, 150, '0xa', '0xc'),
+    changed(1, 180, '0xc', '0xd'),
+    changed(9, 190, '0xx', '0xy'), // an agent not known here, slashed and forgotten
+  ];
+  const fakeIdentity = { filters: {}, queryFilter: async (_f, a, b) => logs.filter((l) => l.blockNumber >= a && l.blockNumber <= b) };
+  const start = (cfgFrom) => chain.init(
+    { rpcUrl: 'x', privateKey: '0x' + '1'.repeat(64), identityAddress: '0x' + '1'.repeat(40),
+      reputationAddress: '0x' + '2'.repeat(40), fromBlock: cfgFrom, logChunkSize: 1000 },
+    { provider: { getBlockNumber: async () => 199 }, wallet: {}, identityContract: fakeIdentity, reputationContract: {} },
+  );
+  start(100);
+  const agents = await chain.getRegisteredAgents();
+  assert.equal(agents.length, 2, 'a change names nobody new');
+  const one = agents.find((a) => a.didHash === '0xdid1');
+  assert.equal(one.operator, '0xd');
+  assert.deepEqual(one.operators, [
+    { fromBlock: 110, operator: '0xa' }, { fromBlock: 150, operator: '0xc' }, { fromBlock: 180, operator: '0xd' },
+  ]);
+  const two = agents.find((a) => a.didHash === '0xdid2');
+  assert.equal(two.operator, '0xb');
+  assert.equal('operators' in two, false, 'the state of an agent that never changed is as it always was');
+
+  // Read again over the same blocks, the list comes out the same and not doubled.
+  chain.restoreScanState({ lastScannedBlock: 99, agents: JSON.parse(JSON.stringify(agents)) });
+  const again = await chain.getRegisteredAgents();
+  assert.deepEqual(again.find((a) => a.didHash === '0xdid1').operators, one.operators);
+
+  // And it survives a restart, with what comes after it added on.
+  chain.reset();
+  chain.restoreScanState(JSON.parse(JSON.stringify({ lastScannedBlock: 199, agents })));
+  logs.push(changed(1, 210, '0xd', '0xe'));
+  const fakeProvider = { getBlockNumber: async () => 220 };
+  chain.init(
+    { rpcUrl: 'x', privateKey: '0x' + '1'.repeat(64), identityAddress: '0x' + '1'.repeat(40),
+      reputationAddress: '0x' + '2'.repeat(40), fromBlock: 100, logChunkSize: 1000 },
+    { provider: fakeProvider, wallet: {}, identityContract: fakeIdentity, reputationContract: {} },
+  );
+  const later = (await chain.getRegisteredAgents()).find((a) => a.didHash === '0xdid1');
+  assert.equal(later.operator, '0xe');
+  assert.equal(later.operators.length, 4);
+});
+
+test('getRegisteredAgents: asks for both events by their signatures in the contract', async () => {
+  const { ethers } = require('ethers');
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'SigvaraIdentity.sol'), 'utf8');
+  assert.match(source, /event OperatorTransferred\(bytes32 indexed didHash, address indexed from, address indexed to\);/);
+  assert.match(source, /event AgentRegistered\(\s*bytes32 indexed didHash,\s*address indexed operator,\s*address indexed agentAddress,\s*bytes32 ed25519PubKey/);
+  chain.reset();
+  let asked;
+  const fakeIdentity = { filters: {}, queryFilter: async (f) => { asked = f; return []; } };
+  chain.init(
+    { rpcUrl: 'x', privateKey: '0x' + '1'.repeat(64), identityAddress: '0x' + '1'.repeat(40),
+      reputationAddress: '0x' + '2'.repeat(40), fromBlock: 1, logChunkSize: 10 },
+    { provider: { getBlockNumber: async () => 5 }, wallet: {}, identityContract: fakeIdentity, reputationContract: {} },
+  );
+  await chain.getRegisteredAgents();
+  assert.deepEqual(asked, [[
+    ethers.id('AgentRegistered(bytes32,address,address,bytes32)'),
+    ethers.id('OperatorTransferred(bytes32,address,address)'),
+  ]]);
+});
+
 // ---------------------------------------------------------------- didHash derivation --
 
 const { ethers } = require('ethers');

@@ -177,6 +177,7 @@ const chain = {
     if (!w.registered) throw new Error('stub: epochs are off in end-to-end tests');
     return [...w.registered, ...(moved ? w.registeredLater ?? [] : [])].map((didHash) => ({
       didHash, agentAddress: w.agents[didHash]?.agentAddress ?? null, blockNumber: w.agents[didHash]?.registeredBlock ?? 1,
+      operator: w.agents[didHash]?.operator ?? null, operators: w.agents[didHash]?.operators,
     }));
   },
   getScanState: () => (world().registryScannedTo === undefined ? null : { lastScannedBlock: world().registryScannedTo, agents: [] }),

@@ -947,6 +947,30 @@ describe('importing payer-signed outcomes from other operators', () => {
     assert.equal((await evidence(b, agent.didHash)).length, 0);
   });
 
+  test('an imported outcome is judged by the operator at the payment\'s block, as one taken directly is', async () => {
+    const former = ethers.Wallet.createRandom();
+    const agent = world.addAgent();
+    const handover = world.data.head - 20;
+    Object.assign(world.data.agents[agent.didHash], {
+      operator: ethers.Wallet.createRandom().address,
+      operators: [{ fromBlock: 1, operator: former.address }, { fromBlock: handover, operator: ethers.Wallet.createRandom().address }],
+    });
+    world.flush();
+
+    // Its own payment while it ran the agent, and then one as a customer after handing it on.
+    const own = world.addTx([{ from: former.address, to: agent.agentAddress, value: 5n * USDC }], { blockNumber: handover - 5 });
+    c.serve([served(agent, own, await signOutcome(agent.didHash, own, former), { acceptedAt: Date.now() + 1 })]);
+    await runImport();
+    assert.match(lastRun(c.url), /0 imported, 1 refused/);
+    assert.equal((await evidence(b, agent.didHash)).length, 0);
+
+    const later = world.addTx([{ from: former.address, to: agent.agentAddress, value: 5n * USDC }]);
+    c.serve([served(agent, later, await signOutcome(agent.didHash, later, former), { acceptedAt: Date.now() + 1 })]);
+    await runImport();
+    assert.match(lastRun(c.url), /1 imported, 0 refused/);
+    assert.equal((await evidence(b, agent.didHash)).length, 1);
+  });
+
   test('refuses what a peer serves that is forged, malformed or checked before its payment, and takes what is genuine', async () => {
     const payer = ethers.Wallet.createRandom();
     const forgedFor = paid(payer);

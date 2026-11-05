@@ -240,7 +240,7 @@ function planCredits(decoded, opts) {
     // Same rule as the attested path: an operator paying its own agent costs only gas,
     // and the money comes straight back.
     if (lower(g.from) === lower(g.to)) { reject('self_payment'); continue; }
-    const operator = operatorOf(g.didHash);
+    const operator = operatorOf(g.didHash, g.blockNumber);
     if (operator && lower(g.from) === lower(operator)) { reject('self_payment'); continue; }
     // Paid before the address was an agent. An operator that scanned this block before the registration
     // does not know the agent and credits nothing, and one that scanned it after would credit it, so
@@ -379,6 +379,18 @@ function checkpointAfter(unresolved, from, to, canary = 'not_run') {
 }
 
 /**
+ * Who operated `agent` at `block`, from what the registry scan holds. A payment is judged against
+ * the operator of its own block, so whether it counts does not depend on when it is looked at: a
+ * new operator's earlier payment was a customer's, and a former operator's was its own.
+ */
+function operatorAt(agent, block) {
+  if (!agent?.operators) return agent?.operator ?? null;
+  let operator = agent.operators[0].operator;
+  for (const o of agent.operators) if (o.fromBlock <= block) operator = o.operator;
+  return operator;
+}
+
+/**
  * Fetch Transfer logs to a set of recipients over a block range.
  *
  * `readLogs` is injected so the caller supplies its own backoff; this module does not
@@ -420,6 +432,7 @@ async function scanRange(
 }
 
 module.exports = {
+  operatorAt,
   TRANSFER_TOPIC,
   MAX_RECIPIENTS_PER_CALL,
   readConfig,
