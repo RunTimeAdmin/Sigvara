@@ -25,7 +25,7 @@
 
 const { ethers } = require('ethers');
 const { CAPS } = require('./score-caps');
-const { readWithBackoff } = require('./read-retry');
+const { readWithBackoff, MAX_BATCH_CALLS } = require('./read-retry');
 const { accountRefused: registryRefused } = require('./payer-outcome');
 
 const ID_ABI = [
@@ -120,7 +120,7 @@ let resolving = false;
 function init(cfg, deps = {}) {
   enabled = !!(cfg.externalRpc && cfg.externalIdentity && cfg.externalReputation);
   if (!enabled) return;
-  provider = deps.provider ?? new ethers.JsonRpcProvider(cfg.externalRpc);
+  provider = deps.provider ?? new ethers.JsonRpcProvider(cfg.externalRpc, undefined, { batchMaxCount: MAX_BATCH_CALLS });
   idContract = deps.idContract ?? new ethers.Contract(cfg.externalIdentity, ID_ABI, provider);
   repContract = deps.repContract ?? new ethers.Contract(cfg.externalReputation, REP_ABI, provider);
   // A re-init points at a different chain, so anything cached about the old one is a
