@@ -37,9 +37,9 @@ test('the scheduled services check runs it', () => {
   assert.match(body, /await checkWallets\(\)/);
 });
 
-test('the deployment record names real addresses with whole floors, for both operators and the publisher', () => {
+test('the deployment record names real addresses with whole floors, for both operators, the publisher and both keepers', () => {
   const { wallets } = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'deployments', '5042002.json'), 'utf8'));
-  assert.deepEqual(Object.keys(wallets).sort(), ['checker', 'primary oracle', 'publisher']);
+  assert.deepEqual(Object.keys(wallets).sort(), ['checker', 'keeper backup', 'keeper primary', 'primary oracle', 'publisher']);
   for (const [name, w] of Object.entries(wallets)) {
     assert.equal(ethers.getAddress(w.address), w.address, name);
     assert.ok(Number.isInteger(w.minUsdc) && w.minUsdc > 0, name);

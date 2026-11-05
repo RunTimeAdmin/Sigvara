@@ -10,7 +10,9 @@
   "wallets": {
     "primary oracle": { "address": "0x6352B8FFBc3Bdd182512Ce59Ef69d1b155Fb3943", "minUsdc": 10 },
     "checker": { "address": "0x989aabd69631f81A6B2c8Ce508C32aa219EC172D", "minUsdc": 1 },
-    "publisher": { "address": "0x787f30E64d212A1d90174A832a79489dca44FE92", "minUsdc": 2 }
+    "publisher": { "address": "0x787f30E64d212A1d90174A832a79489dca44FE92", "minUsdc": 2 },
+    "keeper primary": { "address": "0x8e1f90a2a5042652C1B9CAe99Ab3c2e02a30F2E4", "minUsdc": 1 },
+    "keeper backup": { "address": "0x8c85b61Ed08d66FeD2a613bA50D971b4dE6c5619", "minUsdc": 1 }
   },
   "implementations": {
     "identity": {
