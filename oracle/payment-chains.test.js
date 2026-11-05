@@ -18,6 +18,7 @@ const pc = require('./payment-chains');
 const merkle = require('./merkle');
 const { TRANSFER_TOPIC } = require('./payments');
 const explorer = require('../site/assets/explorer.js');
+const refusals = require('./test-support/refusals');
 
 const BASE_SEPOLIA = 84532;
 const ARC = 5042002;
@@ -766,4 +767,40 @@ test("the cut-off comes down to where this operator's scans have reached", () =>
   assert.equal(pc.coveredCut(want, NOW, cfg, baseReached(NOW / 1000 - 75 * 60)), NOW - 16 * 60_000);
   // A chain that is on and was never scanned: no cut at all.
   assert.equal(pc.coveredCut(want, NOW, cfg, () => null), null);
+});
+
+test('an error for a span refused for its size says so, and carries none of the node\'s words', () => {
+  for (const refused of [refusals.elysium(), refusals.arcTooMany(), refusals.baseSepolia()]) {
+    assert.equal(pc.rpcError(refused, RPC).spanRefused, true, refused.message);
+  }
+  const out = pc.rpcError(refusals.elysium(), RPC);
+  assert.equal(out.message, 'could not coalesce error (rpc -32005)');
+  assert.equal(pc.rpcError(refusals.rateLimited(), RPC).spanRefused, undefined);
+});
+
+test('a scan gets past a range the node refuses for its size, through the read that drops its words', async () => {
+  const a = agent();
+  const provider = fakeChain({
+    finalized: 2000,
+    logs: Array.from({ length: 5 }, (_, i) => transferLog({
+      from: ethers.Wallet.createRandom().address, to: a.agentAddress, amount: 1_000_000n, block: 1500 + i * 3,
+    })),
+  });
+  const answer = provider.getLogs;
+  let refused = 0;
+  provider.getLogs = async (f) => {
+    const found = await answer(f);
+    if (found.length > 3) { refused += 1; throw refusals.elysium(); }
+    return found;
+  };
+  const { credited, deps: d } = deps({
+    provider,
+    agents: [a],
+    // As index.js gives it, so the error reaching the scan is rpcError's.
+    read: (_label, fn) => fn().catch((err) => { throw pc.rpcError(err, RPC); }),
+  });
+  const out = await pc.scanChain(config().chains[0], d);
+  assert.ok(refused > 0, 'the node did refuse');
+  assert.equal(credited.length, 5);
+  assert.equal(out.state.lastBlock, 2000, 'and the cursor moved past it');
 });

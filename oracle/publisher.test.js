@@ -321,6 +321,114 @@ test('live mode: an agent that unlinks and is then slashed reads 0 where its sco
   assert.deepEqual(liveValues(w, '7'), [0n]);
 });
 
+const land = (w) => { w.inFlight.list.push(w.inFlight.entry); w.pendingTxs = 0; };
+const slash = (w, block) => {
+  w.head = block + 5;
+  w.spendable[did(1)] = 0;
+  w.earned[did(1)] = 0;
+  w.events.push({ kind: 'zeroed', didHash: did(1), block, logIndex: 0, txHash: null });
+};
+
+test('live mode: a post that timed out and landed is cleaned up after an unlink and a slash', async () => {
+  // The run after it finds the score live and unchanged, and used to record nothing, so the cleanup
+  // never knew where to go: the old 8004 agent kept the last positive score of a slashed agent.
+  const { w, publisher } = setup({ mode: 'live' });
+  w.lateNext = true;
+  await publisher.runOnce();
+  land(w);
+  const unchanged = await publisher.runOnce();
+  assert.equal(unchanged.skipped[0].reason, 'unchanged at 47');
+  delete w.links[did(1)];
+  slash(w, 135);
+  await publisher.runOnce();
+  assert.deepEqual(liveValues(w, '7'), [0n]);
+});
+
+test('live mode: a post that timed out is still cleaned up when the agent unlinks before the next run', async () => {
+  const { w, publisher } = setup({ mode: 'live' });
+  w.lateNext = true;
+  await publisher.runOnce();
+  land(w);
+  delete w.links[did(1)];
+  slash(w, 135);
+  await publisher.runOnce();
+  assert.deepEqual(liveValues(w, '7'), [0n]);
+});
+
+test('live mode: a post that timed out, then an unlink with no slash, has the score revoked', async () => {
+  const { w, publisher } = setup({ mode: 'live' });
+  w.lateNext = true;
+  await publisher.runOnce();
+  land(w);
+  delete w.links[did(1)];
+  nextDay(w, 160);
+  await publisher.runOnce();
+  assert.deepEqual(liveValues(w, '7'), []);
+});
+
+test('live mode: a post that failed and never landed leaves nothing to revoke, and is tried again', async () => {
+  const { w, publisher } = setup({ mode: 'live' });
+  w.failNext = 'post';
+  await publisher.runOnce();
+  assert.deepEqual(liveValues(w, '7'), []);
+  await publisher.runOnce();
+  assert.deepEqual(kinds(w), ['post', 'post'], 'the failed post does not start the day\'s limit');
+  assert.deepEqual(liveValues(w, '7'), [47n]);
+});
+
+test('live mode: a lost state file is rebuilt from what is live, so the cleanup still works', async () => {
+  const { w, publisher, deps } = setup({ mode: 'live' });
+  await publisher.runOnce();
+  deps.state.set(null);
+  await publisher.runOnce();
+  assert.deepEqual(kinds(w), ['post'], 'it finds the score there and posts nothing');
+  delete w.links[did(1)];
+  slash(w, 135);
+  await publisher.runOnce();
+  assert.deepEqual(liveValues(w, '7'), [0n]);
+});
+
+test('live mode: a score found unchanged does not start a new day\'s limit', async () => {
+  const { w, publisher, state } = setup({ mode: 'live' });
+  await publisher.runOnce();
+  const day = state().posted['7'].day;
+  nextDay(w, 120);
+  await publisher.runOnce(); // the daily refresh, which finds it unchanged
+  assert.equal(state().posted['7'].day, day);
+  assert.equal(state().postedBy[did(1)], '7');
+});
+
+test('live mode: a score found live with no record may still change the same day', async () => {
+  const { w, publisher, deps, state } = setup({ mode: 'live' });
+  await publisher.runOnce();
+  deps.state.set(null);
+  await publisher.runOnce();
+  assert.equal(state().posted['7'].day, undefined, 'nothing says what day it was posted');
+  w.spendable[did(1)] = 49;
+  w.events.push({ kind: 'updated', didHash: did(1), block: 121, logIndex: 0, txHash: null, evidenceRoot: null });
+  w.head = 125;
+  await publisher.runOnce();
+  assert.deepEqual(liveValues(w, '7'), [49n]);
+});
+
+test('live mode: a blocked run records nothing it finds', async () => {
+  const { w, publisher, deps, state } = setup({ mode: 'live' });
+  await publisher.runOnce();
+  deps.state.set(null);
+  w.balance = 0n;
+  await publisher.runOnce();
+  assert.equal(state().postedBy[did(1)], undefined);
+  assert.equal(state().posted['7'], undefined);
+});
+
+test('shadow mode: finding a score live writes nothing to the real records', async () => {
+  const { w, publisher, state } = setup({ mode: 'shadow' });
+  w.feedback['7'] = [{ value: 47n, valueDecimals: 0n, tag1: 'sigvara', tag2: 'score', isRevoked: false }];
+  await publisher.runOnce();
+  assert.deepEqual(state().posted, {});
+  assert.deepEqual(state().postedBy, {});
+});
+
 test('live mode: an agent that moves to another 8004 agent has its score moved with it', async () => {
   const { w, publisher } = setup({ mode: 'live' });
   await publisher.runOnce();

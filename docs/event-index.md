@@ -25,7 +25,7 @@ How it keeps the history complete (`oracle/indexer.js`, `poll`):
 
 - It reads only blocks the RPC calls `finalized`, less 20 (`HEAD_MARGIN`, about ten seconds). Arc finalizes each block as it is made, so a block read once does not change.
 - The margin is there because a provider spreads requests over several nodes. A node a block or two behind the one that named the head can answer a log read for blocks it does not have yet with what it has, and say nothing. So each batch also asks for its own last block, and a batch whose node does not have it is refused (`readSpans`).
-- It reads in order, and moves on only when a whole batch of spans has been read and checked. A refused or malformed answer fails the whole batch, and the next poll reads it again. So the index never has a hole.
+- It reads in order, and moves on only when a whole batch of spans has been read and checked. A span the node refuses for its size, or does not answer in time, is read in halves instead (`oracle/log-spans.js`). Any other refused or malformed answer fails the whole batch, and the next poll reads it again. So the index never has a hole.
 - A log outside the span asked for, from another contract, or with a malformed field fails the read rather than being stored (`normalizeLog`).
 
 ## What it answers
@@ -53,10 +53,10 @@ A request never reaches the RPC. The index answers from memory, so traffic to th
 
 What is not bounded:
 
-- **The index itself.** It is held in memory, about 920 bytes a log on the heap (half a kilobyte as JSON), and written whole to its state file after each poll that moves it. The VPS container's `mem_limit` of 256 MB therefore holds somewhere between 100,000 and 150,000 logs.
+- **The index itself is bounded by `INDEX_MAX_LOGS`, not by the chain.** It is held in memory, about 1.1 KB a log on the heap, and anyone can add logs by calling an indexed contract. At the limit (100,000 by default, which fits the VPS container's `mem_limit` of 256 MB) the index stops reading on, keeps answering with what it has, and `/health` answers 503 with `full: true`. Pages read the blocks after the index from the chain, so they slow down rather than stop. To carry on, raise `INDEX_MAX_LOGS` and `mem_limit` together, by about 2 MB per thousand logs, and restart. A real indexer under a 300,000-log burst, with its cache full, stopped at 95,900 logs and peaked at 221 MiB, and restarted there without trouble. `scripts/check-live.mjs` fails from 80% full. Eighteen agents wrote 119 logs in the day measured on 5 November 2026, so a hundred agents would reach the limit in about five months, and an index meant for many more should not hold everything in memory.
 - **The work for a filter few logs match.** An answer starts at its cursor or `fromBlock` by binary search and stops when the page is full, but a filter that matches few logs reads forward until it finds them. Distinct cursors are distinct cache entries, so they miss the cache.
-- **Answers still being sent.** The 64 MiB bounds the cache; an answer dropped from it stays in memory until a slow reader has it.
-- **Request rates.** The live Caddyfile passes only `GET`, `HEAD` and `OPTIONS` on the two paths (`docs/operations-runbook.md`), but sets no request rate or connection limit; Caddy needs a plugin for one. The example below is the plain `reverse_proxy`.
+- **Answers still being sent.** The cache holds at most 32 MiB, and an answer dropped from it stays in memory until a slow reader has it, or until the kernel's socket buffers do. Measured with 30 readers that asked for a page each and never read: no more than 7 MiB on top of the cache.
+- **Request rates.** The live Caddyfile passes only `GET`, `HEAD` and `OPTIONS` on the two paths (`docs/operations-runbook.md`), but sets no request rate or connection limit; Caddy needs a plugin for one. The example below is the plain `reverse_proxy`. The index limits one thing itself: 120 new answers a minute per client (`TRUSTED_PROXIES` names the proxy, or all clients share that), since building an answer is what costs. Many clients at once are not limited.
 
 All of these are fine for the testnet history, and are to be settled before the index serves a much larger one.
 

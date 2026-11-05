@@ -36,6 +36,7 @@
 // The rules are constants, not settings: a checker that counted differently from its primary
 // would diverge on every linked agent.
 
+const { createHash } = require('node:crypto');
 const { meanRating, MAX_EXTERNAL_SCORE } = require('./external');
 
 const REVIEWER_MIN_TENURE_DAYS = 30;
@@ -54,6 +55,29 @@ const FUNDING_FLOOR = 10n ** 18n;
 const STATUS_ACTIVE = 0;
 const DAY_MS = 86_400_000;
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+
+/**
+ * Who may be a reviewer at all: the addresses in `events` that paid, lowercased, the most paid first,
+ * and by address where they paid the same, so two operators with the same evidence get the same list.
+ * Anyone else's feedback could not count (verdictFor), so external.js does not read it.
+ */
+function payersByAmount(events) {
+  const paid = new Map();
+  for (const e of events) {
+    const payer = String(e.payer || '').toLowerCase();
+    if (payer) paid.set(payer, (paid.get(payer) ?? 0n) + BigInt(e.amount));
+  }
+  return [...paid]
+    .sort(([a, x], [b, y]) => (x === y ? (a < b ? -1 : 1) : (y > x ? 1 : -1)))
+    .map(([payer]) => payer);
+}
+
+/** A digest of the evidence a judgment rests on, to tell whether a remembered one still applies. */
+function evidenceDigest(events) {
+  const hash = createHash('sha256');
+  for (const e of events) hash.update(`${String(e.payer).toLowerCase()}|${e.ts}|${e.amount}|${e.txHash}\n`);
+  return hash.digest('hex');
+}
 
 /** The snapshot every read is taken at: the start of the UTC day containing `nowSec`. */
 function snapshotOf(nowSec) {
@@ -77,7 +101,7 @@ function parsePublicFunders(raw) {
 /**
  * Who first funded `address` by block `cap`, as { funder, block }, or null when it was not
  * funded by then. `funder` is lowercased, and null when the block that funded it shows no
- * transfer in, which a gas-sponsored account can do.
+ * transfer in, which a gas-sponsored account can do, or none that reaches the floor by itself.
  *
  * `read` answers two questions: touched(block), whether by the end of that block the address
  * held FUNDING_FLOOR or had sent a transaction, and inbound(block), the native transfers into
@@ -106,7 +130,12 @@ async function findFirstFunder(read, address, cap) {
   for (const t of await read.inbound(lo)) {
     if (!best || BigInt(t.value) > BigInt(best.value)) best = t;
   }
-  return { funder: best ? String(best.from).toLowerCase() : null, block: lo };
+  // Only a transfer that could have crossed the floor by itself names a funder. A smaller one only
+  // topped the address up, and naming its sender would hide whoever sent the rest: 0.99 from a
+  // treasury and 0.02 from a throwaway wallet read as funded by the throwaway. A wallet with no funder
+  // of its own further back is not a sign of this, since Arc's faucets are like that.
+  const named = best && BigInt(best.value) >= FUNDING_FLOOR;
+  return { funder: named ? String(best.from).toLowerCase() : null, block: lo };
 }
 
 /**
@@ -268,6 +297,7 @@ function describe({ score, reviewers, clusters, excluded }) {
 }
 
 module.exports = {
+  payersByAmount, evidenceDigest,
   snapshotOf, parsePublicFunders, findFirstFunder, verdictFor, scoreReviews, scoreFeedback, describe,
   REVIEWER_MIN_TENURE_DAYS, REVIEWER_MIN_SCORE, REVIEW_HALF_LIFE_DAYS, FULL_WEIGHT_CLUSTERS, FUNDER_HOPS,
   SNAPSHOT_SECONDS, FUNDING_FLOOR,

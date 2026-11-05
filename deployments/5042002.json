@@ -7,6 +7,11 @@
   "svrToken": "0x41De2D6D55318e197a00E8f5B496eA2790e23E6c",
   "oracleBond": "0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171",
   "reader": "0x2921b4eE879CdF5793FA273BbDc4E7dF01ABcef8",
+  "wallets": {
+    "primary oracle": { "address": "0x6352B8FFBc3Bdd182512Ce59Ef69d1b155Fb3943", "minUsdc": 10 },
+    "checker": { "address": "0x989aabd69631f81A6B2c8Ce508C32aa219EC172D", "minUsdc": 1 },
+    "publisher": { "address": "0x787f30E64d212A1d90174A832a79489dca44FE92", "minUsdc": 2 }
+  },
   "implementations": {
     "identity": {
       "current": "0xfB54a76f5347d8898E950C1FC3c28e22B0F224af",

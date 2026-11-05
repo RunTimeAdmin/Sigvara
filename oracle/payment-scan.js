@@ -43,6 +43,7 @@ const { ethers } = require('ethers');
 // TRANSFER_TOPIC, Transfer(address indexed from, address indexed to, uint256 value): one
 // definition, shared with the attested path, rather than a copy that could drift.
 const { countsAsPayment, TRANSFER_TOPIC } = require('./payments');
+const { readSplitting } = require('./log-spans');
 
 /**
  * Recipients per getLogs call.
@@ -239,7 +240,7 @@ function planCredits(decoded, opts) {
     // Same rule as the attested path: an operator paying its own agent costs only gas,
     // and the money comes straight back.
     if (lower(g.from) === lower(g.to)) { reject('self_payment'); continue; }
-    const operator = operatorOf(g.didHash);
+    const operator = operatorOf(g.didHash, g.blockNumber);
     if (operator && lower(g.from) === lower(operator)) { reject('self_payment'); continue; }
     // Paid before the address was an agent. An operator that scanned this block before the registration
     // does not know the agent and credits nothing, and one that scanned it after would credit it, so
@@ -295,22 +296,29 @@ function planCredits(decoded, opts) {
  * @param {(didHash:string) => string|null} addressOf recipient address for an agent
  */
 function pickCanary(eventsByDid, addressOf) {
+  // The newest of any agent's, because an old settlement may sit outside whatever block
+  // range a pruned node still serves, and the first agent listed may not have been paid in
+  // months. A canary that fails holds the checkpoint, so that would hold it on every quiet scan.
+  let newest = null;
+  let newestAt = -Infinity;
   for (const [didHash, events] of eventsByDid) {
     const recipient = addressOf(didHash);
     if (!recipient) continue;
-    // The newest, because an old settlement may sit outside whatever block range a
-    // pruned node still serves.
     for (let i = events.length - 1; i >= 0; i--) {
       const txHash = events[i] && events[i].txHash;
-      // The block comes back too when the event has it, so the caller can skip a receipt
-      // lookup against an index that prunes. Null for events stored before it was kept.
-      if (txHash) {
+      if (!txHash) continue;
+      const at = events[i].ts ?? 0;
+      if (at > newestAt) {
+        newestAt = at;
+        // The block comes back too when the event has it, so the caller can skip a receipt
+        // lookup against an index that prunes. Null for events stored before it was kept.
         const blockNumber = Number.isInteger(events[i].blockNumber) ? events[i].blockNumber : null;
-        return { didHash, recipient, txHash, blockNumber };
+        newest = { didHash, recipient, txHash, blockNumber };
       }
+      break;
     }
   }
-  return null;
+  return newest;
 }
 
 /** The same filter shape the scan uses, narrowed to one recipient and one block. */
@@ -378,6 +386,18 @@ function checkpointAfter(unresolved, from, to, canary = 'not_run') {
 }
 
 /**
+ * Who operated `agent` at `block`, from what the registry scan holds. A payment is judged against
+ * the operator of its own block, so whether it counts does not depend on when it is looked at: a
+ * new operator's earlier payment was a customer's, and a former operator's was its own.
+ */
+function operatorAt(agent, block) {
+  if (!agent?.operators) return agent?.operator ?? null;
+  let operator = agent.operators[0].operator;
+  for (const o of agent.operators) if (o.fromBlock <= block) operator = o.operator;
+  return operator;
+}
+
+/**
  * Fetch Transfer logs to a set of recipients over a block range.
  *
  * `readLogs` is injected so the caller supplies its own backoff; this module does not
@@ -387,6 +407,10 @@ function checkpointAfter(unresolved, from, to, canary = 'not_run') {
  * allowed to ask, and the loop that does the asking is the only thing that can space it
  * out. Backoff reacts to a refusal; pacing avoids provoking one. `sleep` is injected so
  * the tests do not have to spend real seconds proving it.
+ *
+ * A span the node refuses for its size is halved (log-spans.js). The filter is only the
+ * asset and the recipients, so anyone can fill a span with transfers to an agent, and
+ * planCredits drops the worthless ones only once they have been read.
  */
 async function scanRange(
   { readLogs, asset, paceMs = DEFAULT_SCAN_PACE_MS, sleep = wait },
@@ -403,14 +427,19 @@ async function scanRange(
       // there are several.
       if (!first) await sleep(paceMs);
       first = false;
-      const logs = await readLogs({ address: asset, topics, fromBlock: start, toBlock: end });
-      out.push(...logs);
+      const logs = await readSplitting(
+        (a, b) => readLogs({ address: asset, topics, fromBlock: a, toBlock: b }),
+        start, end, { pause: () => sleep(paceMs) },
+      );
+      // One at a time: a flooded span can hold more logs than a call can take as arguments.
+      for (const log of logs) out.push(log);
     }
   }
   return out;
 }
 
 module.exports = {
+  operatorAt,
   TRANSFER_TOPIC,
   MAX_RECIPIENTS_PER_CALL,
   readConfig,

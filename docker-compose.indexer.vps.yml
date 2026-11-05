@@ -41,6 +41,9 @@ services:
       # Alchemy takes ten log reads in one batch. Arc's public RPC refuses four: set 1 for it.
       INDEX_BATCH: "10"
       STATE_FILE: /data/event-index.json
+      # The subnet of the network the TLS proxy reaches this on, so a client's limit on new /events
+      # answers applies to that client (docs/event-index.md). Unset, everyone shares one limit.
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
     secrets:
       - rpc_url
     ports:
@@ -79,7 +82,7 @@ services:
         git checkout -q --detach FETCH_HEAD
         [ "$$(git rev-parse HEAD)" = "$$SIGVARA_COMMIT" ] || { echo "[deploy] checkout is not $$SIGVARA_COMMIT, refusing to start" >&2; exit 1; }
         rm -rf /app/*.js
-        cp /src/oracle/indexer.js /src/oracle/event-index.js /src/oracle/http-helpers.js /app/
+        cp /src/oracle/indexer.js /src/oracle/event-index.js /src/oracle/http-helpers.js /src/oracle/log-spans.js /app/
         cd /app
         echo "[deploy] running $$SIGVARA_COMMIT"
         exec node indexer.js

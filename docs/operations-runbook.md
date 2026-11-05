@@ -20,6 +20,11 @@ Each runs the commit named by `SIGVARA_COMMIT` in its `.env`, and `/health` repo
 `commit`. The commands below are written for the primary; on the checker use its column. The
 `jq` ones need `command -v jq >/dev/null || apt-get install -y jq` first.
 
+**Gas.** `scripts/check-live.mjs services` fails when a wallet under `wallets` in
+`deployments/5042002.json` falls below its floor. Send it testnet USDC. On 4 November 2026 the primary
+sent about 140 transactions a day, about 0.55 USDC, so its floor of 10 is about 18 days. The checker
+usually sends none, and its floor of 1 covers proposing for every agent several times if it has to.
+
 ## 1. State backup and restore
 
 ### What the state file holds
@@ -366,7 +371,7 @@ limited to ten history requests an hour per visitor.
 |---|---|
 | Public URL | `https://index.sigvara.xyz` (`/events`, `/health`) |
 | Host and directory | `archipelago-standby`, `/docker/sigvara-index` |
-| Files there | `docker-compose.yml` (the repository's `docker-compose.indexer.vps.yml`, unchanged), `docker-compose.override.yml` (joins the `sigvara-web` network), `.env` (`SIGVARA_COMMIT` only), `rpc_url` (the RPC URL with its key, root, mode 600) |
+| Files there | `docker-compose.yml` (the repository's `docker-compose.indexer.vps.yml`, unchanged), `docker-compose.override.yml` (joins the `sigvara-web` network), `.env` (`SIGVARA_COMMIT` and `TRUSTED_PROXIES`, the `sigvara-web` subnet), `rpc_url` (the RPC URL with its key, root, mode 600) |
 | Container | `sigvara-index`, listening on `127.0.0.1:3040` |
 | State volume | `sigvara-index_index_data` (the index; a restart resumes from it) |
 | Proxy | the `index.sigvara.xyz` block in `/opt/countersig/Caddyfile`, which passes only `GET`, `HEAD` and `OPTIONS` on `/events` and `/health` to `sigvara-index:3040` |
@@ -586,8 +591,9 @@ with many payments can look stuck for minutes. Also check that `lastBlockTs` mov
 
 **When a scan fails.** The log says `payment chain 99801 scan failed`, and `/metrics` counts it in
 `sigvara_oracle_payment_chain_scan_errors_total`. In shadow, scoring carries on, and the next epoch resumes from the
-last block saved. On Elysium, `could not coalesce error (rpc -32005)` means one call would return more than 10,000
-logs. The scan asks for the same range each time, so it keeps failing until `CHUNK` is lowered.
+last block saved. A range the node refuses for its size is halved, so a dense range alone should not stop a scan. If
+the same `(rpc -32005)` or similar repeats at one block, the node may word its refusal in a way `oracle/log-spans.js`
+does not know: add the wording there. Lowering `CHUNK` gets it past the range in the meantime.
 
 **Removing one.** Delete its lines from the `.env` and run `docker compose up -d`. Its cursor stays in the state file
 under `99801/shadow`, where only a later scan of that chain reads it.
@@ -636,8 +642,8 @@ nothing. If its transaction was already in flight, it reverts, and all that cost
 
 - **From outside, on the outcome.** `scripts/check-live.mjs services`, which the Live checks workflow
   runs on a schedule, fails when a Pending slash is more than six hours past its deadline, unless it
-  is on the list of slashes held on purpose. It fails too when a keeper named under `keepers` in
-  `deployments/5042002.json` is low on gas. This shares nothing with the keepers, so it is what
+  is on the list of slashes held on purpose. It fails too when a keeper listed under `wallets` in
+  `deployments/5042002.json` is under its floor. This shares nothing with the keepers, so it is what
   notices when both are down.
 - **From each keeper, by webhook.** `WEBHOOK_URL`, as the watcher uses, hears about every execution,
   a slash that is refused, a send that did not confirm, a dispute, a lapse, low gas, and six failed
@@ -667,8 +673,8 @@ nothing due nothing is lost, and when one is due the check above fires with most
    log names the address to fund. `chmod 600 .env`.
 2. `docker compose up -d`, and read the log. It should say `shadow mode`, and each run should hold or
    wait for C and not name it as `would execute`.
-3. Add both addresses under `keepers` in `deployments/5042002.json`, in a PR, and send each a little
-   testnet USDC.
+3. Add both addresses under `wallets` in `deployments/5042002.json`, each with a `minUsdc` of 1, in a
+   PR, and send each a few testnet USDC.
 4. Set `KEEPER_MODE=live` on the primary, `docker compose up -d`, and read the log. Then the backup.
 
 **Rehearsing.** Point it at a local fork of Arc, using Anvil's public keys, and move the fork's clock.

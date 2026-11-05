@@ -32,6 +32,8 @@ function fakeRpc() {
     getLogsFrom: [],       // every fromBlock asked for, in order
     noTimestamp: true,     // leave blockTimestamp off the first log, for the indexer to ask
     lagTo: null,           // a node that has blocks only up to here, though it names a later head
+    maxLogs: null,         // refuses a read that would return more logs than this, as a node does
+    refused: [],           // the spans it refused for that
   };
   const add = (block, address = A, topics = [T0, DID]) => chain.logs.push({
     address, topics, data: '0x', blockNumber: hex(block), logIndex: '0x0',
@@ -54,10 +56,15 @@ function fakeRpc() {
       if (parseInt(f.toBlock, 16) - from + 1 > 10000) return { jsonrpc: '2.0', id: r.id, error: { code: -32600, message: 'range too large' } };
       if (chain.refuseOnce.delete(from)) return { jsonrpc: '2.0', id: r.id, error: { code: 429, message: `rate limited at https://rpc.invalid/v2/${KEY}` } };
       const want = new Set(f.address.map((a) => a.toLowerCase()));
-      return ok(chain.logs.filter((l) => {
+      const found = chain.logs.filter((l) => {
         const b = parseInt(l.blockNumber, 16);
         return b >= from && b <= to && want.has(l.address);
-      }).map((l, i) => {
+      });
+      if (chain.maxLogs !== null && found.length > chain.maxLogs) {
+        chain.refused.push([from, to]);
+        return { jsonrpc: '2.0', id: r.id, error: { code: -32005, message: 'logs count limit exceeded (10000) consider refine/narrow down your query' } };
+      }
+      return ok(found.map((l, i) => {
         if (chain.noTimestamp && i === 0) { chain.noTimestamp = false; const { blockTimestamp, ...rest } = l; return rest; }
         return l;
       }));
@@ -80,6 +87,10 @@ function fakeRpc() {
 const freePort = () => new Promise((resolve) => {
   const s = net.createServer().listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)); });
 });
+
+// Its own word that it is serving. Until it has bound the port, the port may be another test
+// file's server, and a request sent there fails whichever test that file is running.
+const serving = (child) => until(() => /serving on /.test(child.output));
 
 function startIndexer(env) {
   const child = spawn(process.execPath, [path.join(__dirname, 'indexer.js')], { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -137,6 +148,7 @@ test('indexer: backfills without holes, follows new blocks, filters, resumes, an
   };
   let child = startIndexer(env);
   try {
+    await serving(child);
     // Caught up to the margin behind the head, through the refused span.
     const h = await until(async () => { const r = await get(port, '/health'); return r.body.toBlock === rpc.chain.head - MARGIN && r; });
     assert.equal(h.status, 200);
@@ -153,6 +165,8 @@ test('indexer: backfills without holes, follows new blocks, filters, resumes, an
     // The refused span was read again, and nothing was read before the index starts.
     assert.equal(rpc.chain.getLogsFrom.filter((f) => f === FROM + 10_000).length, 2);
     assert.ok(rpc.chain.getLogsFrom.every((f) => f >= FROM));
+    // A rate limit fails the batch for the next poll, and is not read again in pieces at once.
+    assert.match(child.output, /poll failed[^\n]*rate limited/);
 
     // Filters, and gzip for a client that asks.
     const filtered = await get(port, `/events?address=${B}`, { 'Accept-Encoding': 'gzip' });
@@ -202,6 +216,7 @@ test('indexer: backfills without holes, follows new blocks, filters, resumes, an
     await child.exited;
     const asked = rpc.chain.getLogsFrom.length;
     child = startIndexer(env);
+    await serving(child);
     await until(async () => (await get(port, '/health')).body.ok);
     assert.match(child.output, /resuming at block/);
     assert.ok(rpc.chain.getLogsFrom.slice(asked).every((f) => f > rpc.chain.head - MARGIN - 1000), 'nothing already indexed is read again');
@@ -251,4 +266,229 @@ test('docker-compose.indexer.vps.yml copies every file the indexer loads, and st
   for (const f of loads) assert.ok(copied.has(f), `indexer.js loads ${f}, which the compose file does not copy`);
   const after = yml.slice(yml.indexOf(cp[0]) + cp[0].length);
   assert.match(after, /^\s*cd \/app\n[\s\S]*?exec node indexer\.js/, 'node starts in /app, where the files were copied');
+});
+
+test('indexer: a span the node refuses for its size is read in halves, with nothing lost and no hole', async () => {
+  const rpc = fakeRpc();
+  rpc.chain.noTimestamp = false;
+  const blocks = Array.from({ length: 40 }, (_, i) => FROM + i * 250); // every one in the first span
+  for (const b of blocks) rpc.add(b);
+  rpc.add(FROM + 12_000);
+  rpc.chain.maxLogs = 25;
+  await new Promise((r) => rpc.server.listen(0, '127.0.0.1', r));
+  const port = await freePort();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sigvara-index-'));
+  const child = startIndexer({
+    RPC_URL: `http://127.0.0.1:${rpc.server.address().port}/v2/${KEY}`,
+    EXPECTED_CHAIN_ID: '5042002',
+    INDEX_ADDRESSES: `${A},${B}`,
+    INDEX_FROM_BLOCK: String(FROM),
+    PORT: String(port),
+    POLL_SECONDS: '1',
+    INDEX_BATCH: '3',
+    STATE_FILE: path.join(dir, 'index.json'),
+  });
+  try {
+    await serving(child);
+    const h = await until(async () => { const r = await get(port, '/health'); return r.body.toBlock === rpc.chain.head - MARGIN && r; });
+    assert.equal(h.status, 200);
+    assert.equal(h.body.lastError, null);
+    const found = (await get(port, '/events')).body.logs.map((l) => parseInt(l.blockNumber, 16));
+    assert.deepEqual(found, [...blocks, FROM + 12_000]);
+    assert.ok(rpc.chain.refused.length > 0, 'the node did refuse');
+    assert.ok(rpc.chain.refused.every(([a, b]) => a === FROM && b === FROM + 9_999), 'and only the whole span');
+  } finally {
+    child.kill();
+    await child.exited;
+    await new Promise((r) => rpc.server.close(r));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+const logRun = (rpc, count, firstBlock, data = '0x') => {
+  for (let i = 0; i < count; i += 1) {
+    const block = firstBlock + i;
+    rpc.chain.logs.push({
+      address: A, topics: [T0, DID], data, blockNumber: hex(block), logIndex: '0x0',
+      transactionHash: '0x' + block.toString(16).padStart(64, '0'), blockTimestamp: hex(5000 + block), removed: false,
+    });
+  }
+};
+
+async function withRpc(rpc, run) {
+  rpc.chain.noTimestamp = false;
+  await new Promise((r) => rpc.server.listen(0, '127.0.0.1', r));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sigvara-index-'));
+  const children = [];
+  const start = async (env = {}) => {
+    const port = await freePort();
+    const child = startIndexer({
+      RPC_URL: `http://127.0.0.1:${rpc.server.address().port}/v2/${KEY}`,
+      EXPECTED_CHAIN_ID: '5042002',
+      INDEX_ADDRESSES: `${A},${B}`,
+      INDEX_FROM_BLOCK: String(FROM),
+      PORT: String(port),
+      POLL_SECONDS: '1',
+      INDEX_BATCH: '1',
+      STATE_FILE: path.join(dir, 'index.json'),
+      ...env,
+    });
+    children.push(child);
+    await serving(child);
+    return { child, port };
+  };
+  try {
+    await run(start, dir);
+  } finally {
+    for (const c of children) { c.kill(); await c.exited; }
+    await new Promise((r) => rpc.server.close(r));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('indexer: full, it stops reading on, keeps what it holds whole, says so, and carries on when raised', async () => {
+  const rpc = fakeRpc();
+  logRun(rpc, 8, FROM);                 // the first span: fits
+  logRun(rpc, 8, FROM + 11_000);        // the second: past the limit, so none of it is taken
+  logRun(rpc, 1, FROM + 21_000);        // the third
+  await withRpc(rpc, async (start) => {
+    const first = await start({ INDEX_MAX_LOGS: '10' });
+    const h = await until(async () => { const r = await get(first.port, '/health'); return r.body.full === true && r; });
+    assert.equal(h.status, 503);
+    assert.equal(h.body.ok, false);
+    assert.equal(h.body.logs, 8);
+    assert.equal(h.body.maxLogs, 10);
+    assert.equal(h.body.toBlock, FROM + 9_999, 'whole up to the block it says');
+    assert.match(h.body.lastError, /the index is full: it holds 8 logs, the next read has 8, and INDEX_MAX_LOGS is 10/);
+
+    // A query still answers, with what it holds, and says how far that goes.
+    const events = await get(first.port, '/events');
+    assert.equal(events.status, 200);
+    assert.equal(events.body.logs.length, 8);
+    assert.equal(events.body.toBlock, FROM + 9_999);
+
+    // Its size is not a node's refusal: the read is not asked for again in halves.
+    assert.equal(rpc.chain.getLogsFrom.filter((b) => b > FROM + 9_999 && b !== FROM + 10_000).length, 0);
+
+    // Stopped there, a restart comes back to the same place, from the state it saved.
+    first.child.kill();
+    await first.child.exited;
+    rpc.chain.getLogsFrom.length = 0;
+    const second = await start({ INDEX_MAX_LOGS: '10' });
+    const again = await until(async () => { const r = await get(second.port, '/health'); return r.body.full === true && r; });
+    assert.equal(again.body.logs, 8);
+    assert.equal(rpc.chain.getLogsFrom.includes(FROM), false, 'and the part it holds is not read again');
+
+    // Raised, it carries on.
+    second.child.kill();
+    await second.child.exited;
+    const third = await start({ INDEX_MAX_LOGS: '100' });
+    const done = await until(async () => { const r = await get(third.port, '/health'); return r.body.toBlock === rpc.chain.head - MARGIN && r; });
+    assert.equal(done.status, 200);
+    assert.equal(done.body.full, false);
+    assert.equal(done.body.lastError, null);
+    assert.equal(done.body.logs, 17);
+  });
+});
+
+test('indexer: caught up and healthy, it says so at once when it fills, and again when it no longer is', async () => {
+  const rpc = fakeRpc();
+  logRun(rpc, 8, FROM);
+  await withRpc(rpc, async (start) => {
+    const { port } = await start({ INDEX_MAX_LOGS: '10' });
+    await until(async () => (await get(port, '/health')).status === 200);
+
+    // New blocks, few and recent: nothing else about it is wrong, so only being full can fail it.
+    const held = rpc.chain.logs.length;
+    rpc.chain.head += 100;
+    logRun(rpc, 8, rpc.chain.head - MARGIN - 50);
+    const full = await until(async () => { const r = await get(port, '/health'); return r.body.full === true && r; });
+    assert.equal(full.status, 503);
+    assert.equal(full.body.ok, false);
+    assert.ok(full.body.behind <= 200, 'only a little behind');
+    assert.equal(full.body.logs, 8);
+
+    // A read that fits again, here because the node no longer has those logs.
+    rpc.chain.logs.length = held;
+    const clear = await until(async () => { const r = await get(port, '/health'); return r.body.full === false && r; });
+    assert.equal(clear.status, 200);
+    assert.equal(clear.body.lastError, null);
+  });
+});
+
+test('indexer: a piece of a refused span that does not fit is not asked for in smaller pieces', async () => {
+  const rpc = fakeRpc();
+  logRun(rpc, 40, FROM);
+  rpc.chain.maxLogs = 25; // the node refuses the span, so it is read in halves
+  await withRpc(rpc, async (start) => {
+    const { port } = await start({ INDEX_MAX_LOGS: '10' });
+    const h = await until(async () => { const r = await get(port, '/health'); return r.body.full === true && r; });
+    assert.equal(h.body.logs, 0, 'a half of 20 does not fit, and nothing smaller was tried');
+    assert.equal(h.body.toBlock, FROM - 1);
+    assert.match(h.body.lastError, /the next read has 40|the next read has 20/);
+  });
+});
+
+test('indexer: a stretch with no logs moves a full index forward', async () => {
+  const rpc = fakeRpc();
+  logRun(rpc, 5, FROM);
+  await withRpc(rpc, async (start) => {
+    const { port } = await start({ INDEX_MAX_LOGS: '5' });
+    const h = await until(async () => { const r = await get(port, '/health'); return r.body.toBlock === rpc.chain.head - MARGIN && r; });
+    assert.equal(h.status, 200, 'at the limit and not past it');
+    assert.equal(h.body.full, false);
+  });
+});
+
+test('indexer: an answer past its limit is asked for in pieces, with nothing lost and no hole', async () => {
+  const rpc = fakeRpc();
+  const big = `0x${'ab'.repeat(1500)}`;
+  logRun(rpc, 3000, FROM, big);         // about 10 MB in one span: over the limit even alone
+  logRun(rpc, 1, FROM + 12_000);
+  await withRpc(rpc, async (start) => {
+    const { port } = await start({ INDEX_BATCH: '3' });
+    const h = await until(async () => { const r = await get(port, '/health'); return r.body.toBlock === rpc.chain.head - MARGIN && r; }, 30_000);
+    assert.equal(h.status, 200);
+    assert.equal(h.body.logs, 3001);
+    assert.equal(h.body.lastError, null);
+    assert.equal(rpc.chain.refused.length, 0, 'the node did not refuse: this is the index keeping to its own limit');
+    assert.ok(rpc.chain.getLogsFrom.filter((b) => b === FROM).length > 1, 'and the first span was asked for again, smaller');
+    const blocks = (await get(port, '/events?limit=1&fromBlock=' + (FROM + 2999))).body.logs.map((l) => parseInt(l.blockNumber, 16));
+    assert.deepEqual(blocks, [FROM + 2999]);
+  });
+});
+
+test('indexer: a client asking new questions is refused past its share, and no one else is', async () => {
+  const rpc = fakeRpc();
+  logRun(rpc, 3, FROM);
+  await withRpc(rpc, async (start) => {
+    const { port } = await start({ TRUSTED_PROXIES: '127.0.0.1' });
+    await until(async () => (await get(port, '/health')).status === 200);
+    const from = (client) => ({ 'X-Forwarded-For': client });
+    const statuses = [];
+    for (let i = 0; i < 125; i += 1) statuses.push((await get(port, `/events?fromBlock=${i + 1}`, from('203.0.113.9'))).status);
+    assert.deepEqual(statuses.slice(0, 120), Array(120).fill(200));
+    assert.deepEqual(statuses.slice(120), Array(5).fill(429));
+
+    const refused = await get(port, '/events?fromBlock=9999', from('203.0.113.9'));
+    assert.equal(refused.status, 429);
+    assert.equal(refused.headers['retry-after'], '60');
+    // What is already built costs nothing to send, so it still answers.
+    assert.equal((await get(port, '/events?fromBlock=120', from('203.0.113.9'))).status, 200);
+    assert.equal((await get(port, '/health', from('203.0.113.9'))).status, 200);
+    assert.equal((await get(port, '/events?fromBlock=9999', from('203.0.113.10'))).status, 200, 'another client');
+  });
+});
+
+test('indexer: refuses a TRUSTED_PROXIES it cannot read', async () => {
+  const child = startIndexer({
+    RPC_URL: 'http://127.0.0.1:1/v2/x', EXPECTED_CHAIN_ID: '1', INDEX_ADDRESSES: A, INDEX_FROM_BLOCK: '1', TRUSTED_PROXIES: 'not-an-address',
+  });
+  assert.equal(await child.exited, 1);
+  assert.match(child.output, /TRUSTED_PROXIES/);
+});
+
+test('docker-compose.indexer.vps.yml passes TRUSTED_PROXIES through', () => {
+  const yml = fs.readFileSync(path.join(__dirname, '..', 'docker-compose.indexer.vps.yml'), 'utf8');
+  assert.match(yml, /^\s*TRUSTED_PROXIES: \$\{TRUSTED_PROXIES:-\}$/m);
 });

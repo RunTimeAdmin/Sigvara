@@ -4,6 +4,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { ethers } = require('ethers');
 const scan = require('./payment-scan');
+const refusals = require('./test-support/refusals');
 
 const addr = (n) => ethers.getAddress('0x' + String(n).repeat(40).slice(0, 40));
 const AGENT = addr('1');
@@ -339,6 +340,31 @@ test('pickCanary chooses the newest payment of an agent whose address is known',
   );
   assert.equal(c.recipient, AGENT);
   assert.equal(c.txHash, '0xbb', 'newest, because an old settlement may fall outside a pruned node');
+});
+
+test('pickCanary chooses the newest payment of any agent, not of the first one listed', () => {
+  const events = new Map([
+    ['0xold', [{ txHash: '0xa', ts: 1000, blockNumber: 10 }]],
+    ['0xnew', [{ txHash: '0xb', ts: 5000, blockNumber: 50 }]],
+    ['0xmid', [{ txHash: '0xc', ts: 3000, blockNumber: 30 }]],
+  ]);
+  const c = scan.pickCanary(events, (did) => `address of ${did}`);
+  assert.deepEqual(c, { didHash: '0xnew', recipient: 'address of 0xnew', txHash: '0xb', blockNumber: 50 });
+});
+
+test('pickCanary skips the newest payment when it cannot be looked at', () => {
+  const events = new Map([
+    ['0xold', [{ txHash: '0xa', ts: 1000 }]],
+    ['0xunknown', [{ txHash: '0xb', ts: 5000 }]],
+    ['0xhashless', [{ ts: 6000 }]],
+  ]);
+  const c = scan.pickCanary(events, (did) => (did === '0xunknown' ? null : did));
+  assert.equal(c.txHash, '0xa');
+});
+
+test('pickCanary looks past a payment with no hash to an older one of the same agent', () => {
+  const events = new Map([['0xdid', [{ txHash: '0xa', ts: 1000 }, { ts: 2000 }]]]);
+  assert.equal(scan.pickCanary(events, (did) => did).txHash, '0xa');
 });
 
 test('pickCanary skips an agent whose address is unknown', () => {
@@ -791,4 +817,77 @@ test('planCredits: a zero-value leg beside a real payment credits only the real 
   ]);
   assert.deepEqual(credits.map((c) => c.payer), [PAYER]);
   assert.deepEqual(skipped.map((s) => s.reason), ['zero_value']);
+});
+
+test('scanRange: a span the node refuses for its size is read in halves, and nothing is lost', async () => {
+  const logs = Array.from({ length: 12 }, (_, i) => ({ blockNumber: i * 2 }));
+  const filters = [];
+  const paced = [];
+  const readLogs = async (f) => {
+    filters.push(f);
+    const found = logs.filter((l) => l.blockNumber >= f.fromBlock && l.blockNumber <= f.toBlock);
+    if (found.length > 4) throw refusals.arcTooMany();
+    return found;
+  };
+  const out = await scan.scanRange(
+    { readLogs, asset: ASSET, paceMs: 7, sleep: async (ms) => { paced.push(ms); } },
+    [addr('a')], 0, 23, 24,
+  );
+  assert.deepEqual(out, logs);
+  assert.ok(filters.length > 1);
+  assert.ok(filters.every((f) => f.address === ASSET && f.topics[0] === filters[0].topics[0] && f.topics[2].length === 1));
+  assert.ok(paced.length > 0 && paced.every((ms) => ms === 7), 'the smaller reads keep to the pace');
+});
+
+test('scanRange: a rate limit is not halved, and fails the scan as it did', async () => {
+  let calls = 0;
+  const readLogs = async () => { calls += 1; throw refusals.rateLimited(); };
+  await assert.rejects(scan.scanRange({ readLogs, asset: ASSET, sleep: async () => {} }, [addr('a')], 0, 99, 100));
+  assert.equal(calls, 1);
+});
+
+test('scanRange: takes more logs from one span than a call can take as arguments', async () => {
+  const flood = Array.from({ length: 200_000 }, (_, i) => ({ blockNumber: 5, logIndex: i }));
+  const out = await scan.scanRange({ readLogs: async () => flood, asset: ASSET }, [addr('a')], 0, 9, 10);
+  assert.equal(out.length, 200_000);
+});
+
+test('operatorAt: the operator as of a block, from the first change on', () => {
+  const agent = {
+    operator: addr('c'),
+    operators: [
+      { fromBlock: 10, operator: addr('a') },
+      { fromBlock: 50, operator: addr('b') },
+      { fromBlock: 90, operator: addr('c') },
+    ],
+  };
+  const at = (block) => scan.operatorAt(agent, block);
+  assert.equal(at(10), addr('a'));
+  assert.equal(at(49), addr('a'));
+  assert.equal(at(50), addr('b'), 'from the block it changed in, as a read of that block answers');
+  assert.equal(at(89), addr('b'));
+  assert.equal(at(1000), addr('c'));
+  assert.equal(at(5), addr('a'), 'before its registration, the first it had');
+});
+
+test('operatorAt: an agent that never changed operator has the one it registered with', () => {
+  assert.equal(scan.operatorAt({ operator: addr('a') }, 5), addr('a'));
+  assert.equal(scan.operatorAt(undefined, 5), null);
+});
+
+test('planCredits: judges each payment against the operator at its own block', () => {
+  const asked = [];
+  const { credits, skipped } = scan.planCredits([
+    { txHash: `0x${'1'.repeat(64)}`, from: addr('a'), to: addr('d'), amount: 5n, blockNumber: 40 },
+    { txHash: `0x${'2'.repeat(64)}`, from: addr('a'), to: addr('d'), amount: 5n, blockNumber: 60 },
+  ], {
+    didHashOf: () => 'did',
+    operatorOf: (didHash, block) => { asked.push([didHash, block]); return block < 50 ? addr('a') : addr('b'); },
+    isUsed: () => false,
+    minAmount: 1n,
+    registeredBlockOf: () => 1,
+  });
+  assert.deepEqual(asked, [['did', 40], ['did', 60]]);
+  assert.deepEqual(skipped.map((s) => s.reason), ['self_payment']);
+  assert.deepEqual(credits.map((c) => c.blockNumber), [60]);
 });

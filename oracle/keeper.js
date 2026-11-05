@@ -34,6 +34,9 @@ require('./config').requireValidNumericConfig('keeper');
 const { ethers } = require('ethers');
 const { fileState } = require('./publisher');
 const { webhookPayload } = require('./watcher-policy');
+const { redact } = require('./event-index');
+const { wordsOf } = require('./log-spans');
+const { readWithBackoff } = require('./read-retry');
 
 const STAKING_ABI = [
   'event SlashInitiated(bytes32 indexed didHash, address indexed reporter, address indexed victim, uint256 initiatedAt)',
@@ -58,8 +61,16 @@ const SCAN_MARGIN = 20;
 const ALERT_AGAIN_SECONDS = 24 * 3600;
 // Consecutive failed runs before a person hears about it. One failed read is routine.
 const FAILED_RUNS_ALERT = 6;
+// Between log reads. Arc's public RPCs refuse a burst of them within a handful of calls (measured 5
+// November 2026), and a first run has dozens to make. As the payment scan does.
+const SCAN_PACE_MS = 500;
 
 const DID_HASH = /^0x[0-9a-f]{64}$/;
+
+// An error as words that can leave this machine. An ethers error's message holds the whole RPC URL
+// when a node answers 429 or 500, and a provider's URL can carry its key. These reach the webhook,
+// which is somebody else's channel. The node's own words say what happened.
+const said = (err, cfg) => redact(wordsOf(err), [cfg.rpcUrl, cfg.webhookUrl]);
 
 /**
  * What to do about one proposal at chain time nowSec. Pure.
@@ -95,7 +106,7 @@ function decide(didHash, proposal, nowSec, cfg) {
  *   state   get(), set(s), persist()
  *   notify  (level, title, lines) -> delivered to a person; failure is its own problem
  */
-function createKeeper({ cfg, reads, sender, state, notify = async () => {}, log = console.log }) {
+function createKeeper({ cfg, reads, sender, state, notify = async () => {}, log = console.log, pause = () => new Promise((r) => setTimeout(r, SCAN_PACE_MS)) }) {
   let failedRuns = 0;
   const load = () => ({ scanBlock: cfg.fromBlock, open: {}, alerted: {}, executed: {}, ...(state.get() ?? {}) });
 
@@ -111,9 +122,11 @@ function createKeeper({ cfg, reads, sender, state, notify = async () => {}, log 
     const head = await reads.head();
     const safeHead = head - SCAN_MARGIN;
 
+    const firstScanned = s.scanBlock;
     // Who to watch. A filed slash stays open here until it is settled or dropped. The value says
     // whether it has been seen open, so history read on a first run raises no alerts.
     for (let start = s.scanBlock; start <= safeHead; start += cfg.chunkSize) {
+      if (start !== firstScanned) await pause();
       const end = Math.min(start + cfg.chunkSize - 1, safeHead);
       for (const didHash of await reads.slashInitiated(start, end)) {
         const d = didHash.toLowerCase();
@@ -214,8 +227,9 @@ function createKeeper({ cfg, reads, sender, state, notify = async () => {}, log 
       r.executed.push({ didHash, hash });
       await notify('ok', 'The slash keeper executed a slash', [`agent ${didHash}`, `tx ${hash}`]);
     } catch (err) {
-      r.failed.push({ didHash, reason: err.message });
-      await raise(s, nowSec, `failed:${didHash}`, 'alert', 'The slash keeper did not confirm an execution', [`agent ${didHash}`, err.message.slice(0, 300), 'It looks again every run, and the other keeper tries too.']);
+      const reason = said(err, cfg);
+      r.failed.push({ didHash, reason });
+      await raise(s, nowSec, `failed:${didHash}`, 'alert', 'The slash keeper did not confirm an execution', [`agent ${didHash}`, reason.slice(0, 300), 'It looks again every run, and the other keeper tries too.']);
     }
   }
 
@@ -223,7 +237,7 @@ function createKeeper({ cfg, reads, sender, state, notify = async () => {}, log 
   async function runFailed(err) {
     failedRuns += 1;
     if (failedRuns === FAILED_RUNS_ALERT) {
-      await notify('alert', `The slash keeper has failed ${failedRuns} runs in a row`, [err.message.slice(0, 300)]);
+      await notify('alert', `The slash keeper has failed ${failedRuns} runs in a row`, [said(err, cfg).slice(0, 300)]);
     }
     return failedRuns;
   }
@@ -335,7 +349,7 @@ function webhookNotifier(cfg) {
       });
       if (!res.ok) console.error(`[keeper] webhook rejected the alert: ${res.status}`);
     } catch (err) {
-      console.error(`[keeper] webhook delivery failed: ${err.message}`);
+      console.error(`[keeper] webhook delivery failed: ${said(err, cfg)}`);
     }
   };
 }
@@ -354,28 +368,34 @@ async function main() {
   const provider = new ethers.JsonRpcProvider(cfg.rpcUrl);
   const staking = new ethers.Contract(cfg.staking, STAKING_ABI, provider);
   const wallet = cfg.privateKey ? new ethers.Wallet(cfg.privateKey, provider) : null;
-  const executionPeriod = Number(await staking.EXECUTION_PERIOD());
-  const disputePeriod = Number(await staking.DISPUTE_RESOLUTION_PERIOD());
+  // Each read through the backoff the oracle uses: a throttle says nothing about a slash. A real
+  // revert carries its data and comes straight back, which is what simulate is asking for.
+  const read = (label, fn) => readWithBackoff(`keeper ${label}`, fn);
+  const executionPeriod = Number(await read('execution period', () => staking.EXECUTION_PERIOD()));
+  const disputePeriod = Number(await read('dispute period', () => staking.DISPUTE_RESOLUTION_PERIOD()));
   const topic = staking.interface.getEvent('SlashInitiated').topicHash;
   const reads = {
-    head: () => provider.getBlockNumber(),
-    blockTime: async (block) => Number((await provider.getBlock(block)).timestamp),
+    head: () => read('head', () => provider.getBlockNumber()),
+    blockTime: async (block) => Number((await read('block', () => provider.getBlock(block))).timestamp),
     slashInitiated: async (from, to) => {
-      const logs = await provider.getLogs({ address: cfg.staking, topics: [topic], fromBlock: from, toBlock: to });
+      const logs = await read('getLogs', () => provider.getLogs({ address: cfg.staking, topics: [topic], fromBlock: from, toBlock: to }));
       return logs.map((l) => l.topics[1]);
     },
-    proposal: (didHash) => staking.getSlashProposal(didHash),
+    proposal: (didHash) => read('proposal', () => staking.getSlashProposal(didHash)),
     simulate: async (didHash) => {
       try {
-        await staking.executeSlash.staticCall(didHash);
+        await read('simulate', () => staking.executeSlash.staticCall(didHash));
         return null;
       } catch (err) {
         return revertName(err, staking.interface);
       }
     },
-    balance: () => provider.getBalance(wallet.address),
+    balance: () => read('balance', () => provider.getBalance(wallet.address)),
     pendingTxs: async () => {
-      const [pending, latest] = await Promise.all([provider.getTransactionCount(wallet.address, 'pending'), provider.getTransactionCount(wallet.address, 'latest')]);
+      const [pending, latest] = await Promise.all([
+        read('nonce', () => provider.getTransactionCount(wallet.address, 'pending')),
+        read('nonce', () => provider.getTransactionCount(wallet.address, 'latest')),
+      ]);
       return pending - latest;
     },
   };
@@ -399,7 +419,7 @@ async function main() {
       for (const h of r.held) console.log(`[keeper] held by KEEPER_SKIP_AGENTS: ${h.didHash}`);
     } catch (err) {
       const n = await keeper.runFailed(err);
-      console.error(`[keeper] run failed (${n} in a row): ${err.message}`);
+      console.error(`[keeper] run failed (${n} in a row): ${said(err, cfg)}`);
     } finally {
       running = false;
     }
@@ -408,6 +428,11 @@ async function main() {
   setInterval(tick, cfg.pollSeconds * 1000);
 }
 
-if (require.main === module) main();
+if (require.main === module) {
+  main().catch((err) => {
+    console.error(`[keeper] could not start: ${redact(wordsOf(err), [process.env.RPC_URL, process.env.WEBHOOK_URL])}`);
+    process.exit(1);
+  });
+}
 
 module.exports = { decide, createKeeper, localSender, readConfig, revertName, summary, STAKING_ABI };

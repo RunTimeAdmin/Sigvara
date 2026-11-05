@@ -50,8 +50,6 @@ const SLASH_OVERDUE_SECONDS = 6 * 3600;
 // Slashes meant to sit past their deadline. The drill leaves agent C to lapse on 24 November 2026
 // (docs/slash-drill.md); once it is expired it is not Pending, and this entry does nothing.
 const SLASHES_HELD = new Set(['0x30b95fc4473e5ea0f187d4955ab24bcfebd7a739a0a93c1beafd5d6445f1d93a']);
-// What a keeper needs for several executions at today's gas price.
-const KEEPER_MIN_BALANCE_WEI = 2n * 10n ** 17n;
 const OUTCOMES_LAG_HOURS = process.env.OUTCOMES_LAG_HOURS ? Number(process.env.OUTCOMES_LAG_HOURS) : 2;
 // Repo-facing files under site/ that are never published, and the one file the host does not serve.
 const NOT_SERVED = new Set(['SECURITY.md', 'SECURITY_DEPLOYMENT_CHECKLIST.md', '.htaccess']);
@@ -193,6 +191,8 @@ async function checkServices() {
     if (res.status !== 200 || j.ok !== true) {
       fail(`index: /health status ${res.status}, ok=${j.ok}, ${j.behind ?? '?'} blocks behind${j.lastError ? `, last error: ${j.lastError}` : ''}`);
     }
+    // Said before it fills: a full index stops reading on, and nothing else watches its size.
+    if (j.maxLogs && j.logs > j.maxLogs * 0.8) fail(`index: holds ${j.logs} of at most ${j.maxLogs} logs; raise INDEX_MAX_LOGS and its mem_limit together`);
   } catch (e) {
     fail(`index: /health unreachable or unreadable (${e.message})`);
   }
@@ -229,6 +229,47 @@ async function checkServices() {
     }
   }
   console.log('services: oracle, checker and event index health, divergence list and certificate expiry checked');
+  await checkWallets();
+}
+
+async function rpcCall(method, params) {
+  const res = await fetch(RPC, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, signal: AbortSignal.timeout(20_000),
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+  });
+  const j = await res.json();
+  if (j.error) throw new Error(j.error.message);
+  return j.result;
+}
+
+/**
+ * The wallets under their floors, as { name, address, usdc, minUsdc }. Pure, so a test can hold it to
+ * them. `wallets` is as in deployments/5042002.json, and `balances` is by name, in wei: on Arc, gas is USDC.
+ */
+export function lowWallets(wallets, balances) {
+  return Object.entries(wallets)
+    .filter(([name, w]) => balances[name] < BigInt(w.minUsdc) * 10n ** 18n)
+    .map(([name, w]) => ({ name, address: w.address, minUsdc: w.minUsdc, usdc: usdcOf(balances[name]) }));
+}
+
+const usdcOf = (wei) => (Number(wei / 10n ** 16n) / 100).toFixed(2);
+
+// A wallet with no gas stops proposing, finalizing or posting, and nothing else would say why until
+// scores went stale. This says so with time to spare, from a place that shares nothing with them.
+async function checkWallets() {
+  try {
+    const { wallets } = JSON.parse(readFileSync('deployments/5042002.json', 'utf8'));
+    const balances = {};
+    for (const [name, w] of Object.entries(wallets)) {
+      balances[name] = BigInt(await rpcCall('eth_getBalance', [w.address, 'latest']));
+    }
+    for (const w of lowWallets(wallets, balances)) {
+      fail(`wallets: ${w.name} (${w.address}) has ${w.usdc} USDC, under its floor of ${w.minUsdc}. See the runbook, "Gas"`);
+    }
+    console.log(`wallets: ${Object.keys(wallets).map((n) => `${n} ${usdcOf(balances[n])} USDC`).join(', ')}`);
+  } catch (e) {
+    fail(`wallets: could not read them (${e.message})`);
+  }
 }
 
 /**
@@ -247,16 +288,6 @@ export function decodeSlashProposal(didHash, hex) {
   // Word 0 is the offset to the struct. Then didHash, reporter, victim, initiatedAt, state, the offset
   // of evidenceHash, challengeDeadline, disputedAt.
   return { didHash, state: Number(BigInt('0x' + word(5))), challengeDeadline: Number(BigInt('0x' + word(7))) };
-}
-
-async function rpcCall(method, params) {
-  const res = await fetch(RPC, {
-    method: 'POST', headers: { 'content-type': 'application/json' }, signal: AbortSignal.timeout(20_000),
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-  });
-  const j = await res.json();
-  if (j.error) throw new Error(j.error.message);
-  return j.result;
 }
 
 // A slash the keepers should have settled, whatever state the keepers think they are in. This
@@ -278,10 +309,6 @@ async function checkSlashes() {
     }
     const open = proposals.filter((p) => p.state === 1).length;
     console.log(`slashes: ${filed.length} agent(s) ever filed against, ${open} pending, none overdue that is not held on purpose`);
-    for (const [name, address] of Object.entries(deployed.keepers ?? {})) {
-      const balance = BigInt(await rpcCall('eth_getBalance', [address, 'latest']));
-      if (balance < KEEPER_MIN_BALANCE_WEI) fail(`keeper ${name} (${address}) is low on gas: ${balance} wei`);
-    }
   } catch (e) {
     fail(`slashes: could not read them (${e.message})`);
   }

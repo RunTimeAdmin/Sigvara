@@ -6,6 +6,11 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { ethers } = require('ethers');
+const http = require('node:http');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawn } = require('node:child_process');
 const { decide, createKeeper, localSender, readConfig, revertName, STAKING_ABI } = require('./keeper');
 
 const DAY = 86_400;
@@ -462,4 +467,166 @@ test('a chain with no priority fee still sends', async () => {
   await h.sender.send(A);
   assert.equal(h.sent[0].opts.maxFeePerGas, 5n * 10n ** 9n);
   assert.equal(h.sent[0].opts.maxPriorityFeePerGas, 5n * 10n ** 9n);
+});
+
+// ---- what it says about a failure leaves this machine -------------------------------------------
+
+const RPC_KEY = 'k3yk3yk3yk3yk3yk3yk3yk3y';
+
+// The real process and real ethers, against a fake node and webhook. `answer(call)` says what the node
+// does with one call: a result, { error } for a JSON-RPC refusal, or null for an HTTP 500.
+async function withKeeperProcess(answer, run) {
+  const listen = (handler) => new Promise((resolve) => {
+    const server = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (c) => { body += c; });
+      req.on('end', () => handler(req, res, body));
+    }).listen(0, '127.0.0.1', () => resolve(server));
+  });
+  const alerts = [];
+  const webhook = await listen((_req, res, body) => { alerts.push(body); res.writeHead(204); res.end(); });
+  const period = ethers.toBeHex(14 * DAY, 32);
+  const node = await listen((_req, res, body) => {
+    const j = JSON.parse(body);
+    const reply = (r) => {
+      if (r.method === 'eth_chainId') return { jsonrpc: '2.0', id: r.id, result: '0x1' };
+      if (r.method === 'eth_call') return { jsonrpc: '2.0', id: r.id, result: period };
+      const a = answer(r);
+      if (a === null) return null;
+      return a.error ? { jsonrpc: '2.0', id: r.id, error: a.error } : { jsonrpc: '2.0', id: r.id, result: a };
+    };
+    const replies = (Array.isArray(j) ? j : [j]).map(reply);
+    if (replies.includes(null)) { res.writeHead(500); return res.end('oops'); }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify(Array.isArray(j) ? replies : replies[0]));
+  });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sigvara-keeper-'));
+  const url = (s) => `http://127.0.0.1:${s.address().port}`;
+  const child = spawn(process.execPath, ['--require', path.join(__dirname, 'test-support', 'fast-interval.js'), path.join(__dirname, 'keeper.js')], {
+    env: {
+      ...process.env,
+      RPC_URL: `${url(node)}/v2/${RPC_KEY}`,
+      WEBHOOK_URL: `${url(webhook)}/hook`,
+      STAKING_ADDRESS: ethers.ZeroAddress.replace(/0$/, '1'),
+      KEEPER_FROM_BLOCK: '1',
+      LOG_CHUNK_SIZE: '100',
+      KEEPER_STATE_PATH: path.join(dir, 'state.json'),
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let output = '';
+  child.stdout.on('data', (d) => { output += d; });
+  child.stderr.on('data', (d) => { output += d; });
+  const exited = new Promise((resolve) => child.on('exit', resolve));
+  const until = async (check, ms = 30_000) => {
+    const end = Date.now() + ms;
+    while (!check()) {
+      assert.ok(Date.now() < end, `timed out waiting:\n${output}`);
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  };
+  try {
+    await run({ alerts, output: () => output, until });
+  } finally {
+    child.kill();
+    await exited;
+    await Promise.all([webhook, node].map((s) => new Promise((r) => { s.closeAllConnections(); s.close(r); })));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('a node failing keeps the RPC URL and its key out of the alert and the log', async () => {
+  await withKeeperProcess(() => null, async ({ alerts, output, until }) => {
+    const failed = () => alerts.find((a) => a.includes('failed 6 runs in a row'));
+    await until(failed);
+    assert.match(failed(), /server response 500/, 'it still says what happened');
+    assert.equal(failed().includes('request={'), false, 'and only that');
+    for (const words of [failed(), output()]) {
+      assert.equal(words.includes(RPC_KEY), false, 'the key');
+      assert.equal(words.includes('/v2/'), false, 'the path it sits in');
+    }
+  });
+});
+
+test('a node refusing every read says so in its own words', async () => {
+  const refuse = () => ({ error: { code: -32005, message: 'rate limit exceeded' } });
+  await withKeeperProcess(refuse, async ({ alerts, until }) => {
+    const failed = () => alerts.find((a) => a.includes('failed 6 runs in a row'));
+    await until(failed, 60_000);
+    assert.match(failed(), /rate limit exceeded/, 'not "could not coalesce error"');
+    assert.equal(failed().includes('coalesce'), false);
+  });
+});
+
+test('a throttled read is tried again, so a run gets through it as Arc\'s public RPCs make it do', async () => {
+  let getLogs = 0;
+  const answer = (call) => {
+    if (call.method === 'eth_blockNumber') return ethers.toBeHex(500);
+    if (call.method === 'eth_getBlockByNumber') return { number: ethers.toBeHex(500), timestamp: ethers.toBeHex(NOW), hash: `0x${'ab'.repeat(32)}`, parentHash: `0x${'cd'.repeat(32)}`, transactions: [], gasLimit: '0x1', gasUsed: '0x0', miner: ethers.ZeroAddress, difficulty: '0x0', nonce: '0x0000000000000000', extraData: '0x' };
+    if (call.method === 'eth_getLogs') {
+      getLogs += 1;
+      return getLogs % 3 === 1 ? { error: { code: -32005, message: 'rate limit exceeded' } } : [];
+    }
+    return null;
+  };
+  await withKeeperProcess(answer, async ({ output, alerts, until }) => {
+    await until(() => /\[keeper\] run at block 500: 0 open/.test(output()));
+    assert.equal(/run failed/.test(output()), false, output());
+    assert.match(output(), /keeper getLogs failed/, 'it did meet the throttle');
+    assert.equal(alerts.length, 0);
+  });
+});
+
+test('log reads are paced between chunks, not before the first or after the last', async () => {
+  const order = [];
+  let kept = null;
+  const keeper = createKeeper({
+    cfg: { mode: 'shadow', fromBlock: 1, chunkSize: 100, graceSeconds: 0, skip: new Set(), executionPeriod: 14 * DAY, disputePeriod: 14 * DAY, minBalance: 0n },
+    reads: {
+      head: async () => 320,
+      blockTime: async () => NOW,
+      slashInitiated: async (from) => { order.push(`read ${from}`); return []; },
+      proposal: async () => pending(1),
+    },
+    state: { get: () => kept, set: (s) => { kept = s; }, persist: () => {} },
+    pause: async () => { order.push('pause'); },
+  });
+  await keeper.runOnce();
+  assert.deepEqual(order, ['read 1', 'pause', 'read 101', 'pause', 'read 201']);
+});
+
+test('an execution that fails keeps a URL out of the alert, and its own words in it', async () => {
+  const notes = [];
+  let kept = null;
+  const reads = {
+    head: async () => 100,
+    blockTime: async () => NOW,
+    slashInitiated: async () => [A],
+    proposal: async () => pending(1),
+    simulate: async () => null,
+    balance: async () => 10n ** 18n,
+    pendingTxs: async () => 0,
+  };
+  const failing = (message) => createKeeper({
+    cfg: { mode: 'live', fromBlock: 1, chunkSize: 1000, graceSeconds: 0, skip: new Set(), executionPeriod: 14 * DAY, disputePeriod: 14 * DAY, minBalance: 0n, rpcUrl: 'https://node.example/v2/secretsecret' },
+    reads,
+    sender: { send: async () => { throw new Error(message); } },
+    state: { get: () => kept, set: (s) => { kept = s; }, persist: () => {} },
+    notify: async (_level, title, lines) => { notes.push([title, ...lines].join(' ')); },
+  });
+  const quoted = await failing('server said no (info={ "requestUrl": "https://node.example/v2/secretsecret", "x": 1 })').runOnce();
+  assert.equal(quoted.failed[0].reason.includes('secretsecret'), false);
+  assert.equal(notes.join(' ').includes('secretsecret'), false);
+
+  kept = null;
+  notes.length = 0;
+  const ours = 'executeSlash 0xabc was sent, with no receipt after 120 seconds. Check it before assuming it failed';
+  assert.equal((await failing(ours).runOnce()).failed[0].reason, ours);
+  assert.ok(notes.join(' ').includes(ours), 'a person is still told which transaction to check');
+});
+
+test('the live check counts keepers among the wallets, and has no list of its own', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'check-live.mjs'), 'utf8');
+  assert.equal(source.includes('deployed.keepers'), false);
+  assert.equal(source.match(/async function rpcCall\(/g).length, 1);
 });

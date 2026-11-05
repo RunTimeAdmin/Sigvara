@@ -37,6 +37,8 @@ const {
   checkerStatus, triage, alertKey, webhookPayload, describeDivergence, trackPollOutcome,
 } = require('./watcher-policy');
 const { finalizableAtOf } = require('./epoch-policy');
+const { redact } = require('./event-index');
+const { wordsOf } = require('./log-spans');
 
 const cfg = {
   checkerUrl: (process.env.CHECKER_URL || '').replace(/\/+$/, ''),
@@ -71,6 +73,11 @@ const ABI = [
 const provider = new ethers.JsonRpcProvider(cfg.rpcUrl);
 const reputation = new ethers.Contract(cfg.reputationAddress, ABI, provider);
 
+// An error as words that can leave this machine. An ethers error's message holds the whole RPC URL
+// when a node answers 429 or 500, and a provider's URL can carry its key. These reach the webhook,
+// which is somebody else's channel. The node's own words say what happened.
+const said = (err) => redact(wordsOf(err), [cfg.rpcUrl, cfg.webhookUrl]);
+
 // key -> highest escalation already sent (0 first sighting, 1 final warning).
 // In memory on purpose: a restart re-surfaces anything still open, which is the safe
 // direction. Losing the record of an alert nobody acted on is not a loss.
@@ -83,7 +90,9 @@ let checkerWasOk = true;
 async function getJson(path) {
   const res = await fetch(`${cfg.checkerUrl}${path}`, { signal: AbortSignal.timeout(20_000), redirect: 'error' });
   if (!res.ok) throw new Error(`${path} returned ${res.status}`);
-  return res.json();
+  const body = await res.text();
+  // Not the parser's message, which quotes the body: what this server sends is not ours to repeat.
+  try { return JSON.parse(body); } catch { throw new Error(`${path} did not return JSON`); }
 }
 
 async function notify(level, title, lines) {
@@ -113,7 +122,7 @@ async function notify(level, title, lines) {
     }
   } catch (err) {
     // A webhook that is down must not stop the loop, and must not be silent either.
-    console.error(`[watcher] webhook delivery failed: ${err.message}`);
+    console.error(`[watcher] webhook delivery failed: ${said(err)}`);
   }
 }
 
@@ -130,14 +139,14 @@ async function poll() {
   try {
     health = await getJson('/health');
   } catch (err) {
-    console.error(`[watcher] checker fetch failed: ${err.message}`);
+    console.error(`[watcher] checker fetch failed: ${said(err)}`);
   }
   if (health) {
     try {
       payload = await getJson('/divergence');
     } catch (err) {
-      payloadError = err.message;
-      console.error(`[watcher] divergence fetch failed: ${err.message}`);
+      payloadError = said(err);
+      console.error(`[watcher] divergence fetch failed: ${payloadError}`);
     }
   }
 
@@ -174,7 +183,7 @@ async function poll() {
       // An unreadable slot must not be treated as "nothing pending", which would
       // silently downgrade a live dispute to 'closed'. Leaving it undefined does the
       // same, so say so and skip the agent this round.
-      console.error(`[watcher] could not read pending score for ${did}: ${err.message}`);
+      console.error(`[watcher] could not read pending score for ${did}: ${said(err)}`);
     }
   }));
 
@@ -231,8 +240,8 @@ async function runPoll() {
     await poll();
   } catch (err) {
     ok = false;
-    failure = err.message;
-    console.error(`[watcher] poll error: ${err.message}`);
+    failure = said(err);
+    console.error(`[watcher] poll error: ${failure}`);
   }
   const { state, action } = trackPollOutcome(pollHealth, ok);
   pollHealth = state;
@@ -249,6 +258,6 @@ async function runPoll() {
 
 // runPoll handles its own failures; this is for the one it cannot, so a bug here costs a poll
 // and not the process.
-const tick = () => runPoll().catch((err) => console.error(`[watcher] unexpected error: ${err.message}`));
+const tick = () => runPoll().catch((err) => console.error(`[watcher] unexpected error: ${said(err)}`));
 tick();
 setInterval(tick, cfg.pollSeconds * 1000);

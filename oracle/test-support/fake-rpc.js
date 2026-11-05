@@ -159,7 +159,15 @@ async function startFakeRpc(options = {}) {
     let body = '';
     req.on('data', (d) => { body += d; });
     req.on('end', () => {
-      const parsed = JSON.parse(body);
+      let parsed;
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        // Not meant for this server: test files run at once and ports get reused, so a stranger
+        // can land here, and that must not fail the test running now. It sees nothing listening.
+        req.socket.destroy();
+        return;
+      }
       const out = Array.isArray(parsed) ? parsed.map(respond) : respond(parsed);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(out));

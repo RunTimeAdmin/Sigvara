@@ -424,6 +424,14 @@ let payerScoreCache = new Map();
 const emptySeenAt = new Map();
 const coveringLate = new Set();
 
+// How fast to ask for payers' standing, as measured on Arc's public RPC on 4 Nov 2026. ethers sends what
+// is asked in one tick as one batch, the RPC refuses past 20 calls in a batch, and a payer with a
+// standing takes two more reads. It also has a budget that runs out: at 600 ms between chunks it
+// refused from about 350 payers on, and at this pace none of 2,000 was refused. All at once, the
+// backoff could not catch up past about 80 payers, and the agent went unscored for having customers.
+const PAYER_READ_CHUNK = 10;
+const PAYER_READ_PACE_MS = 1_500;
+
 async function payerScoresFor(didHash, events = getPaymentEvents(didHash)) {
   if (!payments.required(paymentCfg)) return null;
 
@@ -435,7 +443,7 @@ async function payerScoresFor(didHash, events = getPaymentEvents(didHash)) {
     if (!unique.has(key)) unique.set(key, e.payer);
   }
 
-  // Resolve the cache misses together rather than one at a time.
+  // Resolve the cache misses together, a chunk at a time, rather than one at a time.
   //
   // These reads are independent, and awaiting them in sequence cost a full round trip
   // each. ethers batches calls issued in the same tick into one JSON-RPC request, which
@@ -445,11 +453,14 @@ async function payerScoresFor(didHash, events = getPaymentEvents(didHash)) {
   // getAgentScore retries a throttled or dropped read, and still rejects when the node cannot be
   // reached, because a counterparty the node could not answer for is not one with no standing. What was
   // read is kept either way, so the next try asks only for what is missing. The rejection reaches the
-  // agent's own handler, which skips the agent for this epoch.
+  // agent's own handler, which skips the agent for this epoch, so the rest are not asked for: that
+  // would only press a node that is already failing.
   const misses = [...unique].filter(([key]) => !payerScoreCache.has(key));
-  if (misses.length > 0) {
-    const settled = await Promise.allSettled(misses.map(([, addr]) => chain.getAgentScore(addr)));
-    misses.forEach(([key], i) => { if (settled[i].status === 'fulfilled') payerScoreCache.set(key, settled[i].value); });
+  for (let i = 0; i < misses.length; i += PAYER_READ_CHUNK) {
+    if (i > 0) await new Promise((r) => setTimeout(r, PAYER_READ_PACE_MS));
+    const chunk = misses.slice(i, i + PAYER_READ_CHUNK);
+    const settled = await Promise.allSettled(chunk.map(([, addr]) => chain.getAgentScore(addr)));
+    chunk.forEach(([key], j) => { if (settled[j].status === 'fulfilled') payerScoreCache.set(key, settled[j].value); });
     const failed = settled.find((s) => s.status === 'rejected');
     if (failed) throw failed.reason;
   }
@@ -459,11 +470,30 @@ async function payerScoresFor(didHash, events = getPaymentEvents(didHash)) {
   return out;
 }
 
+// An agent's external factor, kept per snapshot. Read at one block with the same evidence it cannot
+// change, so the epoch, the checker's audit and every GET /score can share one reading, and feedback
+// posted later waits for the next snapshot as it always did. A registry on another chain is read at
+// its latest block, so there it is kept for a few minutes. A failure is not kept: the next to ask
+// tries again.
+const EXTERNAL_SCORES_KEPT = 1024;
+const EXTERNAL_LATEST_HELD_MS = 5 * 60_000;
+const externalScores = new Map();
+
+function externalScoreOnce(key, read) {
+  if (!externalScores.has(key)) {
+    if (externalScores.size >= EXTERNAL_SCORES_KEPT) externalScores.delete(externalScores.keys().next().value);
+    const reading = read();
+    externalScores.set(key, reading);
+    reading.catch(() => externalScores.delete(key));
+  }
+  return externalScores.get(key);
+}
+
 /**
  * The external factor for one agent: the feedback on its linked ERC-8004 identity, counted
- * only from the reviewers reviewers.js accepts. 0 when nothing is linked, the feed is off, or
- * the registry cannot be read (externalScoreFor). Throws when the snapshot or a reviewer
- * cannot be read, and the agent is skipped this epoch. `nowMs` is the chain's clock, as for scoreAt, and
+ * only from the reviewers reviewers.js accepts. 0 when nothing is linked or the feed is off.
+ * Throws when the registry, the snapshot or a reviewer cannot be read, and the agent is
+ * skipped this epoch. `nowMs` is the chain's clock, as for scoreAt, and
  * `events` the payment evidence to judge reviewers by: the checker passes the evidence as it
  * stood at the proposal it audits.
  *
@@ -486,14 +516,20 @@ async function externalScoreOf(didHash, { operator, agentAddress }, nowMs, event
   const snapshotOperator = sameChain ? (await chain.getAgentInfo(didHash, snapshotBlock)).operator : operator;
   const linkedId = await linkedAgentId(didHash, snapshotOperator, sameChain ? snapshotBlock : undefined);
   if (linkedId === undefined) return { score: 0, agentId: null };
-  const score = await external.externalScoreFor(linkedId, snapshotOperator, async (rows) => {
+  // The scored chain's payments only. A reviewer's payment is traced back to its funder on this
+  // chain, by block, and a payment chain's block number means nothing here.
+  const evidence = events.filter((e) => e.chainId == null && e.ts <= snapshotSec * 1000);
+  const key = [
+    didHash, linkedId, snapshotOperator, snapshotSec,
+    sameChain ? snapshotBlock : `latest ${Math.floor(Date.now() / EXTERNAL_LATEST_HELD_MS)}`,
+    reviewers.evidenceDigest(evidence),
+  ].join('|');
+  const score = await externalScoreOnce(key, () => external.externalScoreFor(linkedId, snapshotOperator, async (rows) => {
     const result = await reviewers.scoreFeedback(
       rows,
       {
         agent: { operator: snapshotOperator, agentAddress },
-        // The scored chain's payments only. A reviewer's payment is traced back to its funder on this
-        // chain, by block, and a payment chain's block number means nothing here.
-        events: events.filter((e) => e.chainId == null && e.ts <= snapshotSec * 1000),
+        events: evidence,
         nowMs: snapshotSec * 1000,
       },
       {
@@ -506,7 +542,7 @@ async function externalScoreOf(didHash, { operator, agentAddress }, nowMs, event
     );
     if (rows.length) console.log(`[oracle]   ${didHash.slice(0, 10)}… external: ${reviewers.describe(result)}`);
     return result.score;
-  }, sameChain ? snapshotBlock : undefined);
+  }, sameChain ? snapshotBlock : undefined, reviewers.payersByAmount(evidence)));
   return { score, agentId: linkedId };
 }
 
@@ -781,7 +817,7 @@ async function runPaymentScan(agents) {
 
   const { credits, skipped } = paymentScan.planCredits(logs.map((log) => paymentScan.decodeTransfer(log, paymentCfg.asset)), {
     didHashOf: (address) => byAddress.get(address.toLowerCase())?.didHash ?? null,
-    operatorOf: (didHash) => byDid.get(didHash)?.operator ?? null,
+    operatorOf: (didHash, block) => paymentScan.operatorAt(byDid.get(didHash), block),
     // Ask the store, so the scan's pre-check and creditPayment cannot drift apart.
     isUsed: (txHash, didHash, payer) => isCredited(txHash, didHash, payer),
     minAmount: paymentCfg.minAmount,
@@ -1377,7 +1413,7 @@ async function runEpochInner() {
         const held = evidenceAt(didHash, evidenceCutMs);
         // externalScore: only for agents linked to an ERC-8004 identity they own, and only from
         // the reviewers reviewers.js accepts. Ownership is re-verified inside externalScoreFor;
-        // any failure yields 0.
+        // a registry the node cannot read skips the agent.
         const { score: externalScore } = await externalScoreOf(didHash, { operator, agentAddress }, scoringNowMs, held);
         const inputs = { registeredAt, att, flagWeight, externalScore };
         const { measured, scores } = await scoreAt(didHash, inputs, scoringNowMs, held);
@@ -1858,38 +1894,18 @@ async function readBadgeState(address) {
 }
 
 /**
- * Whether a verified payment settled in a block before the one the agent registered in, which the scan
- * skips too (planCredits). Asked of the chain at the payment's block, so a report and a scan draw the
- * line in the same place. Throws when the chain cannot be read.
+ * The agent as it stood at a verified payment's block, asked of the chain there so a report and a scan
+ * draw the same lines. registeredAt is 0 when the payment came before it registered, which the scan
+ * skips too (planCredits). The operator is who could not have been a customer then, as the scan judges
+ * it (paymentScan.operatorAt). Against today's operator, a former operator could pay its own agent,
+ * hand it on, and attest, and a new operator's payment from before would be refused. Throws when the
+ * chain cannot be read.
  */
-async function paidBeforeRegistration(didHash, credited) {
-  return Number((await chain.getAgentInfo(didHash, credited.blockNumber)).registeredAt) === 0;
+function agentAtPayment(didHash, credited) {
+  return chain.getAgentInfo(didHash, credited.blockNumber);
 }
 
-// Repeated bad signatures for one payment leg. A leg's payer can run its account's code here as
-// often as it likes, so after a few failures the leg waits.
-const BAD_SIGNATURE_LIMIT = 5;
-const BAD_SIGNATURE_WINDOW_MS = 3_600_000;
-const badSignatures = new Map();
-
-function badSignatureThrottled(key, now = Date.now()) {
-  const entry = badSignatures.get(key);
-  if (!entry) return false;
-  if (now - entry.since > BAD_SIGNATURE_WINDOW_MS) {
-    badSignatures.delete(key);
-    return false;
-  }
-  return entry.count >= BAD_SIGNATURE_LIMIT;
-}
-
-function noteBadSignature(key, now = Date.now()) {
-  if (badSignatures.size > 10_000) {
-    for (const [k, v] of badSignatures) if (now - v.since > BAD_SIGNATURE_WINDOW_MS) badSignatures.delete(k);
-  }
-  const entry = badSignatures.get(key);
-  if (!entry || now - entry.since > BAD_SIGNATURE_WINDOW_MS) badSignatures.set(key, { count: 1, since: now });
-  else entry.count += 1;
-}
+const badSignatures = payerOutcome.badSignatureLimiter();
 
 /** The EIP-712 hash of a leg's payer-signed outcome under this oracle's domain. */
 const payerOutcomeHashOf = (didHash, txHash, value) =>
@@ -1930,7 +1946,7 @@ function heldOutcomeReply(didHash, txHash, posted) {
  * @returns {Promise<{ status: number, body: object, metric: string }>} the reply, and the counter
  *   a POST counts it under
  */
-async function admitPayerOutcome({ didHash, credited, info, signed, packetId = null }, { peerBlock = null } = {}) {
+async function admitPayerOutcome({ didHash, credited, info, signed, packetId = null }, { peerBlock = null, client = null } = {}) {
   const fromPeer = peerBlock !== null;
   const refuse = (status, code, error, metric) => ({ status, body: { error, code }, metric });
   const leg = (credited.legs ?? []).find((l) => l.payer.toLowerCase() === signed.payer.toLowerCase());
@@ -1948,8 +1964,10 @@ async function admitPayerOutcome({ didHash, credited, info, signed, packetId = n
   const early = payerOutcome.timingProblem(signed, credited.settledAt);
   if (early) return refuse(400, 'outcome_window', early, 'attestRejectedOther');
 
-  const throttleKey = `${didHash}|${credited.txHash}|${leg.payer.toLowerCase()}`;
-  if (!fromPeer && badSignatureThrottled(throttleKey)) {
+  // Before any chain read. Only a contract's bad signatures are ever noted, below, so this slows down
+  // whoever keeps making a contract account's code run, and nobody else.
+  const throttleKey = `${client}|${didHash}|${credited.txHash}|${leg.payer.toLowerCase()}`;
+  if (!fromPeer && badSignatures.blocked(throttleKey)) {
     return refuse(429, 'bad_signature_throttled', 'too many bad signatures for this payment; try again later', 'attestRejectedOther');
   }
   const provider = chain.getProvider();
@@ -2009,7 +2027,7 @@ async function admitPayerOutcome({ didHash, credited, info, signed, packetId = n
     return refuse(502, 'rpc_error', 'could not read the chain', 'paymentRpcErrors');
   }
   if (!verdict.valid) {
-    if (!fromPeer) noteBadSignature(throttleKey);
+    if (!fromPeer && verdict.signer === 'contract') badSignatures.note(throttleKey);
     return refuse(400, 'bad_signature', 'the signature is not the payer\'s for this outcome', 'attestRejectedOther');
   }
 
@@ -2144,13 +2162,15 @@ async function importOne({ didHash, txHash, checkedAtBlock, signed, packetId }, 
     if (['rpc_error', 'unconfirmed', 'not_found'].includes(err.code)) return { kind: 'retry', code: err.code };
     return { kind: 'refused', code: err.code || 'payment_invalid' };
   }
+  let atPayment;
   try {
-    if (await paidBeforeRegistration(didHash, credited)) return { kind: 'refused', code: 'before_registration' };
+    atPayment = await agentAtPayment(didHash, credited);
+    if (Number(atPayment.registeredAt) === 0) return { kind: 'refused', code: 'before_registration' };
   } catch (err) {
     console.warn(`[oracle] payer outcome import: chain read failed for ${didHash}: ${err.message}`);
     return { kind: 'retry', code: 'rpc_error' };
   }
-  const r = await admitPayerOutcome({ didHash, credited, info, signed, packetId }, { peerBlock: checkedAtBlock });
+  const r = await admitPayerOutcome({ didHash, credited, info: atPayment, signed, packetId }, { peerBlock: checkedAtBlock });
   if (r.status === 200) return { kind: 'imported' };
   if (r.status === 502 || r.status === 503) return { kind: 'retry', code: r.body.code };
   return { kind: 'refused', code: r.body.code };
@@ -2417,8 +2437,6 @@ async function handleRequest(req, res) {
       storeWritable,
       statePersisted: persisted.ok,
       lastPersistMs: persisted.at,
-      ...(persisted.ok ? {} : { statePersistError: persisted.error }),
-      statePath: getStatePath(),
       // 'file', 'fresh', or 'backup' when the state file was unusable and the previous save
       // was used instead, which is a recovery somebody should hear about.
       stateSource: getLoadReport().source,
@@ -2608,6 +2626,7 @@ async function handleRequest(req, res) {
       // threw a ReferenceError at that line and was answered 400: nothing was credited, and
       // no test covered the route.
       let info = null;
+      let atPayment = null;
       if (payments.required(paymentCfg)) {
         const txHash = body.payment && body.payment.txHash;
         try {
@@ -2642,21 +2661,20 @@ async function handleRequest(req, res) {
           }
           return json(res, 402, { error: err.message, code: err.code || 'payment_invalid' });
         }
-        let beforeRegistration;
         try {
-          beforeRegistration = await paidBeforeRegistration(didHash, credited);
+          atPayment = await agentAtPayment(didHash, credited);
         } catch (err) {
           metrics.inc('paymentRpcErrors');
           console.warn(`[oracle] /attest chain read failed for ${didHash}: ${err.message}`);
           return json(res, 502, { error: 'could not read the chain', code: 'rpc_error' });
         }
-        if (beforeRegistration) {
+        if (Number(atPayment.registeredAt) === 0) {
           metrics.inc('attestRejectedPayment');
           return json(res, 402, { error: 'this payment was made before the agent registered', code: 'before_registration' });
         }
         // A payer-signed outcome is checked on the signer's own leg (admitPayerOutcome), so an
         // operator's larger leg in the same transaction cannot block its customer's outcome.
-        if (!signedOutcome && payments.isSelfPayment(credited.payer, info)) {
+        if (!signedOutcome && payments.isSelfPayment(credited.payer, atPayment)) {
           metrics.inc('attestRejectedPayment');
           return json(res, 402, {
             error: 'an agent cannot attest itself: the payer is its own operator or agent address',
@@ -2673,8 +2691,8 @@ async function handleRequest(req, res) {
         // outcome first fixes it, as they fix the outcome, and only the payer and those it gave the
         // signature to can do that.
         const r = await admitPayerOutcome({
-          didHash, credited, info, signed: signedOutcome, packetId: payerOutcome.packetIdOf(packetId),
-        });
+          didHash, credited, info: atPayment, signed: signedOutcome, packetId: payerOutcome.packetIdOf(packetId),
+        }, { client: clientKey(req, isTrustedProxy) });
         metrics.inc(r.metric);
         return json(res, r.status, r.body);
       }
@@ -2743,7 +2761,7 @@ async function handleRequest(req, res) {
           // would let an operator's own leg ride along inside a transaction a real
           // customer also paid into, and would put the two intake paths back into
           // disagreement about the same transaction.
-          if (payments.isSelfPayment(leg.payer, info)) continue;
+          if (payments.isSelfPayment(leg.payer, atPayment)) continue;
           const legOutcome = i === 0 ? outcome : null;
           if (creditPayment(
             didHash, credited.txHash, leg.amount, leg.payer, legOutcome, credited.settledAt, packet,
@@ -2993,7 +3011,13 @@ async function handleRequest(req, res) {
         console.warn(`[oracle] /link chain read failed for ${didHash}: ${err.message}`);
         return json(res, 502, { error: 'could not read the chain', code: 'rpc_error' });
       }
-      const owns = await external.verifyOwnership(String(agentId), operator);
+      let owns;
+      try {
+        owns = await external.verifyOwnership(String(agentId), operator);
+      } catch (err) {
+        console.warn(`[oracle] /link registry read failed for ${didHash}: ${err.message}`);
+        return json(res, 502, { error: 'could not read the chain', code: 'rpc_error' });
+      }
       if (!owns) {
         return json(res, 403, { error: 'ERC-8004 agent is not owned by this agent\'s Sigvara operator; refusing to link' });
       }
@@ -3217,8 +3241,8 @@ const server = http.createServer((req, res) => {
 }
 
 server.listen(cfg.port, cfg.host, () => {
-  if (!cfg.adminToken) {
-    console.warn('[oracle] WARNING: ORACLE_ADMIN_TOKEN is unset — /attest, /flag, and /epoch are UNAUTHENTICATED. Set a token before exposing this service.');
+  if (!cfg.credentials.size) {
+    console.warn('[oracle] WARNING: no write credential is set, so /attest, /flag, and /epoch are UNAUTHENTICATED. Set ORACLE_ADMIN_TOKEN or an ORACLE_TOKEN_<NAME> before exposing this service.');
   }
   console.log(`[oracle] HTTP on ${cfg.host}:${cfg.port}  epoch every ${cfg.epochMs / 3_600_000}h  attest cooldown ${ATTEST_COOLDOWN_MS / 1000}s`);
   // Names only, never the tokens. Revoking a credential means deleting its variable and

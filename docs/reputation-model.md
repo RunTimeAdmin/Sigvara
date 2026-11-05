@@ -167,7 +167,9 @@ One rating per reviewer, however many reviews it posts. Reviewers count as one w
 share an operator, or when their funding, or their operator's, traces to a shared wallet within
 two hops. A wallet's funder is the largest native transfer into it in the first block where it
 held 1 USDC or had sent a transaction, so dust from a stranger does not make the stranger its
-funder. Wallets that fund everyone end a trace: the zero address a mint comes from always, and
+funder. That transfer has to be at least 1 USDC itself: a smaller one only topped the wallet up,
+and naming its sender would hide whoever sent the rest. A reviewer with no funder is not counted.
+Wallets that fund everyone end a trace: the zero address a mint comes from always, and
 a faucet or an exchange when `EXTERNAL_PUBLIC_FUNDERS` lists it. The factor is the
 recency-weighted mean of those independent ratings, scaled down below five of them, so one
 reviewer who paid recently is worth at most 5 of the 25.
@@ -179,6 +181,13 @@ the proposal it audits. The cost is that a payment or a review made today counts
 
 Reviewers count only through the oracle's payment evidence, so the factor is 0 on an operator
 that verifies no payments (`PAYMENT_VERIFICATION` off and the pull scanner off).
+
+Only feedback that could count is read. Anyone can post to the registry, so reading all of it
+would let any wallet decide what an agent costs to score. The oracle asks for the list of clients
+and reads only those that paid the agent: the 100 that paid it most, and the newest 10 reviews of
+each. It then keeps the factor for the rest of the snapshot, unless the evidence changes. So a
+reviewer's older reviews stop counting once it has posted ten newer ones, and a party willing to
+out-pay an honest reviewer, from a hundred wallets, can push it off the list.
 
 That makes the factor harder to farm, not unbuyable. Each reviewer it counts costs a bond, a
 month, an earned score of 40, separately funded wallets and a payment of at least

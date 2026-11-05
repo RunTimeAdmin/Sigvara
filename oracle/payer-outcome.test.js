@@ -39,6 +39,65 @@ async function signOutcome(didHash, txHash, payer, {
 
 // ---- the module on its own --------------------------------------------------------------
 
+describe('badSignatureLimiter', () => {
+  const HOUR = 3_600_000;
+
+  test('blocks a key at its limit, and only that key', () => {
+    const l = payerOutcome.badSignatureLimiter({ limit: 3, windowMs: HOUR });
+    for (let i = 0; i < 2; i += 1) l.note('a', 1000);
+    assert.equal(l.blocked('a', 1000), false);
+    l.note('a', 1000);
+    assert.equal(l.blocked('a', 1000), true);
+    assert.equal(l.blocked('b', 1000), false);
+  });
+
+  test('lets a key go when its window has passed, and starts it again', () => {
+    const l = payerOutcome.badSignatureLimiter({ limit: 2, windowMs: HOUR });
+    l.note('a', 1000);
+    l.note('a', 2000);
+    assert.equal(l.blocked('a', 1000 + HOUR), true, 'still inside it, and the window runs from the first');
+    assert.equal(l.blocked('a', 1001 + HOUR), false);
+    l.note('a', 1002 + HOUR);
+    assert.equal(l.blocked('a', 1002 + HOUR), false, 'one failure into a new window');
+  });
+
+  test('a failure after the window has passed starts a new one, read or no read in between', () => {
+    const l = payerOutcome.badSignatureLimiter({ limit: 1, windowMs: HOUR });
+    l.note('a', 0);
+    l.note('a', HOUR + 1);
+    assert.equal(l.blocked('a', HOUR + 2), true, 'counted from the new failure, so it holds again');
+  });
+
+  test('an expired key goes before a fresh one, even when the fresh one was added first', () => {
+    const l = payerOutcome.badSignatureLimiter({ limit: 1, windowMs: HOUR, maxKeys: 3 });
+    l.note('a', 0);
+    l.note('b', 10);
+    l.note('a', HOUR + 5); // a's window starts again, and it keeps its place at the front
+    l.note('x', HOUR + 6);
+    l.note('c', HOUR + 20); // full, and b has expired by now while a has not
+    assert.equal(l.blocked('a', HOUR + 20), true);
+    assert.equal(l.blocked('x', HOUR + 20), true);
+    assert.equal(l.blocked('c', HOUR + 20), true);
+    assert.equal(l.size, 3);
+  });
+
+  test('holds no more than its limit of keys, dropping expired ones first and then the oldest', () => {
+    const l = payerOutcome.badSignatureLimiter({ limit: 1, windowMs: HOUR, maxKeys: 3 });
+    l.note('old', 0);
+    l.note('b', HOUR);
+    l.note('c', HOUR);
+    assert.equal(l.size, 3);
+    l.note('d', HOUR + 1);
+    assert.equal(l.size, 3);
+    assert.equal(l.blocked('old', HOUR + 1), false, 'the expired one went');
+    assert.equal(l.blocked('b', HOUR + 1), true, 'and nothing fresh went with it');
+    l.note('e', HOUR + 2);
+    assert.equal(l.size, 3);
+    assert.equal(l.blocked('b', HOUR + 2), false, 'all fresh, so the oldest goes');
+    assert.equal(l.blocked('e', HOUR + 2), true);
+  });
+});
+
 describe('payer-outcome', () => {
   test('bounds how long after its deadline an import may arrive, whatever block its peer names', () => {
     const value = { signedAt: 1_000, deadline: 2_000 };
@@ -400,8 +459,8 @@ describe('POST /attest with a payer-signed outcome', () => {
     await positiveOnly.stop();
   });
 
-  const post = (o, didHash, txHash, signed, extra = {}) =>
-    o.call('POST', '/attest', { didHash, payment: { txHash }, payerOutcome: signed, ...extra });
+  const post = (o, didHash, txHash, signed, extra = {}, client = undefined) =>
+    o.call('POST', '/attest', { didHash, payment: { txHash }, payerOutcome: signed, ...extra }, undefined, { client });
   const evidence = async (o, didHash) => (await o.call('GET', `/evidence/${didHash}`)).body.evidence;
 
   /** An agent paid by `payer` (a Wallet) in a new transaction. */
@@ -659,16 +718,46 @@ describe('POST /attest with a payer-signed outcome', () => {
     assert.equal((await evidence(oracle, other.agent.didHash))[0].counterauditPacketId, undefined);
   });
 
-  test('slows down repeated bad signatures for one payment', async () => {
+  // The leg, the transaction and the payer are public, so anyone can post a bad signature for them.
+  test('forged posts do not lock out the payer\'s own signature, from the same client or any other', async () => {
     const payer = ethers.Wallet.createRandom();
     const { agent, txHash } = paid(payer);
     const forged = await signOutcome(agent.didHash, txHash, payer, { signer: ethers.Wallet.createRandom() });
-    for (let i = 0; i < 5; i += 1) {
-      assert.equal((await post(oracle, agent.didHash, txHash, forged)).body.code, 'bad_signature');
+    const client = '10.9.9.1';
+    for (let i = 0; i < 8; i += 1) {
+      const r = await post(oracle, agent.didHash, txHash, forged, {}, client);
+      assert.equal(r.status, 400, r.text);
+      assert.equal(r.body.code, 'bad_signature');
     }
-    const sixth = await post(oracle, agent.didHash, txHash, forged);
+    const genuine = await post(oracle, agent.didHash, txHash, await signOutcome(agent.didHash, txHash, payer), {}, client);
+    assert.equal(genuine.status, 200, genuine.text);
+    assert.equal((await evidence(oracle, agent.didHash))[0].payerOutcome.signer, 'eoa');
+  });
+
+  test('a contract account\'s bad signatures slow down the client sending them, and nobody else', async () => {
+    const owner = ethers.Wallet.createRandom();
+    const account = ethers.Wallet.createRandom().address;
+    world.set('accounts', { ...(world.data.accounts || {}), [account.toLowerCase()]: { owners: [{ fromBlock: 0, owner: owner.address }] } });
+    const agent = world.addAgent();
+    const txHash = world.addTx([{ from: account, to: agent.agentAddress, value: 5n * USDC }]);
+    const asAccount = { address: account, signTypedData: (...a) => owner.signTypedData(...a) };
+    const forged = { ...(await signOutcome(agent.didHash, txHash, asAccount, { signer: ethers.Wallet.createRandom() })), payer: account };
+    const attacker = '10.9.9.2';
+    const askedAccount = () => oracle.calls().filter((c) => c.name === 'call' && c.args[0] === account.toLowerCase()).length;
+
+    for (let i = 0; i < 5; i += 1) {
+      assert.equal((await post(oracle, agent.didHash, txHash, forged, {}, attacker)).body.code, 'bad_signature');
+    }
+    const asked = askedAccount();
+    assert.equal(asked, 5, 'the account was asked each time');
+    const sixth = await post(oracle, agent.didHash, txHash, forged, {}, attacker);
     assert.equal(sixth.status, 429, sixth.text);
     assert.equal(sixth.body.code, 'bad_signature_throttled');
+    assert.equal(askedAccount(), asked, 'and now it is not, which is what the limit is for');
+
+    const genuine = await post(oracle, agent.didHash, txHash, await signOutcome(agent.didHash, txHash, asAccount, { signer: owner }), {}, '10.9.9.3');
+    assert.equal(genuine.status, 200, genuine.text);
+    assert.equal((await evidence(oracle, agent.didHash))[0].payerOutcome.signer, 'contract');
   });
 
   test('serves the outcomes it took at GET /outcomes, oldest first, after a cursor', async () => {
@@ -856,6 +945,30 @@ describe('importing payer-signed outcomes from other operators', () => {
     await runImport();
     assert.match(lastRun(c.url), /0 imported, 1 refused/);
     assert.equal((await evidence(b, agent.didHash)).length, 0);
+  });
+
+  test('an imported outcome is judged by the operator at the payment\'s block, as one taken directly is', async () => {
+    const former = ethers.Wallet.createRandom();
+    const agent = world.addAgent();
+    const handover = world.data.head - 20;
+    Object.assign(world.data.agents[agent.didHash], {
+      operator: ethers.Wallet.createRandom().address,
+      operators: [{ fromBlock: 1, operator: former.address }, { fromBlock: handover, operator: ethers.Wallet.createRandom().address }],
+    });
+    world.flush();
+
+    // Its own payment while it ran the agent, and then one as a customer after handing it on.
+    const own = world.addTx([{ from: former.address, to: agent.agentAddress, value: 5n * USDC }], { blockNumber: handover - 5 });
+    c.serve([served(agent, own, await signOutcome(agent.didHash, own, former), { acceptedAt: Date.now() + 1 })]);
+    await runImport();
+    assert.match(lastRun(c.url), /0 imported, 1 refused/);
+    assert.equal((await evidence(b, agent.didHash)).length, 0);
+
+    const later = world.addTx([{ from: former.address, to: agent.agentAddress, value: 5n * USDC }]);
+    c.serve([served(agent, later, await signOutcome(agent.didHash, later, former), { acceptedAt: Date.now() + 1 })]);
+    await runImport();
+    assert.match(lastRun(c.url), /1 imported, 0 refused/);
+    assert.equal((await evidence(b, agent.didHash)).length, 1);
   });
 
   test('refuses what a peer serves that is forged, malformed or checked before its payment, and takes what is genuine', async () => {

@@ -255,6 +255,236 @@ test('readFeedbackRows: the guide examples arrive scaled, lowercased and counted
   assert.equal(computeExternalScore(rows), Math.round(((0.9977 + 0.89 + 0.87) / 3) * MAX_EXTERNAL_SCORE));
 });
 
+// ---- a node that cannot answer is not an agent with no feedback -------------
+
+// As the real registries answered on 4 November 2026.
+const noSuchAgent = () => Object.assign(new Error('execution reverted (unknown custom error)'), {
+  code: 'CALL_EXCEPTION', data: `0x7e273289${'0'.repeat(63)}1`, reason: null,
+});
+const pastTheEnd = () => Object.assign(new Error('execution reverted: "index out of bounds"'), {
+  code: 'CALL_EXCEPTION', data: '0x08c379a0', reason: 'index out of bounds',
+});
+const rateLimited = () => Object.assign(new Error('missing revert data (action="call", info={ "requestUrl": "https://rpc.example/v2/SECRET-KEY" })'), {
+  code: 'CALL_EXCEPTION', data: null, reason: null, shortMessage: 'missing revert data',
+  info: { error: { code: -32005, message: 'rate limit exceeded' } },
+});
+const internalError = () => Object.assign(new Error('could not coalesce error (error={ "code": -32603, "message": "internal error" })'), {
+  code: 'UNKNOWN_ERROR', error: { code: -32603, message: 'internal error' },
+});
+const row = { value: 90n, valueDecimals: 0n, tag1: 'quality', tag2: '', isRevoked: false };
+const OFF = { externalRpc: '', externalIdentity: '', externalReputation: '' };
+
+function withRegistry(repContract, idContract = {}) {
+  external.init(CFG, {
+    provider: {},
+    idContract,
+    repContract: { getClients: async () => ['0xc1'], getLastIndex: async () => 1n, readFeedback: async () => row, ...repContract },
+  });
+}
+
+test('readFeedbackRows: a revert is an index gap, and the rows around it are kept', async (t) => {
+  t.after(() => external.init(OFF));
+  let asked = 0;
+  withRegistry({
+    getLastIndex: async () => 3n,
+    readFeedback: async (_a, _c, i) => { asked += 1; if (Number(i) === 2) throw pastTheEnd(); return row; },
+  });
+  assert.equal((await external.readFeedbackRows(7)).length, 2);
+  assert.equal(asked, 3, 'a revert is an answer, so it is not asked again');
+});
+
+test('readFeedbackRows: a client whose count reverts is left out, and the others are kept', async (t) => {
+  t.after(() => external.init(OFF));
+  withRegistry({
+    getClients: async () => ['0xc1', '0xc2'],
+    getLastIndex: async (_a, c) => { if (c === '0xc1') throw pastTheEnd(); return 1n; },
+  });
+  assert.deepEqual((await external.readFeedbackRows(7)).map((r) => r.client), ['0xc2']);
+});
+
+test('readFeedbackRows: a read the node fails is tried again, and no row goes missing', async (t) => {
+  t.after(() => external.init(OFF));
+  for (const fail of [rateLimited, internalError]) {
+    let tries = 0;
+    withRegistry({ readFeedback: async () => { tries += 1; if (tries < 3) throw fail(); return row; } });
+    assert.equal((await external.readFeedbackRows(7)).length, 1);
+    assert.equal(tries, 3);
+  }
+});
+
+test('readFeedbackRows: a read that never comes back is given up on, and tried again', async (t) => {
+  t.after(() => external.init(OFF));
+  let tries = 0;
+  withRegistry({ readFeedback: () => { tries += 1; return tries === 1 ? new Promise(() => {}) : Promise.resolve(row); } });
+  assert.equal((await external.readFeedbackRows(7)).length, 1);
+  assert.equal(tries, 2);
+});
+
+test('readFeedbackRows: a row the node never answers for is thrown, not dropped', async (t) => {
+  t.after(() => external.init(OFF));
+  withRegistry({ readFeedback: async () => { throw rateLimited(); } });
+  await assert.rejects(external.readFeedbackRows(7), { code: 'NETWORK_ERROR' });
+});
+
+test('readFeedbackRows: a count the node never answers for is thrown, not a client left out', async (t) => {
+  t.after(() => external.init(OFF));
+  withRegistry({ getLastIndex: async () => { throw internalError(); } });
+  await assert.rejects(external.readFeedbackRows(7), { code: 'NETWORK_ERROR' });
+});
+
+test('verifyOwnership: no such agent is a no, and a node that cannot answer is not', async (t) => {
+  t.after(() => external.init(OFF));
+  withRegistry({}, { ownerOf: async () => { throw noSuchAgent(); } });
+  assert.equal(await external.verifyOwnership(7, '0xabc'), false);
+  withRegistry({}, { ownerOf: async () => { throw rateLimited(); } });
+  await assert.rejects(external.verifyOwnership(7, '0xabc'), { code: 'NETWORK_ERROR' });
+});
+
+test('what is thrown holds none of the node\'s message, which can hold the RPC\'s key', async (t) => {
+  t.after(() => external.init(OFF));
+  withRegistry({}, { ownerOf: async () => { throw rateLimited(); } });
+  await assert.rejects(external.verifyOwnership(7, '0xabc'), (err) => !err.message.includes('SECRET-KEY'));
+});
+
+test('what is thrown reads as the node\'s failure to every caller that sorts them', async (t) => {
+  t.after(() => external.init(OFF));
+  const { isTransientReadError } = require('./read-retry');
+  withRegistry({}, { ownerOf: async () => { throw internalError(); } });
+  await assert.rejects(external.verifyOwnership(7, '0xabc'), (err) => isTransientReadError(err));
+});
+
+test('externalScoreFor: 0 for a stranger\'s agent or one that does not exist, and the judge is not asked', async (t) => {
+  t.after(() => external.init(OFF));
+  const judge = () => { throw new Error('the judge should not be asked'); };
+  withRegistry({}, { ownerOf: async () => '0xother' });
+  assert.equal(await external.externalScoreFor(7, '0xabc', judge), 0);
+  withRegistry({}, { ownerOf: async () => { throw noSuchAgent(); } });
+  assert.equal(await external.externalScoreFor(7, '0xabc', judge), 0);
+});
+
+test('externalScoreFor: 0 when the registry itself refuses the list of clients', async (t) => {
+  t.after(() => external.init(OFF));
+  withRegistry({ getClients: async () => { throw pastTheEnd(); } }, { ownerOf: async () => '0xabc' });
+  assert.equal(await external.externalScoreFor(7, '0xabc', () => 25), 0);
+});
+
+test('externalScoreFor: a node that cannot answer is thrown, at each read, and never reaches the judge', async (t) => {
+  t.after(() => external.init(OFF));
+  const judge = () => { throw new Error('the judge should not be asked'); };
+  const owned = { ownerOf: async () => '0xabc' };
+  for (const [rep, id] of [
+    [{}, { ownerOf: async () => { throw rateLimited(); } }],
+    [{ getClients: async () => { throw rateLimited(); } }, owned],
+    [{ getLastIndex: async () => { throw rateLimited(); } }, owned],
+    [{ readFeedback: async () => { throw rateLimited(); } }, owned],
+  ]) {
+    withRegistry(rep, id);
+    await assert.rejects(external.externalScoreFor(7, '0xabc', judge), { code: 'NETWORK_ERROR' });
+  }
+});
+
+test('externalScoreFor: what the judge makes of the rows when every read answers', async (t) => {
+  t.after(() => external.init(OFF));
+  withRegistry({}, { ownerOf: async () => '0xABC' });
+  assert.equal(await external.externalScoreFor(7, '0xabc', (rows) => rows.length * 10), 10);
+});
+
+// ---- what reading an agent's feedback can cost -----------------------------
+
+const lower = (n) => `0x${n.toString(16).padStart(40, '0')}`;
+const CHECKSUMMED = (a) => a.toUpperCase().replace('0X', '0x');
+
+function counted(repContract) {
+  const asked = { clients: 0, counts: [], rows: [] };
+  withRegistry({
+    getClients: async () => { asked.clients += 1; return repContract.clients; },
+    getLastIndex: async (_a, c) => { asked.counts.push(c); return BigInt(repContract.lastOf?.(c) ?? 1); },
+    readFeedback: async (_a, c, i) => { asked.rows.push([c, Number(i)]); return row; },
+  });
+  return asked;
+}
+
+test('readFeedbackRows: feedback from an address that never paid is not read at all', async (t) => {
+  t.after(() => external.init(OFF));
+  const payer = lower(1);
+  const strangers = Array.from({ length: 500 }, (_, i) => lower(1000 + i));
+  const asked = counted({ clients: [...strangers, payer] });
+  const rows = await external.readFeedbackRows(7, undefined, [payer]);
+  assert.deepEqual(rows.map((r) => r.client), [payer]);
+  assert.equal(asked.clients, 1);
+  assert.deepEqual(asked.counts, [payer], 'five hundred strangers cost one read between them');
+  assert.equal(asked.rows.length, 1);
+});
+
+test('readFeedbackRows: nobody has paid, so there is nothing to ask the registry', async (t) => {
+  t.after(() => external.init(OFF));
+  const asked = counted({ clients: [lower(1)] });
+  assert.deepEqual(await external.readFeedbackRows(7, undefined, []), []);
+  assert.equal(asked.clients, 0);
+});
+
+test('readFeedbackRows: a payer who has posted nothing costs no read', async (t) => {
+  t.after(() => external.init(OFF));
+  const asked = counted({ clients: [lower(1)] });
+  await external.readFeedbackRows(7, undefined, [lower(1), lower(2), lower(3)]);
+  assert.deepEqual(asked.counts, [lower(1)]);
+});
+
+test('readFeedbackRows: finds a payer however the registry writes its address, and asks in that form', async (t) => {
+  t.after(() => external.init(OFF));
+  const written = CHECKSUMMED(lower(0xabc));
+  const asked = counted({ clients: [written] });
+  const rows = await external.readFeedbackRows(7, undefined, [lower(0xabc)]);
+  assert.deepEqual(asked.counts, [written]);
+  assert.deepEqual(rows.map((r) => r.client), [written]);
+});
+
+test('readFeedbackRows: at most the limit of clients, in the order paid, not the order posted', async (t) => {
+  t.after(() => external.init(OFF));
+  const payers = Array.from({ length: external.MAX_CLIENTS_READ + 20 }, (_, i) => lower(i + 1));
+  const asked = counted({ clients: [...payers].reverse() });
+  await external.readFeedbackRows(7, undefined, payers);
+  assert.deepEqual(asked.counts, payers.slice(0, external.MAX_CLIENTS_READ));
+});
+
+test('readFeedbackRows: with no payers given, the limit still holds', async (t) => {
+  t.after(() => external.init(OFF));
+  const clients = Array.from({ length: external.MAX_CLIENTS_READ + 5 }, (_, i) => lower(i + 1));
+  const asked = counted({ clients });
+  await external.readFeedbackRows(7);
+  assert.equal(asked.counts.length, external.MAX_CLIENTS_READ);
+});
+
+test('readFeedbackRows: the newest rows of a client, oldest of them first, and no more', async (t) => {
+  t.after(() => external.init(OFF));
+  const asked = counted({ clients: [lower(1)], lastOf: () => 25 });
+  const rows = await external.readFeedbackRows(7, undefined, [lower(1)]);
+  assert.deepEqual(asked.rows.map(([, i]) => i), [16, 17, 18, 19, 20, 21, 22, 23, 24, 25]);
+  assert.equal(rows.length, external.MAX_ROWS_PER_CLIENT);
+});
+
+test('readFeedbackRows: a client with fewer rows than the limit has them all read', async (t) => {
+  t.after(() => external.init(OFF));
+  const asked = counted({ clients: [lower(1)], lastOf: () => 3 });
+  await external.readFeedbackRows(7, undefined, [lower(1)]);
+  assert.deepEqual(asked.rows.map(([, i]) => i), [1, 2, 3]);
+});
+
+test('readFeedbackRows: exactly the limit of rows has them all read', async (t) => {
+  t.after(() => external.init(OFF));
+  const asked = counted({ clients: [lower(1)], lastOf: () => external.MAX_ROWS_PER_CLIENT });
+  await external.readFeedbackRows(7, undefined, [lower(1)]);
+  assert.equal(asked.rows[0][1], 1);
+  assert.equal(asked.rows.length, external.MAX_ROWS_PER_CLIENT);
+});
+
+test('externalScoreFor: hands the payers on, so the judge sees only what they posted', async (t) => {
+  t.after(() => external.init(OFF));
+  withRegistry({ getClients: async () => [lower(1), lower(2)] }, { ownerOf: async () => '0xabc' });
+  const seen = await external.externalScoreFor(7, '0xabc', (rows) => rows.map((r) => r.client), undefined, [lower(2)]);
+  assert.deepEqual(seen, [lower(2)]);
+});
+
 // ---- links made on chain (link-claims.js) ------------------------------------
 
 const DID = `0x${'ab'.repeat(32)}`;

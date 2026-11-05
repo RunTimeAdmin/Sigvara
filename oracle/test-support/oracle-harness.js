@@ -113,13 +113,20 @@ class World {
   }
 }
 
+// Ports fetch refuses to connect to (the Fetch standard's "bad ports"), however well the server is
+// listening: the oracle starts, and every call to it fails. Those a free port can be, on a machine
+// whose dynamic range starts low. Windows can be set to start at 1024.
+const BAD_PORTS = new Set([
+  1719, 1720, 1723, 2049, 3659, 4045, 4190, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668, 6669, 6679, 6697, 10080,
+]);
+
 function freePort() {
   return new Promise((resolve, reject) => {
     const srv = net.createServer();
     srv.once('error', reject);
     srv.listen(0, '127.0.0.1', () => {
       const { port } = srv.address();
-      srv.close(() => resolve(port));
+      srv.close(() => resolve(BAD_PORTS.has(port) ? freePort() : port));
     });
   });
 }
@@ -197,14 +204,15 @@ function spawnOracle(dir, env) {
 
 /**
  * Start the oracle and wait until it answers. Resolves once /health responds, or throws with
- * the oracle's own output if it exits first.
+ * the oracle's own output if it exits first. If another test file took its port first, it
+ * tries again on a new one.
  *
  * @param {object} opts
  * @param {World}  opts.world
  * @param {object} [opts.env] overrides for the child's environment
  * @param {object} [opts.files] files to put in its directory first, by name
  */
-async function startOracle({ world, env = {}, files }) {
+async function startOracle({ world, env = {}, files }, binds = 3) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sigvara-e2e-'));
   const worldFile = path.join(dir, 'world.json');
   world.file = worldFile;
@@ -214,6 +222,12 @@ async function startOracle({ world, env = {}, files }) {
   const { child, out, exited } = spawnOracle(dir, { ...baseEnv(dir, port, worldFile), ...env });
 
   const deadline = Date.now() + 20_000;
+  // Its own word first. freePort has to let go of the port to hand it over, and test files run
+  // at once, so until the oracle has bound it the port may be another file's server, and a
+  // request sent there fails whichever test that file is running.
+  while (!out.log.includes('[oracle] HTTP on ') && out.code === null && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 20));
+  }
   let up = false;
   while (!up && out.code === null && Date.now() < deadline) {
     try {
@@ -228,6 +242,7 @@ async function startOracle({ world, env = {}, files }) {
     await exited;
     out.drop();
     fs.rmSync(dir, { recursive: true, force: true });
+    if (out.log.includes('EADDRINUSE') && binds > 1) return startOracle({ world, env, files }, binds - 1);
     throw new Error(`the oracle did not start (exit ${out.code}):\n${out.log}`);
   }
 
@@ -376,4 +391,4 @@ function startWatcher({ env = {} }) {
   };
 }
 
-module.exports = { World, startOracle, runToExit, startWatcher, webhookSink, wallet, ASSET };
+module.exports = { World, startOracle, runToExit, startWatcher, webhookSink, wallet, ASSET, freePort, BAD_PORTS };

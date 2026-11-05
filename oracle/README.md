@@ -99,7 +99,6 @@ Health check with operational signals for production alerting.
   "storeWritable": true,
   "statePersisted": true,
   "lastPersistMs": 1234567890000,
-  "statePath": "/data/oracle-state.json",
   "stateSource": "file",
   "chainId": 5042,
   "expectedChainId": 5042,
@@ -116,9 +115,10 @@ Health check with operational signals for production alerting.
 }
 ```
 
+Where the state file is, and what went wrong writing it, are in the log and not in this answer.
 Returns 503 when:
 - State file path is not writable (likely volume mount issue)
-- The last state write failed (`statePersisted: false`, with `statePersistError`)
+- The last state write failed (`statePersisted: false`)
 - No successful epoch for two epoch intervals (stale scoring). After a success the two intervals are counted from it. Before the first success they are counted from process start, so a primary that has never completed an epoch reports 503 once it has been up that long, rather than staying green
 
 `storeWritable` and `statePersisted` are not the same check and both are reported.
@@ -1308,7 +1308,7 @@ cd oracle
 node --test
 ```
 
-1160 tests (as of 4 November 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
+1287 tests (as of 5 November 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
 the trust weighting, Merkle evidence trees, HTTP helpers, store persistence and recovery,
 the streamed state file, chain access with backoff, scan checkpointing, fee caps and transaction replacement,
 metrics, and cooldown logic. Several of the files run the real `index.js` and `watcher.js`

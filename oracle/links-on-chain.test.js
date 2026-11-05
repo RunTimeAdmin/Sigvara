@@ -8,7 +8,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { snapshotOf } = require('./reviewers');
 const { MAX_EXTERNAL_SCORE } = require('./external');
-const { World, startOracle, wallet } = require('./test-support/oracle-harness');
+const { World, startOracle, wallet, ASSET } = require('./test-support/oracle-harness');
 
 const ADMIN = 'a'.repeat(64);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -247,6 +247,153 @@ test('end to end: a span the node refuses for its size is halved until it answer
   const reads = calls.filter((c) => c.name === 'readLinkLogs').map((c) => c.args);
   assert.ok(reads.length > 1, JSON.stringify(reads));
   assert.ok(reads.every(([from, to]) => to - from + 1 <= 40), JSON.stringify(reads));
+});
+
+test('end to end: logs too many to list in one read do not stop scoring, in the words each node refuses with', async () => {
+  // Anyone can set this key on an 8004 agent of their own, so anyone can fill a span. When the
+  // refusal went unrecognised, the logs could not be listed and no agent was scored.
+  for (const words of [
+    'request exceeded max allowed range: query exceeds max results 20000, retry with the range 70780526-70785795',
+    'requested range too large',
+    'logs count limit exceeded (10000) consider refine/narrow down your query',
+  ]) {
+    const { w, files } = claimedWorld();
+    w.set('linkSpanLimit', 40);
+    w.set('linkSpanError', words);
+    const { scores, logs } = await epoch(w, files, linkEnv(w));
+    assert.equal(scores?.externalScore, MAX_EXTERNAL_SCORE, `${words}:\n${logs}`);
+  }
+});
+
+test('end to end: a registry the node cannot read skips the agent, and is not scored as no feedback', async () => {
+  const { w, files } = claimedWorld();
+  w.set('externalReadFails', true);
+  const skipped = await epoch(w, files, linkEnv(w));
+  assert.equal(skipped.scores, null, `nothing proposed:\n${skipped.logs}`);
+  assert.match(skipped.logs, /could not read the ERC-8004 registry/);
+
+  w.file = null;
+  w.set('externalReadFails', false);
+  const scored = await epoch(w, files, linkEnv(w));
+  assert.equal(scored.scores?.externalScore, MAX_EXTERNAL_SCORE, scored.logs);
+});
+
+test('end to end: a checker that cannot read the registry records no divergence against the primary', async () => {
+  const { w, agent, files } = claimedWorld();
+  const { scores } = await epoch(w, files, linkEnv(w));
+  assert.equal(scores?.externalScore, MAX_EXTERNAL_SCORE);
+
+  w.file = null;
+  w.setFor('pending', agent.didHash, { exists: true, proposedAt: w.data.nowSec - 100, data: scores, evidenceRoot: null });
+  w.set('externalReadFails', true);
+  const oracle = await startOracle({
+    world: w, env: { ...linkEnv(w), ORACLE_MODE: 'checker', DIVERGENCE_TOLERANCE: '0' }, files,
+  });
+  try {
+    const text = await untilEpoch(oracle);
+    assert.equal(counter(text, 'sigvara_oracle_checker_comparisons_total{verdict="diverged"}') || 0, 0, oracle.logs());
+  } finally {
+    await oracle.stop();
+  }
+});
+
+test('end to end: /score and /link say the node failed, and do not call the agent unowned', async () => {
+  const { w, agent, files } = claimedWorld();
+  const oracle = await startOracle({ world: w, env: linkEnv(w), files });
+  try {
+    await untilEpoch(oracle);
+    w.set('externalReadFails', true);
+    assert.equal((await oracle.call('GET', `/score/${agent.didHash}`)).status, 200, 'today\'s reading is already held');
+    w.set('nowSec', w.data.nowSec + 86_400);
+    const score = await oracle.call('GET', `/score/${agent.didHash}`);
+    assert.equal(score.status, 502, score.text);
+    assert.equal(score.body.code, 'rpc_error');
+    const link = await oracle.call('POST', '/link', { didHash: agent.didHash, agentId: 7 }, ADMIN);
+    assert.equal(link.status, 502, link.text);
+    assert.equal(link.body.code, 'rpc_error');
+    assert.equal(link.text.includes('registry'), false, 'and the node\'s trouble stays in the log');
+  } finally {
+    await oracle.stop();
+  }
+});
+
+test('end to end: a linked agent\'s feedback is read once per snapshot, however many ask', async () => {
+  const { w, agent, files } = claimedWorld();
+  w.set('recordExternalReads', true);
+  const oracle = await startOracle({ world: w, env: linkEnv(w), files });
+  const reads = () => oracle.calls().filter((c) => c.name === 'externalRead');
+  try {
+    await untilEpoch(oracle);
+    assert.equal(reads().length, 1, 'the epoch read it');
+    for (let i = 0; i < 5; i += 1) {
+      assert.equal((await oracle.call('GET', `/score/${agent.didHash}`)).status, 200);
+    }
+    assert.equal(reads().length, 1, 'and every GET /score shared that');
+
+    // The next day is another snapshot.
+    w.set('nowSec', w.data.nowSec + 86_400);
+    assert.equal((await oracle.call('GET', `/score/${agent.didHash}`)).status, 200);
+    assert.equal(reads().length, 2);
+  } finally {
+    await oracle.stop();
+  }
+});
+
+test('end to end: asks only for those who paid, the most paid first', async () => {
+  const { w, agent, files } = claimedWorld();
+  w.set('recordExternalReads', true);
+  const oracle = await startOracle({ world: w, env: linkEnv(w), files });
+  try {
+    await untilEpoch(oracle);
+    const [, blockTag, payers] = oracle.calls().find((c) => c.name === 'externalRead').args;
+    const paid = JSON.parse(files['state.json']).paymentEvents[agent.didHash].map((e) => e.payer).sort();
+    assert.deepEqual(payers, paid, 'all paid the same here, so by address');
+    assert.equal(blockTag, w.data.head, 'and at the snapshot block');
+  } finally {
+    await oracle.stop();
+  }
+});
+
+test('end to end: a read that fails is not remembered, so the next to ask tries again', async () => {
+  const { w, agent, files } = claimedWorld();
+  w.set('recordExternalReads', true);
+  w.set('externalReadFails', true);
+  const oracle = await startOracle({ world: w, env: linkEnv(w), files });
+  const reads = () => oracle.calls().filter((c) => c.name === 'externalRead');
+  try {
+    await untilEpoch(oracle);
+    const before = reads().length;
+    assert.equal((await oracle.call('GET', `/score/${agent.didHash}`)).status, 502);
+    assert.equal(reads().length, before + 1);
+    w.set('externalReadFails', false);
+    assert.equal((await oracle.call('GET', `/score/${agent.didHash}`)).status, 200);
+    assert.equal(reads().length, before + 2);
+    assert.equal((await oracle.call('GET', `/score/${agent.didHash}`)).status, 200);
+    assert.equal(reads().length, before + 2, 'and one that worked is');
+  } finally {
+    await oracle.stop();
+  }
+});
+
+test('end to end: evidence that changes what counts at the snapshot is read afresh', async () => {
+  const { w, agent, files } = claimedWorld();
+  w.set('recordExternalReads', true);
+  const oracle = await startOracle({ world: w, env: { ...linkEnv(w), PAYMENT_VERIFICATION: 'required', PAYMENT_ASSET: ASSET, PAYMENT_MIN_AMOUNT: '10000' }, files });
+  const reads = () => oracle.calls().filter((c) => c.name === 'externalRead');
+  try {
+    await untilEpoch(oracle);
+    assert.equal(reads().length, 1);
+    // A payment settled before the snapshot, and only now credited.
+    const block = w.data.head - 900;
+    w.set('blockTimes', { ...(w.data.blockTimes || {}), [block]: snapshotOf(w.data.nowSec) - 3_600 });
+    const txHash = w.addTx([{ from: wallet(), to: agent.agentAddress, value: 5_000_000n }], { blockNumber: block });
+    const r = await oracle.call('POST', '/attest', { didHash: agent.didHash, success: true, payment: { txHash } }, ADMIN);
+    assert.equal(r.status, 200, r.text);
+    assert.equal((await oracle.call('GET', `/score/${agent.didHash}`)).status, 200);
+    assert.equal(reads().length, 2);
+  } finally {
+    await oracle.stop();
+  }
 });
 
 test('end to end: with the registry on another chain, links made on chain are not read', async () => {
