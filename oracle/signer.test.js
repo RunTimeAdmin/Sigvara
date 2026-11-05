@@ -12,6 +12,7 @@ const { ethers } = require('ethers');
 const { HEADER, authHeader, authProblem } = require('./signer-auth');
 const { createPolicy, createSigner, createServer, signedRecord, privateFile, readConfig, main } = require('./signer');
 const { remoteSigner } = require('./publisher');
+const { feedbackFile, encodeFeedback } = require('./publisher-policy');
 const { agentWalletTypedData, requestSignature } = require('./agent-wallet');
 
 const SECRET = 'cd'.repeat(32);
@@ -48,9 +49,11 @@ const policy = createPolicy({
   maxGas: 400_000n, maxFeeWei: 50n * 10n ** 9n,
 });
 const CHAIN_NOW = { pendingNonce: 4, time: NOW };
-const DATA = `data:application/json;base64,${Buffer.from('{"value":47}').toString('base64')}`;
+const FILE = Buffer.from('{"value":47}');
+const DATA = `data:application/json;base64,${FILE.toString('base64')}`;
+const HASH = ethers.keccak256(FILE);
 const post = (o = {}) => iface.encodeFunctionData('giveFeedback', [
-  o.agentId ?? 7, o.value ?? 47, o.decimals ?? 0, o.tag1 ?? 'sigvara', o.tag2 ?? 'score', o.endpoint ?? '', o.uri ?? DATA, ethers.ZeroHash,
+  o.agentId ?? 7, o.value ?? 47, o.decimals ?? 0, o.tag1 ?? 'sigvara', o.tag2 ?? 'score', o.endpoint ?? '', o.uri ?? DATA, o.hash ?? HASH,
 ]);
 const tx = (o = {}) => ({
   from: KEY.address, to: REP, data: post(), nonce: '0x4', gas: '0x2bf20', chainId: ethers.toQuantity(CHAIN), value: '0x0', type: '0x2',
@@ -86,6 +89,7 @@ test('policy: anything else is refused, each for its own reason', () => {
     'no endpoint': tx({ data: post({ endpoint: 'https://x' }) }),
     'only a data: feedback URI': tx({ data: post({ uri: 'https://example.com/f.json' }) }),
     'does not hold JSON': tx({ data: post({ uri: 'data:application/json;base64,bm90IGpzb24=' }) }),
+    'a feedback hash of the file it comes with': tx({ data: post({ hash: ethers.ZeroHash }) }),
   };
   for (const [reason, cases] of Object.entries(refused)) {
     for (const t of [cases].flat()) assert.match(String(policy.transaction(t, CHAIN_NOW)), new RegExp(reason.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), reason);
@@ -168,7 +172,7 @@ test('the publisher signs a revoke and a post through it, and agent-wallet.js ge
     const signer = client(s, provider);
     assert.equal(await signer.address(), KEY.address);
     await signer.send('revoke', 7, [7, 1]);
-    await signer.send('post', 7, [7, 47, 0, 'sigvara', 'score', '', DATA, ethers.ZeroHash]);
+    await signer.send('post', 7, [7, 47, 0, 'sigvara', 'score', '', DATA, HASH]);
     assert.equal(provider.broadcast.length, 2);
     assert.deepEqual(provider.broadcast.map((raw) => ethers.Transaction.from(raw).nonce), [4, 5]);
 
@@ -273,6 +277,24 @@ test('privateFile: a secret readable by others is refused', () => {
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('the policy takes what the publisher really builds', () => {
+  const { uri, hash } = encodeFeedback(feedbackFile({
+    chainId: CHAIN, identityRegistry: ID, agentId: 7, publisher: KEY.address, readAt: { time: NOW, block: 123 },
+    spendable: 47, earned: 47, didHash: `0x${'cd'.repeat(32)}`, reputation: REP,
+  }));
+  assert.equal(policy.transaction(tx({ data: post({ uri, hash }) }), CHAIN_NOW), null);
+  assert.match(policy.transaction(tx({ data: post({ uri, hash: ethers.id('another file') }) }), CHAIN_NOW), /a feedback hash/);
+});
+
+test('readConfig: listens on this machine alone unless told otherwise', () => {
+  const base = {
+    SIGNER_KEYSTORE: 'k', SIGNER_PASSWORD_FILE: 'p', SIGNER_SECRET_FILE: 's', SIGNER_ALLOW_FROM: '72.62.41.138', SIGNER_RPC_URL: 'https://r',
+    SIGNER_AGENT_OWNER: OWNER, SIGNER_MAX_FEE_GWEI: '50',
+  };
+  assert.equal(readConfig(base).host, '127.0.0.1');
+  assert.equal(readConfig({ ...base, SIGNER_HOST: '0.0.0.0' }).host, '0.0.0.0');
 });
 
 test('readConfig: a cap that does not parse is refused, not read as no cap', () => {

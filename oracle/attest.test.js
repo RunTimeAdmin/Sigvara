@@ -426,6 +426,8 @@ test('an attestation is not called saved while the state file cannot be written,
     const health = await o.call('GET', '/health');
     assert.equal(health.status, 503);
     assert.equal(health.body.statePersisted, false);
+    assert.equal('statePersistError' in health.body, false, 'what the filesystem said is for the log');
+    assert.equal(/state\.json|EISDIR|ENOENT|EACCES/.test(health.text), false, health.text);
     const metrics = (await o.call('GET', '/metrics')).text;
     assert.match(metrics, /sigvara_oracle_attest_total\{result="accepted_not_durable"\} 1/);
     assert.match(metrics, /sigvara_oracle_attest_total\{result="accepted"\} 0/);

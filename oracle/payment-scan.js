@@ -296,22 +296,29 @@ function planCredits(decoded, opts) {
  * @param {(didHash:string) => string|null} addressOf recipient address for an agent
  */
 function pickCanary(eventsByDid, addressOf) {
+  // The newest of any agent's, because an old settlement may sit outside whatever block
+  // range a pruned node still serves, and the first agent listed may not have been paid in
+  // months. A canary that fails holds the checkpoint, so that would hold it on every quiet scan.
+  let newest = null;
+  let newestAt = -Infinity;
   for (const [didHash, events] of eventsByDid) {
     const recipient = addressOf(didHash);
     if (!recipient) continue;
-    // The newest, because an old settlement may sit outside whatever block range a
-    // pruned node still serves.
     for (let i = events.length - 1; i >= 0; i--) {
       const txHash = events[i] && events[i].txHash;
-      // The block comes back too when the event has it, so the caller can skip a receipt
-      // lookup against an index that prunes. Null for events stored before it was kept.
-      if (txHash) {
+      if (!txHash) continue;
+      const at = events[i].ts ?? 0;
+      if (at > newestAt) {
+        newestAt = at;
+        // The block comes back too when the event has it, so the caller can skip a receipt
+        // lookup against an index that prunes. Null for events stored before it was kept.
         const blockNumber = Number.isInteger(events[i].blockNumber) ? events[i].blockNumber : null;
-        return { didHash, recipient, txHash, blockNumber };
+        newest = { didHash, recipient, txHash, blockNumber };
       }
+      break;
     }
   }
-  return null;
+  return newest;
 }
 
 /** The same filter shape the scan uses, narrowed to one recipient and one block. */
