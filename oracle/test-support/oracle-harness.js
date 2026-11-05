@@ -113,13 +113,20 @@ class World {
   }
 }
 
+// Ports fetch refuses to connect to (the Fetch standard's "bad ports"), however well the server is
+// listening: the oracle starts, and every call to it fails. Those a free port can be, on a machine
+// whose dynamic range starts low. Windows can be set to start at 1024.
+const BAD_PORTS = new Set([
+  1719, 1720, 1723, 2049, 3659, 4045, 4190, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668, 6669, 6679, 6697, 10080,
+]);
+
 function freePort() {
   return new Promise((resolve, reject) => {
     const srv = net.createServer();
     srv.once('error', reject);
     srv.listen(0, '127.0.0.1', () => {
       const { port } = srv.address();
-      srv.close(() => resolve(port));
+      srv.close(() => resolve(BAD_PORTS.has(port) ? freePort() : port));
     });
   });
 }
@@ -384,4 +391,4 @@ function startWatcher({ env = {} }) {
   };
 }
 
-module.exports = { World, startOracle, runToExit, startWatcher, webhookSink, wallet, ASSET };
+module.exports = { World, startOracle, runToExit, startWatcher, webhookSink, wallet, ASSET, freePort, BAD_PORTS };

@@ -289,6 +289,7 @@ test('indexer: a span the node refuses for its size is read in halves, with noth
     STATE_FILE: path.join(dir, 'index.json'),
   });
   try {
+    await serving(child);
     const h = await until(async () => { const r = await get(port, '/health'); return r.body.toBlock === rpc.chain.head - MARGIN && r; });
     assert.equal(h.status, 200);
     assert.equal(h.body.lastError, null);
