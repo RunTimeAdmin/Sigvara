@@ -122,8 +122,10 @@ async function handle(req) {
     const { name, arguments: args = {} } = params ?? {};
 
     if (name === 'sigvara_challenge') {
+      // Keyed by the payload, so a second caller asking about the same DID cannot overwrite the first's.
+      for (const [payload, held] of outstanding) if (held.expiresAt <= Date.now() / 1000) outstanding.delete(payload);
       const c = gate.challenge(args.did);
-      outstanding.set(args.did, c);
+      outstanding.set(c.payload, c);
       return ok({ content: [{ type: 'text', text: JSON.stringify({
         challenge: c.payload, expiresAt: c.expiresAt, audience: gate.audience,
       }, null, 2) }] });
@@ -132,16 +134,16 @@ async function handle(req) {
     if (name === 'restricted_search') {
       // Compare against the challenge WE issued, never one the caller supplied. A gate
       // that verifies whatever payload arrives is verifying the attacker's homework.
-      const issued = outstanding.get(args.did);
-      if (!issued || issued.payload !== args.challenge) {
+      const issued = outstanding.get(args.challenge);
+      if (!issued) {
         return ok({ content: [{ type: 'text', text: JSON.stringify(
           { refused: true, reason: 'unknown_challenge', threshold: THRESHOLD,
             detail: 'No outstanding challenge for that DID matches. Call sigvara_challenge first.' },
           null, 2) }], isError: true });
       }
-      outstanding.delete(args.did);
-
       const verdict = await gate.admit(args.did, issued, args.signature);
+      // Only once it is proven, or a bad signature from anyone would cancel the real agent's challenge.
+      if (verdict.reason !== 'bad_proof') outstanding.delete(args.challenge);
       if (!verdict.ok) {
         return ok({ content: [{ type: 'text', text: JSON.stringify(refusal(verdict), null, 2) }], isError: true });
       }

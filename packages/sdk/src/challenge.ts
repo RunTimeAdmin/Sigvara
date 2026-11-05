@@ -50,6 +50,8 @@ export function generateChallenge(
   proverDid: string,
   audience: string,
   ttlSeconds = DEFAULT_TTL,
+  /** Makes the nonce, for a gate that wants to recognise its own challenges later. Random otherwise. */
+  mintNonce?: (timestamp: number) => string,
 ): Challenge {
   if (!audience) {
     throw new Error(
@@ -61,8 +63,9 @@ export function generateChallenge(
   assertNoNewline('audience', audience);
   assertNoNewline('proverDid', proverDid);
 
-  const nonce = randomHex(16);
   const timestamp = Math.floor(Date.now() / 1000);
+  const nonce = mintNonce ? mintNonce(timestamp) : randomHex(16);
+  assertNoNewline('nonce', nonce);
   const payload = [
     V2_HEADER,
     `did: ${proverDid}`,

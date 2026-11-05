@@ -2,6 +2,11 @@ export { SigvaraAgent } from './agent';
 export { SigvaraVerifier, registerAgent } from './verifier';
 export { depositStake } from './stake';
 export { SigvaraGate, atomicNonceStore } from './gate';
+export { SigvaraTrustCheck, standingDecision } from './standing';
+export type { TrustCheckConfig, TrustVerdict, TrustReason, StandingReason } from './standing';
+export { sigvaraX402Fetch, x402OffersFrom, X402SellerRefused } from './x402';
+export type { X402Offer } from './x402';
+export { sigvaraTrustTool, requireTrustedAgent, UntrustedAgentError, TRUST_TOOL_SCHEMA } from './tools';
 export {
   evidenceLeaf,
   evidenceLayers,

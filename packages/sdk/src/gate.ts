@@ -1,5 +1,8 @@
+import { computeHmac, hexlify, id, randomBytes, toUtf8Bytes } from 'ethers';
 import { SigvaraVerifier } from './verifier';
 import { generateChallenge, parseChallengePayload } from './challenge';
+import { parseMinBond, standingDecision } from './standing';
+import type { StandingReason } from './standing';
 import type { Challenge, ContractAddresses } from './types';
 
 /**
@@ -31,7 +34,7 @@ import type { Challenge, ContractAddresses } from './types';
  *
  * ## What a refusal means
  *
- * Five different things, and they need different responses from the caller:
+ * Six different things, and they need different responses from the caller:
  *
  *   `bad_proof`       the signature does not verify, or names a different agent,
  *                     audience or challenge. Nothing was proven.
@@ -42,6 +45,8 @@ import type { Challenge, ContractAddresses } from './types';
  *                     in force now, not the status stored when the agent was admitted: a
  *                     minimum raised since leaves an agent Active on paper while it holds
  *                     less than the contract asks. Standing is not a score question here.
+ *   `below_bond`      only when the gate was given `minBond`: real, active, and it holds the
+ *                     protocol's minimum but less than this gate asks for.
  *   `stale_score`     only when the gate was given `maxScoreAgeSeconds`: the score was last
  *                     written longer ago than that, or never. Nothing on chain ages a score,
  *                     so one left over from an oracle outage keeps passing a threshold. The
@@ -52,7 +57,7 @@ import type { Challenge, ContractAddresses } from './types';
  * impossible to debug from the caller's side.
  */
 
-export type AdmitReason = 'bad_proof' | 'replayed' | 'not_active' | 'stale_score' | 'below_threshold';
+export type AdmitReason = 'bad_proof' | 'replayed' | StandingReason;
 
 export interface AdmitResult {
   ok: boolean;
@@ -183,9 +188,24 @@ export interface GateConfig {
    * Refuse a score that was written longer ago than this many seconds, or never, with `stale_score`.
    * Unset by default, which means a score is trusted however old it is: nothing on chain ages one, so
    * a gate that should stop admitting when the oracle has stopped writing has to say how long is too long.
-   * Pick a number a few times your oracle's epoch. Measured against this host's clock.
+   * A healthy score gets to about two of your oracle's proposals apart before the next one lands, so pick
+   * more than that. Measured against this host's clock.
    */
   maxScoreAgeSeconds?: number;
+  /**
+   * Refuse an agent holding less than this with `below_bond`, in the bond token's base units, as a bigint
+   * or a string of digits. Unset, the protocol's minimum is enough. A floor below the minimum still needs
+   * the minimum. It compares the same number as `SigvaraReader.isTrusted(agent, minScore, minBond)`.
+   */
+  minBond?: bigint | string;
+  /**
+   * Accept only challenges this gate issued. Unset, any well-formed challenge the agent signed for this
+   * audience in the last `ttlSeconds` is accepted, including one the agent wrote itself, so freshness
+   * rests on the timestamp it signed. Set, the gate marks each nonce with a keyed hash and refuses any
+   * other with `bad_proof`. Keeps no state, so give every instance of a gate the same secret. At least
+   * 32 characters, and not one a caller could learn.
+   */
+  challengeSecret?: string;
   /**
    * 'production' makes the gate refuse to start unless `instances` and `maxScoreAgeSeconds` are both set.
    * Left out, they default to what suits a test bench and not a deployment: one process, so a fleet that
@@ -200,6 +220,8 @@ export class SigvaraGate {
   private readonly nonces: NonceStore;
   private readonly ttl: number;
   private readonly maxScoreAge: number | undefined;
+  private readonly minBond: bigint | undefined;
+  private readonly challengeSecret: string | undefined;
   /** In-flight nonces, so two concurrent admits in ONE process cannot both pass. */
   private readonly inFlight = new Set<string>();
   readonly threshold: number;
@@ -242,7 +264,7 @@ export class SigvaraGate {
       if (config.instances === undefined) {
         missing.push("instances ('single' for one process, 'multiple' with a shared atomic nonceStore)");
       }
-      if (maxAge === undefined) missing.push("maxScoreAgeSeconds (a few times your oracle's epoch)");
+      if (maxAge === undefined) missing.push("maxScoreAgeSeconds (more than two of your oracle's proposals apart)");
       if (missing.length > 0) {
         throw new Error(`SigvaraGate: profile is 'production', so these must be set: ${missing.join('; ')}.`);
       }
@@ -260,6 +282,10 @@ export class SigvaraGate {
         'replayed at another.',
       );
     }
+    if (config.challengeSecret !== undefined
+        && (typeof config.challengeSecret !== 'string' || config.challengeSecret.length < 32)) {
+      throw new Error('SigvaraGate: challengeSecret must be a string of at least 32 characters.');
+    }
     this.verifier = new SigvaraVerifier({
       rpcUrl: config.rpcUrl, addresses: config.addresses, chainId: config.chainId,
       timeoutMs: config.timeoutMs,
@@ -268,6 +294,8 @@ export class SigvaraGate {
     this.audience = config.audience;
     this.ttl = ttl;
     this.maxScoreAge = maxAge;
+    this.minBond = parseMinBond(config.minBond, 'SigvaraGate');
+    this.challengeSecret = config.challengeSecret;
     this.nonces = config.nonceStore ?? new MemoryNonceStore();
   }
 
@@ -299,7 +327,27 @@ export class SigvaraGate {
 
   /** Issue a challenge for an agent to sign. Hand the whole object back to `admit`. */
   challenge(did: string): Challenge {
-    return generateChallenge(did, this.audience, this.ttl);
+    if (this.challengeSecret === undefined) return generateChallenge(did, this.audience, this.ttl);
+    return generateChallenge(did, this.audience, this.ttl, (timestamp) => {
+      const random = hexlify(randomBytes(16)).slice(2);
+      return random + this.mark(did, timestamp, random);
+    });
+  }
+
+  /** The keyed hash that says this gate issued a nonce, over everything the agent will sign. */
+  private mark(did: string, timestamp: number, random: string): string {
+    const message = [did, this.audience, String(timestamp), random].join('\n');
+    return computeHmac('sha256', toUtf8Bytes(this.challengeSecret as string), toUtf8Bytes(message)).slice(2);
+  }
+
+  private issuedHere(signed: { did: string; nonce: string; timestamp: number; audience?: string }): boolean {
+    if (signed.audience !== this.audience || signed.nonce.length !== 96) return false;
+    const random = signed.nonce.slice(0, 32);
+    const want = this.mark(signed.did, signed.timestamp, random);
+    const got = signed.nonce.slice(32);
+    let difference = 0;
+    for (let i = 0; i < want.length; i++) difference |= want.charCodeAt(i) ^ got.charCodeAt(i);
+    return difference === 0;
   }
 
   /**
@@ -329,6 +377,11 @@ export class SigvaraGate {
       return { ...base, ok: false, reason: 'bad_proof' };
     }
 
+    // Before any read, so a challenge this gate never issued costs it nothing.
+    if (this.challengeSecret !== undefined && !this.issuedHere(signed)) {
+      return { ...base, ok: false, reason: 'bad_proof' };
+    }
+
     const proved = await this.verifier.verifySignature(
       did, challenge.payload, signatureBase58, this.ttl, this.audience,
     );
@@ -340,7 +393,12 @@ export class SigvaraGate {
 
     // After the signature, not before: an invalid proof must not be able to burn a nonce
     // and lock out the legitimate holder of that challenge.
-    if (!(await this.consumeNonce(signed.nonce, expiresAt, nowSeconds))) {
+    //
+    // Spent per agent and audience, from the signed bytes. Keyed on the nonce alone, an agent with a
+    // key of its own that learned another's outstanding nonce could sign that nonce itself, get it
+    // spent first, and leave the other agent refused as `replayed`.
+    const spent = id([signed.did, signed.audience ?? this.audience, signed.nonce].join('\n'));
+    if (!(await this.consumeNonce(spent, expiresAt, nowSeconds))) {
       return { ...base, ok: false, reason: 'replayed' };
     }
 
@@ -349,7 +407,7 @@ export class SigvaraGate {
     // its score is not the fix. The reads do not depend on each other, so they go out together:
     // an admit costs the identity read that verifying the signature needs and one more round
     // trip, not one per question.
-    const [active, bonded, score, writtenAt] = await Promise.all([
+    const [active, bonded, score, writtenAt, stake] = await Promise.all([
       this.verifier.isActive(did),
       // The stored status is not enough. It is written when an agent is admitted, slashed or
       // unbonded, so a minimum stake raised afterwards leaves it Active while it holds less than the
@@ -363,23 +421,19 @@ export class SigvaraGate {
       // getReputation: the factor breakdown is a second contract read this decision never looks at.
       this.verifier.getTotalScore(did),
       // Only asked when the gate was given a limit, so a gate without one makes no extra read.
-      this.maxScoreAge === undefined ? Promise.resolve(null) : this.verifier.getScoreUpdatedAt(did),
+      this.maxScoreAge === undefined ? Promise.resolve(0) : this.verifier.getScoreUpdatedAt(did),
+      this.minBond === undefined ? Promise.resolve(0n) : this.verifier.getStake(did),
     ]);
-    if (!active || !bonded) {
-      return { ...base, ok: false, reason: 'not_active' };
-    }
-
-    // Before the number: a score nobody has refreshed cannot be trusted either way, and "the oracle has
-    // stopped writing" is the more useful thing to tell the operator than "the number is low". Zero means
-    // never written, which is no evidence of freshness, and is refused the same way SigvaraReader does.
-    if (writtenAt !== null && this.maxScoreAge !== undefined
-        && (writtenAt === 0 || nowSeconds - writtenAt > this.maxScoreAge)) {
-      return { ...base, ok: false, reason: 'stale_score', score };
-    }
-
-    if (score < this.threshold) {
-      return { ...base, ok: false, reason: 'below_threshold', score };
-    }
-    return { ...base, ok: true, score };
+    // In the shared order (standing.ts). A score nobody has refreshed comes before the number: it cannot be
+    // trusted either way, and "the oracle has stopped writing" is the more useful thing to tell the operator
+    // than "the number is low". Zero means never written, which is no evidence of freshness, and is refused
+    // the same way SigvaraReader does.
+    const decision = standingDecision(
+      { active, bonded, score, scoreUpdatedAt: writtenAt, stake }, this.threshold, this.maxScoreAge, nowSeconds, this.minBond,
+    );
+    if (decision.ok) return { ...base, ok: true, score };
+    return decision.reason === 'not_active'
+      ? { ...base, ok: false, reason: decision.reason }
+      : { ...base, ok: false, reason: decision.reason, score };
   }
 }

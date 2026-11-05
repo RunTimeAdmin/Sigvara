@@ -1,5 +1,59 @@
 # Changelog
 
+## 1.0.0-alpha.16
+
+### Added: `minBond` on `SigvaraGate`
+
+A gate can ask for a bond larger than the protocol minimum, in the bond token's base units, as a bigint or a
+string of digits. An agent holding less is refused with `below_bond`, after `not_active` and before
+`stale_score`. It compares the same number as `SigvaraReader.isTrusted(agent, minScore, minBond)`. A number is
+refused when the gate is built, because a floor past what a double can hold would quietly become another floor.
+One more read per admission, and only when it is set.
+
+### Added: `SigvaraTrustCheck`, for an address rather than a proven caller
+
+The gate's rule, for the question "should I pay or hire this address", where what matters is who the money goes
+to and no proof is needed. `standingDecision` is now in one place, so the gate, the trust server and this cannot
+come to different answers. A read that fails throws, with any URL taken out of the message, because it says
+nothing about the agent either way. Whatever it guards should not go ahead.
+
+### Added: `sigvaraX402Fetch`, a check on the seller before an x402 payment is signed
+
+It wraps the `fetch` underneath an x402 client, so it sees the 402 first. Every `payTo` offered in the v2 header
+and the v1 body must have standing, because the client picks among them. Otherwise the request rejects with
+`X402SellerRefused`, and the client never gets anything to sign. A 402 it cannot read is refused too. A seller
+has to be paid at the agent's registered address for this to find it. No new dependency.
+
+### Added: `sigvaraTrustTool` and `requireTrustedAgent`, for LangChain and its like
+
+`sigvaraTrustTool` makes a tool the model can call, and `requireTrustedAgent` makes a tool of yours refuse to run
+for an agent without standing, whatever the model decided. You pass in LangChain's `tool`, so LangChain does not
+become a dependency of this package.
+
+### Added: `challengeSecret` on `SigvaraGate`
+
+Set, the gate marks each nonce it issues with a keyed hash and refuses any other with `bad_proof`, before any
+read. It keeps no state, so instances sharing the secret accept each other's challenges. `generateChallenge`
+takes an optional function that makes the nonce, which is how the gate does this.
+
+### Fixed: a nonce is spent for one agent and one audience
+
+The gate recorded a spent nonce under the nonce alone, and a caller can sign a challenge with any nonce it likes,
+so one agent's proof could use up a challenge issued to another. It now records a hash of the agent, the audience
+and the nonce. A `NonceStore` is handed that hash where it was handed the nonce, and nothing about a store needs
+to change.
+
+### Fixed: `SigvaraVerifier` keeps to 20 calls in a batch
+
+ethers folds what is asked in one tick into one batch of up to 100 calls, and Arc's public RPC answers 20 and
+refuses the rest with a rate limit. A gate reads up to five things per admission, so a few at once went over.
+
+### Fixed: `examples/mcp-gated-tool`
+
+The example kept one challenge per DID, so a second caller asking about an agent replaced the first's, and it
+dropped a challenge on any attempt, so a bad signature from anyone cancelled the real agent's. It now keeps each
+challenge under its payload, drops expired ones, and spends one only when the proof holds.
+
 ## 1.0.0-alpha.15
 
 ### Added: `sigvara-mcp`, a read-only trust server over MCP

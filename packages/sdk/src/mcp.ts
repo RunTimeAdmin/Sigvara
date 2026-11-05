@@ -22,6 +22,8 @@ import readline from 'readline';
 import type { Readable, Writable } from 'stream';
 import { ethers, FetchRequest } from 'ethers';
 import { SigvaraVerifier } from './verifier';
+import { REASON_DETAIL, standingDecision } from './standing';
+import type { StandingReason } from './standing';
 import { computeDidHash, formatDid, parseDid } from './did';
 import { generateChallenge } from './challenge';
 import { bytes32ToPubKey, pubKeyToMultibase } from './keys';
@@ -300,34 +302,8 @@ const SLASH_NAMES: Record<number, string> = {
   [SlashState.Disputed]: 'Disputed',
 };
 
-export type StandingReason = 'not_active' | 'stale_score' | 'below_threshold';
-
-/**
- * SigvaraGate's rule without the proof, in the gate's order: standing, then freshness, then the number.
- * Kept beside the gate's own code by a test that runs both over the same chain states.
- */
-export function standingDecision(
-  s: { active: boolean; bonded: boolean; score: number; scoreUpdatedAt: number },
-  threshold: number,
-  maxScoreAgeSeconds: number | undefined,
-  nowSeconds: number,
-): { ok: boolean; reason?: StandingReason } {
-  if (!s.active || !s.bonded) return { ok: false, reason: 'not_active' };
-  if (maxScoreAgeSeconds !== undefined
-      && (s.scoreUpdatedAt === 0 || nowSeconds - s.scoreUpdatedAt > maxScoreAgeSeconds)) {
-    return { ok: false, reason: 'stale_score' };
-  }
-  if (s.score < threshold) return { ok: false, reason: 'below_threshold' };
-  return { ok: true };
-}
-
-const REASON_DETAIL: Record<StandingReason, string> = {
-  not_active: 'The agent is not Active with at least the minimum stake now: it is unbonded, suspended, slashed, '
-    + 'or holds less than a raised minimum. A higher score would not change that.',
-  stale_score: 'The score was last written longer ago than the limit you set, or never. The oracle may have stopped '
-    + 'refreshing it, so the number cannot be relied on either way.',
-  below_threshold: 'The agent is Active and bonded, but its matured score is below your threshold.',
-};
+export { standingDecision };
+export type { StandingReason };
 
 function iso(seconds: bigint | number): string | null {
   const n = Number(seconds);

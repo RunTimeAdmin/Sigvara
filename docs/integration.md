@@ -32,7 +32,8 @@ returning true for it until it tops up. `trust(agent).collateralized` reports th
 | A yes or no that refuses a stale score | `reader.isTrustedFresh(agent, minScore, maxAgeSeconds)` | `isTrusted`, and the score was written no more than `maxAgeSeconds` ago. See [How old the score is](#how-old-the-score-is) |
 | The standing behind it | `reader.trust(agent)`, or `trustByDid(didHash)` | One struct, described below |
 | One registry fact | the interfaces in `src/interfaces/ISigvara.sol` | Keyed by didHash, from `computeDidHash(agent)` |
-| An off-chain service that wants proof the caller controls the agent | `SigvaraGate` in the SDK | Challenge and response, then Active status, the bond held now against the current minimum, and the spendable score; with `maxScoreAgeSeconds`, the score's age too. See the [README](../README.md#refusing-work-to-an-agent-without-standing) |
+| An off-chain service that wants proof the caller controls the agent | `SigvaraGate` in the SDK | Challenge and response, then Active status, the bond held now against the current minimum, and the spendable score; with `maxScoreAgeSeconds`, the score's age too, and with `minBond`, a larger bond. See the [README](../README.md#refusing-work-to-an-agent-without-standing) |
+| An off-chain client about to pay or hire an address | `SigvaraTrustCheck` in the SDK, or `sigvaraX402Fetch` around an x402 client | The same rule without the proof. See the [SDK README](../packages/sdk/README.md#before-paying-or-hiring-sigvaratrustcheck) |
 
 ## Getting the interfaces
 

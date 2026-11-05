@@ -263,3 +263,18 @@ describe('generateChallenge input checks', () => {
     expect(c.audience).toBe(AUDIENCE);
   });
 });
+
+describe('generateChallenge: a nonce from elsewhere', () => {
+  it('signs the one it is given, having told the maker the time it will sign', () => {
+    let toldTime = 0;
+    const c = generateChallenge(PEER_DID, AUDIENCE, 300, (timestamp) => { toldTime = timestamp; return 'abc123'; });
+    expect(c.nonce).toBe('abc123');
+    const signed = parseChallengePayload(c.payload);
+    expect(signed.nonce).toBe('abc123');
+    expect(signed.timestamp).toBe(toldTime);
+  });
+
+  it('refuses one that would add a line to what is signed', () => {
+    expect(() => generateChallenge(PEER_DID, AUDIENCE, 300, () => 'abc\naud: https://other.example')).toThrow(/nonce/);
+  });
+});
