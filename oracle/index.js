@@ -424,6 +424,14 @@ let payerScoreCache = new Map();
 const emptySeenAt = new Map();
 const coveringLate = new Set();
 
+// How fast to ask for payers' standing, as measured on Arc's public RPC on 4 Nov 2026. ethers sends what
+// is asked in one tick as one batch, the RPC refuses past 20 calls in a batch, and a payer with a
+// standing takes two more reads. It also has a budget that runs out: at 600 ms between chunks it
+// refused from about 350 payers on, and at this pace none of 2,000 was refused. All at once, the
+// backoff could not catch up past about 80 payers, and the agent went unscored for having customers.
+const PAYER_READ_CHUNK = 10;
+const PAYER_READ_PACE_MS = 1_500;
+
 async function payerScoresFor(didHash, events = getPaymentEvents(didHash)) {
   if (!payments.required(paymentCfg)) return null;
 
@@ -435,7 +443,7 @@ async function payerScoresFor(didHash, events = getPaymentEvents(didHash)) {
     if (!unique.has(key)) unique.set(key, e.payer);
   }
 
-  // Resolve the cache misses together rather than one at a time.
+  // Resolve the cache misses together, a chunk at a time, rather than one at a time.
   //
   // These reads are independent, and awaiting them in sequence cost a full round trip
   // each. ethers batches calls issued in the same tick into one JSON-RPC request, which
@@ -445,11 +453,14 @@ async function payerScoresFor(didHash, events = getPaymentEvents(didHash)) {
   // getAgentScore retries a throttled or dropped read, and still rejects when the node cannot be
   // reached, because a counterparty the node could not answer for is not one with no standing. What was
   // read is kept either way, so the next try asks only for what is missing. The rejection reaches the
-  // agent's own handler, which skips the agent for this epoch.
+  // agent's own handler, which skips the agent for this epoch, so the rest are not asked for: that
+  // would only press a node that is already failing.
   const misses = [...unique].filter(([key]) => !payerScoreCache.has(key));
-  if (misses.length > 0) {
-    const settled = await Promise.allSettled(misses.map(([, addr]) => chain.getAgentScore(addr)));
-    misses.forEach(([key], i) => { if (settled[i].status === 'fulfilled') payerScoreCache.set(key, settled[i].value); });
+  for (let i = 0; i < misses.length; i += PAYER_READ_CHUNK) {
+    if (i > 0) await new Promise((r) => setTimeout(r, PAYER_READ_PACE_MS));
+    const chunk = misses.slice(i, i + PAYER_READ_CHUNK);
+    const settled = await Promise.allSettled(chunk.map(([, addr]) => chain.getAgentScore(addr)));
+    chunk.forEach(([key], j) => { if (settled[j].status === 'fulfilled') payerScoreCache.set(key, settled[j].value); });
     const failed = settled.find((s) => s.status === 'rejected');
     if (failed) throw failed.reason;
   }

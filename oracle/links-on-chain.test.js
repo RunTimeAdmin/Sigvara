@@ -249,6 +249,22 @@ test('end to end: a span the node refuses for its size is halved until it answer
   assert.ok(reads.every(([from, to]) => to - from + 1 <= 40), JSON.stringify(reads));
 });
 
+test('end to end: logs too many to list in one read do not stop scoring, in the words each node refuses with', async () => {
+  // Anyone can set this key on an 8004 agent of their own, so anyone can fill a span. When the
+  // refusal went unrecognised, the logs could not be listed and no agent was scored.
+  for (const words of [
+    'request exceeded max allowed range: query exceeds max results 20000, retry with the range 70780526-70785795',
+    'requested range too large',
+    'logs count limit exceeded (10000) consider refine/narrow down your query',
+  ]) {
+    const { w, files } = claimedWorld();
+    w.set('linkSpanLimit', 40);
+    w.set('linkSpanError', words);
+    const { scores, logs } = await epoch(w, files, linkEnv(w));
+    assert.equal(scores?.externalScore, MAX_EXTERNAL_SCORE, `${words}:\n${logs}`);
+  }
+});
+
 test('end to end: with the registry on another chain, links made on chain are not read', async () => {
   const { w, files } = claimedWorld();
   w.set('externalChainId', 1);

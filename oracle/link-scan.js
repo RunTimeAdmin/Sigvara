@@ -5,13 +5,7 @@
 // rules, so the rules live here once. link-claims.js is the arithmetic; this is the reading.
 
 const linkClaims = require('./link-claims');
-
-// A span the node refuses for its size or does not answer in time is halved. A rate limit is
-// not: a smaller span would only be throttled the same way.
-const spanTooBig = (err) => {
-  const msg = String((err && err.message) || err);
-  return !/rate limit|429|too many requests/i.test(msg) && /more than \d+|too many results|response size|block range|timeout/i.test(msg);
-};
+const { spanTooBig } = require('./log-spans');
 
 /**
  * A scanner over one state slot. `chain` and `external` are the modules of the same names (or

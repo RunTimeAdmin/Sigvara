@@ -586,8 +586,9 @@ with many payments can look stuck for minutes. Also check that `lastBlockTs` mov
 
 **When a scan fails.** The log says `payment chain 99801 scan failed`, and `/metrics` counts it in
 `sigvara_oracle_payment_chain_scan_errors_total`. In shadow, scoring carries on, and the next epoch resumes from the
-last block saved. On Elysium, `could not coalesce error (rpc -32005)` means one call would return more than 10,000
-logs. The scan asks for the same range each time, so it keeps failing until `CHUNK` is lowered.
+last block saved. A range the node refuses for its size is halved, so a dense range alone should not stop a scan. If
+the same `(rpc -32005)` or similar repeats at one block, the node may word its refusal in a way `oracle/log-spans.js`
+does not know: add the wording there. Lowering `CHUNK` gets it past the range in the meantime.
 
 **Removing one.** Delete its lines from the `.env` and run `docker compose up -d`. Its cursor stays in the state file
 under `99801/shadow`, where only a later scan of that chain reads it.

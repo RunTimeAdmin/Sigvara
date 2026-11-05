@@ -25,6 +25,7 @@ const http = require('http');
 const zlib = require('zlib');
 const ix = require('./event-index');
 const { runningCommit } = require('./http-helpers');
+const { spanTooBig, readSplitting } = require('./log-spans');
 
 const fail = (message) => { console.error(`[indexer] ${message}`); process.exit(1); };
 const intSetting = (name, fallback, min, max = Number.MAX_SAFE_INTEGER) => {
@@ -125,6 +126,9 @@ const status = { head: null, lastPollAt: null, lastOkAt: null, lastError: null }
 let caughtUp = false;
 
 // ---- the RPC ----
+// Between the smaller reads of a refused span, so a run of them keeps under a public RPC's rate limit.
+const SPLIT_PACE_MS = 400;
+
 async function rpc(body) {
   // redirect: 'error'. A provider that redirects is not answering the request that was made.
   const res = await fetch(rpcUrl, {
@@ -177,6 +181,26 @@ async function readSpans(spans) {
   return { logs, time: Number.isSafeInteger(time) && time > 0 ? time : null };
 }
 
+// readSpans, with what a node refuses for its size asked for in smaller pieces: a batch a span at a
+// time, and a span in halves (log-spans.js). Anyone can fill a span, by logging from an indexed
+// contract in a loop. A single block still refused fails the batch, as anything else does.
+async function readBatch(spans) {
+  try {
+    return await readSpans(spans);
+  } catch (err) {
+    if (!spanTooBig(err)) throw err;
+    const pause = () => new Promise((r) => setTimeout(r, SPLIT_PACE_MS));
+    const join = (l, r) => ({ logs: l.logs.concat(r.logs), time: r.time });
+    let whole = { logs: [], time: null };
+    for (const [from, to] of spans) {
+      await pause();
+      const part = await readSplitting((x, y) => readSpans([[x, y]]), from, to, { tooBig: spanTooBig, pause, join });
+      whole = join(whole, part); // the time of the batch's last block, which the last read asked for
+    }
+    return whole;
+  }
+}
+
 // An RPC that leaves blockTimestamp out of its logs gets each block's time asked for.
 async function addTimes(logs) {
   const blocks = [...new Set(logs.filter((l) => !l.blockTimestamp).map((l) => l.blockNumber))];
@@ -209,7 +233,7 @@ async function poll() {
     const before = index.toBlock;
     for (let i = 0; i < work.length; i += cfg.batch) {
       const group = work.slice(i, i + cfg.batch);
-      const { logs, time } = await readSpans(group);
+      const { logs, time } = await readBatch(group);
       await addTimes(logs);
       ix.appendLogs(index, logs, group[group.length - 1][1], time);
     }

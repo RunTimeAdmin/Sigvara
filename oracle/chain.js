@@ -12,6 +12,7 @@ const IDENTITY_ABI = [
 const STAKE_VIEW_ABI = ['function hasMinimumStake(bytes32 didHash) view returns (bool)'];
 
 const { SCORE_FACTORS } = require('./epoch-policy');
+const { readSplitting } = require('./log-spans');
 const reviewers = require('./reviewers');
 
 const OPERATOR_SET_ABI = ['function isActiveOperator(address) view returns (bool)'];
@@ -298,7 +299,7 @@ async function getRegisteredAgents() {
   if (fromBlock <= latest) {
     for (let start = fromBlock; start <= latest; start += chunkSize) {
       const end = Math.min(start + chunkSize - 1, latest);
-      const chunk = await queryWithBackoff(filter, start, end);
+      const chunk = await readSplitting((a, b) => queryWithBackoff(filter, a, b), start, end, { pause: () => sleep(400) });
       for (const e of chunk) {
         knownAgents.set(e.args.didHash, {
           didHash: e.args.didHash,
