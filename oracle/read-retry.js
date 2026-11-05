@@ -5,6 +5,12 @@
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// The most calls to put in one JSON-RPC batch. Arc's public RPC answers 20 and refuses the 21st on
+// with a per-item rate limit (measured 4 November 2026), which ethers reports as CALL_EXCEPTION,
+// missing revert data, so it reads like a failed call and gets retried. ethers would otherwise
+// send up to 100.
+const MAX_BATCH_CALLS = 20;
+
 /**
  * A contract read, retried on the failures that are the node's fault rather than the
  * contract's.
@@ -56,4 +62,4 @@ async function readWithBackoff(label, fn, attempts = 4, retryable = isTransientR
   }
 }
 
-module.exports = { isTransientReadError, readWithBackoff };
+module.exports = { isTransientReadError, readWithBackoff, MAX_BATCH_CALLS };
