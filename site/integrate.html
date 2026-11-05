@@ -100,15 +100,33 @@ ISigvaraReader <span class="kw">constant</span> SIGVARA =
 <span class="kw">const</span> result = <span class="kw">await</span> gate.<span class="fn">admit</span>(agentDid, challenge, signature);
 <span class="cm">// bad_proof, replayed, not_active, stale_score or below_threshold</span>
 <span class="kw">if</span> (!result.ok) <span class="fn">refuse</span>(result.reason);</code></pre>
-    <p class="netnote">The gate checks the protocol's minimum bond and does not take a larger one yet. Before running one for real, read <a href="https://github.com/RunTimeAdmin/Sigvara/tree/main/packages/sdk#what-the-sdk-still-needs-from-you" rel="noopener">what the SDK still needs from you</a>.</p>
+    <p class="netnote">The gate checks the protocol's minimum bond. To ask for more, pass <code>minBond</code>, from 1.0.0-alpha.16, and an agent holding less is refused with <code>below_bond</code>. Before running one for real, read <a href="https://github.com/RunTimeAdmin/Sigvara/tree/main/packages/sdk#what-the-sdk-still-needs-from-you" rel="noopener">what the SDK still needs from you</a>.</p>
     <p class="u-mt-12">For an MCP tool, <a href="https://github.com/RunTimeAdmin/Sigvara/tree/main/examples/mcp-gated-tool" rel="noopener">the 10-minute gate</a> is a complete server. For an agent's own lookups, <code>npx -p @sigvara/protocol-sdk sigvara-mcp</code> serves read-only trust tools.</p>
+  </div>
+
+  <div class="app-card">
+    <h2>Before you pay or hire an agent</h2>
+    <p class="sub">The gate asks a caller to prove who it is. To decide whether to pay an address, what matters is who the money goes to, so <code>SigvaraTrustCheck</code> asks the same question with no proof. <code>sigvaraX402Fetch</code> goes underneath an x402 client, so a seller without standing is refused before anything is signed. From 1.0.0-alpha.16.</p>
+    <pre><code><span class="kw">import</span> { wrapFetchWithPayment, x402Client } <span class="kw">from</span> <span class="str">"@x402/fetch"</span>;
+<span class="kw">import</span> { SigvaraTrustCheck, sigvaraX402Fetch } <span class="kw">from</span> <span class="str">"@sigvara/protocol-sdk"</span>;
+
+<span class="kw">const</span> trust = <span class="kw">new</span> <span class="fn">SigvaraTrustCheck</span>({
+  rpcUrl, addresses, chainId: <span class="num">5042002</span>,
+  minScore: <span class="num">40</span>,
+});
+
+<span class="kw">const</span> pay = <span class="fn">wrapFetchWithPayment</span>(<span class="fn">sigvaraX402Fetch</span>(fetch, trust), client);
+
+<span class="cm">// No standing: rejects with X402SellerRefused, and nothing is signed.</span>
+<span class="kw">const</span> res = <span class="kw">await</span> <span class="fn">pay</span>(url);</code></pre>
+    <p class="netnote">It checks who is paid, not that the work will be delivered. A seller has to be paid at the agent's registered address for this to find it, and one paid anywhere else is refused.</p>
+    <p class="u-mt-12">For LangChain, <code>sigvaraTrustTool</code> gives a model a tool to call, and <code>requireTrustedAgent</code> makes a tool of yours refuse to run for an agent without standing, whatever the model decided. See <a href="https://github.com/RunTimeAdmin/Sigvara/blob/main/docs/ai-frameworks.md#langchain-typescript" rel="noopener">the LangChain guide</a> and <a href="https://github.com/RunTimeAdmin/Sigvara/tree/main/packages/sdk#before-paying-or-hiring-sigvaratrustcheck" rel="noopener">the SDK's notes on x402</a>.</p>
   </div>
 
   <div class="app-card">
     <h2>Not here yet</h2>
     <ul>
-      <li>Middleware for x402, and a LangChain package. <a href="docs/ai-frameworks">The framework guide</a> is mostly pseudocode today, and says which parts.</li>
-      <li>A Python SDK.</li>
+      <li>A Python SDK. Much of <a href="docs/ai-frameworks">the framework guide</a> is still pseudocode.</li>
       <li>Mainnet, which waits on an independent audit.</li>
       <li>A way for an agent to contest a payer's bad report. Until there is one, payer negatives stay off, so a score's success factor rarely falls.</li>
     </ul>
