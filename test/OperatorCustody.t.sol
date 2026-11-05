@@ -197,6 +197,74 @@ contract OperatorCustodyTest is StackFixture {
         _propose(signer, perfect);
     }
 
+    /// An operator can name an address without asking it, and a named address cannot bond for itself.
+    /// So it can step down, and then bond.
+    function test_aNamedAddress_canReleaseItself_andThenBond() public {
+        address reserved = makeAddr("reserved");
+        vm.prank(cold);
+        bondReg.setSigner(reserved);
+
+        svr.mint(reserved, BOND);
+        vm.startPrank(reserved);
+        svr.approve(address(bondReg), type(uint256).max);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraOracleBond.AlreadySigner.selector, reserved));
+        bondReg.depositBond(BOND);
+
+        vm.expectEmit(address(bondReg));
+        emit SigvaraOracleBond.SignerCleared(cold, reserved);
+        bondReg.releaseSigner();
+        assertEq(bondReg.signerOf(cold), address(0));
+        assertEq(bondReg.operatorOfSigner(reserved), address(0));
+
+        bondReg.depositBond(BOND);
+        vm.stopPrank();
+        (uint256 bond,,) = bondReg.operators(reserved);
+        assertEq(bond, BOND);
+    }
+
+    /// Stepping down ends what the key could do, as the operator clearing it does.
+    function test_aSignerThatReleasesItself_canNoLongerPropose_andItsProposalDies() public {
+        _propose(signer, _perfect());
+
+        vm.prank(signer);
+        bondReg.releaseSigner();
+
+        vm.warp(block.timestamp + SCORE_WINDOW + 1);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraReputation.ProposerNotAuthorized.selector, didHash, signer));
+        reputation.finalizeReputation(didHash);
+
+        SigvaraReputation.ReputationData memory perfect = _perfect();
+        vm.expectRevert(abi.encodeWithSelector(SigvaraReputation.OracleNotBonded.selector, signer));
+        _propose(signer, perfect);
+    }
+
+    /// The operator keeps its claim on the key: it can name it again, and no other operator can.
+    function test_aReleasedSigner_canBeNamedAgainOnlyByItsOperator() public {
+        _onboard(cold2, signer2);
+        vm.prank(signer);
+        bondReg.releaseSigner();
+
+        vm.expectRevert(BOUND_ERROR(signer, cold));
+        vm.prank(cold2);
+        bondReg.setSigner(signer);
+
+        vm.prank(cold);
+        bondReg.setSigner(signer);
+        assertEq(bondReg.signerOf(cold), signer);
+    }
+
+    function test_releaseSigner_reverts_forAnAddressNobodyNamed() public {
+        address stranger = makeAddr("stranger");
+        vm.expectRevert(abi.encodeWithSelector(SigvaraOracleBond.NotASigner.selector, stranger));
+        vm.prank(stranger);
+        bondReg.releaseSigner();
+
+        // An operator is not its own signer, so this is not another way for it to clear one.
+        vm.expectRevert(abi.encodeWithSelector(SigvaraOracleBond.NotASigner.selector, cold));
+        vm.prank(cold);
+        bondReg.releaseSigner();
+    }
+
     /// A cleared key stays dead: no other operator can name it and bring its proposals back.
     /// Naming it would make isActiveOperator(signer) true again, for the new operator, and the
     /// thief's pending proposal finalizable, without the operator it was stolen from doing

@@ -14,7 +14,7 @@ const STAKE_VIEW_ABI = ['function hasMinimumStake(bytes32 didHash) view returns 
 
 const { SCORE_FACTORS } = require('./epoch-policy');
 const { readSplitting } = require('./log-spans');
-const { isTransientReadError, readWithBackoff } = require('./read-retry');
+const { isTransientReadError, readWithBackoff, MAX_BATCH_CALLS } = require('./read-retry');
 const reviewers = require('./reviewers');
 
 const OPERATOR_SET_ABI = ['function isActiveOperator(address) view returns (bool)'];
@@ -181,7 +181,7 @@ function init(cfg, deps = {}) {
   cfg_ = cfg;
   txWaitMs = cfg.txWaitMs ?? DEFAULT_TX_WAIT_MS;
   txPollMs = cfg.txPollMs ?? DEFAULT_TX_POLL_MS;
-  provider = deps.provider ?? new ethers.JsonRpcProvider(cfg.rpcUrl);
+  provider = deps.provider ?? new ethers.JsonRpcProvider(cfg.rpcUrl, undefined, { batchMaxCount: MAX_BATCH_CALLS });
   wallet = deps.wallet ?? new CappedWallet(cfg.privateKey, provider, capsFromConfig(cfg));
   identityContract = deps.identityContract ?? new ethers.Contract(cfg.identityAddress, IDENTITY_ABI, provider);
   reputationContract = deps.reputationContract ?? new ethers.Contract(cfg.reputationAddress, REPUTATION_ABI, wallet);

@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  decideAction, decideCheckerAction, checkerGraceMs, finalizableAtOf, scoreDivergence, mapChunked, scoringIsStale,
+  decideAction, decideCheckerAction, checkerGraceMs, finalizableAtOf, scoreDivergence, mapChunked, chunkForReads, scoringIsStale,
   epochIntervalError, divergenceToleranceError, MAX_TIMER_MS, MIN_EPOCH_MS,
 } = require('./epoch-policy');
 
@@ -290,6 +290,13 @@ test('divergenceToleranceError: rejects what would silently disable the check', 
 // mapChunked
 // -------------------------------------------------------------------------
 
+test('chunkForReads: counts calls, so a chunk stays within one batch', () => {
+  assert.equal(chunkForReads(2), 10);
+  assert.equal(chunkForReads(3), 6);
+  assert.equal(chunkForReads(1), 20);
+  assert.equal(chunkForReads(50), 1, 'one item at a time rather than none');
+});
+
 test('mapChunked: preserves input order regardless of completion order', async () => {
   // The property the epoch depends on. Phase one builds agentInfos positionally and
   // phase two reads it back beside the agent list, so a reordering here would attach
@@ -321,6 +328,22 @@ test('mapChunked: never exceeds the requested concurrency', async () => {
   assert.equal(peak, 8, `peak concurrency should be the chunk size, got ${peak}`);
   assert.equal(out.length, 200);
   assert.equal(out[199], 398);
+});
+
+test('mapChunked: waits between chunks, not before the first or after the last', async () => {
+  const starts = [];
+  const began = Date.now();
+  await mapChunked([1, 2, 3, 4, 5], 2, async () => { starts.push(Date.now()); }, 60);
+  const took = Date.now() - began;
+  const chunkStarts = [starts[0], starts[2], starts[4]];
+  assert.ok(chunkStarts[1] - chunkStarts[0] >= 55, 'second chunk waited');
+  assert.ok(chunkStarts[2] - chunkStarts[1] >= 55, 'third chunk waited');
+  assert.ok(starts[0] - began < 40, 'first chunk did not wait');
+  assert.ok(took - (chunkStarts[2] - began) < 40, 'nothing waits after the last');
+
+  const one = Date.now();
+  await mapChunked([1, 2], 2, async () => {}, 500);
+  assert.ok(Date.now() - one < 200, 'a single chunk does not wait at all');
 });
 
 test('mapChunked: handles an empty list and a size larger than the list', async () => {

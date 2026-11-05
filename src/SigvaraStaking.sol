@@ -200,6 +200,8 @@ contract SigvaraStaking is
     error UnbondingPeriodActive(bytes32 didHash, uint256 claimableAt);
     error VictimIsReporter(address victim);
     error VictimIsCommittee(address victim);
+    error VictimIsAdmin(address victim);
+    error ZeroWithdrawal(bytes32 didHash);
     error PeriodTooShort(uint256 provided, uint256 minimum);
     error PeriodTooLong(uint256 provided, uint256 maximum);
     error MinimumStakeZero();
@@ -378,6 +380,7 @@ contract SigvaraStaking is
     function initiateWithdrawal(bytes32 didHash, uint256 amount) external nonReentrant {
         Stake storage s = stakes[didHash];
         if (s.amount == 0) revert NoStake(didHash);
+        if (amount == 0) revert ZeroWithdrawal(didHash);
         if (s.unbondingAmount != 0) revert WithdrawalAlreadyPending(didHash);
 
         SigvaraIdentity.AgentIdentity memory id = identityRegistry.getIdentity(didHash);
@@ -479,10 +482,11 @@ contract SigvaraStaking is
         if (victim == address(0)) revert ZeroAddress();
         // The victim takes 25% of the bond. The committee that files and enforces a slash
         // must not profit from it, so neither the reporter nor any other member can be
-        // named as the victim. An outside address named in bad faith is what the operator's
-        // dispute and the admin's ruling are for.
+        // named as the victim, and nor can the admin, who rules on the dispute. An outside
+        // address named in bad faith is what the operator's dispute and the admin's ruling are for.
         if (victim == msg.sender) revert VictimIsReporter(victim);
         if (hasRole(SLASHING_COMMITTEE_ROLE, victim)) revert VictimIsCommittee(victim);
+        if (hasRole(DEFAULT_ADMIN_ROLE, victim)) revert VictimIsAdmin(victim);
         // Slashable balance is the active stake PLUS anything queued for withdrawal.
         // Checking only the active stake let an operator drain everything into the
         // unbonding queue (which executeSlash still sweeps) and thereby block the slash
@@ -562,8 +566,8 @@ contract SigvaraStaking is
      * @notice The admin rules on a disputed slash: uphold it or drop it.
      * @param  uphold True to slash, false to cancel and reinstate the agent.
      * @dev    The committee files a slash and does not rule on it. A slash pays a quarter of the
-     *         bond to whoever filed it and a quarter to the victim it names, so a committee that
-     *         decided its own disputes would be accuser, judge and payee at once, and could uphold
+     *         bond to the victim the committee names, so a committee that decided its own disputes
+     *         would be accuser and judge, with the payee of its choosing, and could uphold
      *         the moment a dispute was filed, cutting short the whole challenge period the admin's
      *         veto relies on. The admin already holds the veto, so the ruling and the check on it
      *         sit with one key that is separate from the accuser. If the admin never rules, anyone
@@ -656,8 +660,8 @@ contract SigvaraStaking is
      * @notice The admin drops a pending or disputed slash. The committee accuses; the admin
      *         rules on a dispute and can stop a proposal at any point.
      * @dev    The committee is trusted to file slashes, and a slash pays a quarter of the bond to
-     *         whoever filed it and a quarter to the victim it names, so a committee that is
-     *         compromised, or simply wrong, has a reason to file. The proposal sits for a whole
+     *         the victim it names, so a committee that is compromised, or simply wrong, can
+     *         have a reason to file. The proposal sits for a whole
      *         challenge period before anyone can execute it, and this is what an independent
      *         admin does inside that period. It is usable without a role grant in the middle of
      *         an incident.
@@ -808,7 +812,10 @@ contract SigvaraStaking is
     /// @notice Upper bounds on the same two periods. The unbonding period is fixed when a withdrawal is
     ///         queued, so a value far above any sane one locks every withdrawal queued while it stands,
     ///         and a challenge period far above one leaves a slash that cannot be executed for as long.
-    uint256 public constant MAX_CHALLENGE_PERIOD = 30 days;
+    ///         The challenge period also has to end well before a dispute filed on its first day expires,
+    ///         because an uphold opens at the first and closes at the second. At 14 days or more any
+    ///         dispute would defeat any slash. This leaves the admin at least four days to rule.
+    uint256 public constant MAX_CHALLENGE_PERIOD = 10 days;
     uint256 public constant MAX_UNBONDING_PERIOD = 90 days;
 
     /// @notice How long the admin has to rule on a dispute before anyone may

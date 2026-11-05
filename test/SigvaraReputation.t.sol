@@ -2071,7 +2071,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
         rep.rejectReputation(DID);
     }
 
-    /// Finalize copies the proposal, stamps lastUpdated, moves the root and emits the total.
+    /// Finalize copies the proposal, dates it from the proposal, moves the root and emits the total.
     function test_finalize_writesDataRootAndEvent() public {
         SigvaraReputation.ReputationData memory data = SigvaraReputation.ReputationData({
             feeScore: 3, successScore: 7, ageScore: 11, externalScore: 2,
@@ -2095,7 +2095,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
         assertEq(stored.externalScore, 2);
         assertEq(stored.communityScore, 1);
         assertEq(stored.propagationScore, 4);
-        assertEq(stored.lastUpdated, t1, "oracle-supplied lastUpdated is overwritten");
+        assertEq(stored.lastUpdated, t0, "oracle-supplied lastUpdated is overwritten");
         assertEq(rep.evidenceRoots(DID), root);
         assertEq(rep.getEarnedScore(DID), 28);
         assertEq(rep.getTotalScore(DID), 28, "no maturity rate: spendable equals earned");

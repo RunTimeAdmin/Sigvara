@@ -23,7 +23,7 @@ const { computeScore } = require('./scoring');
 const {
   decideAction, decideCheckerAction, checkerGraceMs, finalizableAtOf, scoreDivergence,
   epochIntervalError, divergenceToleranceError, DEFAULT_DIVERGENCE_TOLERANCE,
-  mapChunked, clockSkewError, scoringIsStale,
+  mapChunked, chunkForReads, READ_PACE_MS, clockSkewError, scoringIsStale,
 } = require('./epoch-policy');
 const {
   json, readBody, bodyErrorStatus, readCredentials, identifyCaller, mayAttestUnauthenticated, parseScorePath, parseDidHash,
@@ -1240,12 +1240,11 @@ async function runEpochInner() {
   // over the limit several providers accept. Both failures then land in
   // readWithBackoff, which retries, which makes the burst worse rather than better.
   //
-  // 32 to match the phase-two guard loop below: one chunk is 64 to 96 logical reads,
-  // which ethers sends as a single batched round trip, so RPC pressure is flat in the
-  // agent count instead of linear. See mapChunked for what chunking costs. It preserves
-  // input order, so agentInfos stays aligned with agents exactly as the single
-  // Promise.all left it and candidate ordering downstream is unchanged.
-  const PHASE_ONE_CHUNK = 32;
+  // Sized in calls, so one chunk is one batched round trip within what a node accepts
+  // (chunkForReads), and paced (READ_PACE_MS). See mapChunked for what chunking costs. It preserves input order, so
+  // agentInfos stays aligned with agents exactly as the single Promise.all left it and
+  // candidate ordering downstream is unchanged.
+  const PHASE_ONE_CHUNK = chunkForReads(gatingActive ? 3 : 2);
   const agentInfos = await mapChunked(agents, PHASE_ONE_CHUNK, async ({ didHash }) => {
     try {
       const [info, pending, covered] = await Promise.all([
@@ -1257,7 +1256,7 @@ async function runEpochInner() {
     } catch (err) {
       return { didHash, registeredAt: 0, status: -1, pending: null, covered: false, error: err };
     }
-  });
+  }, READ_PACE_MS);
 
   // Agents worth writing for, filtered from the phase-1 batch before any further reads.
   const candidates = [];
@@ -1290,9 +1289,11 @@ async function runEpochInner() {
   // costs a reverted proposal and nothing else. Reading a chunk ahead rather than
   // hoisting the lot keeps the guards close to the writes they guard, so the window
   // stays bounded by the chunk instead of by the epoch.
-  const GUARD_CHUNK = 32;
+  const GUARD_CHUNK = chunkForReads(2);
 
   for (let c = 0; c < candidates.length; c += GUARD_CHUNK) {
+    // The first of these follows the last chunk of phase 1, so it waits too.
+    await new Promise((r) => setTimeout(r, READ_PACE_MS));
     const chunk = candidates.slice(c, c + GUARD_CHUNK);
     // One batch for the whole chunk: ethers folds calls issued in the same tick into a
     // single JSON-RPC request, so this is one round trip rather than 2 x chunk.

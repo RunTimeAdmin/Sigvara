@@ -44,6 +44,7 @@ function finalizableAtOf(pending, challengeWindowSeconds) {
 //
 // NaN is the likeliest way to arrive here: EPOCH_HOURS is read with Number(), so a
 // value like "1h" or an empty override parses to NaN and takes this path silently.
+const { MAX_BATCH_CALLS } = require('./read-retry');
 const MAX_TIMER_MS = 2_147_483_647;
 const MIN_EPOCH_MS = 60_000;
 
@@ -233,13 +234,16 @@ function checkerGraceMs(raw, epochMs) {
  * the guard loop the epoch already uses, and with comparable per-call latency the
  * difference is noise. If the epoch ever spans providers with very different latency,
  * this is the thing to revisit.
+ *
+ * `paceMs` is a wait between one chunk and the next, not before the first or after the last.
  */
-async function mapChunked(items, size, mapper) {
+async function mapChunked(items, size, mapper, paceMs = 0) {
   if (!Number.isInteger(size) || size < 1) {
     throw new TypeError(`mapChunked: size must be a positive integer, got ${size}`);
   }
   const out = [];
   for (let i = 0; i < items.length; i += size) {
+    if (i > 0 && paceMs > 0) await new Promise((r) => setTimeout(r, paceMs));
     // mapper is called with the item alone. Passing it through Array.map directly would
     // hand it a chunk-local index, which reads like a position in `items` and is not.
     const done = await Promise.all(items.slice(i, i + size).map(item => mapper(item)));
@@ -288,8 +292,23 @@ function scoringIsStale({ lastEpochMs, nowMs, uptimeMs, epochMs }) {
   return quietForMs >= epochMs * 2;
 }
 
+/**
+ * How many items fit in one JSON-RPC batch when each takes `readsPerItem` calls. Counted in calls
+ * because that is what a node counts: a chunk of 32 agents at 3 reads each is a batch of 96.
+ */
+function chunkForReads(readsPerItem) {
+  return Math.max(1, Math.floor(MAX_BATCH_CALLS / readsPerItem));
+}
+
+// How long the epoch waits between chunks of reads. Staying within the batch limit is not enough: the
+// RPC also has a budget that runs out. Measured on Arc's public RPC on 5 November 2026 with the real
+// chain.js, 264 agents at two reads each: chunks of 32 and no wait, 339 of 528 reads failed after
+// all their retries; chunks of 10 and no wait, 28 failed; chunks of 10 and this wait, no read was
+// refused at all. It took 42 seconds rather than 41, because retrying is slower than waiting.
+const READ_PACE_MS = 1_500;
+
 module.exports = {
-  decideAction, decideCheckerAction, checkerGraceMs, finalizableAtOf, scoreDivergence, mapChunked, scoringIsStale,
+  decideAction, decideCheckerAction, checkerGraceMs, finalizableAtOf, scoreDivergence, mapChunked, chunkForReads, READ_PACE_MS, scoringIsStale,
   epochIntervalError, divergenceToleranceError, clockSkewError, MAX_TIMER_MS, MIN_EPOCH_MS,
   SCORE_FACTORS, DEFAULT_DIVERGENCE_TOLERANCE, MAX_DIVERGENCE_TOLERANCE,
 };
