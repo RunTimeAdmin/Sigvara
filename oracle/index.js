@@ -470,6 +470,25 @@ async function payerScoresFor(didHash, events = getPaymentEvents(didHash)) {
   return out;
 }
 
+// An agent's external factor, kept per snapshot. Read at one block with the same evidence it cannot
+// change, so the epoch, the checker's audit and every GET /score can share one reading, and feedback
+// posted later waits for the next snapshot as it always did. A registry on another chain is read at
+// its latest block, so there it is kept for a few minutes. A failure is not kept: the next to ask
+// tries again.
+const EXTERNAL_SCORES_KEPT = 1024;
+const EXTERNAL_LATEST_HELD_MS = 5 * 60_000;
+const externalScores = new Map();
+
+function externalScoreOnce(key, read) {
+  if (!externalScores.has(key)) {
+    if (externalScores.size >= EXTERNAL_SCORES_KEPT) externalScores.delete(externalScores.keys().next().value);
+    const reading = read();
+    externalScores.set(key, reading);
+    reading.catch(() => externalScores.delete(key));
+  }
+  return externalScores.get(key);
+}
+
 /**
  * The external factor for one agent: the feedback on its linked ERC-8004 identity, counted
  * only from the reviewers reviewers.js accepts. 0 when nothing is linked or the feed is off.
@@ -497,14 +516,20 @@ async function externalScoreOf(didHash, { operator, agentAddress }, nowMs, event
   const snapshotOperator = sameChain ? (await chain.getAgentInfo(didHash, snapshotBlock)).operator : operator;
   const linkedId = await linkedAgentId(didHash, snapshotOperator, sameChain ? snapshotBlock : undefined);
   if (linkedId === undefined) return { score: 0, agentId: null };
-  const score = await external.externalScoreFor(linkedId, snapshotOperator, async (rows) => {
+  // The scored chain's payments only. A reviewer's payment is traced back to its funder on this
+  // chain, by block, and a payment chain's block number means nothing here.
+  const evidence = events.filter((e) => e.chainId == null && e.ts <= snapshotSec * 1000);
+  const key = [
+    didHash, linkedId, snapshotOperator, snapshotSec,
+    sameChain ? snapshotBlock : `latest ${Math.floor(Date.now() / EXTERNAL_LATEST_HELD_MS)}`,
+    reviewers.evidenceDigest(evidence),
+  ].join('|');
+  const score = await externalScoreOnce(key, () => external.externalScoreFor(linkedId, snapshotOperator, async (rows) => {
     const result = await reviewers.scoreFeedback(
       rows,
       {
         agent: { operator: snapshotOperator, agentAddress },
-        // The scored chain's payments only. A reviewer's payment is traced back to its funder on this
-        // chain, by block, and a payment chain's block number means nothing here.
-        events: events.filter((e) => e.chainId == null && e.ts <= snapshotSec * 1000),
+        events: evidence,
         nowMs: snapshotSec * 1000,
       },
       {
@@ -517,7 +542,7 @@ async function externalScoreOf(didHash, { operator, agentAddress }, nowMs, event
     );
     if (rows.length) console.log(`[oracle]   ${didHash.slice(0, 10)}… external: ${reviewers.describe(result)}`);
     return result.score;
-  }, sameChain ? snapshotBlock : undefined);
+  }, sameChain ? snapshotBlock : undefined, reviewers.payersByAmount(evidence)));
   return { score, agentId: linkedId };
 }
 

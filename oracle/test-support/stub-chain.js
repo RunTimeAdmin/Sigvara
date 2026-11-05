@@ -33,6 +33,7 @@
 //                linkSpanError (default: as returning too many logs)
 //     linkLogsFail: an error every read of those logs fails with, such as a rate limit
 //     externalReadFails: the node cannot answer for the registry, so ownership and feedback reads throw
+//     recordExternalReads: record each read of a linked agent's feedback as externalRead
 //     registryScannedTo: how far the registry scan has read (default: not reported, which reads as the head)
 //     snapshotBlock: the block the snapshot falls in (default `head`)
 //     agents[didHash].operators: [{ fromBlock, operator }] the agent's operator from each block on, for a
@@ -295,7 +296,8 @@ const external = {
     return chainId === undefined ? { status: 'disabled', chainId: null } : { status: 'configured', chainId };
   },
   // The ownership check and the read are faked; what is made of the rows is the real judgment.
-  externalScoreFor: async (agentId, owner, judge, blockTag) => {
+  externalScoreFor: async (agentId, owner, judge, blockTag, payers) => {
+    if (world().recordExternalReads) record('externalRead', String(agentId), blockTag, payers);
     if (world().externalReadFails) throw registryUnreadable();
     if (world().externalOwns !== true || !world().externalFeedback) return 0;
     // With a linkHistory for the agent, ownership is judged from it, as of the block asked.

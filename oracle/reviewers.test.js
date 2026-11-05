@@ -7,6 +7,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const {
   snapshotOf, parsePublicFunders, findFirstFunder, verdictFor, scoreReviews, scoreFeedback,
+  payersByAmount, evidenceDigest,
   REVIEWER_MIN_TENURE_DAYS, REVIEWER_MIN_SCORE, FULL_WEIGHT_CLUSTERS, FUNDING_FLOOR,
 } = require('./reviewers');
 const { MAX_EXTERNAL_SCORE } = require('./external');
@@ -339,6 +340,45 @@ test('reviewers funded straight from a faucet with no funder of its own still co
   assert.equal(r.clusters, 1, 'one faucet wallet, until it is listed as a public funder');
   deps.publicFunders = new Set([faucet]);
   assert.equal((await scoreFeedback(rated(clients), ctx, deps)).clusters, 5);
+});
+
+test('payersByAmount: totals each payer, the most paid first, and lowercases', () => {
+  const big = '0xABC0000000000000000000000000000000000001';
+  const events = [
+    { payer: addr(1), amount: '5' },
+    { payer: big, amount: '3' },
+    { payer: big.toLowerCase(), amount: '4' },
+    { payer: addr(2), amount: '6' },
+  ];
+  assert.deepEqual(payersByAmount(events), [big.toLowerCase(), addr(2), addr(1)]);
+});
+
+test('payersByAmount: the same evidence gives the same list, whatever order it is in', () => {
+  const events = [{ payer: addr(9), amount: '5' }, { payer: addr(3), amount: '5' }, { payer: addr(6), amount: '5' }];
+  assert.deepEqual(payersByAmount(events), [addr(3), addr(6), addr(9)]);
+  assert.deepEqual(payersByAmount([...events].reverse()), [addr(3), addr(6), addr(9)]);
+});
+
+test('payersByAmount: amounts past what a double can hold, and an event with no payer', () => {
+  const events = [
+    { payer: addr(1), amount: '9007199254740992' },
+    { payer: addr(2), amount: '9007199254740993' },
+    { amount: '100000000000000000000' },
+  ];
+  assert.deepEqual(payersByAmount(events), [addr(2), addr(1)]);
+  assert.deepEqual(payersByAmount([]), []);
+});
+
+test('evidenceDigest: changes with anything a judgment reads, and not otherwise', () => {
+  const event = { payer: addr(1), ts: 1000, amount: '5', txHash: '0xa' };
+  const base = evidenceDigest([event]);
+  assert.equal(evidenceDigest([{ ...event }]), base);
+  assert.equal(evidenceDigest([{ ...event, payer: addr(1).toUpperCase().replace('0X', '0x') }]), base, 'however the address is written');
+  for (const change of [{ payer: addr(2) }, { ts: 1001 }, { amount: '6' }, { txHash: '0xb' }]) {
+    assert.notEqual(evidenceDigest([{ ...event, ...change }]), base, JSON.stringify(change));
+  }
+  assert.notEqual(evidenceDigest([event, event]), base);
+  assert.notEqual(evidenceDigest([]), base);
 });
 
 test('parsePublicFunders: a list of addresses, and nothing else', () => {
