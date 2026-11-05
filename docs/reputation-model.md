@@ -184,7 +184,7 @@ that verifies no payments (`PAYMENT_VERIFICATION` off and the pull scanner off).
 
 Only feedback that could count is read. Anyone can post to the registry, so reading all of it
 would let any wallet decide what an agent costs to score. The oracle asks for the list of clients
-and reads only those that paid the agent: the 100 that paid it most, and the newest 10 reviews of
+and reads only those that paid the agent on the scored chain: the 100 that paid it most, and the newest 10 reviews of
 each. It then keeps the factor for the rest of the snapshot, unless the evidence changes. So a
 reviewer's older reviews stop counting once it has posted ten newer ones, and a party willing to
 out-pay an honest reviewer, from a hundred wallets, can push it off the list.
