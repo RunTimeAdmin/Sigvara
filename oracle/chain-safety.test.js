@@ -30,7 +30,13 @@ const FAST = {
   txPollMs: 5,
 };
 
-/** A provider whose receipt lookups follow a script per hash. The last entry repeats. */
+/**
+ * A provider whose receipt lookups follow a script per hash. The last entry repeats.
+ *
+ * The script counts lookups and settle's wait is on the clock, so a busy machine can use up the
+ * wait before the lookups have run. A receipt that needs several lookups only belongs where
+ * running out of time changes nothing about the result.
+ */
 function scripted(byHash) {
   const calls = {};
   return {
@@ -68,6 +74,7 @@ function recordingWallet({ refuse = false } = {}) {
     sendTransaction: async (req) => {
       wallet.attempted = true;
       if (refuse) throw Object.assign(new Error('nonce has already been used'), { code: 'NONCE_EXPIRED' });
+      wallet.sentAt = Date.now();
       sent.push(req);
       return { hash: '0xreplacement', ...req };
     },
@@ -117,7 +124,7 @@ test('settle: a transaction that was mined and reverted throws as ethers would',
 test('settle: a transaction that is never mined is replaced once, at twice the fee and the same nonce', async () => {
   const wallet = initWith(scripted({
     '0xoriginal': [null],
-    '0xreplacement': [null, null, { status: 1 }],
+    '0xreplacement': [{ status: 1 }],
   }));
   const { hash } = await chain.settle(ORIGINAL);
   assert.equal(hash, '0xreplacement', 'the replacement is the transaction that was mined');
@@ -131,13 +138,15 @@ test('settle: a transaction that is never mined is replaced once, at twice the f
   assert.equal(replacement.maxPriorityFeePerGas, 4n * GWEI);
 });
 
-test('settle: nothing is resent beyond the one replacement', async () => {
+test('settle: nothing is resent beyond the one replacement, which gets a full wait of its own', async () => {
   const wallet = initWith(scripted({ '0xoriginal': [null], '0xreplacement': [null] }));
   await assert.rejects(
     () => chain.settle(ORIGINAL),
     (err) => err.code === 'TX_UNCONFIRMED' && err.txHash === '0xoriginal' && err.replacementHash === '0xreplacement',
   );
   assert.equal(wallet.sent.length, 1, 'never pay twice for one epoch');
+  // A floor, which a busy machine can only make longer.
+  assert.ok(Date.now() - wallet.sentAt >= FAST.txWaitMs, 'a full wait, not a last look');
 });
 
 test('settle: the original landing while its replacement is pending is a success, not an error', async () => {
@@ -303,7 +312,9 @@ test('a transaction the endpoint never mines ends the wait instead of hanging, w
 });
 
 test('a rate-limited receipt lookup does not undo a transaction that was mined', async () => {
-  await startChain({ throttleReceipts: 4 });
+  // The lookups are counted, so the wait must not run out first. It is mined, so a passing
+  // run does not sit through this.
+  await startChain({ throttleReceipts: 4 }, { txWaitMs: 30_000 });
   const hash = await chain.proposeScore(DID, SCORES);
   assert.equal(hash, rpc.sent[0].hash);
   assert.equal(rpc.sent.length, 1, 'and it was not sent again');

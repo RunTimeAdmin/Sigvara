@@ -81,6 +81,10 @@ const freePort = () => new Promise((resolve) => {
   const s = net.createServer().listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)); });
 });
 
+// Its own word that it is serving. Until it has bound the port, the port may be another test
+// file's server, and a request sent there fails whichever test that file is running.
+const serving = (child) => until(() => /serving on /.test(child.output));
+
 function startIndexer(env) {
   const child = spawn(process.execPath, [path.join(__dirname, 'indexer.js')], { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
   child.output = '';
@@ -137,6 +141,7 @@ test('indexer: backfills without holes, follows new blocks, filters, resumes, an
   };
   let child = startIndexer(env);
   try {
+    await serving(child);
     // Caught up to the margin behind the head, through the refused span.
     const h = await until(async () => { const r = await get(port, '/health'); return r.body.toBlock === rpc.chain.head - MARGIN && r; });
     assert.equal(h.status, 200);
@@ -202,6 +207,7 @@ test('indexer: backfills without holes, follows new blocks, filters, resumes, an
     await child.exited;
     const asked = rpc.chain.getLogsFrom.length;
     child = startIndexer(env);
+    await serving(child);
     await until(async () => (await get(port, '/health')).body.ok);
     assert.match(child.output, /resuming at block/);
     assert.ok(rpc.chain.getLogsFrom.slice(asked).every((f) => f > rpc.chain.head - MARGIN - 1000), 'nothing already indexed is read again');
