@@ -1,0 +1,79 @@
+# Slash keeper, shaped for a bare VPS (oracle/keeper.js, docs/operations-runbook.md section 7).
+#
+# Like the watcher, this fetches ONE PINNED COMMIT of the public repository inside the
+# container. Which code runs is decided by SIGVARA_COMMIT in .env: the full 40-character hash
+# of a commit on main that someone has read. A deploy is:
+#
+#   1. change SIGVARA_COMMIT in .env
+#   2. docker compose up -d        (a plain restart does NOT re-read .env)
+#   3. read the log: "[deploy] running <that hash>", then "[keeper] shadow mode" or "live mode"
+#
+# Run two, on separate hosts, each with its own key and KEEPER_NAME. The backup's
+# KEEPER_GRACE_SECONDS gives the primary the first chance. Both simulate before they send, so the
+# one that comes second finds nothing to do.
+#
+# The state volume holds how far the scan has read and which slashes are open. It can be rebuilt
+# from the chain, starting at KEEPER_FROM_BLOCK.
+#
+#   cd /docker/sigvara-keeper && docker compose up -d
+services:
+  keeper:
+    image: node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53
+    container_name: sigvara-keeper
+    restart: unless-stopped
+    working_dir: /app
+    init: true
+    env_file:
+      - .env
+    environment:
+      SIGVARA_COMMIT: ${SIGVARA_COMMIT:?set SIGVARA_COMMIT in .env to the full 40-character commit hash}
+      KEEPER_STATE_PATH: /data/keeper-state.json
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - NET_RAW
+    mem_limit: 256m
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+    # Unhealthy when no run has finished lately, which docker ps shows. lastRunAt is chain time, so
+    # this compares the file's own age instead of trusting two clocks to agree.
+    healthcheck:
+      test: ["CMD", "node", "-e", "const f=require('fs').statSync('/data/keeper-state.json');process.exit(Date.now()-f.mtimeMs<3600000?0:1)"]
+      interval: 5m
+      timeout: 10s
+      retries: 2
+      start_period: 5m
+    command:
+      - sh
+      - -c
+      - |
+        set -eu
+        case "$${SIGVARA_COMMIT:-}" in ""|*[!0-9a-f]*) echo "[deploy] SIGVARA_COMMIT must be 40 lowercase hex characters" >&2; exit 1;; esac
+        [ "$${#SIGVARA_COMMIT}" -eq 40 ] || { echo "[deploy] SIGVARA_COMMIT must be 40 characters" >&2; exit 1; }
+        apk add --no-cache git >/dev/null
+        rm -rf /src && mkdir /src && cd /src
+        git init -q
+        git remote add origin https://github.com/RunTimeAdmin/Sigvara.git
+        git fetch -q --depth 1 origin "$$SIGVARA_COMMIT"
+        git checkout -q --detach FETCH_HEAD
+        [ "$$(git rev-parse HEAD)" = "$$SIGVARA_COMMIT" ] || { echo "[deploy] checkout is not $$SIGVARA_COMMIT, refusing to start" >&2; exit 1; }
+        rm -rf /app/node_modules /app/*.js /app/package.json /app/package-lock.json
+        cp /src/oracle/*.js /src/oracle/package.json /src/oracle/package-lock.json /app/
+        rm -f /app/*.test.js
+        cd /app
+        # npm ci installs exactly the committed lockfile; --ignore-scripts keeps dependencies
+        # from running code at install time.
+        npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+        echo "[deploy] running $$SIGVARA_COMMIT"
+        exec node keeper.js
+    volumes:
+      - keeper_app:/app
+      - keeper_state:/data
+
+volumes:
+  keeper_app:
+  keeper_state:

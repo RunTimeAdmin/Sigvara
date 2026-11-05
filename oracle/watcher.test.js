@@ -37,7 +37,7 @@ async function until(check, ms = 15000) {
   }
 }
 
-async function withWatcher({ divergence }, run) {
+async function withWatcher({ divergence, refusal = null }, run) {
   const alerts = [];
   const webhook = await listen((_req, res, body) => { alerts.push(body); res.writeHead(204); res.end(); });
   const checker = await listen((req, res) => {
@@ -47,10 +47,13 @@ async function withWatcher({ divergence }, run) {
   // Answers who it is, and fails everything else, as a node having a bad day does.
   const node = await listen((_req, res, body) => {
     const j = JSON.parse(body);
-    const one = Array.isArray(j) && j.length === 1 ? j[0] : j;
-    if (one.method === 'eth_chainId') return json(res, { jsonrpc: '2.0', id: one.id, result: '0x1' });
-    res.writeHead(500);
-    return res.end('oops');
+    const reply = (c) => {
+      if (c.method === 'eth_chainId') return { jsonrpc: '2.0', id: c.id, result: '0x1' };
+      return refusal ? { jsonrpc: '2.0', id: c.id, error: refusal } : null;
+    };
+    const replies = (Array.isArray(j) ? j : [j]).map(reply);
+    if (replies.includes(null)) { res.writeHead(500); return res.end('oops'); }
+    return json(res, Array.isArray(j) ? replies : replies[0]);
   });
   const child = spawn(process.execPath, ['--require', path.join(__dirname, 'test-support', 'fast-interval.js'), path.join(__dirname, 'watcher.js')], {
     env: {
@@ -89,6 +92,15 @@ test('watcher: a node failing keeps the RPC URL and its key out of the alert and
       assert.equal(said.includes(KEY), false, 'the key');
       assert.equal(said.includes('/v2/'), false, 'the path it sits in');
     }
+  });
+});
+
+test('watcher: a node refusing a read is reported in its own words', async () => {
+  await withWatcher({ divergence: disputed, refusal: { code: -32005, message: 'rate limit exceeded' } }, async ({ alerts }) => {
+    const raised = () => alerts.find((a) => a.includes('the watcher cannot complete its checks'));
+    await until(raised);
+    assert.match(raised(), /last error: rate limit exceeded/);
+    assert.equal(raised().includes('coalesce'), false);
   });
 });
 

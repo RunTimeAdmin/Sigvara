@@ -8,9 +8,10 @@
 // No dependencies: the indexer runs with no node_modules, from the files
 // docker-compose.indexer.vps.yml names.
 
-// The node's own words. ethers nests them under `error`, in a message that also holds the request,
-// and the request can say anything: ethers numbers its requests, so one has the id 429.
-const wordsOf = (err) => String(err?.error?.message ?? err?.shortMessage ?? err?.message ?? err);
+// The node's own words. ethers nests them under `error`, or under `info.error` for a call it turned into
+// "missing revert data", in a message that also holds the request, and the request can say anything:
+// ethers numbers its requests, so one has the id 429.
+const wordsOf = (err) => String(err?.error?.message ?? err?.info?.error?.message ?? err?.shortMessage ?? err?.message ?? err);
 
 // Asked again in place, not halved: a smaller span would be throttled the same way. \b because a
 // refusal can name blocks ("retry with the range 70742912-70750000").
@@ -60,4 +61,4 @@ async function readSplitting(read, from, to, { tooBig = spanRefused, pause = asy
   }
 }
 
-module.exports = { spanRefused, spanTooBig, readSplitting };
+module.exports = { spanRefused, spanTooBig, readSplitting, wordsOf };

@@ -43,6 +43,13 @@ const NUMERIC = [
   ['PUBLISH_MAX_GAS', 'int', 21000],
   ['PUBLISH_MAX_FEE_GWEI', 'num', 0.000001],
   ['PUBLISH_MIN_BALANCE', 'num', 0],
+  // The slash keeper's (keeper.js).
+  ['KEEPER_FROM_BLOCK', 'int', 0],
+  ['KEEPER_GRACE_SECONDS', 'num', 0],
+  ['KEEPER_POLL_SECONDS', 'num', 30],
+  ['KEEPER_MAX_GAS', 'int', 21000],
+  ['KEEPER_MAX_FEE_GWEI', 'num', 0.000001],
+  ['KEEPER_MIN_BALANCE', 'num', 0],
   ['JOBS_MAX_SPAN', 'int', 1],
   ['EXPECTED_CHAIN_ID', 'int', 1],
   ['TX_WAIT_SECONDS', 'num', 5, 3600],

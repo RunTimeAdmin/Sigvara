@@ -38,6 +38,7 @@ const {
 } = require('./watcher-policy');
 const { finalizableAtOf } = require('./epoch-policy');
 const { redact } = require('./event-index');
+const { wordsOf } = require('./log-spans');
 
 const cfg = {
   checkerUrl: (process.env.CHECKER_URL || '').replace(/\/+$/, ''),
@@ -74,8 +75,8 @@ const reputation = new ethers.Contract(cfg.reputationAddress, ABI, provider);
 
 // An error as words that can leave this machine. An ethers error's message holds the whole RPC URL
 // when a node answers 429 or 500, and a provider's URL can carry its key. These reach the webhook,
-// which is somebody else's channel, and the short message says what happened.
-const said = (err) => redact(err?.shortMessage || err?.message || err, [cfg.rpcUrl, cfg.webhookUrl]);
+// which is somebody else's channel. The node's own words say what happened.
+const said = (err) => redact(wordsOf(err), [cfg.rpcUrl, cfg.webhookUrl]);
 
 // key -> highest escalation already sent (0 first sighting, 1 final warning).
 // In memory on purpose: a restart re-surfaces anything still open, which is the safe

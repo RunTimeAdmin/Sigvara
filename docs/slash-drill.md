@@ -411,6 +411,9 @@ victim, and the expire path goes unshown until a rerun. The rehearsal checks thi
 (`test_lapsingProposalIsExecutableUntilItLapses`). If it happens, the log says so: it is the
 protocol working, not the drill failing.
 
+Sigvara's own slash keeper will not be that passer-by: C stays on its `KEEPER_SKIP_AGENTS` until day 21
+is done, and the keeper does not execute past a lapse in any case ([runbook, section 7](operations-runbook.md#7-slash-keeper)).
+
 **What this proves and what it does not.** It shows each way out of a slash working on the live
 deployment, with each guard firing when it should. It does not show that the admin rules well or
 that the committee files in good faith: one person holds both keys on testnet, as above, and both
