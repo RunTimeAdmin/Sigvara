@@ -936,7 +936,7 @@ somewhere a human will see them; without it they go to the container log, which 
 reads at the hour this matters.
 
 Run it on a third host. A watcher sharing a machine with the checker goes down with it,
-and then its silence means nothing.
+and then its silence means nothing. The slash keeper (`keeper.js`) has its own section in the [runbook](../docs/operations-runbook.md#7-slash-keeper).
 
 ## Environment Variables
 

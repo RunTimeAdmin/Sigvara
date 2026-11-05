@@ -9,7 +9,8 @@
 
 > ## Status since this review — 2026-09-20
 >
-> **Later changes.** This status was last revised on 1 November. The mainnet-readiness work of
+> **Later changes.** This status was last revised on 1 November, and what is open now is in the
+> [launch checklist](launch-checklist.md#where-this-stands). The mainnet-readiness work of
 > 22 October (split upgrade and admin authority, the guardian pause, launch floors and ceilings,
 > reader freshness) is recorded in [ADR 0005](adr/0005-governance-and-emergency-powers.md), the
 > [launch checklist](launch-checklist.md), the README's

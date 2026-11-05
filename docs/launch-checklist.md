@@ -2,6 +2,40 @@
 
 Sequenced against the Q4 2026 SVR mainnet milestone. Dates are targets, not commitments — slip any item rather than skip the gate it protects.
 
+## Where this stands
+
+As of 5 November 2026. Everything runs on Arc testnet, and nothing is on mainnet. What runs where is in the
+[runbook](operations-runbook.md). There has been no external audit, and nobody outside the team gates on a score yet.
+
+**In progress, with dates.**
+- The adversarial slash drill: day 7 from 10 November 03:46 UTC and day 21 from 24 November 03:45 UTC
+  ([slash-drill.md](slash-drill.md)).
+- The slash keepers went live on 5 November. C should read `held` from 10 November, and neither has yet
+  executed a real slash.
+- The publisher has not yet posted through the policy signer's new rule, which requires the feedback hash
+  to match its file. Three earlier real posts all pass it.
+
+**Open before mainnet.**
+- An external audit, and fixing what it finds (Phase 2).
+- A contract upgrade batch, on testnet first: how a score's age reads after a late finalize, a cap on the
+  challenge period below the dispute period, refusing the admin as a slash's victim, a zero-amount
+  withdrawal, an address being named as a signer without its consent, and stale NatSpec on the slash paths.
+- The handover: moving testnet roles to a Safe and a timelock, after the drill, since `executeSlash` needs
+  the reporter still on the committee. Before it, more checks in the renounce gate (the Safe's history, the
+  initializers consumed, every proxy the deployer created) and passing the role replay only the settings it needs.
+- A challenge process for negative outcomes. Until then payer outcomes stay positive only
+  ([ADR 0006](adr/0006-payer-signed-outcomes.md)).
+- A review of retention by counsel, before public outcome retrieval and peer import on mainnet.
+- The operators' spending as agents grow: a limit on total epoch spend, and the reads an unstaked registration adds.
+
+**Open, and not blocking mainnet.**
+- The SDK half of the one-call path: `minBond` in `SigvaraGate`, x402 and LangChain middleware, then a publish.
+  Tightening its replay key and issued nonces goes with it.
+- Design partners, the first users from outside the team.
+- The reward distributor stays a draft until mainnet.
+- Moving the testnet compose files to the mainnet pattern (a file secret, read-only, non-root).
+- A wiki pass whenever `main` moves.
+
 ## Phase 1 — Prove the mechanism (testnet, weeks 1–2)
 
 - [x] **Live slash drill on a throwaway agent.** Done. A throwaway was registered at exactly `minimumStake` (1,000 SVR on testnet), `initiateSlash` was filed from the committee key on 20 September 2026, and `executeSlash` was called permissionlessly on 3 October 2026 after the seven-day challenge window. The log carries the filing and execution transactions with explorer links and says first that it was a drill; the registration, bond and claim transactions are not listed. The demo agent was not targeted: `Slashed` is terminal.
@@ -33,7 +67,8 @@ Sequenced against the Q4 2026 SVR mainnet milestone. Dates are targets, not comm
   committee, because `executeSlash` reverts with `ReporterNotAuthorized` for it
   ([ADR 0005](adr/0005-governance-and-emergency-powers.md), decision 12). A slash that is not executed within 14 days of its deadline
   lapses and has to be filed again after the cooldown ([ADR 0005](adr/0005-governance-and-emergency-powers.md),
-  decision 7). It also races its own expiry: until `expireSlash` lands, execution is still allowed.
+  decision 7). It also races its own expiry: until `expireSlash` lands, execution is still allowed. Running
+  on Arc testnet since 5 November 2026; mainnet needs its own pair, funded with their own keys.
 - [ ] **Initialize oracle bonds** for admitted operators. `admit()` takes the admin role, so nobody buys their way in; there is no on-chain vote. The bond is what a corrupt oracle can lose.
 - [ ] **Pin and rehearse the operator deployment.** Operators run a pinned commit (`SIGVARA_REF` in `docker-compose.mainnet.yml`), never a branch. Each `.env` is mode 600 and the key is a file secret. State is copied off the box nightly and the restore drill in [operations-runbook.md](operations-runbook.md) has been run once. The key-compromise sequence in [incident-operator-key.md](incident-operator-key.md) has been walked through with the Safe signers.
 - [ ] **Confirm Arc's finality on mainnet before one confirmation counts.** `PAYMENT_MIN_CONFIRMATIONS=1` in `oracle/.env.mainnet.example` assumes a block cannot be reorganized once it is served. That is Arc's documented design and not something this repository tests ([payment-backed-attestations.md](payment-backed-attestations.md#configuration)). Read a block's hash, read the same block number again ten blocks later, and repeat across a day: the hashes must match. If one ever differs, raise `PAYMENT_MIN_CONFIRMATIONS` and `PAYMENT_SCAN_CONFIRMATIONS` before a payment counts.

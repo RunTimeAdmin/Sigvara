@@ -60,7 +60,7 @@ What is not bounded:
 
 All of these are fine for the testnet history, and are to be settled before the index serves a much larger one.
 
-`GET /health` answers 200 while the index has polled in the last few minutes and is at most 3,600 blocks (about half an hour) behind the finalized head, and 503 otherwise. It reports `toBlock`, `head`, `behind`, the number of logs, the last error with any URL removed, and the commit it runs.
+`GET /health` answers 200 while the index has polled in the last few minutes and is at most 3,600 blocks (about half an hour) behind the finalized head, and 503 otherwise. It also answers 503 once the index is full. It reports `toBlock`, `head`, `behind`, the number of logs, `maxLogs`, `full`, the last error with any URL removed, and the commit it runs.
 
 ## When it does not answer
 
