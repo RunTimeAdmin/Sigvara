@@ -24,7 +24,7 @@ const fs = require('fs');
 const http = require('http');
 const zlib = require('zlib');
 const ix = require('./event-index');
-const { runningCommit } = require('./http-helpers');
+const { runningCommit, clientKey, parseTrustedProxies, rateLimited } = require('./http-helpers');
 const { spanTooBig, readSplitting } = require('./log-spans');
 
 const fail = (message) => { console.error(`[indexer] ${message}`); process.exit(1); };
@@ -78,7 +78,12 @@ const cfg = {
   // deployment on it sets 1.
   batch: intSetting('INDEX_BATCH', 10, 1),
   stateFile: process.env.STATE_FILE || '',
+  // The logs it will hold. Past this it stops reading on and keeps answering with what it has, and
+  // /health fails. Set with the container's memory: docs/event-index.md says how they go together.
+  maxLogs: intSetting('INDEX_MAX_LOGS', 100_000, 1),
 };
+let isTrustedProxy;
+try { isTrustedProxy = parseTrustedProxies(process.env.TRUSTED_PROXIES); } catch { fail('TRUSTED_PROXIES must be comma-separated addresses or CIDR ranges (the value is not shown)'); }
 // One poll reads at most this many spans (a million blocks) before it saves and starts the next,
 // so a first run's backfill is saved as it goes.
 const SPANS_PER_POLL = 100;
@@ -89,6 +94,10 @@ const MAX_BEHIND = 3600;
 // head can answer a log read for the newest blocks with what it has. The pages read the blocks
 // after the index from the chain, so the margin costs them one small read.
 const HEAD_MARGIN = 20;
+// An answer past this is refused the way a node refuses a span for its size, so the read is asked
+// for in smaller pieces (log-spans.js). A node's own limit can be 20,000 logs a span and a batch is
+// ten spans, which is more than the process can hold. A single block holds far less than this.
+const MAX_ANSWER_BYTES = 8 * 1024 * 1024;
 
 // ---- state ----
 function load() {
@@ -113,16 +122,18 @@ function save() {
   const tmp = `${cfg.stateFile}.tmp`;
   const fd = fs.openSync(tmp, 'w');
   try {
-    fs.writeSync(fd, JSON.stringify(index));
+    for (const chunk of ix.savedChunks(index)) fs.writeFileSync(fd, chunk);
     fs.fsyncSync(fd);
   } finally {
     fs.closeSync(fd);
   }
   fs.renameSync(tmp, cfg.stateFile);
+  savedThrough = index.toBlock;
 }
 
 let index = load();
-const status = { head: null, lastPollAt: null, lastOkAt: null, lastError: null };
+let savedThrough = index.toBlock;
+const status = { head: null, lastPollAt: null, lastOkAt: null, lastError: null, full: false };
 let caughtUp = false;
 
 // ---- the RPC ----
@@ -139,7 +150,14 @@ async function rpc(body) {
     signal: AbortSignal.timeout(60_000),
   });
   if (!res.ok) throw new Error(`the RPC answered HTTP ${res.status}`);
-  return res.json();
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of res.body) {
+    size += chunk.length;
+    if (size > MAX_ANSWER_BYTES) throw Object.assign(new Error(`an answer past ${MAX_ANSWER_BYTES} bytes`), { spanRefused: true });
+    chunks.push(chunk);
+  }
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
 
 async function call(method, params) {
@@ -181,26 +199,6 @@ async function readSpans(spans) {
   return { logs, time: Number.isSafeInteger(time) && time > 0 ? time : null };
 }
 
-// readSpans, with what a node refuses for its size asked for in smaller pieces: a batch a span at a
-// time, and a span in halves (log-spans.js). Anyone can fill a span, by logging from an indexed
-// contract in a loop. A single block still refused fails the batch, as anything else does.
-async function readBatch(spans) {
-  try {
-    return await readSpans(spans);
-  } catch (err) {
-    if (!spanTooBig(err)) throw err;
-    const pause = () => new Promise((r) => setTimeout(r, SPLIT_PACE_MS));
-    const join = (l, r) => ({ logs: l.logs.concat(r.logs), time: r.time });
-    let whole = { logs: [], time: null };
-    for (const [from, to] of spans) {
-      await pause();
-      const part = await readSplitting((x, y) => readSpans([[x, y]]), from, to, { tooBig: spanTooBig, pause, join });
-      whole = join(whole, part); // the time of the batch's last block, which the last read asked for
-    }
-    return whole;
-  }
-}
-
 // An RPC that leaves blockTimestamp out of its logs gets each block's time asked for.
 async function addTimes(logs) {
   const blocks = [...new Set(logs.filter((l) => !l.blockTimestamp).map((l) => l.blockNumber))];
@@ -217,6 +215,42 @@ async function addTimes(logs) {
   }
 }
 
+// What a read brought, added to the index, unless the index has no room for all of it. Then nothing
+// from it is added, so the index stays whole up to the block it holds.
+async function take({ logs, time }, through) {
+  if (index.logs.length + logs.length > cfg.maxLogs) {
+    status.full = true;
+    throw Object.assign(
+      new Error(`the index is full: it holds ${index.logs.length} logs, the next read has ${logs.length}, and INDEX_MAX_LOGS is ${cfg.maxLogs}`),
+      { indexFull: true },
+    );
+  }
+  await addTimes(logs);
+  ix.appendLogs(index, logs, through, time);
+  status.full = false;
+}
+
+// readSpans, added to the index, with what is refused for its size asked for in smaller pieces: a
+// batch a span at a time, and a span in halves (log-spans.js). Anyone can fill a span, by logging
+// from an indexed contract in a loop, so each piece is added as it comes rather than all of them
+// being held until the last. A single block still refused fails the batch, as anything else does.
+async function readBatch(spans) {
+  let whole;
+  try {
+    whole = await readSpans(spans);
+  } catch (err) {
+    if (!spanTooBig(err)) throw err;
+    const pause = () => new Promise((r) => setTimeout(r, SPLIT_PACE_MS));
+    const tooBig = (e) => !e.indexFull && spanTooBig(e);
+    for (const [from, to] of spans) {
+      await pause();
+      await readSplitting(async (x, y) => take(await readSpans([[x, y]]), y), from, to, { tooBig, pause, join: () => undefined });
+    }
+    return;
+  }
+  await take(whole, spans[spans.length - 1][1]);
+}
+
 let timer = null;
 async function poll() {
   timer = null;
@@ -230,14 +264,13 @@ async function poll() {
     const end = Math.min(target, index.toBlock + SPANS_PER_POLL * ix.LOG_SPAN);
     more = end < target;
     const work = ix.planSpans(index.toBlock + 1, end);
-    const before = index.toBlock;
-    for (let i = 0; i < work.length; i += cfg.batch) {
-      const group = work.slice(i, i + cfg.batch);
-      const { logs, time } = await readBatch(group);
-      await addTimes(logs);
-      ix.appendLogs(index, logs, group[group.length - 1][1], time);
+    try {
+      for (let i = 0; i < work.length; i += cfg.batch) await readBatch(work.slice(i, i + cfg.batch));
+    } finally {
+      // What was read before a failure stays, since it has no hole. A full index would not move
+      // again, so this is its one chance to save it.
+      if (index.toBlock !== savedThrough) save();
     }
-    if (index.toBlock !== before) save();
     if (!more && !caughtUp) {
       caughtUp = true;
       console.log(`[indexer] caught up: ${index.logs.length} logs through block ${index.toBlock}`);
@@ -260,7 +293,7 @@ function health() {
   const behind = status.head === null ? null : Math.max(0, status.head - index.toBlock);
   const fresh = status.lastOkAt !== null && Date.now() - status.lastOkAt < cfg.pollSeconds * 5000 + 60_000;
   return {
-    ok: fresh && behind !== null && behind <= MAX_BEHIND,
+    ok: fresh && behind !== null && behind <= MAX_BEHIND && !status.full,
     chainId: index.chainId,
     fromBlock: index.fromBlock,
     toBlock: index.toBlock,
@@ -268,6 +301,8 @@ function health() {
     head: status.head,
     behind,
     logs: index.logs.length,
+    maxLogs: cfg.maxLogs,
+    full: status.full,
     lastPollAt: iso(status.lastPollAt),
     lastOkAt: iso(status.lastOkAt),
     lastError: status.lastError,
@@ -293,16 +328,22 @@ function encode(body) {
 // encoding per query rather than one per request, and slow readers share one buffer. At most
 // ANSWERS answers and ANSWERS_BYTES of them, encoded, are kept: the oldest goes first.
 const ANSWERS = 64;
-const ANSWERS_BYTES = 64 * 1024 * 1024;
+const ANSWERS_BYTES = 32 * 1024 * 1024;
+// Answers one client may have built in a minute. Only these cost much, in encoding on the event
+// loop: a question an earlier one already asked comes from the cache, and is not counted. Behind a
+// proxy the client is the address it names, so with TRUSTED_PROXIES unset all share this.
+const BUILDS_PER_MINUTE = 120;
 const answers = new Map();
 let answersBytes = 0;
 let answersAt = null;
 const sizeOf = (a) => a.json.length + (a.gzip ? a.gzip.length : 0);
-function eventsAnswer(q) {
+// The answer to `q`, or null when `client` has had its share of new ones.
+function eventsAnswer(q, client) {
   if (answersAt !== index.toBlock) { answers.clear(); answersBytes = 0; answersAt = index.toBlock; }
   const key = JSON.stringify([q.address && [...q.address].sort(), q.topic0 && [...q.topic0].sort(), q.topic1, q.fromBlock, q.limit, q.after]);
   let a = answers.get(key);
   if (!a) {
+    if (rateLimited(`events:${client}`, Date.now(), BUILDS_PER_MINUTE, 60_000)) return null;
     a = encode(ix.eventsBody(index, q));
     answers.set(key, a);
     answersBytes += sizeOf(a);
@@ -315,11 +356,12 @@ function eventsAnswer(q) {
   return a;
 }
 
-function send(req, res, status, encoded, cache = 'no-store') {
+function send(req, res, status, encoded, { cache = 'no-store', headers = {} } = {}) {
   const gzip = encoded.gzip !== null && /\bgzip\b/.test(req.headers['accept-encoding'] || '');
   const out = gzip ? encoded.gzip : encoded.json;
   res.writeHead(status, {
     ...COMMON,
+    ...headers,
     'Content-Type': 'application/json',
     'Cache-Control': cache,
     Vary: 'Accept-Encoding',
@@ -345,7 +387,9 @@ const server = http.createServer((req, res) => {
     const q = ix.parseQuery(url.searchParams, cfg.addresses);
     if (q instanceof Error) return send(req, res, 400, encode({ error: q.message }));
     if (index.toBlock < index.fromBlock) return send(req, res, 503, encode({ error: 'nothing indexed yet' }));
-    return send(req, res, 200, eventsAnswer(q), 'public, max-age=10');
+    const answer = eventsAnswer(q, clientKey(req, isTrustedProxy));
+    if (!answer) return send(req, res, 429, encode({ error: 'too many new questions; try again in a minute' }), { headers: { 'Retry-After': '60' } });
+    return send(req, res, 200, answer, { cache: 'public, max-age=10' });
   }
   return send(req, res, 404, encode({ error: 'not found' }));
 });
