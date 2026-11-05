@@ -606,7 +606,7 @@ two operators share through the public `GET /outcomes`; flag
 raising and resolution with half-life decay; an integration with CounterAudit that
 enriches audit packets with Sigvara identity and, since 1 November 2026, carries
 payer-signed outcomes to the operators (its relay of an org's own reported outcome has been
-off in production since 30 October 2026, when CounterAudit limited relaying to allowlisted orgs).
+off in production since 30 October 2026, when CounterAudit limited relaying to allowlisted orgs); and, since 5 November 2026, two slash keepers on separate hosts, which have not yet had a slash to execute.
 
 **Deployed 20 September 2026:** a second bonded operator in checker mode, on separate
 hardware from the primary and a separate RPC provider, with its own 25,000 SVR bond and
@@ -620,9 +620,9 @@ charged. The app disables every fee control rather than pointing at an address w
 code.
 
 **Deployed contracts versus `main`.** The Arc testnet proxies run the implementations recorded in
-`deployments/5042002.json`, which are the contracts at commit `76bbc97`, the head of `main` on
-2 November 2026. The four proxies were upgraded in place with `script/Upgrade.s.sol` to `fdce1a7` on
-26 October, the staking proxy again to `f89b3b9` on 28 October and to `25c2d59` on 2 November, and the oracle bond proxy to `76bbc97` the same day. A contract
+`deployments/5042002.json`, which are the contracts at commit `f35cbc6`, the head of `main` on
+4 November 2026. The four proxies were upgraded in place with `script/Upgrade.s.sol` to `fdce1a7` on
+26 October, the staking proxy again to `f89b3b9` on 28 October and to `25c2d59` on 2 November, the oracle bond proxy to `76bbc97` the same day, and the reputation proxy to `f35cbc6` on 4 November. A contract
 change merged after that commit is not on the testnet until the next upgrade. The guardian pause, admin-ruled disputes with a veto, a lapse and a bound on late upholds, launch
 floors and ceilings, operator signers, the reporter check at slash execution, a withdrawal's claim time
 fixed when it is queued, an oracle operator's exit time fixed when it starts to leave, the refusal of evidence the admin rejected and a slash that pays the
@@ -633,7 +633,7 @@ roles, and administers `UPGRADER_ROLE`), and the timelocked role grants describe
 apply to a fresh deployment, not to the testnet.
 `node scripts/record-implementations.mjs --check` shows what is live.
 
-**Test coverage**, as of 4 November 2026: 754 contract tests across 33 Foundry test files
+**Test coverage**, as of 5 November 2026: 754 contract tests across 33 Foundry test files
 including fuzz and invariant tests (three fork suites need an RPC, and the twelve in
 `SplitAuthorityFork` skip without `--fork-url`), 1287 oracle tests and 300 in the SDK (9 skip
 outside CI and without a live deployment; every test that runs passes). CI runs Foundry, the oracle and

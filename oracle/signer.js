@@ -6,7 +6,7 @@
  * only:
  *
  *   - giveFeedback on the ERC-8004 Reputation Registry, tagged sigvara/score, a value of 0 to 100
- *     with no decimals, no endpoint, and a data: feedback URI holding JSON;
+ *     with no decimals, no endpoint, a data: feedback URI holding JSON, and the keccak256 of that JSON;
  *   - revokeFeedback on the same registry;
  *   - the EIP-712 AgentWalletSet message that makes its own address the agentWallet of Sigvara's
  *     registration, for the registration's owner, due within five minutes.

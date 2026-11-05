@@ -128,6 +128,12 @@ state changes only and never on a healthy poll, so nothing downstream can tell a
 watcher from a dead one. Sharing a host with the checker would mean one failure silences
 both, and the silence would read as "nothing to report".
 
+The **slash keepers** exist because a slash settles only when someone calls `executeSlash`, and
+a fortnight later anyone may let it lapse. Two run on separate hosts, the second waiting an hour so
+that only one pays the gas. Each key holds no role and only a little gas, so a stolen one can do only
+what any passer-by can. They stop at the lapse and expire nothing, since both are a person's decision
+([runbook, section 7](operations-runbook.md#7-slash-keeper)).
+
 **What this does not do.** Nothing in the contract requires the two operators to agree.
 The checker cannot reject anything; it makes a disagreement legible and a human committee
 must act on it. And both operators are run by the same party today, so what has been

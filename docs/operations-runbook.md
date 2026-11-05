@@ -16,6 +16,21 @@ key is [incident-operator-key.md](incident-operator-key.md); bringing up an oper
 | State volume | `sigvara-oracle_oracle_state` | `sigvara-checker_checker_state` |
 | Local port, for `/metrics` | `127.0.0.1:3030` | `127.0.0.1:3031` |
 
+**What runs what, as of 5 November 2026.** Each public `/health` names its own commit, and that is the
+one to trust when this table has gone stale.
+
+| Service | Host | Commit | Since (UTC) |
+|---|---|---|---|
+| Primary oracle | `archipelago-standby` | `b95f0aa` | 5 November, 13:33 |
+| Checker | `packrai-vps` | `b95f0aa` | 5 November, 13:32 |
+| Event index | `archipelago-standby` | `b95f0aa` | 5 November, 13:31 |
+| Watcher | a third host | `b95f0aa` | 5 November, 13:31 |
+| Policy signer | `packrai-vps` | `b95f0aa` | 5 November, 13:33 |
+| ERC-8004 publisher | `archipelago-standby` | `e39ff5b` | 5 November, 11:08 |
+| Slash keepers | `archipelago-standby`, `packrai-vps` | `d26ebc1` | 5 November, 15:25 and 15:26 |
+
+Open items are listed in the [launch checklist](launch-checklist.md#where-this-stands).
+
 Each runs the commit named by `SIGVARA_COMMIT` in its `.env`, and `/health` reports it as
 `commit`. The commands below are written for the primary; on the checker use its column. The
 `jq` ones need `command -v jq >/dev/null || apt-get install -y jq` first.
@@ -380,14 +395,15 @@ limited to ten history requests an hour per visitor.
 | Watched by | `scripts/check-live.mjs services` (its `/health` and certificate), on the live-checks schedule |
 
 **Checking it.** `curl -s https://index.sigvara.xyz/health` reports `ok`, `toBlock`, `behind` (20 in
-steady state: it stays that far behind the finalized head), `logs`, `lastError` with any URL
-removed, and `commit`. On the box, `docker logs sigvara-index` shows `[deploy] running <commit>` and
+steady state: it stays that far behind the finalized head), `logs`, `maxLogs`, `full`, `lastError`
+with any URL removed, and `commit`. On the box, `docker logs sigvara-index` shows `[deploy] running <commit>` and
 `[indexer] caught up`.
 
 **Redeploying.** Copy `docker-compose.indexer.vps.yml` from the commit being deployed over
 `docker-compose.yml`, checking its sha256 against git; leave the override in place. Set
 `SIGVARA_COMMIT` in `.env` to that commit and run `docker compose up -d`. A plain restart does not
-read `.env` again.
+read `.env` again. Keep `TRUSTED_PROXIES` in `.env` at the `sigvara-web` subnet: without it, every
+visitor behind the proxy shares one limit on new `/events` answers.
 
 **When `/health` fails.**
 - A `lastError` from the RPC that says the request was refused or unauthorised means the Alchemy
@@ -395,6 +411,10 @@ read `.env` again.
   - Put a working URL in `rpc_url` and run `docker compose up -d --force-recreate`.
   - Any provider for chain 5042002 works. On Arc's public RPC, also set `INDEX_BATCH=1`, since it
     refuses a batch of four.
+- `full: true` means it holds `INDEX_MAX_LOGS` logs and has stopped reading on. It keeps answering
+  with what it has, and the pages read the rest from the chain, more slowly. Raise `INDEX_MAX_LOGS`
+  and `mem_limit` together, by about 2 MB per thousand logs, and restart ([event-index.md](event-index.md)).
+  `check-live` fails from 80% full, so this should not come as a surprise.
 - `behind` growing with no error means the poll is slow or the RPC is lagging. Read the log.
 - A container that restarts in a loop: read `docker logs`. The launcher refuses a `SIGVARA_COMMIT`
   that is not 40 hex characters, and a commit it cannot fetch.
@@ -666,7 +686,33 @@ nothing due nothing is lost, and when one is due the check above fires with most
 | `blocked` | A transaction of its own is still pending | Wait. If it stays stuck, look at the nonce |
 | `lapsed` | Nobody executed it for a fortnight | Decide: execute by hand, or `expireSlash` |
 
-**Rolling it out.** Each step is David's go, and each host has to be named.
+**Where it stands, on Arc testnet as of 5 November 2026.** Both are live. Neither has sent a transaction,
+because no slash has fallen due, and each holds 20 USDC.
+
+| | Primary | Backup |
+|---|---|---|
+| Host | `archipelago-standby` | `packrai-vps` |
+| Address | `0x8e1f90a2a5042652C1B9CAe99Ab3c2e02a30F2E4` | `0x8c85b61Ed08d66FeD2a613bA50D971b4dE6c5619` |
+| `KEEPER_GRACE_SECONDS` | 0 | 3600 |
+| `RPC_URL` | `https://rpc.quicknode.testnet.arc.io` | `https://rpc.testnet.arc.network` |
+
+Those endpoints differ from each other and from the other services on each host. dRPC's refuses their
+10,000-block reads. `WEBHOOK_URL` is the watcher's channel, and a test alert from each arrived.
+
+Not yet shown on the live chain: a real execution, two keepers racing, and C reading `held`, which it
+should from 10 November.
+
+**Around a drill.** Agent A of the drill is not on `KEEPER_SKIP_AGENTS`. Day 7 refiles it, so cancel
+it before its deadline, as the plan does, or a keeper executes it and burns its bond. Any other slash
+meant to be left alone has to be listed on both hosts first. Expect a `dropped` alert for A if a run
+lands between the refile and the cancel, and `lapsed` alerts for C from both keepers from
+24 November 03:45 UTC, repeating daily until `expireSlash(C)`.
+
+**Stopping them.** Set `KEEPER_MODE=shadow` in `.env` on each host and run `docker compose up -d`. They
+then read and send nothing. `retrying in` in the log is normal: public RPCs refuse a burst of reads, so
+the keeper waits 500 ms between log reads and tries a throttled read again.
+
+**Rolling it out again.** Each step is David's go, and each host has to be named.
 
 1. On each host, make `/docker/sigvara-keeper`, and copy the compose file and the example `.env` there.
    Set `SIGVARA_COMMIT`, `KEEPER_NAME` and, on the backup, `KEEPER_GRACE_SECONDS=3600`. Keep
