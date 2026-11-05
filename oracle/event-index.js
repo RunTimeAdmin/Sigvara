@@ -87,12 +87,15 @@ function createIndex({ chainId, fromBlock, addresses }) {
 
 /**
  * Adds the logs of blocks (index.toBlock, through], which must follow on from what the index
- * holds, so it never has a hole. Logs already held are kept once. `throughTime` is the time of
- * block `through`, or null when it is not known yet. Returns the index.
+ * holds, so it never has a hole. A log repeated in `logs` is kept once. `throughTime` is the time
+ * of block `through`, or null when it is not known yet. Returns the index.
+ *
+ * Every log here comes after every log held, so the cost is the new logs and not the history.
  */
 function appendLogs(index, logs, through, throughTime = null) {
   if (!Number.isSafeInteger(through) || through < index.toBlock) throw new Error(`cannot move the index back from ${index.toBlock} to ${through}`);
-  const seen = new Set(index.logs.map((l) => `${l.transactionHash}:${l.logIndex}`));
+  const seen = new Set();
+  const fresh = [];
   // A block and log index name one log: an /events cursor relies on it.
   const at = new Map(logs.map((l) => [orderOf(l).join('-'), l.transactionHash]));
   for (const l of logs) {
@@ -100,12 +103,24 @@ function appendLogs(index, logs, through, throughTime = null) {
     if (block <= index.toBlock || block > through) throw new Error(`a log from block ${block}, outside ${index.toBlock + 1} to ${through}`);
     if (at.get(orderOf(l).join('-')) !== l.transactionHash) throw new Error(`two logs at block ${block}, log index ${parseInt(l.logIndex, 16)}`);
     const key = `${l.transactionHash}:${l.logIndex}`;
-    if (!seen.has(key)) { seen.add(key); index.logs.push(l); }
+    if (!seen.has(key)) { seen.add(key); fresh.push(l); }
   }
-  index.logs.sort(byChainOrder);
+  fresh.sort(byChainOrder);
+  for (const l of fresh) index.logs.push(l);
   index.toBlock = through;
   index.toBlockTime = throughTime;
   return index;
+}
+
+// The index as JSON, in pieces: the same bytes as JSON.stringify(index), with no one string holding
+// them. That string is as long as the state file, and it was what ran the process out of memory.
+function* savedChunks(index, logsPerChunk = 1000) {
+  const { logs, ...head } = index;
+  yield `${JSON.stringify(head).slice(0, -1)},"logs":[`;
+  for (let i = 0; i < logs.length; i += logsPerChunk) {
+    yield (i ? ',' : '') + logs.slice(i, i + logsPerChunk).map((l) => JSON.stringify(l)).join(',');
+  }
+  yield ']}';
 }
 
 // Whether a saved index can be carried on from, given the index this run is configured for.
@@ -226,5 +241,5 @@ function redact(message, secrets = []) {
 }
 
 module.exports = {
-  LOG_SPAN, PAGE_ROWS, PAGE_BYTES, cursorOf, planSpans, normalizeLog, createIndex, appendLogs, resumable, parseQuery, selectLogs, eventsBody, redact,
+  LOG_SPAN, PAGE_ROWS, PAGE_BYTES, cursorOf, planSpans, normalizeLog, createIndex, appendLogs, savedChunks, resumable, parseQuery, selectLogs, eventsBody, redact,
 };

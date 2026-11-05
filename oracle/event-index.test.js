@@ -208,3 +208,51 @@ test('redact: the RPC URL, its key and any other URL are cut out', () => {
   const out = ix.redact(`fetch ${url} failed; key abcdefghijklmnopqrstu; see https://example.com/x`, [url, 'abcdefghijklmnopqrstu']);
   assert.equal(out, 'fetch <secret> failed; key <secret>; see <url>');
 });
+
+// --- what the index costs as it grows ----------------------------------------------------
+
+const logAt = (block, i = 0) => ({
+  address: A, topics: [T0], data: '0x', blockNumber: `0x${block.toString(16)}`, logIndex: `0x${i.toString(16)}`,
+  transactionHash: `0x${(block * 1000 + i).toString(16).padStart(64, '0')}`,
+});
+const fresh = () => ix.createIndex({ chainId: 1, fromBlock: 100, addresses: new Set([A]) });
+
+test('appendLogs: leaves what the index already holds alone', () => {
+  const index = fresh();
+  ix.appendLogs(index, [logAt(110), logAt(120)], 199);
+  // A history that may only be appended to: reading or reordering it would throw.
+  index.logs = new Proxy(index.logs, {
+    get(target, prop) {
+      if (prop === 'push') return (...items) => target.push(...items);
+      if (prop === 'length') return target.length;
+      throw new Error(`read the history: ${String(prop)}`);
+    },
+    set() { throw new Error('rewrote the history'); },
+  });
+  ix.appendLogs(index, [logAt(250, 1), logAt(210), logAt(250)], 299);
+  const held = index.logs;
+  assert.equal(held.length, 5);
+});
+
+test('appendLogs: the new logs join in chain order, each once, after what is held', () => {
+  const index = fresh();
+  ix.appendLogs(index, [logAt(110)], 199);
+  ix.appendLogs(index, [logAt(250, 1), logAt(210), logAt(250), logAt(210)], 299);
+  assert.deepEqual(index.logs.map((l) => ix.cursorOf(l)), ['110-0', '210-0', '250-0', '250-1']);
+});
+
+test('savedChunks: the same bytes as the whole index as JSON, however many logs it holds', () => {
+  for (const count of [0, 1, 999, 1000, 1001, 2500]) {
+    const index = fresh();
+    ix.appendLogs(index, Array.from({ length: count }, (_, i) => logAt(100 + i)), 100 + count, 5000);
+    assert.equal([...ix.savedChunks(index)].join(''), JSON.stringify(index), `${count} logs`);
+  }
+});
+
+test('savedChunks: no piece is much of the whole', () => {
+  const index = fresh();
+  ix.appendLogs(index, Array.from({ length: 5000 }, (_, i) => logAt(100 + i)), 5100);
+  const whole = JSON.stringify(index).length;
+  const longest = Math.max(...[...ix.savedChunks(index)].map((c) => c.length));
+  assert.ok(longest <= whole / 4, `longest ${longest} of ${whole}`);
+});

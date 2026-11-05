@@ -371,7 +371,7 @@ limited to ten history requests an hour per visitor.
 |---|---|
 | Public URL | `https://index.sigvara.xyz` (`/events`, `/health`) |
 | Host and directory | `archipelago-standby`, `/docker/sigvara-index` |
-| Files there | `docker-compose.yml` (the repository's `docker-compose.indexer.vps.yml`, unchanged), `docker-compose.override.yml` (joins the `sigvara-web` network), `.env` (`SIGVARA_COMMIT` only), `rpc_url` (the RPC URL with its key, root, mode 600) |
+| Files there | `docker-compose.yml` (the repository's `docker-compose.indexer.vps.yml`, unchanged), `docker-compose.override.yml` (joins the `sigvara-web` network), `.env` (`SIGVARA_COMMIT` and `TRUSTED_PROXIES`, the `sigvara-web` subnet), `rpc_url` (the RPC URL with its key, root, mode 600) |
 | Container | `sigvara-index`, listening on `127.0.0.1:3040` |
 | State volume | `sigvara-index_index_data` (the index; a restart resumes from it) |
 | Proxy | the `index.sigvara.xyz` block in `/opt/countersig/Caddyfile`, which passes only `GET`, `HEAD` and `OPTIONS` on `/events` and `/health` to `sigvara-index:3040` |
