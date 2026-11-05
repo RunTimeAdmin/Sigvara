@@ -34,6 +34,7 @@
 //     linkLogsFail: an error every read of those logs fails with, such as a rate limit
 //     externalReadFails: the node cannot answer for the registry, so ownership and feedback reads throw
 //     recordExternalReads: record each read of a linked agent's feedback as externalRead
+//     recordEpochReads: record the epoch's batched reads as epochRead, with the time
 //     registryScannedTo: how far the registry scan has read (default: not reported, which reads as the head)
 //     snapshotBlock: the block the snapshot falls in (default `head`)
 //     agents[didHash].operators: [{ fromBlock, operator }] the agent's operator from each block on, for a
@@ -165,6 +166,7 @@ const chain = {
   STATUS_SLASHED: 2,
   getProvider: () => provider,
   getAgentInfo: async (didHash, blockTag) => {
+    if (world().recordEpochReads && blockTag === undefined) record('epochRead', hostNow());
     hostAhead += world().hostClockSteps?.getAgentInfo ?? 0;
     const agent = world().agents[String(didHash).toLowerCase()];
     if (!agent || (blockTag !== undefined && blockTag < (agent.registeredBlock ?? 1))) {
@@ -221,14 +223,20 @@ const chain = {
   getChallengeWindow: async () => world().challengeWindow ?? 21600,
   feeGatingConfigured: () => !!world().feeGating,
   getEpochFee: async () => BigInt(world().epochFee ?? 0),
-  getPendingScore: async (didHash) => world().pending?.[didHash] ?? { exists: false },
+  getPendingScore: async (didHash) => {
+    if (world().recordEpochReads) record('epochRead', hostNow());
+    return world().pending?.[didHash] ?? { exists: false };
+  },
   // The finalized score; lastUpdated is 0 until one is finalized, as on chain.
   getReputationData: async (didHash) => {
     if (world().reputation?.[didHash] === 'throw') throw new Error('stub: reputation read failed');
     return { lastUpdated: 0, ...(world().reputation?.[didHash] ?? {}) };
   },
   isCovered: async (didHash) => world().covered?.[didHash] ?? true,
-  isBonded: async (didHash) => world().bonded?.[didHash] ?? true,
+  isBonded: async (didHash) => {
+    if (world().recordEpochReads) record('epochRead', hostNow());
+    return world().bonded?.[didHash] ?? true;
+  },
   getReviewerStanding: async (address) => {
     const r = world().reviewers?.[address.toLowerCase()];
     if (r === 'throw') throw new Error('stub: reviewer read failed');
