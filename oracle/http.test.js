@@ -190,6 +190,7 @@ test('/flag refuses a didHash that is not a 32-byte hash, and one bad body does 
   assert.equal(ok.body.flags, 1);
   const health = (await oracle.call('GET', '/health')).body;
   assert.equal(health.statePersisted, true, 'the last save of the state file worked');
+  assert.equal('statePath' in health, false, 'and where this host keeps it is not public');
 });
 
 test('/flag files the flag under the one stored spelling of the hash', async () => {
@@ -423,6 +424,21 @@ test('the oracle refuses to start on a scope or proxy setting it cannot read', a
     const { code, log } = await runToExit({ world: new World(), env: { ...base, ...extra } });
     assert.equal(code, 1, JSON.stringify(extra));
     assert.match(log, pattern, JSON.stringify(extra));
+  }
+});
+
+test('the oracle warns of open write routes only when they are open', async () => {
+  const open = await startOracle({ world: new World(), env: { ORACLE_ADMIN_TOKEN: '' } });
+  try {
+    assert.match(open.logs(), /no write credential is set, so \/attest, \/flag, and \/epoch are UNAUTHENTICATED/);
+  } finally {
+    await open.stop();
+  }
+  const named = await startOracle({ world: new World(), env: { ORACLE_ADMIN_TOKEN: '', ORACLE_TOKEN_COUNTERAUDIT: ADMIN } });
+  try {
+    assert.equal(/UNAUTHENTICATED/.test(named.logs()), false, 'a named token is a credential too');
+  } finally {
+    await named.stop();
   }
 });
 

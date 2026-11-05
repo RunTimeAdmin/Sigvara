@@ -28,6 +28,8 @@ jobs:
 
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@dba66c27052e63476d886f22216e119ba7e615bf # v1
+        with:
+          version: v1.9.0
 
       # lib/ is gitignored (not vendored, not submodules), so CI fetches the
       # Solidity deps at the versions foundry.toml's remappings expect. Each is

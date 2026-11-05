@@ -342,6 +342,31 @@ test('pickCanary chooses the newest payment of an agent whose address is known',
   assert.equal(c.txHash, '0xbb', 'newest, because an old settlement may fall outside a pruned node');
 });
 
+test('pickCanary chooses the newest payment of any agent, not of the first one listed', () => {
+  const events = new Map([
+    ['0xold', [{ txHash: '0xa', ts: 1000, blockNumber: 10 }]],
+    ['0xnew', [{ txHash: '0xb', ts: 5000, blockNumber: 50 }]],
+    ['0xmid', [{ txHash: '0xc', ts: 3000, blockNumber: 30 }]],
+  ]);
+  const c = scan.pickCanary(events, (did) => `address of ${did}`);
+  assert.deepEqual(c, { didHash: '0xnew', recipient: 'address of 0xnew', txHash: '0xb', blockNumber: 50 });
+});
+
+test('pickCanary skips the newest payment when it cannot be looked at', () => {
+  const events = new Map([
+    ['0xold', [{ txHash: '0xa', ts: 1000 }]],
+    ['0xunknown', [{ txHash: '0xb', ts: 5000 }]],
+    ['0xhashless', [{ ts: 6000 }]],
+  ]);
+  const c = scan.pickCanary(events, (did) => (did === '0xunknown' ? null : did));
+  assert.equal(c.txHash, '0xa');
+});
+
+test('pickCanary looks past a payment with no hash to an older one of the same agent', () => {
+  const events = new Map([['0xdid', [{ txHash: '0xa', ts: 1000 }, { ts: 2000 }]]]);
+  assert.equal(scan.pickCanary(events, (did) => did).txHash, '0xa');
+});
+
 test('pickCanary skips an agent whose address is unknown', () => {
   const c = scan.pickCanary(
     eventsFor([['0xunknown', [{ txHash: '0xaa' }]], [DID, [{ txHash: '0xbb' }]]]),

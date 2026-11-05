@@ -4,6 +4,12 @@
 .env.*
 !.env.example
 .state/
+*.pem
+*.key
+*keystore*.json
+mnemonic*.txt
+oracle-state*.json
+secrets/
 node_modules/
 
 # Tests and their fixtures are not needed to run the oracle.

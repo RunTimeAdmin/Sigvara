@@ -82,12 +82,14 @@ function createPolicy({ address, chainId, reputationRegistry, identityRegistry, 
     // Exactly the call, with nothing after it.
     if (FEEDBACK.encodeFunctionData(call.name, call.args).toLowerCase() !== String(t.data).toLowerCase()) return 'calldata that is not exactly one call';
     if (call.name === 'giveFeedback') {
-      const [, value, decimals, tag1, tag2, endpoint, uri] = call.args;
+      const [, value, decimals, tag1, tag2, endpoint, uri, hash] = call.args;
       if (tag1 !== 'sigvara' || tag2 !== 'score') return 'only feedback tagged sigvara/score';
       if (Number(decimals) !== 0 || value < 0n || value > 100n) return 'only a value of 0 to 100 with no decimals';
       if (endpoint !== '') return 'no endpoint';
       if (!uri.startsWith(DATA_URI) || uri.length > MAX_FEEDBACK_URI) return 'only a data: feedback URI';
-      try { JSON.parse(Buffer.from(uri.slice(DATA_URI.length), 'base64').toString('utf8')); } catch { return 'a feedback URI that does not hold JSON'; }
+      const file = Buffer.from(uri.slice(DATA_URI.length), 'base64');
+      try { JSON.parse(file.toString('utf8')); } catch { return 'a feedback URI that does not hold JSON'; }
+      if (hash !== ethers.keccak256(file)) return 'a feedback hash of the file it comes with';
     }
     return null;
   }
@@ -274,7 +276,7 @@ function readConfig(env = process.env) {
     secretFile: need('SIGNER_SECRET_FILE'),
     stateFile: String(env.SIGNER_STATE_FILE || '/data/signer-state.json'),
     rpcUrl: need('SIGNER_RPC_URL'),
-    host: String(env.SIGNER_HOST || '0.0.0.0'),
+    host: String(env.SIGNER_HOST || '127.0.0.1'),
     port: whole('SIGNER_PORT', 28600, 1),
     allowFrom,
     chainId: whole('SIGNER_CHAIN_ID', 5042002, 1),

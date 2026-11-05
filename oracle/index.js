@@ -2437,8 +2437,6 @@ async function handleRequest(req, res) {
       storeWritable,
       statePersisted: persisted.ok,
       lastPersistMs: persisted.at,
-      ...(persisted.ok ? {} : { statePersistError: persisted.error }),
-      statePath: getStatePath(),
       // 'file', 'fresh', or 'backup' when the state file was unusable and the previous save
       // was used instead, which is a recovery somebody should hear about.
       stateSource: getLoadReport().source,
@@ -3243,8 +3241,8 @@ const server = http.createServer((req, res) => {
 }
 
 server.listen(cfg.port, cfg.host, () => {
-  if (!cfg.adminToken) {
-    console.warn('[oracle] WARNING: ORACLE_ADMIN_TOKEN is unset — /attest, /flag, and /epoch are UNAUTHENTICATED. Set a token before exposing this service.');
+  if (!cfg.credentials.size) {
+    console.warn('[oracle] WARNING: no write credential is set, so /attest, /flag, and /epoch are UNAUTHENTICATED. Set ORACLE_ADMIN_TOKEN or an ORACLE_TOKEN_<NAME> before exposing this service.');
   }
   console.log(`[oracle] HTTP on ${cfg.host}:${cfg.port}  epoch every ${cfg.epochMs / 3_600_000}h  attest cooldown ${ATTEST_COOLDOWN_MS / 1000}s`);
   // Names only, never the tokens. Revoking a credential means deleting its variable and

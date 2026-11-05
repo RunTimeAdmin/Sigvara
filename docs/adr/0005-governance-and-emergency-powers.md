@@ -229,8 +229,9 @@ and its ceiling. That is a stated trust assumption, not an oversight:
   pairing they were set up with.
 - The audit pack lists the veto and the dispute ruling as admin powers, the two setters as upgrade-class,
   and the guardian.
-- A slash that is legitimate has to be executed within 14 days of its deadline, or it lapses and has to
-  be filed again after the cooldown, so it should be executed as soon as the window closes.
+- A slash that is legitimate should be executed as soon as the window closes. From 14 days after its
+  deadline anyone can drop it, and then it has to be filed again after the cooldown. Until someone does,
+  it can still be executed, so a late execution and an expiry race, and whichever lands first stands.
 - Replacing the committee address (a new Safe, say) orphans the proposals of the one it replaces. They
   can no longer be executed by anyone, and lapse 14 days after their deadline unless a member of the new
   committee cancels them first (decision 12). Execute what is ripe, and cancel the rest, before the
