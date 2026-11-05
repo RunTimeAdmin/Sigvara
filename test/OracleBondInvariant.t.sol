@@ -61,6 +61,11 @@ contract OracleBondHandler is Test {
         try bond.clearSigner() {} catch {}
     }
 
+    function releaseSigner(uint256 who) external {
+        vm.prank(_a(who));
+        try bond.releaseSigner() {} catch {}
+    }
+
     function unbond(uint256 who) external {
         vm.prank(_a(who));
         try bond.initiateUnbond() {} catch {}

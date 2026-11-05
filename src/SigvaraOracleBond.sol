@@ -162,6 +162,7 @@ contract SigvaraOracleBond is
     /// isActiveOperator could then not say which of the two it was answering for.
     error AlreadySigner(address account);
     error NoSigner(address operator);
+    error NotASigner(address account);
     /// The address is bound to another operator (`boundTo`): that operator named it first, or it
     /// is an operator's own address. Naming it would revive whatever it left pending.
     error SignerBoundElsewhere(address signer, address operator);
@@ -353,6 +354,19 @@ contract SigvaraOracleBond is
     function clearSigner() external {
         if (signerOf[msg.sender] == address(0)) revert NoSigner(msg.sender);
         _clearSigner(msg.sender);
+    }
+
+    /**
+     * @notice Stop signing for the operator that named the caller. An operator can name any free
+     *         address without asking it, and while named that address cannot bond for itself
+     *         (`AlreadySigner`), so this is how it gets out. The operator can name it again, and
+     *         no other operator can, until it bonds for itself.
+     * @dev    Not nonReentrant: it moves no tokens and makes no external call.
+     */
+    function releaseSigner() external {
+        address operator = operatorOfSigner[msg.sender];
+        if (operator == address(0)) revert NotASigner(msg.sender);
+        _clearSigner(operator);
     }
 
     // -------------------------------------------------------------------------

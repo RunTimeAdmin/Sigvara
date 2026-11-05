@@ -45,7 +45,7 @@ runl C12 $S 'function initializeV2(uint256 unbondingPeriod_)' 'if (unbondingPeri
 runl C13 $S 'function setChallengePeriod(uint256 newPeriod)' 'if (newPeriod > MAX_CHALLENGE_PERIOD)' 'newPeriod > MAX_CHALLENGE_PERIOD' 'false' 'setChallengePeriod takes any period'
 runl C14 $S 'function setUnbondingPeriod(uint256 newPeriod)' 'if (newPeriod > MAX_UNBONDING_PERIOD)' 'newPeriod > MAX_UNBONDING_PERIOD' 'false' 'staking setUnbondingPeriod takes any period'
 runl C15 $S 'function setUnbondingPeriod(uint256 newPeriod)' 'if (newPeriod > MAX_UNBONDING_PERIOD)' 'newPeriod > MAX_UNBONDING_PERIOD' 'newPeriod >= MAX_UNBONDING_PERIOD' 'staking setUnbondingPeriod refuses the ceiling itself'
-runl C16 $S 'uint256 public constant MAX_CHALLENGE_PERIOD' 'uint256 public constant MAX_CHALLENGE_PERIOD' '30 days' '31 days' 'the challenge ceiling is 31 days'
+runl C16 $S 'uint256 public constant MAX_CHALLENGE_PERIOD' 'uint256 public constant MAX_CHALLENGE_PERIOD' '10 days' '11 days' 'the challenge ceiling is 31 days'
 runl C17 $S 'uint256 public constant MAX_UNBONDING_PERIOD' 'uint256 public constant MAX_UNBONDING_PERIOD' '90 days' '91 days' 'the staking unbonding ceiling is 91 days'
 runl C18 $B 'function initialize(' 'if (unbondingPeriod_ > MAX_UNBONDING_PERIOD) {' 'unbondingPeriod_ > MAX_UNBONDING_PERIOD' 'false' 'bond initialize takes any unbonding period'
 runl C19 $B 'function setUnbondingPeriod(uint256 newPeriod)' 'if (newPeriod > MAX_UNBONDING_PERIOD)' 'newPeriod > MAX_UNBONDING_PERIOD' 'false' 'bond setUnbondingPeriod takes any period'

@@ -55,8 +55,9 @@ This ADR records what was decided about each, and what was left as a stated trus
    the admin never rules, anyone can expire the dispute after 14 days and the agent keeps its stake. A
    ruling to uphold is refused from that moment (`DisputeResolutionExpired`), so the two never overlap:
    before day 14 only the admin can end a dispute in the committee's favour, and after it only the expiry
-   remains. With a challenge period of 14 days or more, a dispute filed early expires before an uphold
-   could open; the launch period is 7 days. The committee still files and cancels.
+   remains. With a challenge period of 14 days or more, a dispute filed early would expire before an
+   uphold could open, so `MAX_CHALLENGE_PERIOD` is 10 days, which leaves at least four to rule; the launch
+   period is 7 days. The committee still files and cancels.
 3. **The committee cannot file again at once.** Every drop (cancelled, vetoed, expired after a
    dispute, resolved in the agent's favour) records `lastDroppedAt`, and `initiateSlash` refuses
    for one challenge period after it. An operator always gets a window to act, and a withdrawal it

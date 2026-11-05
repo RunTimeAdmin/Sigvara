@@ -919,7 +919,7 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
     /// locks every queued withdrawal, and a challenge period far above one stops a slash from ever being
     /// executable. The ceilings keep both to a number of weeks, in every place they are set.
     function test_ceilings_arePinned() public view {
-        assertEq(staking.MAX_CHALLENGE_PERIOD(), 30 days);
+        assertEq(staking.MAX_CHALLENGE_PERIOD(), 10 days);
         assertEq(staking.MAX_UNBONDING_PERIOD(), 90 days);
     }
 
@@ -978,10 +978,10 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
         SigvaraStaking s = SigvaraStaking(address(new ERC1967Proxy(
             address(new SigvaraStaking()),
             abi.encodeCall(SigvaraStaking.initialize, (
-                admin, address(identity), address(rep), address(svr), MIN_STAKE, 30 days, 90 days
+                admin, address(identity), address(rep), address(svr), MIN_STAKE, 10 days, 90 days
             ))
         )));
-        assertEq(s.challengePeriod(), 30 days);
+        assertEq(s.challengePeriod(), 10 days);
         assertEq(s.unbondingPeriod(), 90 days);
     }
 
@@ -1496,6 +1496,58 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
         );
     }
 
+    /// An uphold opens at the challenge deadline and closes when the dispute expires. Were the longest
+    /// period allowed to reach the dispute's 14 days, a dispute on the first day would defeat any slash.
+    function test_atTheLongestChallengePeriod_aDisputeOnDayOneCanStillBeUpheld() public {
+        uint256 longest = staking.MAX_CHALLENGE_PERIOD();
+        assertEq(longest, 10 days);
+        assertEq(staking.DISPUTE_RESOLUTION_PERIOD(), 14 days);
+
+        vm.prank(admin);
+        staking.setChallengePeriod(longest);
+        _deposit();
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "");
+        vm.prank(operator);
+        staking.disputeSlash(didHash);
+
+        vm.warp(block.timestamp + staking.DISPUTE_RESOLUTION_PERIOD());
+        vm.prank(admin);
+        staking.resolveDispute(didHash, true);
+        assertEq(uint8(staking.getSlashProposal(didHash).state), uint8(SigvaraStaking.SlashState.Executed));
+    }
+
+    /// The admin rules on a dispute, so a committee naming the admin would make the judge the payee.
+    function test_initiateSlash_reverts_victimIsTheAdmin() public {
+        _deposit();
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.VictimIsAdmin.selector, admin));
+        vm.prank(committee);
+        staking.initiateSlash(didHash, admin, "");
+    }
+
+    /// A former admin holds no ruling power, so is named like anyone else.
+    function test_initiateSlash_allowsAFormerAdminAsVictim() public {
+        _deposit();
+        address formerAdmin = makeAddr("formerAdmin");
+        bytes32 role = staking.DEFAULT_ADMIN_ROLE();
+        vm.startPrank(admin);
+        staking.grantRole(role, formerAdmin);
+        staking.revokeRole(role, formerAdmin);
+        vm.stopPrank();
+
+        vm.prank(committee);
+        staking.initiateSlash(didHash, formerAdmin, "");
+        assertEq(staking.getSlashProposal(didHash).victim, formerAdmin);
+    }
+
+    /// Nothing to queue, so nothing should be written or announced.
+    function test_initiateWithdrawal_reverts_zeroAmount() public {
+        _deposit();
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.ZeroWithdrawal.selector, didHash));
+        vm.prank(operator);
+        staking.initiateWithdrawal(didHash, 0);
+    }
+
     function test_resolveDispute_reverts_notDisputed() public {
         _deposit();
         vm.prank(committee);
@@ -1616,7 +1668,7 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
 
         // Lengthening it does not hold the gate shut.
         vm.prank(admin);
-        staking.setChallengePeriod(20 days);
+        staking.setChallengePeriod(10 days);
         vm.warp(deadline + 1);
         vm.prank(admin);
         staking.resolveDispute(didHash, true);
