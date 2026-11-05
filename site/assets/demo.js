@@ -237,7 +237,7 @@
   Simulator.prototype.finalizeReputation = function () {
     if (!this.pendingScore) throw new Error('NoScorePending');
     if (this.now < this.pendingScore.finalizeAt) throw new Error('ChallengeWindowActive: ' + Math.ceil((this.pendingScore.finalizeAt - this.now) / 3600) + 'h left');
-    this.score = { factors: this.pendingScore.factors, total: this.pendingScore.total, lastUpdated: this.now };
+    this.score = { factors: this.pendingScore.factors, total: this.pendingScore.total, lastUpdated: this.pendingScore.proposedAt };
     this.pendingScore = null;
     this.emit('ReputationUpdated', { didHash: this.agent.didHash, totalScore: this.score.total, timestamp: this.now }, 'anyone: SigvaraReputation.finalizeReputation');
     return this.score;

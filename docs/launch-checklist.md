@@ -29,8 +29,6 @@ As of 5 November 2026. Everything runs on Arc testnet, and nothing is on mainnet
 - The operators' spending as agents grow: a limit on total epoch spend, and the reads an unstaked registration adds.
 
 **Open, and not blocking mainnet.**
-- The SDK half of the one-call path: `minBond` in `SigvaraGate`, x402 and LangChain middleware, then a publish.
-  Tightening its replay key and issued nonces goes with it.
 - Design partners, the first users from outside the team.
 - The reward distributor stays a draft until mainnet.
 - Moving the testnet compose files to the mainnet pattern (a file secret, read-only, non-root).
