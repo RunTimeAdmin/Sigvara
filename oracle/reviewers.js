@@ -167,8 +167,8 @@ async function traceFunding(address, cap, own, { funderOf, publicFunders }) {
  *
  * `ctx`: the scored agent's { operator, agentAddress }; its payment evidence up to the snapshot;
  * and `nowMs`, the snapshot. `deps`: standingOf(address) and funderOf(address, cap) read the
- * chain as of the snapshot and throw when the node cannot answer, which leaves the whole factor
- * at 0, since a reviewer that could not be checked is not one that may be counted;
+ * chain as of the snapshot and throw when the node cannot answer, which skips the agent for the
+ * epoch rather than score it, since a reviewer that could not be checked says nothing either way;
  * paymentBlock(event) is the block a payment settled in; snapshotBlock is the snapshot's block.
  */
 async function verdictFor(client, { agent, events, nowMs }, deps) {
