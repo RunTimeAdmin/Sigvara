@@ -36,6 +36,7 @@
 // The rules are constants, not settings: a checker that counted differently from its primary
 // would diverge on every linked agent.
 
+const { createHash } = require('node:crypto');
 const { meanRating, MAX_EXTERNAL_SCORE } = require('./external');
 
 const REVIEWER_MIN_TENURE_DAYS = 30;
@@ -54,6 +55,29 @@ const FUNDING_FLOOR = 10n ** 18n;
 const STATUS_ACTIVE = 0;
 const DAY_MS = 86_400_000;
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+
+/**
+ * Who may be a reviewer at all: the addresses in `events` that paid, lowercased, the most paid first,
+ * and by address where they paid the same, so two operators with the same evidence get the same list.
+ * Anyone else's feedback could not count (verdictFor), so external.js does not read it.
+ */
+function payersByAmount(events) {
+  const paid = new Map();
+  for (const e of events) {
+    const payer = String(e.payer || '').toLowerCase();
+    if (payer) paid.set(payer, (paid.get(payer) ?? 0n) + BigInt(e.amount));
+  }
+  return [...paid]
+    .sort(([a, x], [b, y]) => (x === y ? (a < b ? -1 : 1) : (y > x ? 1 : -1)))
+    .map(([payer]) => payer);
+}
+
+/** A digest of the evidence a judgment rests on, to tell whether a remembered one still applies. */
+function evidenceDigest(events) {
+  const hash = createHash('sha256');
+  for (const e of events) hash.update(`${String(e.payer).toLowerCase()}|${e.ts}|${e.amount}|${e.txHash}\n`);
+  return hash.digest('hex');
+}
 
 /** The snapshot every read is taken at: the start of the UTC day containing `nowSec`. */
 function snapshotOf(nowSec) {
@@ -273,6 +297,7 @@ function describe({ score, reviewers, clusters, excluded }) {
 }
 
 module.exports = {
+  payersByAmount, evidenceDigest,
   snapshotOf, parsePublicFunders, findFirstFunder, verdictFor, scoreReviews, scoreFeedback, describe,
   REVIEWER_MIN_TENURE_DAYS, REVIEWER_MIN_SCORE, REVIEW_HALF_LIFE_DAYS, FULL_WEIGHT_CLUSTERS, FUNDER_HOPS,
   SNAPSHOT_SECONDS, FUNDING_FLOOR,

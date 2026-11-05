@@ -8,7 +8,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { snapshotOf } = require('./reviewers');
 const { MAX_EXTERNAL_SCORE } = require('./external');
-const { World, startOracle, wallet } = require('./test-support/oracle-harness');
+const { World, startOracle, wallet, ASSET } = require('./test-support/oracle-harness');
 
 const ADMIN = 'a'.repeat(64);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -303,6 +303,8 @@ test('end to end: /score and /link say the node failed, and do not call the agen
   try {
     await untilEpoch(oracle);
     w.set('externalReadFails', true);
+    assert.equal((await oracle.call('GET', `/score/${agent.didHash}`)).status, 200, 'today\'s reading is already held');
+    w.set('nowSec', w.data.nowSec + 86_400);
     const score = await oracle.call('GET', `/score/${agent.didHash}`);
     assert.equal(score.status, 502, score.text);
     assert.equal(score.body.code, 'rpc_error');
@@ -310,6 +312,85 @@ test('end to end: /score and /link say the node failed, and do not call the agen
     assert.equal(link.status, 502, link.text);
     assert.equal(link.body.code, 'rpc_error');
     assert.equal(link.text.includes('registry'), false, 'and the node\'s trouble stays in the log');
+  } finally {
+    await oracle.stop();
+  }
+});
+
+test('end to end: a linked agent\'s feedback is read once per snapshot, however many ask', async () => {
+  const { w, agent, files } = claimedWorld();
+  w.set('recordExternalReads', true);
+  const oracle = await startOracle({ world: w, env: linkEnv(w), files });
+  const reads = () => oracle.calls().filter((c) => c.name === 'externalRead');
+  try {
+    await untilEpoch(oracle);
+    assert.equal(reads().length, 1, 'the epoch read it');
+    for (let i = 0; i < 5; i += 1) {
+      assert.equal((await oracle.call('GET', `/score/${agent.didHash}`)).status, 200);
+    }
+    assert.equal(reads().length, 1, 'and every GET /score shared that');
+
+    // The next day is another snapshot.
+    w.set('nowSec', w.data.nowSec + 86_400);
+    assert.equal((await oracle.call('GET', `/score/${agent.didHash}`)).status, 200);
+    assert.equal(reads().length, 2);
+  } finally {
+    await oracle.stop();
+  }
+});
+
+test('end to end: asks only for those who paid, the most paid first', async () => {
+  const { w, agent, files } = claimedWorld();
+  w.set('recordExternalReads', true);
+  const oracle = await startOracle({ world: w, env: linkEnv(w), files });
+  try {
+    await untilEpoch(oracle);
+    const [, blockTag, payers] = oracle.calls().find((c) => c.name === 'externalRead').args;
+    const paid = JSON.parse(files['state.json']).paymentEvents[agent.didHash].map((e) => e.payer).sort();
+    assert.deepEqual(payers, paid, 'all paid the same here, so by address');
+    assert.equal(blockTag, w.data.head, 'and at the snapshot block');
+  } finally {
+    await oracle.stop();
+  }
+});
+
+test('end to end: a read that fails is not remembered, so the next to ask tries again', async () => {
+  const { w, agent, files } = claimedWorld();
+  w.set('recordExternalReads', true);
+  w.set('externalReadFails', true);
+  const oracle = await startOracle({ world: w, env: linkEnv(w), files });
+  const reads = () => oracle.calls().filter((c) => c.name === 'externalRead');
+  try {
+    await untilEpoch(oracle);
+    const before = reads().length;
+    assert.equal((await oracle.call('GET', `/score/${agent.didHash}`)).status, 502);
+    assert.equal(reads().length, before + 1);
+    w.set('externalReadFails', false);
+    assert.equal((await oracle.call('GET', `/score/${agent.didHash}`)).status, 200);
+    assert.equal(reads().length, before + 2);
+    assert.equal((await oracle.call('GET', `/score/${agent.didHash}`)).status, 200);
+    assert.equal(reads().length, before + 2, 'and one that worked is');
+  } finally {
+    await oracle.stop();
+  }
+});
+
+test('end to end: evidence that changes what counts at the snapshot is read afresh', async () => {
+  const { w, agent, files } = claimedWorld();
+  w.set('recordExternalReads', true);
+  const oracle = await startOracle({ world: w, env: { ...linkEnv(w), PAYMENT_VERIFICATION: 'required', PAYMENT_ASSET: ASSET, PAYMENT_MIN_AMOUNT: '10000' }, files });
+  const reads = () => oracle.calls().filter((c) => c.name === 'externalRead');
+  try {
+    await untilEpoch(oracle);
+    assert.equal(reads().length, 1);
+    // A payment settled before the snapshot, and only now credited.
+    const block = w.data.head - 900;
+    w.set('blockTimes', { ...(w.data.blockTimes || {}), [block]: snapshotOf(w.data.nowSec) - 3_600 });
+    const txHash = w.addTx([{ from: wallet(), to: agent.agentAddress, value: 5_000_000n }], { blockNumber: block });
+    const r = await oracle.call('POST', '/attest', { didHash: agent.didHash, success: true, payment: { txHash } }, ADMIN);
+    assert.equal(r.status, 200, r.text);
+    assert.equal((await oracle.call('GET', `/score/${agent.didHash}`)).status, 200);
+    assert.equal(reads().length, 2);
   } finally {
     await oracle.stop();
   }

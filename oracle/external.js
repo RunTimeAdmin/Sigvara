@@ -19,7 +19,9 @@
 //
 // The registry accepts feedback from anyone, so which of it counts is decided by
 // reviewers.js, not here: this module reads and normalizes, and externalScoreFor
-// hands the rows to that judgment.
+// hands the rows to that judgment. Whoever can post could otherwise set how many reads an agent
+// costs, so only addresses that paid the agent are read, up to these limits. Both operators apply
+// them the same way, from the same evidence, so they read the same rows.
 
 const { ethers } = require('ethers');
 const { CAPS } = require('./score-caps');
@@ -39,6 +41,11 @@ const REP_ABI = [
 
 const MAX_EXTERNAL_SCORE = CAPS.external;
 const READ_TIMEOUT_MS = 8000;
+// The factor is full at five independent reviewers (reviewers.js), so a hundred leaves room for those
+// who do not qualify. The most paid come first, so pushing a reviewer out means out-paying it.
+const MAX_CLIENTS_READ = 100;
+// One rating per reviewer, however many reviews it posts, so its newest word is enough.
+const MAX_ROWS_PER_CLIENT = 10;
 
 // ---- pure normalization (the oracle's judgment; curated deliberately) -------
 // Map a recognized feedback tag to a 0..1 rating. Unrecognized tags (bespoke
@@ -189,9 +196,15 @@ async function read(label, fn) {
 //
 // `blockTag`, when given, reads the registry as of that block (reviewers.js reads
 // everything as of its snapshot); left out, at the latest block.
-async function readFeedbackRows(agentId, blockTag) {
+//
+// `payers` is who may be a reviewer, most paid first and lowercased (reviewers.payersByAmount). Feedback
+// from anyone else could not count, so it is not read at all. Left out, every client is a candidate.
+async function readFeedbackRows(agentId, blockTag, payers) {
+  if (payers && payers.length === 0) return [];
   const at = blockTag === undefined ? [] : [{ blockTag }];
-  const clients = Array.from(await read('feedback clients', () => repContract.getClients(agentId, ...at)));
+  const posted = Array.from(await read('feedback clients', () => repContract.getClients(agentId, ...at)));
+  const named = new Map(posted.map((c) => [String(c).toLowerCase(), c]));
+  const clients = (payers ? payers.filter((p) => named.has(p)).map((p) => named.get(p)) : posted).slice(0, MAX_CLIENTS_READ);
   const rows = [];
   for (const c of clients) {
     let last = 0;
@@ -201,7 +214,7 @@ async function readFeedbackRows(agentId, blockTag) {
       if (registryRefused(err)) continue;
       throw err;
     }
-    for (let i = 1; i <= last; i++) {
+    for (let i = Math.max(1, last - MAX_ROWS_PER_CLIENT + 1); i <= last; i++) {
       try {
         const fb = await read('feedback row', () => repContract.readFeedback(agentId, c, i, ...at));
         if (fb.isRevoked) continue;
@@ -268,12 +281,12 @@ async function ownerAt(agentId, blockTag) {
 // is thrown, as is an error from `judge`, which means a reviewer the node could not
 // answer for. The caller skips the agent this epoch rather than propose a number it
 // knows is wrong, as it does for a counterparty it could not read (chain.getAgentScore).
-async function externalScoreFor(agentId, expectedOwner, judge, blockTag) {
+async function externalScoreFor(agentId, expectedOwner, judge, blockTag, payers) {
   if (!enabled) return 0;
   let rows;
   try {
     if (!(await verifyOwnership(agentId, expectedOwner, blockTag))) return 0;
-    rows = await readFeedbackRows(agentId, blockTag);
+    rows = await readFeedbackRows(agentId, blockTag, payers);
   } catch (err) {
     if (registryRefused(err)) return 0;
     throw err;
@@ -283,6 +296,6 @@ async function externalScoreFor(agentId, expectedOwner, judge, blockTag) {
 
 module.exports = {
   init, configured, meanRating, computeExternalScore, readFeedbackRows,
-  verifyOwnership, externalScoreFor, TAG_NORMALIZERS, MAX_EXTERNAL_SCORE,
+  verifyOwnership, externalScoreFor, TAG_NORMALIZERS, MAX_EXTERNAL_SCORE, MAX_CLIENTS_READ, MAX_ROWS_PER_CLIENT,
   refreshChainId, chainState, latestBlock, readLinkLogs, claimHolds, ownerAt,
 };

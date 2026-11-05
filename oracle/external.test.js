@@ -389,6 +389,102 @@ test('externalScoreFor: what the judge makes of the rows when every read answers
   assert.equal(await external.externalScoreFor(7, '0xabc', (rows) => rows.length * 10), 10);
 });
 
+// ---- what reading an agent's feedback can cost -----------------------------
+
+const lower = (n) => `0x${n.toString(16).padStart(40, '0')}`;
+const CHECKSUMMED = (a) => a.toUpperCase().replace('0X', '0x');
+
+function counted(repContract) {
+  const asked = { clients: 0, counts: [], rows: [] };
+  withRegistry({
+    getClients: async () => { asked.clients += 1; return repContract.clients; },
+    getLastIndex: async (_a, c) => { asked.counts.push(c); return BigInt(repContract.lastOf?.(c) ?? 1); },
+    readFeedback: async (_a, c, i) => { asked.rows.push([c, Number(i)]); return row; },
+  });
+  return asked;
+}
+
+test('readFeedbackRows: feedback from an address that never paid is not read at all', async (t) => {
+  t.after(() => external.init(OFF));
+  const payer = lower(1);
+  const strangers = Array.from({ length: 500 }, (_, i) => lower(1000 + i));
+  const asked = counted({ clients: [...strangers, payer] });
+  const rows = await external.readFeedbackRows(7, undefined, [payer]);
+  assert.deepEqual(rows.map((r) => r.client), [payer]);
+  assert.equal(asked.clients, 1);
+  assert.deepEqual(asked.counts, [payer], 'five hundred strangers cost one read between them');
+  assert.equal(asked.rows.length, 1);
+});
+
+test('readFeedbackRows: nobody has paid, so there is nothing to ask the registry', async (t) => {
+  t.after(() => external.init(OFF));
+  const asked = counted({ clients: [lower(1)] });
+  assert.deepEqual(await external.readFeedbackRows(7, undefined, []), []);
+  assert.equal(asked.clients, 0);
+});
+
+test('readFeedbackRows: a payer who has posted nothing costs no read', async (t) => {
+  t.after(() => external.init(OFF));
+  const asked = counted({ clients: [lower(1)] });
+  await external.readFeedbackRows(7, undefined, [lower(1), lower(2), lower(3)]);
+  assert.deepEqual(asked.counts, [lower(1)]);
+});
+
+test('readFeedbackRows: finds a payer however the registry writes its address, and asks in that form', async (t) => {
+  t.after(() => external.init(OFF));
+  const written = CHECKSUMMED(lower(0xabc));
+  const asked = counted({ clients: [written] });
+  const rows = await external.readFeedbackRows(7, undefined, [lower(0xabc)]);
+  assert.deepEqual(asked.counts, [written]);
+  assert.deepEqual(rows.map((r) => r.client), [written]);
+});
+
+test('readFeedbackRows: at most the limit of clients, in the order paid, not the order posted', async (t) => {
+  t.after(() => external.init(OFF));
+  const payers = Array.from({ length: external.MAX_CLIENTS_READ + 20 }, (_, i) => lower(i + 1));
+  const asked = counted({ clients: [...payers].reverse() });
+  await external.readFeedbackRows(7, undefined, payers);
+  assert.deepEqual(asked.counts, payers.slice(0, external.MAX_CLIENTS_READ));
+});
+
+test('readFeedbackRows: with no payers given, the limit still holds', async (t) => {
+  t.after(() => external.init(OFF));
+  const clients = Array.from({ length: external.MAX_CLIENTS_READ + 5 }, (_, i) => lower(i + 1));
+  const asked = counted({ clients });
+  await external.readFeedbackRows(7);
+  assert.equal(asked.counts.length, external.MAX_CLIENTS_READ);
+});
+
+test('readFeedbackRows: the newest rows of a client, oldest of them first, and no more', async (t) => {
+  t.after(() => external.init(OFF));
+  const asked = counted({ clients: [lower(1)], lastOf: () => 25 });
+  const rows = await external.readFeedbackRows(7, undefined, [lower(1)]);
+  assert.deepEqual(asked.rows.map(([, i]) => i), [16, 17, 18, 19, 20, 21, 22, 23, 24, 25]);
+  assert.equal(rows.length, external.MAX_ROWS_PER_CLIENT);
+});
+
+test('readFeedbackRows: a client with fewer rows than the limit has them all read', async (t) => {
+  t.after(() => external.init(OFF));
+  const asked = counted({ clients: [lower(1)], lastOf: () => 3 });
+  await external.readFeedbackRows(7, undefined, [lower(1)]);
+  assert.deepEqual(asked.rows.map(([, i]) => i), [1, 2, 3]);
+});
+
+test('readFeedbackRows: exactly the limit of rows has them all read', async (t) => {
+  t.after(() => external.init(OFF));
+  const asked = counted({ clients: [lower(1)], lastOf: () => external.MAX_ROWS_PER_CLIENT });
+  await external.readFeedbackRows(7, undefined, [lower(1)]);
+  assert.equal(asked.rows[0][1], 1);
+  assert.equal(asked.rows.length, external.MAX_ROWS_PER_CLIENT);
+});
+
+test('externalScoreFor: hands the payers on, so the judge sees only what they posted', async (t) => {
+  t.after(() => external.init(OFF));
+  withRegistry({ getClients: async () => [lower(1), lower(2)] }, { ownerOf: async () => '0xabc' });
+  const seen = await external.externalScoreFor(7, '0xabc', (rows) => rows.map((r) => r.client), undefined, [lower(2)]);
+  assert.deepEqual(seen, [lower(2)]);
+});
+
 // ---- links made on chain (link-claims.js) ------------------------------------
 
 const DID = `0x${'ab'.repeat(32)}`;
