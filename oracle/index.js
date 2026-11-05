@@ -472,9 +472,9 @@ async function payerScoresFor(didHash, events = getPaymentEvents(didHash)) {
 
 /**
  * The external factor for one agent: the feedback on its linked ERC-8004 identity, counted
- * only from the reviewers reviewers.js accepts. 0 when nothing is linked, the feed is off, or
- * the registry cannot be read (externalScoreFor). Throws when the snapshot or a reviewer
- * cannot be read, and the agent is skipped this epoch. `nowMs` is the chain's clock, as for scoreAt, and
+ * only from the reviewers reviewers.js accepts. 0 when nothing is linked or the feed is off.
+ * Throws when the registry, the snapshot or a reviewer cannot be read, and the agent is
+ * skipped this epoch. `nowMs` is the chain's clock, as for scoreAt, and
  * `events` the payment evidence to judge reviewers by: the checker passes the evidence as it
  * stood at the proposal it audits.
  *
@@ -1388,7 +1388,7 @@ async function runEpochInner() {
         const held = evidenceAt(didHash, evidenceCutMs);
         // externalScore: only for agents linked to an ERC-8004 identity they own, and only from
         // the reviewers reviewers.js accepts. Ownership is re-verified inside externalScoreFor;
-        // any failure yields 0.
+        // a registry the node cannot read skips the agent.
         const { score: externalScore } = await externalScoreOf(didHash, { operator, agentAddress }, scoringNowMs, held);
         const inputs = { registeredAt, att, flagWeight, externalScore };
         const { measured, scores } = await scoreAt(didHash, inputs, scoringNowMs, held);
@@ -1877,30 +1877,7 @@ async function paidBeforeRegistration(didHash, credited) {
   return Number((await chain.getAgentInfo(didHash, credited.blockNumber)).registeredAt) === 0;
 }
 
-// Repeated bad signatures for one payment leg. A leg's payer can run its account's code here as
-// often as it likes, so after a few failures the leg waits.
-const BAD_SIGNATURE_LIMIT = 5;
-const BAD_SIGNATURE_WINDOW_MS = 3_600_000;
-const badSignatures = new Map();
-
-function badSignatureThrottled(key, now = Date.now()) {
-  const entry = badSignatures.get(key);
-  if (!entry) return false;
-  if (now - entry.since > BAD_SIGNATURE_WINDOW_MS) {
-    badSignatures.delete(key);
-    return false;
-  }
-  return entry.count >= BAD_SIGNATURE_LIMIT;
-}
-
-function noteBadSignature(key, now = Date.now()) {
-  if (badSignatures.size > 10_000) {
-    for (const [k, v] of badSignatures) if (now - v.since > BAD_SIGNATURE_WINDOW_MS) badSignatures.delete(k);
-  }
-  const entry = badSignatures.get(key);
-  if (!entry || now - entry.since > BAD_SIGNATURE_WINDOW_MS) badSignatures.set(key, { count: 1, since: now });
-  else entry.count += 1;
-}
+const badSignatures = payerOutcome.badSignatureLimiter();
 
 /** The EIP-712 hash of a leg's payer-signed outcome under this oracle's domain. */
 const payerOutcomeHashOf = (didHash, txHash, value) =>
@@ -1941,7 +1918,7 @@ function heldOutcomeReply(didHash, txHash, posted) {
  * @returns {Promise<{ status: number, body: object, metric: string }>} the reply, and the counter
  *   a POST counts it under
  */
-async function admitPayerOutcome({ didHash, credited, info, signed, packetId = null }, { peerBlock = null } = {}) {
+async function admitPayerOutcome({ didHash, credited, info, signed, packetId = null }, { peerBlock = null, client = null } = {}) {
   const fromPeer = peerBlock !== null;
   const refuse = (status, code, error, metric) => ({ status, body: { error, code }, metric });
   const leg = (credited.legs ?? []).find((l) => l.payer.toLowerCase() === signed.payer.toLowerCase());
@@ -1959,8 +1936,10 @@ async function admitPayerOutcome({ didHash, credited, info, signed, packetId = n
   const early = payerOutcome.timingProblem(signed, credited.settledAt);
   if (early) return refuse(400, 'outcome_window', early, 'attestRejectedOther');
 
-  const throttleKey = `${didHash}|${credited.txHash}|${leg.payer.toLowerCase()}`;
-  if (!fromPeer && badSignatureThrottled(throttleKey)) {
+  // Before any chain read. Only a contract's bad signatures are ever noted, below, so this slows down
+  // whoever keeps making a contract account's code run, and nobody else.
+  const throttleKey = `${client}|${didHash}|${credited.txHash}|${leg.payer.toLowerCase()}`;
+  if (!fromPeer && badSignatures.blocked(throttleKey)) {
     return refuse(429, 'bad_signature_throttled', 'too many bad signatures for this payment; try again later', 'attestRejectedOther');
   }
   const provider = chain.getProvider();
@@ -2020,7 +1999,7 @@ async function admitPayerOutcome({ didHash, credited, info, signed, packetId = n
     return refuse(502, 'rpc_error', 'could not read the chain', 'paymentRpcErrors');
   }
   if (!verdict.valid) {
-    if (!fromPeer) noteBadSignature(throttleKey);
+    if (!fromPeer && verdict.signer === 'contract') badSignatures.note(throttleKey);
     return refuse(400, 'bad_signature', 'the signature is not the payer\'s for this outcome', 'attestRejectedOther');
   }
 
@@ -2685,7 +2664,7 @@ async function handleRequest(req, res) {
         // signature to can do that.
         const r = await admitPayerOutcome({
           didHash, credited, info, signed: signedOutcome, packetId: payerOutcome.packetIdOf(packetId),
-        });
+        }, { client: clientKey(req, isTrustedProxy) });
         metrics.inc(r.metric);
         return json(res, r.status, r.body);
       }
@@ -3004,7 +2983,13 @@ async function handleRequest(req, res) {
         console.warn(`[oracle] /link chain read failed for ${didHash}: ${err.message}`);
         return json(res, 502, { error: 'could not read the chain', code: 'rpc_error' });
       }
-      const owns = await external.verifyOwnership(String(agentId), operator);
+      let owns;
+      try {
+        owns = await external.verifyOwnership(String(agentId), operator);
+      } catch (err) {
+        console.warn(`[oracle] /link registry read failed for ${didHash}: ${err.message}`);
+        return json(res, 502, { error: 'could not read the chain', code: 'rpc_error' });
+      }
       if (!owns) {
         return json(res, 403, { error: 'ERC-8004 agent is not owned by this agent\'s Sigvara operator; refusing to link' });
       }

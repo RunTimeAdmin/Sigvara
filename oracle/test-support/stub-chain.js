@@ -32,6 +32,7 @@
 //     linkSpanLimit: the most blocks one read of those logs may span; a wider one is refused with
 //                linkSpanError (default: as returning too many logs)
 //     linkLogsFail: an error every read of those logs fails with, such as a rate limit
+//     externalReadFails: the node cannot answer for the registry, so ownership and feedback reads throw
 //     registryScannedTo: how far the registry scan has read (default: not reported, which reads as the head)
 //     snapshotBlock: the block the snapshot falls in (default `head`)
 //     agents[didHash].operators: [{ fromBlock, operator }] the agent's operator from each block on, for a
@@ -107,6 +108,8 @@ const fakeHash = (tag) => `0x${tag.repeat(32)}`;
 // How far world.clockSteps has moved the chain since this process started.
 let moved = 0;
 const step = (name) => { moved += world().clockSteps?.[name] ?? 0; };
+// As external.js throws it, when world.externalReadFails says the node cannot answer for the registry.
+const registryUnreadable = () => Object.assign(new Error('could not read the ERC-8004 registry (8004 owner)'), { code: 'NETWORK_ERROR' });
 // Standing reads in flight, recorded when world.standingReadMs gives them time to overlap.
 let standingReads = 0;
 const hostNow = Date.now;
@@ -292,6 +295,7 @@ const external = {
   },
   // The ownership check and the read are faked; what is made of the rows is the real judgment.
   externalScoreFor: async (agentId, owner, judge, blockTag) => {
+    if (world().externalReadFails) throw registryUnreadable();
     if (world().externalOwns !== true || !world().externalFeedback) return 0;
     // With a linkHistory for the agent, ownership is judged from it, as of the block asked.
     if (world().linkHistory?.[String(agentId)]) {
@@ -300,7 +304,10 @@ const external = {
     }
     return judge(world().externalFeedback);
   },
-  verifyOwnership: async () => world().externalOwns === true,
+  verifyOwnership: async () => {
+    if (world().externalReadFails) throw registryUnreadable();
+    return world().externalOwns === true;
+  },
   latestBlock: async () => world().head,
   readLinkLogs: async (_key, from, to) => {
     const w = world();

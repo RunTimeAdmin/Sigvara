@@ -25,7 +25,7 @@
  * emails the repository owner, which makes it a second alert path beside the Discord
  * watcher: it does not depend on the three servers being up.
  *
- * Reads only. Every request is a GET to a public URL.
+ * Reads only. Every request is a GET to a public URL, or a read of the chain over the public RPC.
  */
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -39,6 +39,7 @@ const CHECKER = process.env.CHECKER_BASE || 'https://checker.sigvara.xyz';
 const INDEX = process.env.INDEX_BASE || 'https://index.sigvara.xyz';
 const EPOCH_STALE_MS = 3 * 3600 * 1000;       // the oracle runs hourly; three hours is a missed run
 const CERT_MIN_DAYS = 14;
+const RPC = process.env.RPC_URL || 'https://rpc.testnet.arc.io';
 const OUTCOMES_LAG_HOURS = process.env.OUTCOMES_LAG_HOURS ? Number(process.env.OUTCOMES_LAG_HOURS) : 2;
 // Repo-facing files under site/ that are never published, and the one file the host does not serve.
 const NOT_SERVED = new Set(['SECURITY.md', 'SECURITY_DEPLOYMENT_CHECKLIST.md', '.htaccess']);
@@ -215,6 +216,47 @@ async function checkServices() {
     }
   }
   console.log('services: oracle, checker and event index health, divergence list and certificate expiry checked');
+  await checkWallets();
+}
+
+async function rpcCall(method, params) {
+  const res = await fetch(RPC, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, signal: AbortSignal.timeout(20_000),
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+  });
+  const j = await res.json();
+  if (j.error) throw new Error(j.error.message);
+  return j.result;
+}
+
+/**
+ * The wallets under their floors, as { name, address, usdc, minUsdc }. Pure, so a test can hold it to
+ * them. `wallets` is as in deployments/5042002.json, and `balances` is by name, in wei: on Arc, gas is USDC.
+ */
+export function lowWallets(wallets, balances) {
+  return Object.entries(wallets)
+    .filter(([name, w]) => balances[name] < BigInt(w.minUsdc) * 10n ** 18n)
+    .map(([name, w]) => ({ name, address: w.address, minUsdc: w.minUsdc, usdc: usdcOf(balances[name]) }));
+}
+
+const usdcOf = (wei) => (Number(wei / 10n ** 16n) / 100).toFixed(2);
+
+// A wallet with no gas stops proposing, finalizing or posting, and nothing else would say why until
+// scores went stale. This says so with time to spare, from a place that shares nothing with them.
+async function checkWallets() {
+  try {
+    const { wallets } = JSON.parse(readFileSync('deployments/5042002.json', 'utf8'));
+    const balances = {};
+    for (const [name, w] of Object.entries(wallets)) {
+      balances[name] = BigInt(await rpcCall('eth_getBalance', [w.address, 'latest']));
+    }
+    for (const w of lowWallets(wallets, balances)) {
+      fail(`wallets: ${w.name} (${w.address}) has ${w.usdc} USDC, under its floor of ${w.minUsdc}. See the runbook, "Gas"`);
+    }
+    console.log(`wallets: ${Object.keys(wallets).map((n) => `${n} ${usdcOf(balances[n])} USDC`).join(', ')}`);
+  } catch (e) {
+    fail(`wallets: could not read them (${e.message})`);
+  }
 }
 
 /**
