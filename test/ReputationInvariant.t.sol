@@ -288,7 +288,7 @@ contract ReputationHandler is Test {
             if (refuse) aBadFinalizeWasAccepted = true;
 
             SigvaraReputation.ReputationData memory d = p.data;
-            d.lastUpdated = block.timestamp;
+            d.lastUpdated = p.at;
             finalized[did] = d;
             finalizedRoot[did] = p.root;
             anchorOf[did] = anchor;

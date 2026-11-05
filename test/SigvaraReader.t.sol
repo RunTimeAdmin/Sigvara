@@ -125,20 +125,20 @@ contract SigvaraReaderTest is StackFixture {
     /// before an oracle outage, or from while proposals were paused, satisfied a gate for as long as the
     /// outage lasted. The reader reports the time, and isTrustedFresh refuses a score older than the caller
     /// will accept.
-    function test_trust_reportsWhenTheScoreWasLastWritten() public {
+    function test_trust_reportsWhenTheScoreWasProposed() public {
         address stranger = makeAddr("stranger");
         assertEq(reader.trust(stranger).scoreUpdatedAt, 0, "an unregistered address has no score");
 
         bytes32 didHash = _registerAndBond(agentPk, 2 * MIN_STAKE);
         assertEq(reader.trust(agent).scoreUpdatedAt, 0, "bonded and never scored");
 
+        uint256 proposedAt = block.timestamp;
         _finalize(didHash, _score40());
-        uint256 wroteAt = block.timestamp;
-        assertEq(reader.trust(agent).scoreUpdatedAt, wroteAt);
+        assertEq(reader.trust(agent).scoreUpdatedAt, proposedAt);
         assertEq(reader.trust(agent).scoreUpdatedAt, reputation.getReputation(didHash).lastUpdated);
 
-        vm.warp(wroteAt + 3 days);
-        assertEq(reader.trust(agent).scoreUpdatedAt, wroteAt, "time passing does not refresh it");
+        vm.warp(proposedAt + 3 days);
+        assertEq(reader.trust(agent).scoreUpdatedAt, proposedAt, "time passing does not refresh it");
     }
 
     function test_trust_aCallerBuiltAgainstTheEarlierStructStillDecodes() public {
@@ -156,29 +156,29 @@ contract SigvaraReaderTest is StackFixture {
 
     function test_isTrustedFresh_acceptsAScoreUpToTheAgeAndNotOneSecondOver() public {
         bytes32 didHash = _registerAndBond(agentPk, 2 * MIN_STAKE);
+        uint256 proposedAt = block.timestamp;
         _finalize(didHash, _score40());
-        uint256 wroteAt = block.timestamp;
         uint256 maxAge = 1 days;
 
-        assertTrue(reader.isTrustedFresh(agent, 40, maxAge), "just written");
+        assertTrue(reader.isTrustedFresh(agent, 40, maxAge), "just finalized");
 
-        vm.warp(wroteAt + maxAge);
+        vm.warp(proposedAt + maxAge);
         assertTrue(reader.isTrustedFresh(agent, 40, maxAge), "exactly the age");
         assertTrue(reader.isTrusted(agent, 40));
 
-        vm.warp(wroteAt + maxAge + 1);
+        vm.warp(proposedAt + maxAge + 1);
         assertFalse(reader.isTrustedFresh(agent, 40, maxAge), "one second over");
         assertTrue(reader.isTrusted(agent, 40), "isTrusted does not look at age, which is why this exists");
     }
 
-    /// A maximum age of zero asks for a score written in this very second.
-    function test_isTrustedFresh_zeroAgeMeansWrittenThisSecond() public {
+    /// A maximum age of zero asks for a score proposed in this very second, and a challenge window lies
+    /// between a proposal and its finalize, so no finalized score can meet it.
+    function test_isTrustedFresh_zeroAgeIsNeverMet() public {
         bytes32 didHash = _registerAndBond(agentPk, 2 * MIN_STAKE);
         _finalize(didHash, _score40());
 
-        assertTrue(reader.isTrustedFresh(agent, 40, 0));
-        vm.warp(block.timestamp + 1);
         assertFalse(reader.isTrustedFresh(agent, 40, 0));
+        assertTrue(reader.isTrustedFresh(agent, 40, type(uint256).max));
     }
 
     /// An agent that has never been scored has no score to be fresh. isTrusted at threshold zero says yes
@@ -228,13 +228,13 @@ contract SigvaraReaderTest is StackFixture {
         assertTrue(reader.isTrustedFresh(agent, 40, maxAge), "fresh again");
     }
 
-    /// Whatever the age and the time since the write, isTrustedFresh is exactly isTrusted and an age check.
+    /// Whatever the age and the time since the proposal, isTrustedFresh is exactly isTrusted and an age check.
     function testFuzz_isTrustedFresh_isIsTrustedAndTheAgeCheck(uint256 elapsed, uint256 maxAge) public {
         bytes32 didHash = _registerAndBond(agentPk, 2 * MIN_STAKE);
+        uint256 proposedAt = block.timestamp;
         _finalize(didHash, _score40());
-        uint256 wroteAt = block.timestamp;
-        elapsed = bound(elapsed, 0, 3650 days);
-        vm.warp(wroteAt + elapsed);
+        elapsed = bound(elapsed, block.timestamp - proposedAt, 3650 days);
+        vm.warp(proposedAt + elapsed);
 
         assertEq(reader.isTrustedFresh(agent, 40, maxAge), reader.isTrusted(agent, 40) && elapsed <= maxAge);
     }

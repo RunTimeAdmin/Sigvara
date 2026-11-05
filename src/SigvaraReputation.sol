@@ -145,7 +145,7 @@ contract SigvaraReputation is Initializable, TimelockedGrants, UUPSUpgradeable, 
         uint8 externalScore;     // max 25
         uint8 communityScore;    // max  5
         uint8 propagationScore;  // max  5
-        uint256 lastUpdated;     // block.timestamp of last finalized write
+        uint256 lastUpdated;     // when the finalized score was proposed, or zeroed by a slash
     }
 
     struct PendingScore {
@@ -484,7 +484,10 @@ contract SigvaraReputation is Initializable, TimelockedGrants, UUPSUpgradeable, 
         (uint8 anchor, uint256 clock) = _maturity(didHash);
 
         ReputationData memory data = pending.data;
-        data.lastUpdated = block.timestamp;
+        // When the score was proposed, not when it was finalized. Anyone can finalize at any time after
+        // the window, so the block's time let a caller re-date a score an oracle left behind when it
+        // stopped, and keep it passing every limit on how old a score may be.
+        data.lastUpdated = pending.proposedAt;
         bytes32 root = pending.evidenceRoot;
         reputations[didHash] = data;
         evidenceRoots[didHash] = root;

@@ -93,7 +93,7 @@ contract Deploy is Script {
 
     /// The ceilings the contracts enforce in the same places, checked first on mainnet for the same reason.
     /// test/DeployScripts.t.sol pins these to the contracts' own constants too.
-    uint256 constant MAX_CHALLENGE_PERIOD = 30 days;
+    uint256 constant MAX_CHALLENGE_PERIOD = 10 days;
     uint256 constant MAX_UNBONDING_PERIOD = 90 days;
     uint256 constant MAX_CHALLENGE_WINDOW = 7 days;
     uint256 constant MAX_MATURITY_RATE_PER_DAY = 100;

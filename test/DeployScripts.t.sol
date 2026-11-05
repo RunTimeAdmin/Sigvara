@@ -184,9 +184,9 @@ contract DeployScriptGuardsTest is Test {
     function test_mainnet_refusesAPeriodAboveTheCeiling() public {
         vm.chainId(5042);
         vm.expectRevert(
-            abi.encodeWithSelector(Deploy.AboveCeiling.selector, "CHALLENGE_PERIOD", 30 days + 1, 30 days)
+            abi.encodeWithSelector(Deploy.AboveCeiling.selector, "CHALLENGE_PERIOD", 10 days + 1, 10 days)
         );
-        h.checkPeriods(30 days + 1, 21 days, 6 hours);
+        h.checkPeriods(10 days + 1, 21 days, 6 hours);
 
         vm.expectRevert(
             abi.encodeWithSelector(Deploy.AboveCeiling.selector, "UNBONDING_PERIOD", 90 days + 1, 90 days)
@@ -199,14 +199,14 @@ contract DeployScriptGuardsTest is Test {
         h.checkPeriods(7 days, 21 days, 7 days + 1);
 
         vm.expectRevert(
-            abi.encodeWithSelector(Deploy.AboveCeiling.selector, "CHALLENGE_PERIOD", type(uint256).max, 30 days)
+            abi.encodeWithSelector(Deploy.AboveCeiling.selector, "CHALLENGE_PERIOD", type(uint256).max, 10 days)
         );
         h.checkPeriods(type(uint256).max, 21 days, 6 hours);
     }
 
     function test_mainnet_acceptsTheCeilingsThemselves() public {
         vm.chainId(5042);
-        h.checkPeriods(30 days, 90 days, 7 days);
+        h.checkPeriods(10 days, 90 days, 7 days);
     }
 
     function test_mainnet_refusesAMaturityRateAboveTheCeiling() public {
