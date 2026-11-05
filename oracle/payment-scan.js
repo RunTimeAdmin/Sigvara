@@ -43,6 +43,7 @@ const { ethers } = require('ethers');
 // TRANSFER_TOPIC, Transfer(address indexed from, address indexed to, uint256 value): one
 // definition, shared with the attested path, rather than a copy that could drift.
 const { countsAsPayment, TRANSFER_TOPIC } = require('./payments');
+const { readSplitting } = require('./log-spans');
 
 /**
  * Recipients per getLogs call.
@@ -387,6 +388,10 @@ function checkpointAfter(unresolved, from, to, canary = 'not_run') {
  * allowed to ask, and the loop that does the asking is the only thing that can space it
  * out. Backoff reacts to a refusal; pacing avoids provoking one. `sleep` is injected so
  * the tests do not have to spend real seconds proving it.
+ *
+ * A span the node refuses for its size is halved (log-spans.js). The filter is only the
+ * asset and the recipients, so anyone can fill a span with transfers to an agent, and
+ * planCredits drops the worthless ones only once they have been read.
  */
 async function scanRange(
   { readLogs, asset, paceMs = DEFAULT_SCAN_PACE_MS, sleep = wait },
@@ -403,8 +408,12 @@ async function scanRange(
       // there are several.
       if (!first) await sleep(paceMs);
       first = false;
-      const logs = await readLogs({ address: asset, topics, fromBlock: start, toBlock: end });
-      out.push(...logs);
+      const logs = await readSplitting(
+        (a, b) => readLogs({ address: asset, topics, fromBlock: a, toBlock: b }),
+        start, end, { pause: () => sleep(paceMs) },
+      );
+      // One at a time: a flooded span can hold more logs than a call can take as arguments.
+      for (const log of logs) out.push(log);
     }
   }
   return out;

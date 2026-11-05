@@ -3,6 +3,7 @@
 const { test, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const chain = require('./chain');
+const refusals = require('./test-support/refusals');
 
 const CFG = {
   rpcUrl: 'http://fake',
@@ -356,6 +357,30 @@ test('getRegisteredAgents: keeps progress when a chunk fails part way through', 
   const state = chain.getScanState();
   assert.equal(state.lastScannedBlock, 1199, 'kept the two chunks that succeeded');
   assert.equal(state.agents.length, 2, 'kept the agents those chunks found');
+});
+
+test('getRegisteredAgents: a chunk the node refuses for its size is read in halves, and every agent found', async () => {
+  chain.reset();
+  const fakeIdentity = {
+    filters: { AgentRegistered: () => ({}) },
+    queryFilter: async (_f, start, end) => {
+      if (end - start + 1 > 30 && start <= 1150 && end >= 1150) throw refusals.arcTooMany();
+      return Array.from({ length: end - start + 1 }, (_, i) => ({
+        args: { didHash: `0xdid${start + i}`, agentAddress: '0xagent' },
+        blockNumber: start + i,
+      }));
+    },
+  };
+  chain.init(
+    { rpcUrl: 'x', privateKey: '0x' + '1'.repeat(64), identityAddress: '0x' + '1'.repeat(40),
+      reputationAddress: '0x' + '2'.repeat(40), fromBlock: 1100, logChunkSize: 100 },
+    { provider: { getBlockNumber: async () => 1199 }, wallet: {}, identityContract: fakeIdentity,
+      reputationContract: {} }
+  );
+
+  const agents = await chain.getRegisteredAgents();
+  assert.equal(agents.length, 100);
+  assert.equal(chain.getScanState().lastScannedBlock, 1199);
 });
 
 // ---------------------------------------------------------------- didHash derivation --

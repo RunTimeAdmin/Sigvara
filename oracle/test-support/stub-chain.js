@@ -107,6 +107,8 @@ const fakeHash = (tag) => `0x${tag.repeat(32)}`;
 // How far world.clockSteps has moved the chain since this process started.
 let moved = 0;
 const step = (name) => { moved += world().clockSteps?.[name] ?? 0; };
+// Standing reads in flight, recorded when world.standingReadMs gives them time to overlap.
+let standingReads = 0;
 const hostNow = Date.now;
 let hostAhead = 0;
 Date.now = () => hostNow() + hostAhead;
@@ -182,6 +184,12 @@ const chain = {
   getAgentScore: async (address) => {
     step('getAgentScore');
     const key = String(address).toLowerCase();
+    if (world().standingReadMs) {
+      standingReads += 1;
+      record('standingRead', standingReads);
+      await new Promise((r) => setTimeout(r, world().standingReadMs));
+      standingReads -= 1;
+    }
     if (world().standingFails?.[key]) {
       throw Object.assign(new Error('429 too many requests'), { code: 'SERVER_ERROR' });
     }

@@ -4,6 +4,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { ethers } = require('ethers');
 const scan = require('./payment-scan');
+const refusals = require('./test-support/refusals');
 
 const addr = (n) => ethers.getAddress('0x' + String(n).repeat(40).slice(0, 40));
 const AGENT = addr('1');
@@ -791,4 +792,37 @@ test('planCredits: a zero-value leg beside a real payment credits only the real 
   ]);
   assert.deepEqual(credits.map((c) => c.payer), [PAYER]);
   assert.deepEqual(skipped.map((s) => s.reason), ['zero_value']);
+});
+
+test('scanRange: a span the node refuses for its size is read in halves, and nothing is lost', async () => {
+  const logs = Array.from({ length: 12 }, (_, i) => ({ blockNumber: i * 2 }));
+  const filters = [];
+  const paced = [];
+  const readLogs = async (f) => {
+    filters.push(f);
+    const found = logs.filter((l) => l.blockNumber >= f.fromBlock && l.blockNumber <= f.toBlock);
+    if (found.length > 4) throw refusals.arcTooMany();
+    return found;
+  };
+  const out = await scan.scanRange(
+    { readLogs, asset: ASSET, paceMs: 7, sleep: async (ms) => { paced.push(ms); } },
+    [addr('a')], 0, 23, 24,
+  );
+  assert.deepEqual(out, logs);
+  assert.ok(filters.length > 1);
+  assert.ok(filters.every((f) => f.address === ASSET && f.topics[0] === filters[0].topics[0] && f.topics[2].length === 1));
+  assert.ok(paced.length > 0 && paced.every((ms) => ms === 7), 'the smaller reads keep to the pace');
+});
+
+test('scanRange: a rate limit is not halved, and fails the scan as it did', async () => {
+  let calls = 0;
+  const readLogs = async () => { calls += 1; throw refusals.rateLimited(); };
+  await assert.rejects(scan.scanRange({ readLogs, asset: ASSET, sleep: async () => {} }, [addr('a')], 0, 99, 100));
+  assert.equal(calls, 1);
+});
+
+test('scanRange: takes more logs from one span than a call can take as arguments', async () => {
+  const flood = Array.from({ length: 200_000 }, (_, i) => ({ blockNumber: 5, logIndex: i }));
+  const out = await scan.scanRange({ readLogs: async () => flood, asset: ASSET }, [addr('a')], 0, 9, 10);
+  assert.equal(out.length, 200_000);
 });

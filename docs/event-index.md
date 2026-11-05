@@ -25,7 +25,7 @@ How it keeps the history complete (`oracle/indexer.js`, `poll`):
 
 - It reads only blocks the RPC calls `finalized`, less 20 (`HEAD_MARGIN`, about ten seconds). Arc finalizes each block as it is made, so a block read once does not change.
 - The margin is there because a provider spreads requests over several nodes. A node a block or two behind the one that named the head can answer a log read for blocks it does not have yet with what it has, and say nothing. So each batch also asks for its own last block, and a batch whose node does not have it is refused (`readSpans`).
-- It reads in order, and moves on only when a whole batch of spans has been read and checked. A refused or malformed answer fails the whole batch, and the next poll reads it again. So the index never has a hole.
+- It reads in order, and moves on only when a whole batch of spans has been read and checked. A span the node refuses for its size, or does not answer in time, is read in halves instead (`oracle/log-spans.js`). Any other refused or malformed answer fails the whole batch, and the next poll reads it again. So the index never has a hole.
 - A log outside the span asked for, from another contract, or with a malformed field fails the read rather than being stored (`normalizeLog`).
 
 ## What it answers

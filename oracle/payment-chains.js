@@ -42,6 +42,7 @@
 const net = require('net');
 const { ethers } = require('ethers');
 const paymentScan = require('./payment-scan');
+const { spanRefused } = require('./log-spans');
 
 const DEFAULT_DELAY_SECONDS = 3600;
 // Longer than Base Sepolia's finality lag (about 17 minutes, measured 3 November 2026) with room to
@@ -549,6 +550,8 @@ function rpcError(err, url) {
   const rpcCode = Number.isInteger(err?.error?.code) ? ` (rpc ${err.error.code})` : '';
   const out = new Error(`${short.split(url).join('<rpc>').slice(0, 200)}${rpcCode}`);
   if (err && err.code !== undefined) out.code = err.code;
+  // Whether it was refused for its size, and nothing of how the node put it, so the scan can halve.
+  if (spanRefused(err)) out.spanRefused = true;
   return out;
 }
 
