@@ -23,6 +23,8 @@
 
 const { ethers } = require('ethers');
 const { CAPS } = require('./score-caps');
+const { readWithBackoff } = require('./read-retry');
+const { accountRefused: registryRefused } = require('./payer-outcome');
 
 const ID_ABI = [
   'function ownerOf(uint256) view returns (address)',
@@ -166,6 +168,21 @@ function withTimeout(promise) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
+// One read of a registry. Only a revert is the registry's own answer: no such agent, no such row.
+// Anything else is the node, and says nothing about the agent, so it is tried again and then thrown.
+// Read as no feedback, it lowers the score this oracle proposes, and a checker whose read succeeded
+// records a divergence against an honest primary (chain.getAgentScore has the same rule). Thrown as
+// a node's failure to callers that know that one, and with none of its message, which can hold the
+// RPC's URL and so its key.
+async function read(label, fn) {
+  try {
+    return await readWithBackoff(label, () => withTimeout(fn()), 4, (err) => !registryRefused(err));
+  } catch (err) {
+    if (registryRefused(err)) throw err;
+    throw Object.assign(new Error(`could not read the ERC-8004 registry (${label})`), { code: 'NETWORK_ERROR' });
+  }
+}
+
 // getClients -> per-client getLastIndex -> readFeedback. The registry is not
 // enumerable and public RPCs cap getLogs ranges, so per-agent reads beat event
 // scanning. ethers Result arrays are frozen, hence the Array.from copy.
@@ -174,30 +191,40 @@ function withTimeout(promise) {
 // everything as of its snapshot); left out, at the latest block.
 async function readFeedbackRows(agentId, blockTag) {
   const at = blockTag === undefined ? [] : [{ blockTag }];
-  const clients = Array.from(await withTimeout(repContract.getClients(agentId, ...at)));
+  const clients = Array.from(await read('feedback clients', () => repContract.getClients(agentId, ...at)));
   const rows = [];
   for (const c of clients) {
     let last = 0;
-    try { last = Number(await withTimeout(repContract.getLastIndex(agentId, c, ...at))); } catch { continue; }
+    try {
+      last = Number(await read('feedback count', () => repContract.getLastIndex(agentId, c, ...at)));
+    } catch (err) {
+      if (registryRefused(err)) continue;
+      throw err;
+    }
     for (let i = 1; i <= last; i++) {
       try {
-        const fb = await withTimeout(repContract.readFeedback(agentId, c, i, ...at));
+        const fb = await read('feedback row', () => repContract.readFeedback(agentId, c, i, ...at));
         if (fb.isRevoked) continue;
         rows.push({ client: c, value: Number(fb.value) / 10 ** Number(fb.valueDecimals), tag: (fb.tag1 || '').toLowerCase() });
-      } catch { /* index gaps are expected — skip */ }
+      } catch (err) {
+        if (!registryRefused(err)) throw err; // a revert is an index gap, which is expected
+      }
     }
   }
   return rows;
 }
 
 // True iff the 8004 agent NFT is owned by expectedOwner (same wallet across
-// chains). Case-insensitive. Any error (bad id, RPC) is treated as "no".
+// chains). Case-insensitive. A revert (no such agent) is "no"; a node that cannot answer is thrown.
 async function verifyOwnership(agentId, expectedOwner, blockTag) {
   if (!enabled) return false;
   try {
-    const owner = await withTimeout(idContract.ownerOf(agentId, ...(blockTag === undefined ? [] : [{ blockTag }])));
+    const owner = await read('8004 owner', () => idContract.ownerOf(agentId, ...(blockTag === undefined ? [] : [{ blockTag }])));
     return owner.toLowerCase() === String(expectedOwner).toLowerCase();
-  } catch { return false; }
+  } catch (err) {
+    if (registryRefused(err)) return false;
+    throw err;
+  }
 }
 
 // ---- links made on chain (link-claims.js) -----------------------------------
@@ -237,18 +264,20 @@ async function ownerAt(agentId, blockTag) {
 // externalScore for a linked agent. Re-verifies ownership every call (the NFT is
 // transferable), then reads the feedback and returns what `judge` makes of it
 // (reviewers.scoreFeedback, through index.js), both as of `blockTag` when given.
-// Fail-safe: an error reading the registry or an ownership mismatch yields 0 and
-// never blocks the epoch. An error from `judge` is not swallowed: it means a
-// reviewer the node could not answer for, which is not a reviewer with no standing,
-// and the caller skips the agent this epoch rather than propose a number it knows
-// is wrong, as it does for a counterparty it could not read (chain.getAgentScore).
+// An ownership mismatch or a registry that refuses yields 0. A node that cannot answer
+// is thrown, as is an error from `judge`, which means a reviewer the node could not
+// answer for. The caller skips the agent this epoch rather than propose a number it
+// knows is wrong, as it does for a counterparty it could not read (chain.getAgentScore).
 async function externalScoreFor(agentId, expectedOwner, judge, blockTag) {
   if (!enabled) return 0;
   let rows;
   try {
     if (!(await verifyOwnership(agentId, expectedOwner, blockTag))) return 0;
     rows = await readFeedbackRows(agentId, blockTag);
-  } catch { return 0; }
+  } catch (err) {
+    if (registryRefused(err)) return 0;
+    throw err;
+  }
   return judge(rows);
 }
 

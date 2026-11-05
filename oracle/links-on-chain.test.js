@@ -265,6 +265,56 @@ test('end to end: logs too many to list in one read do not stop scoring, in the 
   }
 });
 
+test('end to end: a registry the node cannot read skips the agent, and is not scored as no feedback', async () => {
+  const { w, files } = claimedWorld();
+  w.set('externalReadFails', true);
+  const skipped = await epoch(w, files, linkEnv(w));
+  assert.equal(skipped.scores, null, `nothing proposed:\n${skipped.logs}`);
+  assert.match(skipped.logs, /could not read the ERC-8004 registry/);
+
+  w.file = null;
+  w.set('externalReadFails', false);
+  const scored = await epoch(w, files, linkEnv(w));
+  assert.equal(scored.scores?.externalScore, MAX_EXTERNAL_SCORE, scored.logs);
+});
+
+test('end to end: a checker that cannot read the registry records no divergence against the primary', async () => {
+  const { w, agent, files } = claimedWorld();
+  const { scores } = await epoch(w, files, linkEnv(w));
+  assert.equal(scores?.externalScore, MAX_EXTERNAL_SCORE);
+
+  w.file = null;
+  w.setFor('pending', agent.didHash, { exists: true, proposedAt: w.data.nowSec - 100, data: scores, evidenceRoot: null });
+  w.set('externalReadFails', true);
+  const oracle = await startOracle({
+    world: w, env: { ...linkEnv(w), ORACLE_MODE: 'checker', DIVERGENCE_TOLERANCE: '0' }, files,
+  });
+  try {
+    const text = await untilEpoch(oracle);
+    assert.equal(counter(text, 'sigvara_oracle_checker_comparisons_total{verdict="diverged"}') || 0, 0, oracle.logs());
+  } finally {
+    await oracle.stop();
+  }
+});
+
+test('end to end: /score and /link say the node failed, and do not call the agent unowned', async () => {
+  const { w, agent, files } = claimedWorld();
+  const oracle = await startOracle({ world: w, env: linkEnv(w), files });
+  try {
+    await untilEpoch(oracle);
+    w.set('externalReadFails', true);
+    const score = await oracle.call('GET', `/score/${agent.didHash}`);
+    assert.equal(score.status, 502, score.text);
+    assert.equal(score.body.code, 'rpc_error');
+    const link = await oracle.call('POST', '/link', { didHash: agent.didHash, agentId: 7 }, ADMIN);
+    assert.equal(link.status, 502, link.text);
+    assert.equal(link.body.code, 'rpc_error');
+    assert.equal(link.text.includes('registry'), false, 'and the node\'s trouble stays in the log');
+  } finally {
+    await oracle.stop();
+  }
+});
+
 test('end to end: with the registry on another chain, links made on chain are not read', async () => {
   const { w, files } = claimedWorld();
   w.set('externalChainId', 1);

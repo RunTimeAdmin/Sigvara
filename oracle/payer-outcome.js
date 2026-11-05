@@ -58,6 +58,41 @@ function accountRefused(err) {
 // of a valid one, and this oracle must accept exactly what the contracts would.
 const HALF_ORDER = BigInt('0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0');
 
+/**
+ * Repeated bad signatures, by key. A contract account's code runs for each one, so after a few
+ * failures that key waits. The caller puts the client in the key: everything else about a payment
+ * is public, and keyed on that alone, anyone could post a few junk signatures and lock the payer's
+ * real one out. The client also means someone with many addresses can fill this, so it is bounded.
+ */
+function badSignatureLimiter({ limit = 5, windowMs = 3_600_000, maxKeys = 10_000 } = {}) {
+  const seen = new Map();
+  return {
+    blocked(key, now = Date.now()) {
+      const entry = seen.get(key);
+      if (!entry) return false;
+      if (now - entry.since > windowMs) {
+        seen.delete(key);
+        return false;
+      }
+      return entry.count >= limit;
+    },
+    note(key, now = Date.now()) {
+      if (seen.size >= maxKeys) {
+        for (const [k, v] of seen) if (now - v.since > windowMs) seen.delete(k);
+        // Still full, of fresh ones. A Map keeps its order, so the oldest go first.
+        for (const k of seen.keys()) {
+          if (seen.size < maxKeys) break;
+          seen.delete(k);
+        }
+      }
+      const entry = seen.get(key);
+      if (!entry || now - entry.since > windowMs) seen.set(key, { count: 1, since: now });
+      else entry.count += 1;
+    },
+    get size() { return seen.size; },
+  };
+}
+
 const MODES = ['off', 'positive', 'both'];
 
 /**
@@ -434,6 +469,8 @@ function parseServed(item) {
 }
 
 module.exports = {
+  accountRefused,
+  badSignatureLimiter,
   TYPES,
   DELIVERED,
   NOT_DELIVERED,

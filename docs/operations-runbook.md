@@ -20,6 +20,11 @@ Each runs the commit named by `SIGVARA_COMMIT` in its `.env`, and `/health` repo
 `commit`. The commands below are written for the primary; on the checker use its column. The
 `jq` ones need `command -v jq >/dev/null || apt-get install -y jq` first.
 
+**Gas.** `scripts/check-live.mjs services` fails when a wallet under `wallets` in
+`deployments/5042002.json` falls below its floor. Send it testnet USDC. On 4 November 2026 the primary
+sent about 140 transactions a day, about 0.55 USDC, so its floor of 10 is about 18 days. The checker
+usually sends none, and its floor of 1 covers proposing for every agent several times if it has to.
+
 ## 1. State backup and restore
 
 ### What the state file holds
