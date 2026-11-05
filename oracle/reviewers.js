@@ -77,7 +77,7 @@ function parsePublicFunders(raw) {
 /**
  * Who first funded `address` by block `cap`, as { funder, block }, or null when it was not
  * funded by then. `funder` is lowercased, and null when the block that funded it shows no
- * transfer in, which a gas-sponsored account can do.
+ * transfer in, which a gas-sponsored account can do, or none that reaches the floor by itself.
  *
  * `read` answers two questions: touched(block), whether by the end of that block the address
  * held FUNDING_FLOOR or had sent a transaction, and inbound(block), the native transfers into
@@ -106,7 +106,12 @@ async function findFirstFunder(read, address, cap) {
   for (const t of await read.inbound(lo)) {
     if (!best || BigInt(t.value) > BigInt(best.value)) best = t;
   }
-  return { funder: best ? String(best.from).toLowerCase() : null, block: lo };
+  // Only a transfer that could have crossed the floor by itself names a funder. A smaller one only
+  // topped the address up, and naming its sender would hide whoever sent the rest: 0.99 from a
+  // treasury and 0.02 from a throwaway wallet read as funded by the throwaway. A wallet with no funder
+  // of its own further back is not a sign of this, since Arc's faucets are like that.
+  const named = best && BigInt(best.value) >= FUNDING_FLOOR;
+  return { funder: named ? String(best.from).toLowerCase() : null, block: lo };
 }
 
 /**

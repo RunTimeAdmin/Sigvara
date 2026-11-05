@@ -792,7 +792,7 @@ async function runPaymentScan(agents) {
 
   const { credits, skipped } = paymentScan.planCredits(logs.map((log) => paymentScan.decodeTransfer(log, paymentCfg.asset)), {
     didHashOf: (address) => byAddress.get(address.toLowerCase())?.didHash ?? null,
-    operatorOf: (didHash) => byDid.get(didHash)?.operator ?? null,
+    operatorOf: (didHash, block) => paymentScan.operatorAt(byDid.get(didHash), block),
     // Ask the store, so the scan's pre-check and creditPayment cannot drift apart.
     isUsed: (txHash, didHash, payer) => isCredited(txHash, didHash, payer),
     minAmount: paymentCfg.minAmount,
@@ -1873,8 +1873,12 @@ async function readBadgeState(address) {
  * skips too (planCredits). Asked of the chain at the payment's block, so a report and a scan draw the
  * line in the same place. Throws when the chain cannot be read.
  */
-async function paidBeforeRegistration(didHash, credited) {
-  return Number((await chain.getAgentInfo(didHash, credited.blockNumber)).registeredAt) === 0;
+// The agent as it stood at a payment's block. registeredAt is 0 when the payment came before it
+// registered, and the operator is who could not have been a customer then, as the scan judges it
+// (paymentScan.operatorAt). Against today's operator, a former operator could pay its own agent,
+// hand it on, and attest, and a new operator's payment from before would be refused.
+function agentAtPayment(didHash, credited) {
+  return chain.getAgentInfo(didHash, credited.blockNumber);
 }
 
 // Repeated bad signatures for one payment leg. A leg's payer can run its account's code here as
@@ -2155,13 +2159,15 @@ async function importOne({ didHash, txHash, checkedAtBlock, signed, packetId }, 
     if (['rpc_error', 'unconfirmed', 'not_found'].includes(err.code)) return { kind: 'retry', code: err.code };
     return { kind: 'refused', code: err.code || 'payment_invalid' };
   }
+  let atPayment;
   try {
-    if (await paidBeforeRegistration(didHash, credited)) return { kind: 'refused', code: 'before_registration' };
+    atPayment = await agentAtPayment(didHash, credited);
+    if (Number(atPayment.registeredAt) === 0) return { kind: 'refused', code: 'before_registration' };
   } catch (err) {
     console.warn(`[oracle] payer outcome import: chain read failed for ${didHash}: ${err.message}`);
     return { kind: 'retry', code: 'rpc_error' };
   }
-  const r = await admitPayerOutcome({ didHash, credited, info, signed, packetId }, { peerBlock: checkedAtBlock });
+  const r = await admitPayerOutcome({ didHash, credited, info: atPayment, signed, packetId }, { peerBlock: checkedAtBlock });
   if (r.status === 200) return { kind: 'imported' };
   if (r.status === 502 || r.status === 503) return { kind: 'retry', code: r.body.code };
   return { kind: 'refused', code: r.body.code };
@@ -2619,6 +2625,7 @@ async function handleRequest(req, res) {
       // threw a ReferenceError at that line and was answered 400: nothing was credited, and
       // no test covered the route.
       let info = null;
+      let atPayment = null;
       if (payments.required(paymentCfg)) {
         const txHash = body.payment && body.payment.txHash;
         try {
@@ -2653,21 +2660,20 @@ async function handleRequest(req, res) {
           }
           return json(res, 402, { error: err.message, code: err.code || 'payment_invalid' });
         }
-        let beforeRegistration;
         try {
-          beforeRegistration = await paidBeforeRegistration(didHash, credited);
+          atPayment = await agentAtPayment(didHash, credited);
         } catch (err) {
           metrics.inc('paymentRpcErrors');
           console.warn(`[oracle] /attest chain read failed for ${didHash}: ${err.message}`);
           return json(res, 502, { error: 'could not read the chain', code: 'rpc_error' });
         }
-        if (beforeRegistration) {
+        if (Number(atPayment.registeredAt) === 0) {
           metrics.inc('attestRejectedPayment');
           return json(res, 402, { error: 'this payment was made before the agent registered', code: 'before_registration' });
         }
         // A payer-signed outcome is checked on the signer's own leg (admitPayerOutcome), so an
         // operator's larger leg in the same transaction cannot block its customer's outcome.
-        if (!signedOutcome && payments.isSelfPayment(credited.payer, info)) {
+        if (!signedOutcome && payments.isSelfPayment(credited.payer, atPayment)) {
           metrics.inc('attestRejectedPayment');
           return json(res, 402, {
             error: 'an agent cannot attest itself: the payer is its own operator or agent address',
@@ -2684,7 +2690,7 @@ async function handleRequest(req, res) {
         // outcome first fixes it, as they fix the outcome, and only the payer and those it gave the
         // signature to can do that.
         const r = await admitPayerOutcome({
-          didHash, credited, info, signed: signedOutcome, packetId: payerOutcome.packetIdOf(packetId),
+          didHash, credited, info: atPayment, signed: signedOutcome, packetId: payerOutcome.packetIdOf(packetId),
         });
         metrics.inc(r.metric);
         return json(res, r.status, r.body);
@@ -2754,7 +2760,7 @@ async function handleRequest(req, res) {
           // would let an operator's own leg ride along inside a transaction a real
           // customer also paid into, and would put the two intake paths back into
           // disagreement about the same transaction.
-          if (payments.isSelfPayment(leg.payer, info)) continue;
+          if (payments.isSelfPayment(leg.payer, atPayment)) continue;
           const legOutcome = i === 0 ? outcome : null;
           if (creditPayment(
             didHash, credited.txHash, leg.amount, leg.payer, legOutcome, credited.settledAt, packet,

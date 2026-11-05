@@ -156,6 +156,14 @@ function createPublisher({ cfg, chain, scanner, reads, signer, state, log = cons
       return out;
     }
 
+    // Records that what is live on an 8004 agent, or may be by now, is this agent's score, so a later
+    // unlink or slash knows where to clean up. The day stays as it was: only a post this run saw
+    // confirmed starts a new day's limit.
+    const claim = (agentId, didHash, value) => {
+      postedBy[didHash] = agentId;
+      if (posted[agentId]?.didHash !== didHash) posted[agentId] = { didHash, day: posted[agentId]?.day, value, block: head };
+    };
+
     let txs = 0;
     const sendFailed = (err) => Object.assign(err, { sendFailed: true });
     // Sends one agent's revokes and post, or, when not sending, records them. Every transaction
@@ -182,6 +190,8 @@ function createPublisher({ cfg, chain, scanner, reads, signer, state, log = cons
         log(`[publisher] revoked #${index} on agent ${agentId} tx=${tx}`);
       }
       if (plan.post) {
+        // Before the send: one that times out can still land, and the agent may unlink before the next run.
+        claim(agentId, entry.didHash, entry.value);
         const tx = await send('post', postArgs);
         log(`[publisher] posted ${entry.value} to agent ${agentId} tx=${tx}`);
         out.sent.push({ ...entry, tx });
@@ -238,7 +248,13 @@ function createPublisher({ cfg, chain, scanner, reads, signer, state, log = cons
           live = [{ index: null, value: posted[agentId].value, valueDecimals: 0 }];
         }
         const plan = policy.planUpdate(spendable, live);
-        if (!plan.post && !plan.revoke.length) { skip(`unchanged at ${spendable}`); continue; }
+        if (!plan.post && !plan.revoke.length) {
+          // It is there, though this state does not say so: a post that timed out and landed later, or a
+          // state file that was lost. A simulated run has claimed it already, or has nothing to claim.
+          if (sending) claim(agentId, didHash, spendable);
+          skip(`unchanged at ${spendable}`);
+          continue;
+        }
 
         const entry = { didHash, agentId, value: spendable, earned, block: head, reason: why.kind };
         if (!(await apply(agentId, plan, entry, postArgsFor(agentId, spendable, fileFor(agentId, didHash, spendable, earned, why))))) break;

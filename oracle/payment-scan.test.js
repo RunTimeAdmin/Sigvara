@@ -826,3 +826,43 @@ test('scanRange: takes more logs from one span than a call can take as arguments
   const out = await scan.scanRange({ readLogs: async () => flood, asset: ASSET }, [addr('a')], 0, 9, 10);
   assert.equal(out.length, 200_000);
 });
+
+test('operatorAt: the operator as of a block, from the first change on', () => {
+  const agent = {
+    operator: addr('c'),
+    operators: [
+      { fromBlock: 10, operator: addr('a') },
+      { fromBlock: 50, operator: addr('b') },
+      { fromBlock: 90, operator: addr('c') },
+    ],
+  };
+  const at = (block) => scan.operatorAt(agent, block);
+  assert.equal(at(10), addr('a'));
+  assert.equal(at(49), addr('a'));
+  assert.equal(at(50), addr('b'), 'from the block it changed in, as a read of that block answers');
+  assert.equal(at(89), addr('b'));
+  assert.equal(at(1000), addr('c'));
+  assert.equal(at(5), addr('a'), 'before its registration, the first it had');
+});
+
+test('operatorAt: an agent that never changed operator has the one it registered with', () => {
+  assert.equal(scan.operatorAt({ operator: addr('a') }, 5), addr('a'));
+  assert.equal(scan.operatorAt(undefined, 5), null);
+});
+
+test('planCredits: judges each payment against the operator at its own block', () => {
+  const asked = [];
+  const { credits, skipped } = scan.planCredits([
+    { txHash: `0x${'1'.repeat(64)}`, from: addr('a'), to: addr('d'), amount: 5n, blockNumber: 40 },
+    { txHash: `0x${'2'.repeat(64)}`, from: addr('a'), to: addr('d'), amount: 5n, blockNumber: 60 },
+  ], {
+    didHashOf: () => 'did',
+    operatorOf: (didHash, block) => { asked.push([didHash, block]); return block < 50 ? addr('a') : addr('b'); },
+    isUsed: () => false,
+    minAmount: 1n,
+    registeredBlockOf: () => 1,
+  });
+  assert.deepEqual(asked, [['did', 40], ['did', 60]]);
+  assert.deepEqual(skipped.map((s) => s.reason), ['self_payment']);
+  assert.deepEqual(credits.map((c) => c.blockNumber), [60]);
+});

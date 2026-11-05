@@ -4,6 +4,7 @@ const { ethers } = require('ethers');
 
 const IDENTITY_ABI = [
   'event AgentRegistered(bytes32 indexed didHash, address indexed operator, address indexed agentAddress, bytes32 ed25519PubKey)',
+  'event OperatorTransferred(bytes32 indexed didHash, address indexed from, address indexed to)',
   'function getIdentity(bytes32 didHash) view returns (tuple(address operator, address agentAddress, bytes32 ed25519PubKey, uint8 status, uint256 registeredAt))',
   'function stakeView() view returns (address)',
   'function computeDidHash(address agentAddress) view returns (bytes32)',
@@ -16,6 +17,9 @@ const { readSplitting } = require('./log-spans');
 const reviewers = require('./reviewers');
 
 const OPERATOR_SET_ABI = ['function isActiveOperator(address) view returns (bool)'];
+
+const AGENT_REGISTERED_TOPIC = ethers.id('AgentRegistered(bytes32,address,address,bytes32)');
+const OPERATOR_TRANSFERRED_TOPIC = ethers.id('OperatorTransferred(bytes32,address,address)');
 
 const REPUTATION_ABI = [
   'function operatorBond() view returns (address)',
@@ -290,9 +294,21 @@ function restoreScanState(state) {
   return true;
 }
 
+// An agent that has changed operator, as the payment scan needs it: who the operator was from which
+// block (paymentScan.operatorAt). The list starts here, so an agent that never changed has none. A
+// scan run again over the same blocks reads the registration first, which starts the list over.
+function noteOperatorChange(e) {
+  const agent = knownAgents.get(e.args.didHash);
+  if (!agent) return; // slashed and forgotten
+  const operators = agent.operators ?? [{ fromBlock: agent.blockNumber, operator: agent.operator }];
+  agent.operators = [...operators, { fromBlock: e.blockNumber, operator: e.args.to }];
+  agent.operator = e.args.to;
+}
+
 async function getRegisteredAgents() {
   const chunkSize = cfg_.logChunkSize;
-  const filter = identityContract.filters.AgentRegistered();
+  // Both in one read, in chain order, so a change is applied after the registration it follows.
+  const filter = [[AGENT_REGISTERED_TOPIC, OPERATOR_TRANSFERRED_TOPIC]];
   const latest = await provider.getBlockNumber();
   const fromBlock = lastScannedBlock !== null ? lastScannedBlock + 1 : cfg_.fromBlock;
 
@@ -301,13 +317,15 @@ async function getRegisteredAgents() {
       const end = Math.min(start + chunkSize - 1, latest);
       const chunk = await readSplitting((a, b) => queryWithBackoff(filter, a, b), start, end, { pause: () => sleep(400) });
       for (const e of chunk) {
+        if (e.eventName === 'OperatorTransferred') { noteOperatorChange(e); continue; }
         knownAgents.set(e.args.didHash, {
           didHash: e.args.didHash,
           agentAddress: e.args.agentAddress,
           // Already in the event, so keeping it costs nothing and saves a read per
-          // agent. The payment scanner needs it to refuse an operator paying its own
-          // agent, which is the attested path's rule and must not become cheaper to
-          // dodge just because the evidence now arrives by a different door.
+          // agent, and noteOperatorChange keeps it current. The payment scanner needs it
+          // to refuse an operator paying its own agent, which is the attested path's rule
+          // and must not become cheaper to dodge just because the evidence now arrives by
+          // a different door.
           operator: e.args.operator,
           blockNumber: e.blockNumber,
         });

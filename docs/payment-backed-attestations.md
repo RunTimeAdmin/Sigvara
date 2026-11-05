@@ -189,7 +189,9 @@ would otherwise grow the state file without bound.
 Three rules apply once a payment verifies.
 
 **Self-payments are refused.** If the payer is the agent's own operator or its
-agent address, the attestation is rejected with `self_payment`. Paying yourself
+agent address, the attestation is rejected with `self_payment`. The operator is the one at the
+payment's own block, on the scan and on `/attest` alike: a former operator's earlier payment was its
+own, and a new operator's earlier payment was a customer's. Paying yourself
 costs only gas, because the money comes back, and the resulting attestation is
 otherwise indistinguishable from a customer's. This does not stop someone funding
 a second wallet, but it raises the floor from free to deliberate.
