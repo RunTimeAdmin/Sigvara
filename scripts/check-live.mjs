@@ -181,6 +181,8 @@ async function checkServices() {
     if (res.status !== 200 || j.ok !== true) {
       fail(`index: /health status ${res.status}, ok=${j.ok}, ${j.behind ?? '?'} blocks behind${j.lastError ? `, last error: ${j.lastError}` : ''}`);
     }
+    // Said before it fills: a full index stops reading on, and nothing else watches its size.
+    if (j.maxLogs && j.logs > j.maxLogs * 0.8) fail(`index: holds ${j.logs} of at most ${j.maxLogs} logs; raise INDEX_MAX_LOGS and its mem_limit together`);
   } catch (e) {
     fail(`index: /health unreachable or unreadable (${e.message})`);
   }

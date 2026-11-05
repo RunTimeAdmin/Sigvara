@@ -41,6 +41,9 @@ services:
       # Alchemy takes ten log reads in one batch. Arc's public RPC refuses four: set 1 for it.
       INDEX_BATCH: "10"
       STATE_FILE: /data/event-index.json
+      # The subnet of the network the TLS proxy reaches this on, so a client's limit on new /events
+      # answers applies to that client (docs/event-index.md). Unset, everyone shares one limit.
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
     secrets:
       - rpc_url
     ports:
