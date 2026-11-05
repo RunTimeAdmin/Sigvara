@@ -620,12 +620,12 @@ charged. The app disables every fee control rather than pointing at an address w
 code.
 
 **Deployed contracts versus `main`.** The Arc testnet proxies run the implementations recorded in
-`deployments/5042002.json`, which are the contracts at commit `f35cbc6`, the head of `main` on
-4 November 2026. The four proxies were upgraded in place with `script/Upgrade.s.sol` to `fdce1a7` on
-26 October, the staking proxy again to `f89b3b9` on 28 October and to `25c2d59` on 2 November, the oracle bond proxy to `76bbc97` the same day, and the reputation proxy to `f35cbc6` on 4 November. A contract
+`deployments/5042002.json`, which are the contracts at commit `dcad617` of 5 November 2026, except
+staking, whose changes in that commit wait for the slash drill to end. The four proxies were upgraded in place with `script/Upgrade.s.sol` to `fdce1a7` on
+26 October, the staking proxy again to `f89b3b9` on 28 October and to `25c2d59` on 2 November, the oracle bond proxy to `76bbc97` the same day, the reputation proxy to `f35cbc6` on 4 November, and the reputation and oracle bond proxies to `dcad617` on 5 November. A contract
 change merged after that commit is not on the testnet until the next upgrade. The guardian pause, admin-ruled disputes with a veto, a lapse and a bound on late upholds, launch
 floors and ceilings, operator signers, the reporter check at slash execution, a withdrawal's claim time
-fixed when it is queued, an oracle operator's exit time fixed when it starts to leave, the refusal of evidence the admin rejected and a slash that pays the
+fixed when it is queued, an oracle operator's exit time fixed when it starts to leave, the refusal of evidence the admin rejected, a score's age counted from its proposal and a slash that pays the
 committee nothing are live on the testnet. One
 thing the upgrade could not change: role administrators are written when a proxy is initialised, so
 the testnet keeps the older arrangement (the admin grants the slasher, committee and staking-core

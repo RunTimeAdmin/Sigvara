@@ -39,7 +39,7 @@ fails at the fee-estimation step, retry with `--legacy`.
 **Explorer verification.** Every Arc testnet contract, each proxy and the implementation
 behind it, is source-verified on [explorer.testnet.arc.io](https://explorer.testnet.arc.io), and
 each is reproduced byte for byte by a build of the commit `deployments/5042002.json` names
-(`bytecode.reproducedAt`, tagged `arc-testnet-2026-11-04b`). See [Verifying the deployed code](#verifying-the-deployed-code)
+(`bytecode.reproducedAt`, tagged `arc-testnet-2026-11-05`). See [Verifying the deployed code](#verifying-the-deployed-code)
 below. Do not add `[etherscan]` entries for `5042` / `5042002` to `foundry.toml` until Foundry
 ships chain metadata for Arc; unknown chain IDs break `forge script`.
 
@@ -384,7 +384,7 @@ contracts. Only an Active operator can name a signer, one address cannot sign fo
 operators, and a signer cannot post a bond of its own.
 
 `setSigner` with a new address replaces the old one (the operator has to be Active), and
-`clearSigner()` removes it in any status. Either takes effect in the same block: the old key's next propose, finalize or
+`clearSigner()` removes it in any status, as the named address can itself with `releaseSigner()`. Each takes effect in the same block: the old key's next propose, finalize or
 charge is refused, and so are its proposals still waiting out their challenge window. The
 signer is released when the operator withdraws its bond or is slashed to nothing.
 `removeOperator` does not release it.
@@ -661,7 +661,7 @@ when you ask for more than you hold.
 
 ### Implementation history
 
-Proxy addresses never change; these are the implementations behind them, newest first. On 26 October 2026 (Central time; 27 October 01:19 UTC) all four moved in place to the code on `main` (commit `fdce1a7`) with `script/Upgrade.s.sol`. On 28 October 2026 (Central time; 14:47 UTC) the staking proxy moved again, to the code on `main` at commit `f89b3b9`, which adds the dispute bound of pull request 94; the other three already matched that commit. On 2 November 2026 (16:28 UTC, block 70377384) the staking proxy moved to `25c2d59`, where a slash pays the committee nothing (pull request 144, [ADR 0007](adr/0007-no-slash-share-for-the-committee.md)); its deployed code matches that commit's build apart from the implementation's own address. Later that day (21:36 UTC, block 70413542) the oracle bond proxy moved to `76bbc97`, where an operator's exit time is fixed when it starts to leave (pull request 151). [`deployments/5042002.json`](../deployments/5042002.json) holds the upgrade transaction and block of each replaced implementation, and it is the record to trust over this table.
+Proxy addresses never change; these are the implementations behind them, newest first. On 26 October 2026 (Central time; 27 October 01:19 UTC) all four moved in place to the code on `main` (commit `fdce1a7`) with `script/Upgrade.s.sol`. On 28 October 2026 (Central time; 14:47 UTC) the staking proxy moved again, to the code on `main` at commit `f89b3b9`, which adds the dispute bound of pull request 94; the other three already matched that commit. On 2 November 2026 (16:28 UTC, block 70377384) the staking proxy moved to `25c2d59`, where a slash pays the committee nothing (pull request 144, [ADR 0007](adr/0007-no-slash-share-for-the-committee.md)); its deployed code matches that commit's build apart from the implementation's own address. Later that day (21:36 UTC, block 70413542) the oracle bond proxy moved to `76bbc97`, where an operator's exit time is fixed when it starts to leave (pull request 151). On 5 November 2026 (20:39 UTC, blocks 70916733 and 70916843) the reputation and oracle bond proxies moved to `dcad617` (pull request 218); the staking changes in that commit wait for the slash drill to end. [`deployments/5042002.json`](../deployments/5042002.json) holds the upgrade transaction and block of each replaced implementation, and it is the record to trust over this table.
 
 | Proxy | Implementation | Released |
 |---|---|---|
@@ -675,14 +675,14 @@ Proxy addresses never change; these are the implementations behind them, newest 
 | | `0x169f1ada8a3568e229d24e74515b4ef889b8a6bd` | 21 Sep |
 | | `0x3501f936f629dbc2e97ae0717c501456ca8215e0` | 19 Sep, narrowed coupling |
 | | `0x28c23b766c2dabb5f2930905a5eeb660919b71ef` | 19 Sep, PendingBond activation |
-| `reputation` | `0x26cf380314962f0c912b51b40a5c123c0683ac8a` | 4 Nov, `f35cbc6`, a finalize keeps the time built up toward the next point (current) |
+| `reputation` | `0x4bbcb51fa8edac8ab3d3dc9757614b55cffba837` | 5 Nov, `dcad617`, a score's age runs from its proposal (current) |
+| | `0x26cf380314962f0c912b51b40a5c123c0683ac8a` | 4 Nov, `f35cbc6`, a finalize keeps the time built up toward the next point |
 | | `0xd23fffa937cfe37bbc6ee1e14c3c844c78bfe3ca` | 26 Oct, `fdce1a7` |
-| | `0x87492399e34e5247740d0280c329e7553403404c` | recorded 21 Sep |
-| | `0x0dc80134817e6fea978c06497f48391371a8413d`, `0xea5940bc23d7bf82113316dd03a3b1bb1bc2f084` | 19 Sep, evidence roots; 18 Sep, maturity |
-| `oracleBond` | `0x722abaa614edd77cb5b31655eb1bfdb18e823a51` | 3 Nov, `0483a3c`, a signer key stays bound to the operator that named it (current) |
+| | `0x87492399e34e5247740d0280c329e7553403404c`, `0x0dc80134817e6fea978c06497f48391371a8413d`, `0xea5940bc23d7bf82113316dd03a3b1bb1bc2f084` | recorded 21 Sep; 19 Sep, evidence roots; 18 Sep, maturity |
+| `oracleBond` | `0x875e285ab8c75be29739a25d25d8eabfda41f335` | 5 Nov, `dcad617`, a named signer can step down (current) |
+| | `0x722abaa614edd77cb5b31655eb1bfdb18e823a51` | 3 Nov, `0483a3c`, a signer key stays bound to the operator that named it |
 | | `0x3c06a98ba5137e967af182e91f88729ca1880e83` | 2 Nov, `76bbc97`, exit time fixed at unbonding |
-| | `0xa33fc1b6ee82309bbf77fde4113a223742c53931` | 26 Oct, `fdce1a7` |
-| | `0x9ed31f024e0c3e7df853c411744babb53f5aaffa` | 21 Sep |
+| | `0xa33fc1b6ee82309bbf77fde4113a223742c53931`, `0x9ed31f024e0c3e7df853c411744babb53f5aaffa` | 26 Oct, `fdce1a7`; 21 Sep |
 | | `0xf8464144726850d222a06b85a230c8030673b933`, `0x826fc09041a8a678b06336a253c55bd84f1fdc50` | 19 Sep, bond binds on read; 18 Sep, initial |
 
 Read the current one straight from the proxy rather than trusting this table:
@@ -696,16 +696,16 @@ cast storage <proxy> 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505
 Anyone can check that the code on chain is this repository's, without trusting the explorer:
 
 ```bash
-git checkout arc-testnet-2026-11-04b
+git checkout arc-testnet-2026-11-05
 sh scripts/fetch-deps.sh && forge build
 node scripts/check-bytecode.mjs
 ```
 
 `check-bytecode.mjs` reads each proxy, the implementation it runs, the SVR token and the reader (`0x2921b4eE879CdF5793FA273BbDc4E7dF01ABcef8`) from the
 chain, blanks the immutables (a UUPS implementation stores its own address in one), and compares
-the rest with the build, byte for byte, source metadata included. On 4 November 2026, after the
-reader was deployed, all ten matched the build of `7e461f4`; the tag sits on the commit that
-records that deployment, whose contract sources are the same. Build in an ordinary checkout: a `lib/` that is a symlink or
+the rest with the build, byte for byte, source metadata included. On 5 November 2026, after the
+reputation and bond upgrades, all matched the build of `dcad617` except staking, whose new source
+waits for the slash drill to end: it is reported as expected, and `arc-testnet-2026-11-04b` builds it. Build in an ordinary checkout: a `lib/` that is a symlink or
 junction changes the source paths solc records, and with them the metadata hash. CI runs the
 same check after every build; when main's sources have moved on since the recorded commit, a
 mismatch is expected and reported as such.
