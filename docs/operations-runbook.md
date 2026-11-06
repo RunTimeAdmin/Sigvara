@@ -16,15 +16,15 @@ key is [incident-operator-key.md](incident-operator-key.md); bringing up an oper
 | State volume | `sigvara-oracle_oracle_state` | `sigvara-checker_checker_state` |
 | Local port, for `/metrics` | `127.0.0.1:3030` | `127.0.0.1:3031` |
 
-**What runs what, as of 5 November 2026.** Each public `/health` names its own commit, and that is the
+**What runs what, as of 6 November 2026.** Each public `/health` names its own commit, and that is the
 one to trust when this table has gone stale.
 
 | Service | Host | Commit | Since (UTC) |
 |---|---|---|---|
-| Primary oracle | `archipelago-standby` | `6b52053` | 5 November, 21:41 |
-| Checker | `packrai-vps` | `6b52053` | 5 November, 21:40 |
+| Primary oracle | `archipelago-standby` | `61dfe13` | 6 November, 00:18 |
+| Checker | `packrai-vps` | `61dfe13` | 6 November, 00:17 |
 | Event index | `archipelago-standby` | `b95f0aa` | 5 November, 13:31 |
-| Watcher | a third host | `b95f0aa` | 5 November, 13:31 |
+| Watcher | a third host | `aa34cee` | 6 November, 08:37 |
 | Policy signer | `packrai-vps` | `b95f0aa` | 5 November, 13:33 |
 | ERC-8004 publisher | `archipelago-standby` | `e39ff5b` | 5 November, 11:08 |
 | Slash keepers | `archipelago-standby`, `packrai-vps` | `d26ebc1` | 5 November, 15:25 and 15:26 |

@@ -13,7 +13,7 @@ with SVR as the bond asset ([token.md](token.md)).
 Official docs: [Connect to Arc](https://docs.arc.io/arc/references/connect-to-arc).
 Other providers serve Arc too, but they are not interchangeable for oracle indexing. Of the
 alternatives to the public endpoint only QuickNode worked when measured: dRPC accepts
-`eth_getLogs` ranges of only about 100 blocks and Blockdaemon returns nothing for older
+`eth_getLogs` ranges of only about 100 blocks and no JSON-RPC batch over 10 calls, and Blockdaemon returns nothing for older
 transactions. The measurements are in the
 [second-operator runbook](../oracle/RUNBOOK-second-operator.md).
 

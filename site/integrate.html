@@ -59,7 +59,7 @@
 
 <span class="cm">// Active, a score of at least 40, and a bond of at least 1,000 test SVR.</span>
 <span class="kw">if</span> (!(<span class="kw">await</span> reader.<span class="fn">isTrusted</span>(agent, <span class="num">40</span>, <span class="num">1000n</span> * <span class="num">10n</span> ** <span class="num">18n</span>))) <span class="kw">throw new</span> <span class="fn">Error</span>(<span class="str">"not in good standing"</span>);</code></pre>
-    <p><code>isTrusted</code> is true when the agent is Active, its bond meets both the protocol's current minimum and yours, and its score is at least yours. An address that never registered is false, whatever you ask for.</p>
+    <p><code>isTrusted</code> is true when the agent is Active, its bond meets both the protocol's current minimum and yours, and its score is at least yours. An address that never registered is false, whatever you ask for. A score below roughly 60 says little on its own, so read <a href="https://github.com/RunTimeAdmin/Sigvara/blob/main/docs/whitepaper.md#53-what-a-fake-score-costs">what a fake score costs</a> before you pick a number.</p>
     <p class="netnote">It tells you about an address. It does not tell you that your caller controls that address, so use it where you already know the address. If a caller only claims to be the agent, use the gate below.</p>
   </div>
 

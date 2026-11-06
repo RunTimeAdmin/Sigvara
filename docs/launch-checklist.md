@@ -4,7 +4,7 @@ Sequenced against the Q4 2026 SVR mainnet milestone. Dates are targets, not comm
 
 ## Where this stands
 
-As of 5 November 2026. Everything runs on Arc testnet, and nothing is on mainnet. What runs where is in the
+As of 6 November 2026. Everything runs on Arc testnet, and nothing is on mainnet. What runs where is in the
 [runbook](operations-runbook.md). There has been no external audit, and nobody outside the team gates on a score yet.
 
 **In progress, with dates.**
@@ -24,8 +24,12 @@ As of 5 November 2026. Everything runs on Arc testnet, and nothing is on mainnet
   the reporter still on the committee. Before it, more checks in the renounce gate (the Safe's history, the
   initializers consumed, every proxy the deployer created) and passing the role replay only the settings it needs.
 - A challenge process for negative outcomes. Until then payer outcomes stay positive only
-  ([ADR 0006](adr/0006-payer-signed-outcomes.md)).
+  ([ADR 0006](adr/0006-payer-signed-outcomes.md)), and non-delivery cannot be used as a ground for a slash
+  ([ADR 0010](adr/0010-what-can-be-slashed.md)).
 - A review of retention by counsel, before public outcome retrieval and peer import on mainnet.
+- A legal review of the token launch.
+- A way to notice a dead watcher. It alerts on changes only, so a watcher that has stopped looks like one with
+  nothing to report.
 - The operators' spending as agents grow: a limit on total epoch spend, and the reads an unstaked registration adds.
 
 **Open, and not blocking mainnet.**
@@ -48,6 +52,7 @@ As of 5 November 2026. Everything runs on Arc testnet, and nothing is on mainnet
 
 ## Phase 3 — SVR token launch on Tolly (Arc)
 
+- [ ] **Legal review of the token launch**, finished before any launch transaction is signed.
 - [ ] **Confirm deployer address** `0x8857A7C392d1Bb1A68647c64Ce18D9AA1Fd023b0` is the sole creator; anything attributed to Sigvara not created by it is not ours.
 - [ ] **Seed the Uniswap V3 pool** (1% tier, USDC quote) with the whole 1B supply single-sided. LP NFT goes to Tolly's ownerless collect-only fee locker — no withdraw path in code.
 - [ ] **Publish the token address** on `docs/token.md` and sigvara.xyz *before* any social announcement. Never announce on social first.

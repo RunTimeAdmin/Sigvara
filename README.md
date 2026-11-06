@@ -17,7 +17,7 @@ const reader = new Contract("0x2921b4eE879CdF5793FA273BbDc4E7dF01ABcef8", abi, p
 if (!(await reader.isTrusted(agent, 40, 1000n * 10n ** 18n))) throw new Error("not in good standing");
 ```
 
-See the answer for [a live agent](https://sigvara.xyz/check?a=0xCc52Cd92963f8A86d04dB29a4810d1e01D193910). [sigvara.xyz/integrate](https://sigvara.xyz/integrate) has the same call from a contract, and a gate for a caller that has to prove it is the agent.
+See the answer for [a live agent](https://sigvara.xyz/check?a=0xCc52Cd92963f8A86d04dB29a4810d1e01D193910). [sigvara.xyz/integrate](https://sigvara.xyz/integrate) has the same call from a contract, and a gate for a caller that has to prove it is the agent. A score below roughly 60 says little on its own, so read [what a fake score costs](docs/whitepaper.md#53-what-a-fake-score-costs) before you pick a number.
 
 As AI agents become independent economic actors, they need a trust score that means something and accountability that costs something. [ERC-8004](https://eips.ethereum.org/EIPS/eip-8004) gives agents a standard on-chain identity and a raw feedback ledger, but deliberately leaves out the hard parts: computing a trustworthy score from that feedback, and putting slashable stake behind it. Sigvara is that layer. It takes ERC-8004 as the identity and feedback substrate, computes a normalized reputation score with an oracle, and enforces bonds and slashing — the accountability the standard omits. (Ed25519 PKI challenge-response for agent-to-agent auth rides alongside.)
 
