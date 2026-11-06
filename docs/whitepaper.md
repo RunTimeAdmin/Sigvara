@@ -644,7 +644,7 @@ fails when the site states something the contracts do not.
 
 ## 8. Roadmap
 
-Ordered by what unblocks what, not by difficulty.
+Ordered by what unblocks what, not by difficulty. The goal is an outside team gating on a score. [roadmap.md](roadmap.md) lists what is open and what starts each step, and this section keeps the reasoning behind the main ones.
 
 1. ~~**A second bonded operator in checker mode.**~~ Running since 20 September 2026.
    VPS separate from the primary, separate RPC provider, its own bond of 25,000 SVR, its
@@ -695,15 +695,15 @@ Ordered by what unblocks what, not by difficulty.
    after it. Six contract tests, including that a losing writer does not restart a live
    proposal's challenge window. Verified against the live chain by simulating the call
    from the checker's address onto an occupied slot and decoding the revert.
-5. **A reward distributor.** Replaces `rewardPool` as a plain address with a contract
-   paying operators for epochs served.
-6. **External audit**, then Arc mainnet with a committee multisig.
+5. **External audit**, then Arc mainnet with a committee multisig.
+6. **A reward distributor.** Replaces `rewardPool` as a plain address with a contract
+   paying operators for epochs served. It stays a draft until mainnet.
 7. **Delivery and disputes for x402 payments.** Partly built. Outcomes bound to the settled
    payment by a payer signature are built ([ADR 0006](adr/0006-payer-signed-outcomes.md))
    and live on Arc testnet since 31 October 2026, for "delivered" only. A payer that was not
    delivered what it paid for still has no recourse of its own: the payer-initiated
    challenge against the agent's bond and an arbiter path beyond the committee are not
-   started, and are outside the first audit. x402 now has an authorize, capture and refund scheme and open
+   started, and are outside the first audit, so mainnet launches with positive outcomes only. Who rules is decided first, in its own ADR. x402 now has an authorize, capture and refund scheme and open
    escrow and delivery-receipt proposals, so the aim is to supply the bonded verifier and
    the seller's standing to those, not to add a competing payment scheme. Order and scope
    follow what the x402 Foundation takes into the standard.
