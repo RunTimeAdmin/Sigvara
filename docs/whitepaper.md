@@ -135,7 +135,7 @@ filed it is still on the committee. On execution the stake is distributed:
 The committee member who files a slash is paid nothing for it, and no committee member can be
 named as the victim. An enforcer paid from what it enforces has a reason to enforce more, so
 the committee's reward for finding misbehaviour is not a share of the stake. An outside
-victim named in bad faith is what the operator's dispute and the admin's ruling are for.
+victim named in bad faith is what the operator's dispute and the admin's ruling are for. [ADR 0010](adr/0010-what-can-be-slashed.md) lists what can be slashed.
 
 Proceeds are credited and claimed, never pushed, so a recipient that cannot accept a
 transfer cannot brick the settlement.
@@ -633,7 +633,7 @@ roles, and administers `UPGRADER_ROLE`), and the timelocked role grants describe
 apply to a fresh deployment, not to the testnet.
 `node scripts/record-implementations.mjs --check` shows what is live.
 
-**Test coverage**, as of 5 November 2026: 768 contract tests across 34 Foundry test files
+**Test coverage**, as of 6 November 2026: 768 contract tests across 34 Foundry test files
 including fuzz and invariant tests (three fork suites need an RPC, and the twelve in
 `SplitAuthorityFork` skip without `--fork-url`), 1298 oracle tests and 361 in the SDK (9 skip
 outside CI and without a live deployment; every test that runs passes). CI runs Foundry, the oracle and

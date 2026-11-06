@@ -57,7 +57,7 @@ const gate = new SigvaraGate({
   audience: process.env.SIGVARA_AUDIENCE || 'mcp://gated-tool.example',
 });
 
-/** Challenges we issued, by did. A real host would key these to a session. */
+/** Challenges we issued, by payload. A real host would key these to a session. */
 const outstanding = new Map();
 
 const TOOLS = [
