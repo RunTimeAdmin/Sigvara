@@ -332,6 +332,34 @@ test('finalizing uses the same bounded wait', async () => {
   assert.equal(rpc.sent.length, 2);
 });
 
+// A node past its rate limit refuses for a moment, and whichever agent came first after a batch of reads
+// lost its finalize for the epoch, an hour. Proposals did not, because canPropose asks first with retries.
+test('finalizing: a node refusing for its rate limit is asked again, and one transaction is sent', async () => {
+  await startChain({ throttleCalls: 2 });
+  const hash = await chain.finalizeScore(DID);
+  assert.equal(rpc.sent.length, 1);
+  assert.equal(hash, rpc.sent[0].hash);
+  assert.ok(
+    rpc.calls.lastIndexOf('eth_call') < rpc.calls.indexOf('eth_sendRawTransaction'),
+    'asked before sending',
+  );
+});
+
+test('finalizing: a node that keeps refusing sends nothing, and reads as being throttled', async () => {
+  await startChain({ throttleCalls: 99 });
+  await assert.rejects(() => chain.finalizeScore(DID), (err) => chain.isRateLimited(err));
+  assert.equal(rpc.sent.length, 0);
+});
+
+test('finalizing: the contract refusing is not asked again, and keeps its name for the epoch to read', async () => {
+  const data = new ethers.Interface(['error ProposerNotAuthorized(bytes32 didHash, address proposer)'])
+    .encodeErrorResult('ProposerNotAuthorized', [DID, ethers.ZeroAddress]);
+  await startChain({ revertCall: data });
+  await assert.rejects(() => chain.finalizeScore(DID), (err) => chain.isProposerNotAuthorized(err));
+  assert.equal(rpc.calls.filter((m) => m === 'eth_call').length, 1);
+  assert.equal(rpc.sent.length, 0);
+});
+
 test('a transaction the endpoint never mines shows as a pending nonce until it lands', async () => {
   await startChain({ autoMine: () => false });
   assert.equal(await chain.getNonceGap(), 0);

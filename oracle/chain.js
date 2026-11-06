@@ -920,6 +920,11 @@ function isRateLimited(err) {
 }
 
 async function finalizeScore(didHash) {
+  // Asked first, with retries, as canPropose asks before a proposal. Sending estimates gas and is not
+  // retried, because a write must not be repeated, so a node refusing that estimate for its rate limit
+  // cost the agent its finalize until the next epoch. That was whichever agent came first after a batch
+  // of reads. This is a read and sends nothing, and a refusal from the contract still throws at once.
+  await readWithBackoff('simulate finalize', () => reputationContract.finalizeReputation.staticCall(didHash));
   const tx = await reputationContract.finalizeReputation(didHash);
   return (await settle(tx)).hash;
 }

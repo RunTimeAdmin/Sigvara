@@ -47,10 +47,10 @@ function makeFakeReputationContract({ pending = {}, challengeWindow = 3600 } = {
       calls.proposeReputation.push({ didHash, data });
       return fakeTx('0xproposeTxHash');
     },
-    finalizeReputation: async didHash => {
+    finalizeReputation: Object.assign(async didHash => {
       calls.finalizeReputation.push({ didHash });
       return fakeTx('0xfinalizeTxHash');
-    },
+    }, { staticCall: async () => {} }),
     getPendingScore: async didHash =>
       pending[didHash] ?? { exists: false, proposedAt: 0n, data: {} },
     challengeWindow: async () => BigInt(challengeWindow),

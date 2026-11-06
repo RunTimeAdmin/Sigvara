@@ -7,7 +7,7 @@
 //
 //   const rpc = await startFakeRpc({ priorityFee: 5_000_000n * 10n ** 9n });
 //   ... chain.init({ rpcUrl: rpc.url, ... }) ...
-//   options: priorityFee, gas, autoMine, throttleReceipts, revertCall (eth_call reverts with this
+//   options: priorityFee, gas, autoMine, throttleReceipts, throttleCalls, revertCall (eth_call reverts with this
 //            data), revertEstimate (eth_estimateGas reverts with this data)
 //   rpc.sent        every raw transaction received, decoded
 //   rpc.calls       every method called, in order
@@ -34,6 +34,8 @@ async function startFakeRpc(options = {}) {
     autoMine: options.autoMine ?? (() => true),
     // The next this many receipt lookups fail with a rate-limit error.
     throttleReceipts: options.throttleReceipts ?? 0,
+    // The next this many eth_call and eth_estimateGas answers fail with a rate-limit error.
+    throttleCalls: options.throttleCalls ?? 0,
     // When set (revert data as hex), every eth_call reverts with it.
     revertCall: options.revertCall ?? null,
     // Likewise for eth_estimateGas, which is where a send that the contract would refuse fails.
@@ -41,6 +43,14 @@ async function startFakeRpc(options = {}) {
     sent: [],
     calls: [],
     receipts: new Map(),
+  };
+
+  const refuseIfThrottled = () => {
+    if (state.throttleCalls <= 0) return;
+    state.throttleCalls -= 1;
+    const err = new Error('rate limit exceeded');
+    err.rpcCode = -32005;
+    throw err;
   };
 
   const block = () => ({
@@ -101,6 +111,7 @@ async function startFakeRpc(options = {}) {
       case 'eth_maxPriorityFeePerGas': return hex(state.priorityFee);
       case 'eth_getTransactionCount': return hex(transactionCount(params[1]));
       case 'eth_estimateGas': {
+        refuseIfThrottled();
         if (state.revertEstimate) {
           const err = new Error('execution reverted');
           err.rpcCode = 3;
@@ -111,6 +122,7 @@ async function startFakeRpc(options = {}) {
       }
       case 'eth_call': {
         // A contract call that simply succeeds, or reverts with the data a test supplies.
+        refuseIfThrottled();
         if (state.revertCall) {
           const err = new Error('execution reverted');
           err.rpcCode = 3;
