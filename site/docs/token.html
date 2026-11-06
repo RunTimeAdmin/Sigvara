@@ -132,6 +132,7 @@
           <li><b>Operator incentives.</b> Paying admitted operators for epochs served, once a distribution mechanism exists. Today <code>distributeFees()</code> sends the non-burned fee share to a plain address and the spend is manual.</li>
           <li><b>Slashing-committee costs.</b> The operational cost of reviewing reports and filing slashes.</li>
           <li><b>Staking rewards</b>, under the rules below, and only those.</li>
+          <li><b>Repaying a wrongful slash.</b> Returning what a slash took to the operator who lost it, once the admin has published a finding that the slash was wrong (<a href="https://github.com/RunTimeAdmin/Sigvara/blob/main/docs/adr/0010-what-can-be-slashed.md">ADR 0010</a>). Never more than the slash took, only from SVR the treasury already holds, and never to a team-operated agent or oracle operator, because the finding is a judgment and this cannot be a payment the team directs to itself. It is not owed, and it is disclosed like every other treasury movement.</li>
         </ol>
 
         <p>Buybacks run on a published schedule, not in response to price. No fee revenue is paid out to the team, and no treasury SVR is sold.</p>

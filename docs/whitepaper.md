@@ -552,7 +552,7 @@ bought on the open market and published with its amount, transaction and purpose
 
 **The treasury** is funded by buybacks from the creator share of pool fees and by
 disclosed open-market purchases. Treasury SVR is spent only on oracle bonds, operator
-incentives, slashing-committee costs and staking rewards.
+incentives, slashing-committee costs, staking rewards and repaying a wrongful slash.
 
 **Staking rewards** are not live and cannot pay out before the mainnet registries exist.
 When they do, eligibility is limited to `Active` bonded agents and admitted operators

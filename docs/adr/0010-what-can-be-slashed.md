@@ -1,7 +1,7 @@
 # ADR 0010: What can be slashed
 
 **Status:** Accepted · 2026-11-06, with David's decisions below. This is policy: no contract or oracle
-code changes with it.
+code changes with it. It adds one use to the treasury policy in `docs/token.md`.
 
 ## Context
 
@@ -96,9 +96,13 @@ filed, as the drill's log was.
 
 - **Before execution,** the dispute, the veto and the expiry already exist
   ([ADR 0005](0005-governance-and-emergency-powers.md)). Nothing compensates the time spent suspended.
-- **After execution, there is no remedy.** The status is terminal, the score is zero and 75% is burned, and
-  the contract has no way back. Treasury SVR cannot repay it either: [the treasury policy](../token.md#treasury-policy)
-  is a closed list of four uses and this is not one of them. Changing that would be its own decision.
+- **After execution, a slash can be repaid but not undone.** The status is terminal, the score is zero and
+  75% is burned, and the contract has no way back. The admin may publish a finding that the slash was wrong,
+  naming the slash and the evidence, and [the treasury policy](../token.md#treasury-policy) then lets treasury
+  SVR return what the slash took to the operator who lost it. The victim keeps its 25%, and an agent's
+  operator starts a new DID from zero. Repayment is not owed. It is limited to what the treasury holds, which
+  is nothing until buybacks start, and it never goes to a team-operated agent or oracle operator, because the
+  finding is a judgment and this cannot be a payment the team directs to itself.
 - **Stolen keys:** an operator answers for its keys, as the whitepaper says of signers. A prompt
   self-report with evidence lets the committee decline to file, and nothing guarantees that it will.
 
@@ -114,8 +118,9 @@ filed, as the drill's log was.
   unbonding of 21 days is the outer limit for a report to reach the committee and be filed.
 - **A partial operator slash can demote.** An operator left below `bondAmount` leaves the active set until
   it tops up and is admitted again, so a first O2 can take a bonded operator out of service.
-- **A wrongful execution is permanent.** That raises the bar for the committee, and it should be said plainly
-  to anyone bonding.
+- **A wrongful execution can be repaid, not undone.** The score and the DID stay gone, and repayment depends
+  on a finding and on what the treasury holds. That raises the bar for the committee, and it should be said
+  plainly to anyone bonding.
 - **Today's setup cannot fully apply this.** On testnet one key holds committee and admin, so accuser and
   judge are the same until the handover, and one party runs both operators.
 

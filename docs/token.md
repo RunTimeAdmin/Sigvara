@@ -84,6 +84,13 @@ Treasury SVR is spent only on:
 3. **Slashing-committee costs** — the operational cost of reviewing reports and
    filing slashes.
 4. **Staking rewards**, under the rules in the next section, and only those.
+5. **Repaying a wrongful slash.** Returning what a slash took to the operator who lost
+   it, once the admin has published a finding that the slash was wrong
+   ([ADR 0010](adr/0010-what-can-be-slashed.md)). Never more than the slash took, only
+   from SVR the treasury already holds, and never to a team-operated agent or oracle
+   operator, because the finding is a judgment and this cannot be a payment the team
+   directs to itself. It is not owed, and it is disclosed like every other treasury
+   movement.
 
 Buybacks run on a published schedule, not in response to price. No fee revenue
 is paid out to the team, and no treasury SVR is sold.
