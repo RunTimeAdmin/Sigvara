@@ -113,9 +113,9 @@ Base Sepolia to Arc on 22 September. `/health` reports `externalFeed` and
 outside; `externalFeed: configured` alone could not distinguish a working feed from one
 aimed at a dead host, and did not. It changes no score
 today: `externalScore` needs an agent linked to an ERC-8004 id whose NFT is held by
-the same wallet, and none is. `propagationScore` inherits only a counterparty's
+the same wallet, and feedback from qualifying reviewers. One simulation agent is linked, and it has none. `propagationScore` inherits only a counterparty's
 external standing, so it is 0 for the same reason, which puts the reachable ceiling at
-70 of 100 until linked agents exist. The reads are fail-safe: an unreachable external
+70 of 100 until agents have that standing. The reads are fail-safe: an unreachable external
 RPC costs the factor, never the epoch.
 
 ### Where it runs

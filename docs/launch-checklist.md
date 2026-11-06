@@ -1,6 +1,6 @@
-# Sigvara Q4 Arc Mainnet Launch Checklist
+# Sigvara Arc Mainnet Launch Checklist
 
-Sequenced against the Q4 2026 SVR mainnet milestone. Dates are targets, not commitments — slip any item rather than skip the gate it protects.
+Sequenced by gate, not by date. The wider plan, adoption included, is the [roadmap](roadmap.md). Slip any item rather than skip the gate it protects.
 
 ## Where this stands
 
@@ -23,14 +23,14 @@ As of 6 November 2026. Everything runs on Arc testnet, and nothing is on mainnet
 - The handover: moving testnet roles to a Safe and a timelock, after the drill, since `executeSlash` needs
   the reporter still on the committee. Before it, more checks in the renounce gate (the Safe's history, the
   initializers consumed, every proxy the deployer created) and passing the role replay only the settings it needs.
-- A challenge process for negative outcomes. Until then payer outcomes stay positive only
-  ([ADR 0006](adr/0006-payer-signed-outcomes.md)), and non-delivery cannot be used as a ground for a slash
-  ([ADR 0010](adr/0010-what-can-be-slashed.md)).
 - A review of retention by counsel, before public outcome retrieval and peer import on mainnet.
 - The operators' spending as agents grow: a limit on total epoch spend, and the reads an unstaked registration adds.
 
 **Open, and not blocking mainnet.**
 - Design partners, the first users from outside the team.
+- The challenge process for negative outcomes. Mainnet launches with payer outcomes positive only
+  ([ADR 0006](adr/0006-payer-signed-outcomes.md)), and non-delivery cannot be used as a ground for a slash until
+  it exists ([ADR 0010](adr/0010-what-can-be-slashed.md)). The ADR on who rules comes first.
 - The reward distributor stays a draft until mainnet.
 - Moving the testnet compose files to the mainnet pattern (a file secret, read-only, non-root).
 - A way to notice a dead watcher. It alerts on changes only, so a watcher that has stopped looks like one with

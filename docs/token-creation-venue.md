@@ -21,7 +21,7 @@ SVR will be consumed by contracts that live on Arc: `SigvaraStaking` and `Sigvar
 
 ## The one real alternative
 
-If Sigvara ever deploys registries to a second chain, SVR would need a canonical home chain plus a wrapped representation on the other — with the bond and stake accounting staying on the home chain. That is a later governance decision, not a launch decision. For Q4 2026: Arc, via Tolly, full stop.
+If Sigvara ever deploys registries to a second chain, SVR would need a canonical home chain plus a wrapped representation on the other — with the bond and stake accounting staying on the home chain. That is a later governance decision, not a launch decision. For the launch: Arc, via Tolly, full stop.
 
 ## Cross-links
 
