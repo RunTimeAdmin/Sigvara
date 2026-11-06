@@ -39,6 +39,7 @@ const {
 const { finalizableAtOf } = require('./epoch-policy');
 const { redact } = require('./event-index');
 const { wordsOf } = require('./log-spans');
+const { readWithBackoff } = require('./read-retry');
 
 const cfg = {
   checkerUrl: (process.env.CHECKER_URL || '').replace(/\/+$/, ''),
@@ -171,13 +172,16 @@ async function poll() {
   const divergences = payload.divergences ?? [];
   if (divergences.length === 0) return;
 
-  // Re-read every disputed slot. One call per distinct agent, in parallel.
+  // Re-read every disputed slot, one agent at a time. Read together they go out as one JSON-RPC
+  // batch, and dRPC answers 400 to a whole batch over 10 calls (measured 6 November 2026), so every
+  // read failed once enough agents were on the list, however few were still open. 100 agents take
+  // about 8 seconds this way, against a poll of minutes.
   const dids = [...new Set(divergences.map(d => d.didHash))];
   const challengeWindowSec = Number(await reputation.challengeWindow());
   const pendingByDid = {};
-  await Promise.all(dids.map(async (did) => {
+  for (const did of dids) {
     try {
-      const p = await reputation.getPendingScore(did);
+      const p = await readWithBackoff('pending score', () => reputation.getPendingScore(did));
       pendingByDid[did] = { exists: p.exists, proposedAt: Number(p.proposedAt), finalizableAt: Number(p.finalizableAt) };
     } catch (err) {
       // An unreadable slot must not be treated as "nothing pending", which would
@@ -185,7 +189,7 @@ async function poll() {
       // same, so say so and skip the agent this round.
       console.error(`[watcher] could not read pending score for ${did}: ${said(err)}`);
     }
-  }));
+  }
 
   const nowSec = Math.floor(Date.now() / 1000);
   const readable = divergences.filter(d => pendingByDid[d.didHash] !== undefined);
@@ -222,6 +226,11 @@ async function poll() {
     `${counts.suppressed} already raised, ${counts.expired} expired, ` +
     `${counts.superseded} superseded, ${counts.closed} closed`,
   );
+
+  // An agent it could not read has not been checked, so this poll did not do its job, and three in a
+  // row raise the alert in runPoll. Last, so the agents it could read have already alerted.
+  const unread = dids.length - Object.keys(pendingByDid).length;
+  if (unread) throw new Error(`could not read ${unread} of ${dids.length} disputed agents`);
 }
 
 console.log(
