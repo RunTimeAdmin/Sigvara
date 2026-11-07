@@ -607,7 +607,7 @@ PAYMENT_CHAIN_99801_MAX_BLOCKS=100000
 
 Run `docker compose up -d` with the compose line from the table above; a plain restart does not read `.env`
 again. The next epoch scans from `FROM_BLOCK`. The operator must run a commit with payment chains. It also needs
-`PAYMENT_VERIFICATION=required`, `PAYMENT_SCAN_ENABLED=1` and `EXPECTED_CHAIN_ID`, or the process refuses to start. Base Sepolia (84532) has run in shadow on both operators since 7 November 2026, with asset `0x036CbD53842c5426634e7929541eC2318f3dCF7e`, `FROM_BLOCK=55444000`, `FEE_UNIT=100000000`, `MIN_AMOUNT=10000` and `CHUNK=2000`, through `base-sepolia-rpc.publicnode.com` on the primary and `base-sepolia.gateway.tenderly.co` on the checker.
+`PAYMENT_VERIFICATION=required`, `PAYMENT_SCAN_ENABLED=1` and `EXPECTED_CHAIN_ID`, or the process refuses to start. Base Sepolia (84532) counts on both operators. It ran in shadow from about 00:40 UTC on 7 November 2026, then went `on` at 01:54:45 UTC on the checker and 01:55:18 UTC on the primary, with asset `0x036CbD53842c5426634e7929541eC2318f3dCF7e`, `FROM_BLOCK=55462500`, `FEE_UNIT=100000000`, `MIN_AMOUNT=10000`, `CHUNK=2000` and the default delay of 3600 seconds, through `base-sepolia-rpc.publicnode.com` on the primary and `base-sepolia.gateway.tenderly.co` on the checker. Each `.env` and state file from just before is kept as `.env.bak-pre-base-on-*` and `/root/oracle-state-backups/{checker,primary}-state-pre-base-on-*.json`.
 
 **Checking it.** `curl -s https://checker.sigvara.xyz/health | jq .paymentChains`. Each chain reports `mode`,
 `lastBlock`, `lastBlockTs` and `lastScan`, which holds `from`, `to`, `wouldCredit`, `skipped`, `reasons` and `canary`.
@@ -617,7 +617,10 @@ with many payments can look stuck for minutes. Also check that `lastBlockTs` mov
 
 **When a scan fails.** The log says `payment chain 99801 scan failed`, and `/metrics` counts it in
 `sigvara_oracle_payment_chain_scan_errors_total`. In shadow, scoring carries on, and the next epoch resumes from the
-last block saved. A range the node refuses for its size is halved, so a dense range alone should not stop a scan. If
+last block saved. With the chain `on`, an operator whose scan has not reached the chain's delay scores nothing that epoch
+and finalizes nothing, until the scan catches up: `paymentChainHold` on `/health` says so, and
+`sigvara_oracle_epochs_held_by_payment_chain_total` counts it. Both operators reach Base through keyless public
+endpoints, so read this first when a score stops moving. A range the node refuses for its size is halved, so a dense range alone should not stop a scan. If
 the same `(rpc -32005)` or similar repeats at one block, the node may word its refusal in a way `oracle/log-spans.js`
 does not know: add the wording there. Lowering `CHUNK` gets it past the range in the meantime.
 
@@ -625,7 +628,9 @@ does not know: add the wording there. Lowering `CHUNK` gets it past the range in
 under `99801/shadow`, where only a later scan of that chain reads it.
 
 **Rolling back.** A shadow cursor leaves the state file at format 1, so a build from before payment chains still loads
-it. That build drops the cursor. A chain that has been `on` writes format 2, which such a build refuses.
+it. That build drops the cursor. A chain that has been `on` writes format 2, which such a build refuses. Taking a chain
+from `on` back to shadow has its own order: stop the checker, put the primary in shadow, wait out the challenge window,
+and start the checker in shadow (`oracle/README.md`, "Switching back").
 
 ## 7. Slash keeper
 
