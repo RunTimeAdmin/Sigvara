@@ -184,9 +184,20 @@ contract SplitAuthority is Script {
     address internal constant SAFE_FACTORY_1_5_0_AT = 0x14F2982D601c9458F93bd70B218933A6f8165e7b;
     address internal constant SAFE_TO_L2_SETUP_1_4_1_AT = 0xBD89A1CE4DDe368FFAB0eC35506eEcE0b1fFdc54;
     address internal constant SAFE_TO_L2_SETUP_1_5_0_AT = 0x900C7589200010D6C6eCaaE5B06EBe653bc2D82a;
-    /// Where a Safe keeps its guard and its fallback handler, which the plan prints.
+    /// Each version's CompatibilityFallbackHandler, known by address and code hash together, from safe-deployments
+    /// and checked on Arc testnet.
+    bytes32 internal constant SAFE_HANDLER_1_3_0 = 0x03e69f7ce809e81687c69b19a7d7cca45b6d551ffdec73d9bb87178476de1abf;
+    bytes32 internal constant SAFE_HANDLER_1_4_1 = 0x7c6007a5d711cea8dfd5d91f5940ec29c7f200fe511eb1fc1397b367af3c42f9;
+    bytes32 internal constant SAFE_HANDLER_1_5_0 = 0x3c6a85bcf7b563daa624b884b4e9a1b9fa5371edde7be945d998071a48f28bbc;
+    address internal constant SAFE_HANDLER_1_3_0_AT = 0xf48f2B2d2a534e402487b3ee7C18c33Aec0Fe5e4;
+    address internal constant SAFE_HANDLER_1_3_0_EIP155_AT = 0x017062a1dE2FE6b99BE3d9d37841FeD19F573804;
+    address internal constant SAFE_HANDLER_1_4_1_AT = 0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99;
+    address internal constant SAFE_HANDLER_1_5_0_AT = 0x3EfCBb83A4A7AfcB4F68D501E2c2203a38be77f4;
+    /// Where a Safe keeps its guard and its fallback handler.
     bytes32 internal constant SAFE_GUARD_SLOT = keccak256("guard_manager.guard.address");
     bytes32 internal constant SAFE_FALLBACK_HANDLER_SLOT = keccak256("fallback_manager.handler.address");
+    /// Where OpenZeppelin's Initializable keeps the version a proxy has reached, in the low 64 bits.
+    bytes32 internal constant INITIALIZABLE_SLOT = 0xf0c57e16840df040f15088dc2f81fe391c3923bec73e23a9662efc9c229c6a00;
     /// The head of a Safe's module list (SENTINEL_MODULES).
     address internal constant SAFE_MODULES_HEAD = address(0x1);
     /// The longest a reconciliation report counts for. Long enough to run phase 5 after it; the nonces in it
@@ -239,6 +250,10 @@ contract SplitAuthority is Script {
     error SafeNotCreatedAsShown(address safe, address created);
     error SafeSetupDelegatedTo(address safe, address to);
     error SafeSetupRanOtherCode(address safe, address code);
+    error SafeNotL2FromCreation(address safe, address implementation);
+    error SafeImplementationChangedSinceCreation(address safe, address created, address current);
+    error SafeFallbackHandlerNotRecognized(address safe, address handler);
+    error ReinitializerStillOpen(string target, uint64 version, uint64 required);
     error ReconciliationRefused(string reason);
     error SafeIsADelegatedAccount(address safe);
     error DeployerStillAdmin(string target, address deployer);
@@ -587,6 +602,11 @@ contract SplitAuthority is Script {
             if (!_upgraderAdminIsSelf(targets[i].addr)) revert UpgraderRoleNotSelfAdministered(targets[i].name);
             (bool open, bytes32 role) = _firstRoleTheAdminCanGrant(targets[i].name, targets[i].addr);
             if (open) revert RoleNotTimelocked(targets[i].name, role);
+            // A reinitializer left open is the admin's to call once, with no delay, and it writes what the
+            // setters do not let the admin write: Reputation's grants the committee role directly.
+            uint64 version = _initializedVersion(targets[i].addr);
+            uint64 required = _lastReinitializer(targets[i].name);
+            if (version < required) revert ReinitializerStillOpen(targets[i].name, version, required);
         }
 
         // Last, and for nothing above: the histories the contracts cannot answer for.
@@ -628,6 +648,18 @@ contract SplitAuthority is Script {
         Target[] memory out = new Target[](n);
         for (uint256 i = 0; i < n; i++) out[i] = buf[i];
         return out;
+    }
+
+    function _initializedVersion(address target) internal view returns (uint64) {
+        return uint64(uint256(vm.load(target, INITIALIZABLE_SLOT)));
+    }
+
+    /// @dev The highest reinitializer each registry has, which script/Deploy.s.sol uses up and
+    ///      scripts/check-mainnet.sh checks. SigvaraOracleBond has none.
+    function _lastReinitializer(string memory name) internal pure returns (uint64) {
+        if (keccak256(bytes(name)) == keccak256("reputation")) return 4;
+        if (keccak256(bytes(name)) == keccak256("oracleBond")) return 1;
+        return 2; // identity, staking and epochFees
     }
 
     /// @dev From the artifact, so `plan` and `safe-calldata` never touch a private key.
@@ -749,7 +781,8 @@ contract SplitAuthority is Script {
     }
 
     /// @dev Phase 5's answer to "is this a Safe": a Safe proxy running code Safe published, created by Safe's
-    ///      factory as the operator shows, with no module and no guard. Anything else is refused: the history
+    ///      factory as the operator shows, SafeL2 since then, with no module, no guard and no fallback handler but
+    ///      Safe's. Anything else is refused: the history
     ///      phase 5 also needs (`_requireReconciliation`) is a Safe's history.
     function _requireKnownSafe(address safe, address deployer, address factory, bytes memory creation)
         internal
@@ -776,6 +809,12 @@ contract SplitAuthority is Script {
         // remove the guard included. Phase 4 shows only that it let the role changes through.
         address guard = address(uint160(uint256(vm.load(safe, SAFE_GUARD_SLOT))));
         if (guard != address(0)) revert SafeHasGuard(safe, guard);
+        // A fallback handler cannot act as the Safe, but it does answer for it: ERC-1271 signature checks go through
+        // it. So it is none, or the handler Safe publishes.
+        address handler = address(uint160(uint256(vm.load(safe, SAFE_FALLBACK_HANDLER_SLOT))));
+        if (handler != address(0) && !_isSafeFallbackHandler(handler)) {
+            revert SafeFallbackHandlerNotRecognized(safe, handler);
+        }
     }
 
     /// @dev The report scripts/check-before-renounce.mjs writes when every role holder, the Safe's whole history and
@@ -912,27 +951,39 @@ contract SplitAuthority is Script {
         // The factory calls the new proxy with the initializer, which runs as `singleton`'s code. Anything but Safe's
         // could write owners and modules around the lists and then point the proxy at Safe's code.
         if (!_isSafeImplementation(singleton)) revert SafeSetupRanOtherCode(safe, singleton);
-        _requirePlainSetup(safe, initializer);
+        address made = _requirePlainSetup(safe, singleton, initializer);
+        // Only a SafeL2's log records each transaction's operation, and the history the renounce relies on
+        // (scripts/check-before-renounce.mjs) is that log. A Safe that ran plain code for a while could have run a
+        // DelegateCall that left no record, switched itself to SafeL2 and evened up its log and nonce, so it must
+        // have been SafeL2 from its creation, and be running what it was made with.
+        if (!_isSafeL2(made)) revert SafeNotL2FromCreation(safe, made);
+        address current = _implementationOf(safe);
+        if (current != made) revert SafeImplementationChangedSinceCreation(safe, made, current);
     }
 
     /// @dev The initializer is Safe's setup, the only call that does anything before a Safe has owners. Its `to`
     ///      runs as the Safe, by delegatecall, and could write any storage at all, so it may be nothing, or Safe's
     ///      SafeToL2Setup pointing the proxy at another of Safe's implementations: whatever it names runs as the
-    ///      Safe from then on.
-    function _requirePlainSetup(address safe, bytes memory initializer) internal view {
+    ///      Safe from then on. Returns the implementation the Safe came out of its setup running.
+    function _requirePlainSetup(address safe, address singleton, bytes memory initializer)
+        internal
+        view
+        returns (address)
+    {
         if (initializer.length < 4) revert SafeCreationNotShown(safe);
         // forge-lint: disable-next-line(unsafe-typecast)
         if (bytes4(initializer) != ISafe.setup.selector) revert SafeCreationNotShown(safe);
         (,, address to, bytes memory data,,,,) = abi.decode(
             _afterSelector(initializer), (address[], uint256, address, bytes, address, address, uint256, address)
         );
-        if (to == address(0)) return;
+        if (to == address(0)) return singleton;
         if (!_isSafeToL2Setup(to)) revert SafeSetupDelegatedTo(safe, to);
         if (data.length < 36) revert SafeSetupDelegatedTo(safe, to);
         // forge-lint: disable-next-line(unsafe-typecast)
         if (bytes4(data) != ISafeToL2Setup.setupToL2.selector) revert SafeSetupDelegatedTo(safe, to);
         address next = abi.decode(_afterSelector(data), (address));
         if (!_isSafeImplementation(next)) revert SafeSetupRanOtherCode(safe, next);
+        return next;
     }
 
     function _isSafeImplementation(address code) internal view returns (bool) {
@@ -981,6 +1032,20 @@ contract SplitAuthority is Script {
         if (code == SAFE_1_5_0_AT && h == SAFE_1_5_0) return "Safe 1.5.0";
         if (code == SAFE_L2_1_5_0_AT && h == SAFE_L2_1_5_0) return "SafeL2 1.5.0";
         return "";
+    }
+
+    function _isSafeL2(address code) internal view returns (bool) {
+        bytes32 h = code.codehash;
+        return ((code == SAFE_L2_1_3_0_AT || code == SAFE_L2_1_3_0_EIP155_AT) && h == SAFE_L2_1_3_0)
+            || (code == SAFE_L2_1_4_1_AT && h == SAFE_L2_1_4_1)
+            || (code == SAFE_L2_1_5_0_AT && h == SAFE_L2_1_5_0);
+    }
+
+    function _isSafeFallbackHandler(address handler) internal view returns (bool) {
+        bytes32 h = handler.codehash;
+        return ((handler == SAFE_HANDLER_1_3_0_AT || handler == SAFE_HANDLER_1_3_0_EIP155_AT) && h == SAFE_HANDLER_1_3_0)
+            || (handler == SAFE_HANDLER_1_4_1_AT && h == SAFE_HANDLER_1_4_1)
+            || (handler == SAFE_HANDLER_1_5_0_AT && h == SAFE_HANDLER_1_5_0);
     }
 
     function _isSafeFactory(address factory) internal view returns (bool) {

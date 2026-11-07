@@ -204,6 +204,14 @@ contract SplitAuthorityTest is Test {
                 deployer, address(0), address(svr), identity, makeAddr("pool"), 0
             ))
         ));
+        // Every reinitializer used up, as script/Deploy.s.sol leaves them.
+        vm.startPrank(deployer);
+        SigvaraIdentity(identity).initializeV2(staking);
+        SigvaraReputation(reputation).initializeV3(identity);
+        SigvaraReputation(reputation).initializeV4(1);
+        SigvaraStaking(staking).initializeV2(21 days);
+        SigvaraEpochFees(fees).initializeV2(1 hours, address(0));
+        vm.stopPrank();
         targets = [identity, reputation, staking, bond, fees];
     }
 
@@ -926,11 +934,32 @@ contract SplitAuthorityTest is Test {
         ));
         vm.revertToState(start);
 
+        // 6. A fallback handler that is not Safe's. It answers ERC-1271 for the Safe.
+        address handler = makeAddr("a handler");
+        vm.store(address(mSafe), keccak256("fallback_manager.handler.address"), bytes32(uint256(uint160(handler))));
+        _renounceIsRefused(mScript, address(mSafe), address(mTimelock), abi.encodeWithSelector(
+            SplitAuthority.SafeFallbackHandlerNotRecognized.selector, address(mSafe), handler
+        ));
+        vm.revertToState(start);
+
+        // 7. A reinitializer left open on any registry that has one: the admin's to call once, with no delay.
+        bytes32 initializable = 0xf0c57e16840df040f15088dc2f81fe391c3923bec73e23a9662efc9c229c6a00;
+        uint64[5] memory last = [uint64(2), 4, 2, 1, 2];
+        for (uint256 i = 0; i < targets.length; i++) {
+            assertEq(uint64(uint256(vm.load(targets[i], initializable))), last[i], names[i]);
+            if (last[i] == 1) continue; // SigvaraOracleBond has no reinitializer to leave open
+            vm.store(targets[i], initializable, bytes32(uint256(last[i] - 1)));
+            _renounceIsRefused(mScript, address(mSafe), address(mTimelock), abi.encodeWithSelector(
+                SplitAuthority.ReinitializerStillOpen.selector, names[i], last[i] - 1, last[i]
+            ));
+            vm.revertToState(start);
+        }
+
         // None of that dropped anything.
         _assertDeployerHolds();
 
-        // 6. What separates those from a pass is the one thing each changed: with no module and no guard, the
-        //    stand-in goes through.
+        // 8. What separates those from a pass is the one thing each changed: with no module, no guard, no other
+        //    handler and no reinitializer open, the stand-in goes through.
         _env("renounce", address(mSafe), address(mTimelock), "yes-drop-the-deployer");
         mScript.run();
         _assertDeployerDropped();
