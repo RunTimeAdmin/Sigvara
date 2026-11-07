@@ -1,8 +1,8 @@
 # ADR 0009: Count payments that settle on Base, starting with Base Sepolia
 
 **Status:** Accepted · 2026-11-03, with David's decisions below. Rollout step 1 is built, off by default
-(`oracle/payment-chains.js`): sections 1 to 8, with section 7 since 6 November 2026. Of section 7,
-CounterAudit's forwarder does not carry the field yet, so an outcome for a payment chain's payment goes
+(`oracle/payment-chains.js`): sections 1 to 8, with section 7 since 6 November 2026. Step 2, shadow on both operators, has run since 7 November 2026.
+CounterAudit's forwarder takes the field from CounterAudit#97, which is not deployed yet, so an outcome for a payment chain's payment goes
 straight to an operator's `POST /attest` for now.
 
 ## Context
@@ -192,7 +192,7 @@ Both operators enable a payment chain from the same block, as they did with
   MCP. Both are worth doing only once a score describes payments those agents can make.
 - Each operator needs its own Base RPC. The public endpoints are not enough: Base Sepolia's limits
   `eth_getLogs` to 200 blocks, and at 0.2 s blocks an hour is 18,000 blocks, so 90 calls per batch
-  of 50 agents.
+  of 50 agents. That is `sepolia.base.org`: on 6 November 2026 publicnode and Tenderly took 10,000 blocks with no key, and dRPC's free plan took none.
 - An agent registered at a contract address gets nothing from Base until a binding exists.
 - Base Sepolia USDC is free from Circle's faucet, so evidence there is as cheap to manufacture as
   SVR is on Arc testnet. It tests the mechanism, not the economics.

@@ -16,13 +16,13 @@ key is [incident-operator-key.md](incident-operator-key.md); bringing up an oper
 | State volume | `sigvara-oracle_oracle_state` | `sigvara-checker_checker_state` |
 | Local port, for `/metrics` | `127.0.0.1:3030` | `127.0.0.1:3031` |
 
-**What runs what, as of 6 November 2026.** Each public `/health` names its own commit, and that is the
+**What runs what, as of 7 November 2026.** Each public `/health` names its own commit, and that is the
 one to trust when this table has gone stale.
 
 | Service | Host | Commit | Since (UTC) |
 |---|---|---|---|
-| Primary oracle | `archipelago-standby` | `61dfe13` | 6 November, 00:18 |
-| Checker | `packrai-vps` | `61dfe13` | 6 November, 00:17 |
+| Primary oracle | `archipelago-standby` | `5627f51` | 7 November, 00:41 |
+| Checker | `packrai-vps` | `5627f51` | 7 November, 00:39 |
 | Event index | `archipelago-standby` | `b95f0aa` | 5 November, 13:31 |
 | Watcher | a third host | `aa34cee` | 6 November, 08:37 |
 | Policy signer | `packrai-vps` | `b95f0aa` | 5 November, 13:33 |
@@ -607,7 +607,7 @@ PAYMENT_CHAIN_99801_MAX_BLOCKS=100000
 
 Run `docker compose up -d` with the compose line from the table above; a plain restart does not read `.env`
 again. The next epoch scans from `FROM_BLOCK`. The operator must run a commit with payment chains. It also needs
-`PAYMENT_VERIFICATION=required`, `PAYMENT_SCAN_ENABLED=1` and `EXPECTED_CHAIN_ID`, or the process refuses to start.
+`PAYMENT_VERIFICATION=required`, `PAYMENT_SCAN_ENABLED=1` and `EXPECTED_CHAIN_ID`, or the process refuses to start. Base Sepolia (84532) has run in shadow on both operators since 7 November 2026, with asset `0x036CbD53842c5426634e7929541eC2318f3dCF7e`, `FROM_BLOCK=55444000`, `FEE_UNIT=100000000`, `MIN_AMOUNT=10000` and `CHUNK=2000`, through `base-sepolia-rpc.publicnode.com` on the primary and `base-sepolia.gateway.tenderly.co` on the checker.
 
 **Checking it.** `curl -s https://checker.sigvara.xyz/health | jq .paymentChains`. Each chain reports `mode`,
 `lastBlock`, `lastBlockTs` and `lastScan`, which holds `from`, `to`, `wouldCredit`, `skipped`, `reasons` and `canary`.
