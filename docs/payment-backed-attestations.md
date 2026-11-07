@@ -261,7 +261,8 @@ the transaction from the chain `chainId` names, and every scored-chain leaf keep
 the published roots were made with (`oracle/merkle.js`). The explorer rebuilds both, and so do the
 SDK's `evidenceLeaf` and `sigvara_verify_evidence` in `sigvara-mcp`, from 1.0.0-alpha.17. Earlier
 versions rebuild only the five-word leaf, so they report a good root with such a payment in it as
-a mismatch.
+a mismatch. In 1.0.0-alpha.17 the tool can still fail on a long payment history, when the public
+RPC refuses its calls.
 
 Its payer can sign an outcome too, in the same typed data with that chain's id in the domain, and the
 request names the chain as `payment.chainId` (ADR 0009, section 7). The outcome goes into the leaf as
