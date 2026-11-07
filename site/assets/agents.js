@@ -3,6 +3,7 @@
 // evidence behind its score that runs in the visitor's browser. Sources are in explorer.js.
 
 const X = window.SigvaraExplorer;
+const Lobby = window.SigvaraLobby;
 const $ = (id) => document.getElementById(id);
 
 // Agents the repository itself says are Sigvara's own, so the list does not pass them off as
@@ -62,16 +63,28 @@ async function loadAgents() {
     return setCard("agentsCard", X.failed("the agents' scores from the chain", e));
   }
   renderAgents(registrations);
+  renderLobby();
 }
 
 // Which group an agent is in, for the badge and the filter.
 function groupOf(a) {
   const profile = X.simAgent(a.address);
-  if (profile) return { key: "sim", profile, label: `Simulated · ${profile === "ring" ? "Sybil ring" : profile}` };
-  if (KNOWN_AGENTS[a.didHash]) return { key: "own", label: KNOWN_AGENTS[a.didHash] };
-  if (X.same(a.operator, X.DEPLOYER)) return { key: "own", label: "Sigvara's own" };
-  if (X.same(a.operator, X.DRILL_OPERATOR)) return { key: "own", label: "Sigvara's slash drill" };
-  return { key: "outside", label: "Outside" };
+  if (profile) return { key: "sim", kind: profile, profile, label: `Simulated · ${profile === "ring" ? "Sybil ring" : profile}` };
+  if (KNOWN_AGENTS[a.didHash]) return { key: "own", kind: "demo", label: KNOWN_AGENTS[a.didHash] };
+  if (X.same(a.operator, X.DEPLOYER)) return { key: "own", kind: "own", label: "Sigvara's own" };
+  if (X.same(a.operator, X.DRILL_OPERATOR)) return { key: "own", kind: "drill", label: "Sigvara's slash drill" };
+  return { key: "outside", kind: "outside", label: "Outside" };
+}
+// What the lobby draws an agent from. Its score stays out of this on purpose (lobby.js).
+function characterOf(a) {
+  const g = groupOf(a);
+  return {
+    address: a.address,
+    kind: g.kind,
+    simulated: g.key === "sim",
+    mood: a.status === 2 ? "ghost" : a.status === 1 ? "asleep" : "awake",
+    waiting: a.status === 3,
+  };
 }
 let filter = "all";
 let lastHistory = null;
@@ -100,7 +113,7 @@ function renderAgents(history = lastHistory) {
     const g = groupOf(a);
     const pillClass = g.key === "sim" ? g.profile : g.key;
     html += `<tr>
-      <td><a href="epochs?a=${a.address}"><code>${X.short(a.address)}</code></a></td>
+      <td><div class="ag-cell">${Lobby.svg(characterOf(a), 30)}<div><a href="epochs?a=${a.address}"><code>${X.short(a.address)}</code></a><div class="ex-note">${X.esc(Lobby.nickname(a.address))}</div></div></div></td>
       <td><span class="ex-pill ${X.esc(pillClass)}">${X.esc(g.label)}</span><div class="ex-note">operator ${X.whoIs(a.operator)}</div></td>
       <td>${X.esc(X.STATUS[a.status] ?? "?")}</td>
       <td><b>${a.total}</b></td>
@@ -121,6 +134,31 @@ function renderAgents(history = lastHistory) {
   for (const btn of document.querySelectorAll("[data-filter]")) {
     btn.addEventListener("click", () => { filter = btn.getAttribute("data-filter"); renderAgents(); });
   }
+}
+
+// ---- the lobby ----
+function renderLobby() {
+  $("lobbyCard").classList.remove("u-hidden");
+  Lobby.startLobby($("lobbyRoom"), agents.map((a) => ({ ...characterOf(a), agent: a })), (person) => showInLobby(person.agent));
+}
+
+function showInLobby(a) {
+  const g = groupOf(a);
+  const pillClass = g.key === "sim" ? g.profile : g.key;
+  $("lobbyPick").innerHTML = `${Lobby.svg(characterOf(a), 72)}
+    <div>
+      <div class="ag-name">${X.esc(Lobby.nickname(a.address))}</div>
+      <a href="epochs?a=${a.address}"><code>${X.esc(a.address)}</code></a>
+      <dl>
+        <dt>Who</dt><dd><span class="ex-pill ${X.esc(pillClass)}">${X.esc(g.label)}</span></dd>
+        <dt>Status</dt><dd>${X.esc(X.STATUS[a.status] ?? "?")}</dd>
+        <dt>Matured score</dt><dd>${a.total}</dd>
+        <dt>Earned</dt><dd>${a.earned}</dd>
+        <dt>Stake</dt><dd>${X.esc(X.fmtSvr(a.stake))}</dd>
+      </dl>
+    </div>
+    <button class="btn btn-secondary btn-sm" type="button" id="lobbyCheck">Check evidence</button>`;
+  $("lobbyCheck").addEventListener("click", () => checkEvidence(a.didHash));
 }
 
 // ---- the evidence check ----
