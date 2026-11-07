@@ -267,8 +267,11 @@ those payments must not spend the scored chain's RPC either: a scan reads a reci
 Open before it could go `on`, and none of it matters in shadow:
 
 - **A flood of payments.** A chain that is `on` is still scanned inside the epoch, so payments to an agent across many
-  blocks slow that epoch by a read a block. This holds for Base Sepolia too, and needs a bound before either goes
-  `on`. Elysium's logs carry `blockTimestamp`, which would avoid those reads there.
+  blocks slow that epoch by a read a block. Base Sepolia went `on` on 7 November 2026 without a bound, and
+  `PAYMENT_CHAIN_<id>_MAX_READS` is that bound: a scan stops there and saves its place, and the epoch's time budget
+  covers what follows. So a flood costs an epoch minutes and not hours. One faster than an operator can read still leaves
+  it behind, and it then holds rather than scoring on less than the other operator holds. Elysium's logs carry
+  `blockTimestamp`, which would avoid those reads there.
 - **Whether bridged USDC counts.** It is a gateway token on this chain, not issued by Circle.
 - **A provider per operator.** The checker reads the public endpoint. A chain that counts needs both operators, each
   with its own provider (decision 5).

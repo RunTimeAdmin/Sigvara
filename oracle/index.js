@@ -919,8 +919,8 @@ async function runPaymentChainScans(agents, chains) {
   for (const pc of chains) {
     const key = paymentChains.stateKey(pc);
     const startedAt = Date.now();
-    // Steps of at most MAX_BLOCKS, each saved as it completes, until the scan reaches the finalized
-    // block or the time budget is spent. One step an epoch could not keep up with a chain that makes
+    // Steps of at most MAX_BLOCKS and MAX_READS, each saved as it completes, until the scan reaches the
+    // finalized block or the time budget is spent. One step an epoch could not keep up with a chain that makes
     // more blocks an epoch than a step covers, and a failure costs only the step it happens in.
     try {
       for (;;) {
@@ -953,13 +953,15 @@ async function runPaymentChainScans(agents, chains) {
           skipped: summary.skipped,
           reasons: summary.reasons,
           canary: summary.canary ?? null,
+          ...(summary.readLimited ? { readLimited: true } : {}),
         });
         if (!summary.upToDate) {
           console.log(
             `[oracle] payment chain ${pc.chainId} (${pc.mode}) ${summary.from}-${summary.to}: ` +
             `${summary.credited} ${counted}, ${summary.skipped} skipped` +
             (summary.canary && summary.canary !== 'not_run' ? `, canary ${summary.canary}` : '') +
-            (summary.skipped ? ` (${JSON.stringify(summary.reasons)})` : ''),
+            (summary.skipped ? ` (${JSON.stringify(summary.reasons)})` : '') +
+            (summary.readLimited ? ', stopped at MAX_READS' : ''),
           );
         }
         if (summary.upToDate || summary.caughtUp || !summary.state) break;

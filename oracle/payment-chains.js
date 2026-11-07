@@ -56,6 +56,10 @@ const DEFAULT_PACE_MS = 500;
 // Blocks one scan covers at most: two hours of Base Sepolia, twenty of Base. A catch-up then
 // advances a bounded step per epoch instead of retrying an ever larger range after one failed call.
 const DEFAULT_MAX_BLOCKS = 36_000;
+// Reads one scan spends on its payments at most: a getCode for each agent and block, and a getBlock for each
+// block, one at a time. A chain that is on is scanned inside the epoch, so without this a step of many
+// payments could hold an epoch for hours with nothing saved.
+const DEFAULT_MAX_READS = 1_000;
 // How long one read of a payment chain may take. A chain that is on is scanned inside the epoch, before
 // scoring, and each read is tried four times, so ethers' default of 5 minutes would let one hung
 // endpoint hold an epoch for 20 minutes. At 30 seconds it costs about 2.
@@ -125,7 +129,7 @@ function rpcUrlProblem(raw) {
  *   PAYMENT_CHAIN_84532_FEE_UNIT=...       required: base units of this asset per point
  *   PAYMENT_CHAIN_84532_MODE=shadow|on     default shadow: scan and report, credit nothing
  *   PAYMENT_CHAIN_84532_DELAY_SECONDS=3600 how old a payment must be before it is scored
- *   PAYMENT_CHAIN_84532_MIN_AMOUNT=...     required, at least 1. Also _CHUNK=200, _PACE_MS=500, _MAX_BLOCKS=36000
+ *   PAYMENT_CHAIN_84532_MIN_AMOUNT=...     required, at least 1. Also _CHUNK=200, _PACE_MS=500, _MAX_BLOCKS=36000, _MAX_READS=1000
  *
  * Throws on anything it cannot use, without the RPC URL in the message.
  *
@@ -165,6 +169,7 @@ function readConfig(env = process.env, { scoredChainId = null, paymentRequired =
       chunkSize: wholeNumber(env[`${p}CHUNK`], `${p}CHUNK`, { min: 1, fallback: DEFAULT_CHUNK }),
       paceMs: wholeNumber(env[`${p}PACE_MS`], `${p}PACE_MS`, { fallback: DEFAULT_PACE_MS }),
       maxBlocks: wholeNumber(env[`${p}MAX_BLOCKS`], `${p}MAX_BLOCKS`, { min: 1, fallback: DEFAULT_MAX_BLOCKS }),
+      maxReads: wholeNumber(env[`${p}MAX_READS`], `${p}MAX_READS`, { min: 1, fallback: DEFAULT_MAX_READS }),
       mode,
     });
     chains.push(chain);
@@ -382,6 +387,28 @@ function publicView(cfg, stateOf, lastScans) {
 }
 
 /**
+ * Where a scan ends so that its payments cost at most maxReads: just before the block that would pass it, or
+ * `to`. Whole blocks only, and always at least the first, so a scan moves however many payments one block holds.
+ * Where it ends cannot change what an operator ends up holding. A payment left for the next scan is credited
+ * there at its own block's time, evidence is cut by time and kept in a fixed order, and a cursor that has not
+ * reached a cut-off holds the epoch or brings the cut-off down.
+ */
+function scanEnd(credits, to, maxReads) {
+  const agentsAt = new Map();
+  for (const c of credits) {
+    if (!agentsAt.has(c.blockNumber)) agentsAt.set(c.blockNumber, new Set());
+    agentsAt.get(c.blockNumber).add(c.didHash);
+  }
+  const blocks = [...agentsAt.keys()].sort((a, b) => a - b);
+  let reads = 0;
+  for (let i = 0; i < blocks.length; i++) {
+    reads += agentsAt.get(blocks[i]).size + 1;
+    if (reads > maxReads && i > 0) return blocks[i] - 1;
+  }
+  return to;
+}
+
+/**
  * One scan of one payment chain. Everything it touches is passed in, so it can be tested without
  * the oracle around it.
  *
@@ -441,12 +468,17 @@ async function scanChain(chain, deps) {
     from, to, chain.chunkSize,
   );
 
-  const plan = paymentScan.planCredits(logs.map((log) => paymentScan.decodeTransfer(log, chain.asset)), {
+  const transfers = logs.map((log) => paymentScan.decodeTransfer(log, chain.asset));
+  const planFor = (list) => paymentScan.planCredits(list, {
     didHashOf: (address) => byAddress.get(address.toLowerCase())?.didHash ?? null,
     operatorOf: (didHash) => byDid.get(didHash)?.operator ?? null,
     isUsed: isCredited,
     minAmount: chain.minAmount,
   });
+  let plan = planFor(transfers);
+  const end = scanEnd(plan.credits, to, chain.maxReads);
+  // Planned again without the rest, so what is skipped past here is reported by the scan that reaches it.
+  if (end < to) plan = planFor(transfers.filter((t) => t && t.blockNumber <= end));
   const skipped = [...plan.skipped];
   const skip = (c, reason) => skipped.push({ txHash: c.txHash, didHash: c.didHash, payer: c.payer, amount: c.amount, reason });
 
@@ -507,7 +539,7 @@ async function scanChain(chain, deps) {
   let canary = 'not_run';
   if (credited === 0) canary = await chainCanary(chain, provider, knownOnChain, byDid, read);
 
-  const checkpoint = paymentScan.checkpointAfter(unresolved, from, to, canary);
+  const checkpoint = paymentScan.checkpointAfter(unresolved, from, end, canary);
   let next = null;
   if (checkpoint !== null) {
     let checkpointTs = toTs;
@@ -521,8 +553,8 @@ async function scanChain(chain, deps) {
   const reasons = {};
   for (const sk of skipped) reasons[sk.reason] = (reasons[sk.reason] || 0) + 1;
   return {
-    from, to, credited, refused, skipped: skipped.length, unresolved: unresolved.length,
-    canary, reasons, state: next, caughtUp: to === finalized.number,
+    from, to: end, credited, refused, skipped: skipped.length, unresolved: unresolved.length,
+    canary, reasons, state: next, caughtUp: end === finalized.number, readLimited: end < to,
   };
 }
 
