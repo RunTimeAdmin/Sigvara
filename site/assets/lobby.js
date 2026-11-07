@@ -108,9 +108,11 @@
   // wander. `onPick(person)` runs on a click. Where someone stands means nothing, so the start comes from the
   // address and the wandering from Math.random.
   function startLobby(host, people, onPick) {
-    const W = host.clientWidth < 560 ? 440 : 860;
-    const H = 300;
-    const SIZE = 46;
+    const wide = host.clientWidth >= 560;
+    const W = wide ? 860 : 400;
+    const H = wide ? 340 : 300;
+    const SIZE = wide ? 56 : 46;
+    const FEET = SIZE * 0.89; // how far down a drawing its feet are, to stand it on something
     const FLOOR = 110;
     const BENCH = W - 116;
     host.innerHTML = `<svg class="ag-room" viewBox="0 0 ${W} ${H}" aria-hidden="true">
@@ -134,8 +136,8 @@
       const y = FLOOR + (byteOf(a, 12) * 256 + byteOf(a, 13)) % (H - SIZE - FLOOR - 6);
       const w = { person, x, y, tx: x, ty: y, pause: span(0, 3), near, how: "walk", slot: 0 };
       if (person.mood === "ghost") { w.how = "float"; w.slot = counts.ghost++; }
-      else if (person.mood === "asleep") { w.how = "sit"; w.x = BENCH + 2 + (counts.asleep++ % 3) * 30; w.y = 48; }
-      else if (person.waiting) { w.how = "sit"; w.x = 19; w.y = 62; }
+      else if (person.mood === "asleep") { w.how = "sit"; w.x = BENCH + 2 + (counts.asleep++ % 3) * SIZE * 0.65; w.y = 88 - FEET; }
+      else if (person.waiting) { w.how = "sit"; w.x = 42 - SIZE / 2; w.y = 104 - FEET; }
       else if (person.kind === "ring") { w.how = "ring"; w.slot = counts.ring++; }
       const el = document.createElementNS("http://www.w3.org/2000/svg", "svg");
       el.setAttribute("class", "ag-walker");
@@ -150,7 +152,7 @@
     });
 
     let hoopX = W / 2;
-    let hoopY = 190;
+    let hoopY = (FLOOR + H) / 2;
     let hoopToX = hoopX;
     let hoopToY = hoopY;
     const step = (from, to, by) => (Math.abs(to - from) <= by ? to : from + Math.sign(to - from) * by);
@@ -169,7 +171,7 @@
       const walk = 0.025 * dt;
       if (Math.hypot(hoopToX - hoopX, hoopToY - hoopY) < 2) {
         hoopToX = span(120, W - 120);
-        hoopToY = span(150, 240);
+        hoopToY = span(FLOOR + SIZE, H - SIZE);
       }
       hoopX = step(hoopX, hoopToX, walk * 0.6);
       hoopY = step(hoopY, hoopToY, walk * 0.6);
@@ -179,8 +181,8 @@
           w.y = 16 + 6 * Math.sin(t / 1300 + w.slot);
         } else if (w.how === "ring") {
           const angle = t / 2600 + (w.slot * 2 * Math.PI) / Math.max(1, rings);
-          w.x = hoopX + 32 * Math.cos(angle) - SIZE / 2;
-          w.y = hoopY + 15 * Math.sin(angle) - SIZE / 2;
+          w.x = hoopX + SIZE * 0.7 * Math.cos(angle) - SIZE / 2;
+          w.y = hoopY + SIZE * 0.33 * Math.sin(angle) - SIZE / 2;
         } else if (w.how === "walk") {
           const far = Math.hypot(w.tx - w.x, w.ty - w.y);
           if (far < 2) {
