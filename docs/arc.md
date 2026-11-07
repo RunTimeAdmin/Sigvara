@@ -395,7 +395,7 @@ Every registry is a UUPS proxy gated on `UPGRADER_ROLE`, so an upgrade is the
 most dangerous operation in the system. `script/Upgrade.s.sol` deploys a fresh
 implementation, reads the proxy address out of `deployments/<chainId>.json`,
 records the ERC-1967 implementation slot before and after, and reverts if the
-slot did not move.
+slot did not move. Rolling a proxy back across a storage append and forward again can leave values in the appended slots that the older code never cleared and the newer code trusts, so read those slots before upgrading forward again.
 
 Every command here needs `DEPLOYER_PRIVATE_KEY` in the environment as well, and
 must run from the repository root. `TARGET` is

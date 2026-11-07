@@ -365,6 +365,10 @@ contract SplitAuthorityForkTest is Test {
             (string memory proxy, string memory implementation) = probe.version(made);
             assertEq(proxy, proxies[i], implementations[i]);
             assertEq(implementation, implementations[i], implementations[i]);
+            // Odd positions are SafeL2. A plain Safe's log leaves out each transaction's operation, so it is refused.
+            if (i % 2 == 0) {
+                vm.expectRevert(abi.encodeWithSelector(SplitAuthority.SafeNotL2FromCreation.selector, made, singletons[i]));
+            }
             probe.requireKnown(made, DEPLOYER, factories[i], creation);
         }
 
@@ -375,6 +379,47 @@ contract SplitAuthorityForkTest is Test {
         (, string memory became) = probe.version(viaL2Setup);
         assertEq(became, "SafeL2 1.4.1", "SafeToL2Setup did not switch the implementation");
         probe.requireKnown(viaL2Setup, DEPLOYER, SAFE_FACTORY, itsCreation);
+
+        _safeL2FromCreationAndSafesOwnHandler(probe);
+    }
+
+    /// What the proxy runs now has to be what it was made with, and that has to be SafeL2, and its fallback handler has
+    /// to be none or Safe's. Part of test_theScriptKnowsASafeFromEachOfArcsFactories, apart only for the stack.
+    function _safeL2FromCreationAndSafesOwnHandler(SplitAuthority_SafeProbe probe) internal {
+        // Finding 4.1: made on plain Safe and later showing SafeL2, with nothing logged. While it ran plain code a
+        // DelegateCall could have left no record, and written its slot 0 and nonce to match.
+        (address madePlain, bytes memory plainCreation) = _makeSafe(SAFE_FACTORY, SAFE_SINGLETON, _plainSetup(), 8);
+        vm.store(madePlain, bytes32(0), bytes32(uint256(uint160(SAFE_L2_SINGLETON))));
+        (, string memory shows) = probe.version(madePlain);
+        assertEq(shows, "SafeL2 1.4.1", "it reads as SafeL2 now");
+        vm.expectRevert(abi.encodeWithSelector(SplitAuthority.SafeNotL2FromCreation.selector, madePlain, SAFE_SINGLETON));
+        probe.requireKnown(madePlain, DEPLOYER, SAFE_FACTORY, plainCreation);
+
+        // Made on SafeL2 and running something else of Safe's now: no longer what the log was read against.
+        (address madeL2, bytes memory l2Creation) = _makeSafe(SAFE_FACTORY, SAFE_L2_SINGLETON, _plainSetup(), 11);
+        probe.requireKnown(madeL2, DEPLOYER, SAFE_FACTORY, l2Creation);
+        vm.store(madeL2, bytes32(0), bytes32(uint256(uint160(SAFE_L2_SINGLETON_1_3_0))));
+        vm.expectRevert(abi.encodeWithSelector(
+            SplitAuthority.SafeImplementationChangedSinceCreation.selector, madeL2, SAFE_L2_SINGLETON, SAFE_L2_SINGLETON_1_3_0
+        ));
+        probe.requireKnown(madeL2, DEPLOYER, SAFE_FACTORY, l2Creation);
+        vm.store(madeL2, bytes32(0), bytes32(uint256(uint160(SAFE_L2_SINGLETON))));
+
+        // A fallback handler: none, or the one Safe publishes for any version, at Safe's address with Safe's code.
+        bytes32 handlerSlot = keccak256("fallback_manager.handler.address");
+        address[4] memory handlers = [
+            0xf48f2B2d2a534e402487b3ee7C18c33Aec0Fe5e4, 0x017062a1dE2FE6b99BE3d9d37841FeD19F573804,
+            0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99, 0x3EfCBb83A4A7AfcB4F68D501E2c2203a38be77f4
+        ];
+        for (uint256 i = 0; i < handlers.length; i++) {
+            vm.store(madeL2, handlerSlot, bytes32(uint256(uint160(handlers[i]))));
+            probe.requireKnown(madeL2, DEPLOYER, SAFE_FACTORY, l2Creation);
+        }
+        address handlerCopy = address(0xA11CE);
+        vm.etch(handlerCopy, handlers[2].code);
+        vm.store(madeL2, handlerSlot, bytes32(uint256(uint160(handlerCopy))));
+        vm.expectRevert(abi.encodeWithSelector(SplitAuthority.SafeFallbackHandlerNotRecognized.selector, madeL2, handlerCopy));
+        probe.requireKnown(madeL2, DEPLOYER, SAFE_FACTORY, l2Creation);
     }
 
     /**
@@ -385,13 +430,13 @@ contract SplitAuthorityForkTest is Test {
      */
     function test_theScriptRefusesASafeWhoseCreationItCannotShow() public onlyArcFork {
         SplitAuthority_SafeProbe probe = new SplitAuthority_SafeProbe();
-        bytes memory creation = _creation(SAFE_SINGLETON, _plainSetup(), 0);
+        bytes memory creation = _creation(SAFE_L2_SINGLETON, _plainSetup(), 0);
         probe.requireKnown(safe, DEPLOYER, SAFE_FACTORY, creation);
 
-        bytes memory otherSalt = _creation(SAFE_SINGLETON, _plainSetup(), 1);
+        bytes memory otherSalt = _creation(SAFE_L2_SINGLETON, _plainSetup(), 1);
         address otherAddress = vm.computeCreate2Address(
             keccak256(abi.encodePacked(keccak256(_plainSetup()), uint256(1))),
-            keccak256(abi.encodePacked(ISafeProxyFactory(SAFE_FACTORY).proxyCreationCode(), uint256(uint160(SAFE_SINGLETON)))),
+            keccak256(abi.encodePacked(ISafeProxyFactory(SAFE_FACTORY).proxyCreationCode(), uint256(uint160(SAFE_L2_SINGLETON)))),
             SAFE_FACTORY
         );
         vm.expectRevert(abi.encodeWithSelector(SplitAuthority.SafeNotCreatedAsShown.selector, safe, otherAddress));
@@ -413,7 +458,7 @@ contract SplitAuthorityForkTest is Test {
             vm.store(copy, bytes32(slot), vm.load(safe, bytes32(slot)));
         }
         (, string memory copied) = probe.version(copy);
-        assertEq(copied, "Safe 1.4.1", "the copy runs Safe's code");
+        assertEq(copied, "SafeL2 1.4.1", "the copy runs Safe's code");
         vm.expectRevert(abi.encodeWithSelector(SplitAuthority.SafeNotCreatedAsShown.selector, copy, safe));
         probe.requireKnown(copy, DEPLOYER, SAFE_FACTORY, creation);
 
@@ -442,7 +487,7 @@ contract SplitAuthorityForkTest is Test {
      */
     function test_theScriptKnowsSafesCodeOnlyAtSafesAddresses() public onlyArcFork {
         SplitAuthority_SafeProbe probe = new SplitAuthority_SafeProbe();
-        bytes memory creation = _creation(SAFE_SINGLETON, _plainSetup(), 0);
+        bytes memory creation = _creation(SAFE_L2_SINGLETON, _plainSetup(), 0);
         address elsewhere = address(0x5AFE);
         vm.etch(elsewhere, SAFE_SINGLETON.code);
         assertEq(elsewhere.codehash, SAFE_SINGLETON.codehash, "the same code");
@@ -491,7 +536,7 @@ contract SplitAuthorityForkTest is Test {
      */
     function test_theScriptRefusesARealSafeWithAModule() public onlyArcFork {
         SplitAuthority_SafeProbe probe = new SplitAuthority_SafeProbe();
-        bytes memory creation = _creation(SAFE_SINGLETON, _plainSetup(), 0);
+        bytes memory creation = _creation(SAFE_L2_SINGLETON, _plainSetup(), 0);
         probe.requireKnown(safe, DEPLOYER, SAFE_FACTORY, creation);
 
         address module = address(0x0D01E);
@@ -532,7 +577,7 @@ contract SplitAuthorityForkTest is Test {
 
     function _deployRealSafe(address owner) internal returns (address proxy) {
         assertEq(owner, safeOwner, "every Safe here has the one owner");
-        (proxy,) = _makeSafe(SAFE_FACTORY, SAFE_SINGLETON, _plainSetup(), 0);
+        (proxy,) = _makeSafe(SAFE_FACTORY, SAFE_L2_SINGLETON, _plainSetup(), 0);
     }
 
     /// @dev A Safe from `factory`, and the call that made it, which is what an operator copies from the creation

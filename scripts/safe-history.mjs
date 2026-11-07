@@ -7,8 +7,8 @@
  * by a DelegateCall from one of its transactions or by a module, can write around them, and
  * script/SplitAuthority.s.sol, which reads the contracts, cannot see that it ever happened. A
  * SafeL2 logs each transaction with its operation (SafeMultiSigTransaction) and each module call
- * (SafeModuleTransaction), so its log shows it. A Safe that is not SafeL2 logs neither, and is
- * refused.
+ * (SafeModuleTransaction), so its log shows it. A Safe that is not SafeL2, or was not from its
+ * creation, logs neither for that time, and is refused.
  *
  * `assessSafeHistory` is pure, so `node scripts/check-before-renounce.mjs --self-test` runs it
  * on made-up logs.
@@ -195,6 +195,29 @@ export async function safeL2Of(provider, safe, blockTag) {
     return { ok: false, reason: `${implementation} does not hold the code Safe lists for ${known.name}` };
   }
   return { ok: true, name: known.name };
+}
+
+/**
+ * What the Safe's implementation at its creation and now say about its log, or nothing when they agree. A
+ * plain Safe logs no transaction's operation, and code it let run could set slot 0 to SafeL2 with no
+ * ChangedMasterCopy and even up its log and nonce (audit finding 4.1), so SafeL2 now proves nothing unless the
+ * Safe was SafeL2 from the start. Pure.
+ *
+ * @param {string} atCreation the implementation in slot 0 at the block of its SafeSetup
+ * @param {string} now the implementation in slot 0 at the block the history was read to
+ * @returns {string[]} problems
+ */
+export function implementationProblems(atCreation, now) {
+  const made = atCreation.toLowerCase();
+  if (!SAFE_L2.has(made)) return [`the Safe was made running ${made}, not a SafeL2, so its early transactions are not in its log`];
+  if (now.toLowerCase() !== made) return [`the Safe was made running ${made} and runs ${now.toLowerCase()} now`];
+  return [];
+}
+
+/** The implementation in a Safe proxy's slot 0, read at `blockTag`. */
+export async function implementationAt(provider, safe, blockTag) {
+  const slot0 = await provider.getStorage(safe, 0, blockTag);
+  return ethers.getAddress('0x' + slot0.slice(26)).toLowerCase();
 }
 
 /** The Safe's logs from `fromBlock` to `toBlock`, decoded, oldest first. Chunked and paced like check-role-holders. */

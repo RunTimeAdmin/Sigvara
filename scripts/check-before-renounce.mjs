@@ -2,7 +2,7 @@
  * The last check before the step that cannot be undone, and the one script/SplitAuthority.s.sol's
  * renounce phase will not run without (the owner's decision, 2026-11-02: a hard gate).
  *
- * The renounce phase reads the contracts as they are. Three things are only in the chain's history:
+ * The renounce phase reads the contracts as they are. Four things are only in the chain's history:
  *
  *   1. Who holds every role. AccessControl cannot list holders, so a grant nobody expected shows
  *      only in the events. scripts/check-role-holders.mjs replays them, with BEFORE_RENOUNCE=1.
@@ -14,8 +14,11 @@
  *      operation, so one scheduled before the renounce runs after it whether or not anyone
  *      remembered it, and it may grant a role or upgrade a registry. Every operation still Waiting
  *      or Ready fails the check unless its id is in REVIEWED_TIMELOCK_OPERATIONS.
+ *   4. Every proxy the deployer created (scripts/deployer-created.mjs). One the artifact does not name is not in
+ *      any phase, so the deployer keeps whatever it holds on it. Each fails the check unless its address is in
+ *      REVIEWED_UNRECORDED_PROXIES, which says someone has decided what happens to it.
  *
- * All three are read at one finalized block (scripts/renounce-snapshot.mjs), handed to the role
+ * All four are read at one finalized block (scripts/renounce-snapshot.mjs), handed to the role
  * replay with its hash, so the report describes one moment. Read at different blocks, a grant
  * between two of the reads would be in none of them.
  *
@@ -37,7 +40,9 @@
  * read from TIMELOCK_FROM_BLOCK, by default the artifact's deployBlock. AT_BLOCK picks the block to read
  * at, and must already be final; by default it is the finalized block. REVIEWED_TIMELOCK_OPERATIONS is a
  * comma-separated list of operation ids meant to run after the handover; the renounce phase needs the
- * same list. CHAIN_ID (default 5042, mainnet) and RPC_URL pick the chain, for a rehearsal;
+ * same list. REVIEWED_UNRECORDED_PROXIES is a comma-separated list of proxies the deployer created that the artifact
+ * does not name and someone has decided about; the renounce phase does not read it, because the deployer making
+ * another would move the nonce in the report. CHAIN_ID (default 5042, mainnet) and RPC_URL pick the chain, for a rehearsal;
  * check-role-holders.mjs reads the same two. MAX_RANGE and PACE_MS work as they do there.
  */
 
@@ -46,7 +51,10 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
-import { assessSafeHistory, safeL2Of, readSafeHistory, MULTI_SEND_CALL_ONLY } from './safe-history.mjs';
+import {
+  assessSafeHistory, safeL2Of, readSafeHistory, implementationAt, implementationProblems, MULTI_SEND_CALL_ONLY,
+} from './safe-history.mjs';
+import { proxiesCreatedBy, assessUnrecordedProxies, reviewedProxiesFrom, recordedProxies } from './deployer-created.mjs';
 import { snapshotBlock, holdersAt } from './renounce-snapshot.mjs';
 import {
   checkTimelockQueue, operationsDigest, reviewedFrom, printQueue, describeCall, pendingForReport,
@@ -130,6 +138,9 @@ const owners = (await safe.getOwners({ blockTag: at })).map((o) => o.toLowerCase
 const threshold = Number(await safe.getThreshold({ blockTag: at }));
 const entries = await readSafeHistory(provider, SAFE, fromBlock, at, { range: RANGE, paceMs: PACE_MS });
 const problems = assessSafeHistory({ entries, nonce, owners, threshold });
+// SafeL2 at this block says nothing about what the log leaves out unless it was SafeL2 from the start.
+const made = entries.find((e) => e.name === 'SafeSetup');
+if (made) problems.push(...implementationProblems(await implementationAt(provider, SAFE, made.block), await implementationAt(provider, SAFE, at)));
 // The batch contract a DelegateCall went to must hold the code Safe published for it.
 for (const to of new Set(entries.filter((e) => e.name === 'SafeMultiSigTransaction' && e.operation === 1).map((e) => e.to))) {
   if (MULTI_SEND_CALL_ONLY.has(to) && ethers.keccak256(await provider.getCode(to, at)) !== MULTI_SEND_CALL_ONLY.get(to)) {
@@ -154,6 +165,15 @@ if (queue.problems.length > 0) stop("the timelock's queue does not reconcile (ab
 for (const p of queue.pending) console.log(`ok    ${p.id} is ${p.state} and listed as reviewed`);
 const ops = operationsDigest(queue.operations, queue.states);
 
+console.log('== 4. proxies the deployer created ==');
+const deployerNonce = await provider.getTransactionCount(artifact.deployer, at);
+const reviewedProxies = reviewedProxiesFrom(process.env.REVIEWED_UNRECORDED_PROXIES);
+const proxies = await proxiesCreatedBy(provider, artifact.deployer, deployerNonce, at, { paceMs: PACE_MS });
+const created = assessUnrecordedProxies({ proxies, recorded: recordedProxies(artifact), reviewed: reviewedProxies });
+for (const p of created.problems) console.log(`FAIL  ${p}`);
+if (created.problems.length > 0) stop('a proxy the deployer created is not accounted for (above)');
+console.log(`ok    ${deployerNonce} transactions by the deployer, ${proxies.length} proxies created, ${created.unrecorded.length} outside the artifact and listed as reviewed`);
+
 // Every read above was at `at`; the chain must still have the same block there.
 try {
   await snapshotBlock(provider, at, snap.hash);
@@ -161,7 +181,6 @@ try {
   stop(e.message);
 }
 
-const deployerNonce = await provider.getTransactionCount(artifact.deployer, at);
 const commit = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' });
 const dirty = spawnSync('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: root, encoding: 'utf8' });
 writeFileSync(REPORT, reportJson({
@@ -169,14 +188,21 @@ writeFileSync(REPORT, reportJson({
   safeNonce: nonce, deployerNonce, artifactBytes,
   sourceCommit: commit.status === 0 ? commit.stdout.trim() : null,
   sourceDirty: dirty.status === 0 ? dirty.stdout.trim() !== '' : null,
-  ops, reviewed, pending: queue.pending,
+  ops, reviewed, pending: queue.pending, reviewedProxies,
 }));
 console.log(`before the renounce: all checks passed at block ${at}. Wrote deployments/${CHAIN_ID}.renounce-check.json, good for an hour while neither the Safe nor the deployer makes a transaction and no timelock operation changes state.`);
 
-/** The environment the role replay runs in: the same chain and endpoint, and the block every read is at. */
+/**
+ * The environment the role replay runs in: the same chain and endpoint, the block every read is at, the holders
+ * it checks, and nothing else. An operator's shell may hold DEPLOYER_PRIVATE_KEY, which the replay has no use for.
+ */
 function roleReplayEnv(env, chainId, rpc, snap) {
+  const passed = {};
+  for (const name of ['PATH', 'SYSTEMROOT', 'NODE_EXTRA_CA_CERTS', 'SAFE', 'TIMELOCK', 'COMMITTEE', 'ORACLE', 'GUARDIAN', 'MAX_RANGE', 'PACE_MS']) {
+    if (env[name] !== undefined) passed[name] = env[name];
+  }
   return {
-    ...env, BEFORE_RENOUNCE: '1', CHAIN_ID: String(chainId), RPC_URL: rpc,
+    ...passed, BEFORE_RENOUNCE: '1', CHAIN_ID: String(chainId), RPC_URL: rpc,
     AT_BLOCK: String(snap.number), AT_BLOCK_HASH: snap.hash,
   };
 }
@@ -186,7 +212,7 @@ function roleReplayEnv(env, chainId, rpc, snap) {
  * artifact_keccak, the timelock ids, states and digest, and the reviewed ids; the rest is for the people who
  * read it. test/fixtures/renounce-check-v2.json is one, and the Forge tests read it as the renounce does.
  */
-function reportJson({ chainId, safe, timelock, deployer, snap, safeNonce, deployerNonce, artifactBytes, sourceCommit, sourceDirty, ops, reviewed, pending }) {
+function reportJson({ chainId, safe, timelock, deployer, snap, safeNonce, deployerNonce, artifactBytes, sourceCommit, sourceDirty, ops, reviewed, pending, reviewedProxies }) {
   return `${JSON.stringify({
     schema: SCHEMA,
     passed: true,
@@ -207,6 +233,7 @@ function reportJson({ chainId, safe, timelock, deployer, snap, safeNonce, deploy
     timelock_operations_digest: ops.digest,
     reviewed_timelock_operations: reviewed.map((id) => id.toLowerCase()).sort(),
     timelock_pending: pendingForReport(pending),
+    reviewed_unrecorded_proxies: reviewedProxies,
   }, null, 2)}\n`;
 }
 
@@ -249,6 +276,51 @@ async function selfTest(writeFixture = false) {
     const found = assessSafeHistory({ entries, ...state });
     check(what, expected === null ? found.length === 0 : found.some((p) => p.includes(expected)), JSON.stringify(found));
   }
+
+  // --- the implementation since creation (audit finding 4.1) ---
+  const SAFE_L2_1_4_1 = '0x29fcb43b46531bca003ddc8fcb67ffe91900c762';
+  const PLAIN_1_4_1 = '0x41675c099f32341bf84bfc5382af534df5c7461a';
+  const SAFE_L2_1_3_0 = '0x3e5c63644e683549055b9be8653de26e0b4cd36e';
+  check('SafeL2 from creation to now passes', implementationProblems(SAFE_L2_1_4_1, SAFE_L2_1_4_1).length === 0);
+  check('made on plain Safe and SafeL2 now is refused, whatever the log says',
+    implementationProblems(PLAIN_1_4_1, SAFE_L2_1_4_1).some((p) => p.includes('not a SafeL2')), JSON.stringify(implementationProblems(PLAIN_1_4_1, SAFE_L2_1_4_1)));
+  check('another SafeL2 now than at creation is refused',
+    implementationProblems(SAFE_L2_1_4_1, SAFE_L2_1_3_0).some((p) => p.includes('runs')), JSON.stringify(implementationProblems(SAFE_L2_1_4_1, SAFE_L2_1_3_0)));
+  const atBlocks = { getStorage: async (_safe, _slot, tag) => ethers.zeroPadValue(tag === 5 ? PLAIN_1_4_1 : SAFE_L2_1_4_1, 32) };
+  check('slot 0 is read as an address, at the block asked for',
+    (await implementationAt(atBlocks, a(1), 5)) === PLAIN_1_4_1 && (await implementationAt(atBlocks, a(1), 6)) === SAFE_L2_1_4_1);
+
+  // --- what the deployer created ---
+  const DEPLOYER = a(13);
+  const madeAt = (n) => ethers.getCreateAddress({ from: DEPLOYER, nonce: n }).toLowerCase();
+  const IMPLEMENTATION_SLOT = '0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbd';
+  // Nonce 0 sent no contract, 1 is a plain contract, 2 and 3 are proxies, and 4 a proxy with no implementation set.
+  const createdChain = {
+    getCode: async (addr) => ([madeAt(1), madeAt(2), madeAt(3), madeAt(4)].includes(addr.toLowerCase()) ? '0x60' : '0x'),
+    getStorage: async (addr, slot) => {
+      const isProxy = [madeAt(2), madeAt(3)].includes(addr.toLowerCase()) && slot === IMPLEMENTATION_SLOT;
+      return ethers.zeroPadValue(isProxy ? a(99) : '0x00', 32);
+    },
+    call: async () => ethers.zeroPadValue('0x01', 32),
+  };
+  const found = await proxiesCreatedBy(createdChain, DEPLOYER, 5, 200, { paceMs: 0 });
+  check('the proxies a deployer created are found from its nonce, and nothing else',
+    found.map((p) => p.address).join() === [madeAt(2), madeAt(3)].join() && found[0].nonce === 2, JSON.stringify(found));
+  check('asks what the deployer still holds on each', found[0].deployerHolds.join() === 'DEFAULT_ADMIN_ROLE,UPGRADER_ROLE', JSON.stringify(found[0]));
+  const recorded = recordedProxies({ identity: madeAt(2), reputation: ethers.getAddress(madeAt(3)), epochFees: undefined });
+  check('every proxy in the artifact passes', assessUnrecordedProxies({ proxies: found, recorded, reviewed: [] }).problems.length === 0);
+  const oneOut = recordedProxies({ identity: madeAt(2) });
+  const unrecorded = assessUnrecordedProxies({ proxies: found, recorded: oneOut, reviewed: [] });
+  check('a proxy outside the artifact, such as an epochFees it leaves out, fails, and says what the deployer holds',
+    unrecorded.problems.length === 1 && unrecorded.problems[0].includes(madeAt(3)) && unrecorded.problems[0].includes('UPGRADER_ROLE'), JSON.stringify(unrecorded));
+  check('it passes once listed as reviewed',
+    assessUnrecordedProxies({ proxies: found, recorded: oneOut, reviewed: [madeAt(3)] }).problems.length === 0);
+  check('a reviewed address that is no unrecorded proxy of this deployer fails',
+    assessUnrecordedProxies({ proxies: found, recorded: oneOut, reviewed: [madeAt(3), a(55)] }).problems.some((p) => p.includes(a(55))));
+  check('reviewed addresses are read, lowercased and sorted', reviewedProxiesFrom(`${ethers.getAddress(madeAt(3))}, ${a(1)}`).join() === [a(1), madeAt(3)].sort().join());
+  let notAnAddress = '';
+  try { reviewedProxiesFrom('0x12'); } catch (e) { notAnAddress = e.message; }
+  check('a reviewed entry that is not an address fails loudly', notAnAddress.includes('not an address'), notAnAddress);
 
   // --- the timelock's queue ---
   // The module's own interface, so these logs are the ones it decodes; checked against OpenZeppelin's source below.
@@ -321,10 +393,12 @@ async function selfTest(writeFixture = false) {
   check('a block with another hash at that number is refused',
     await refused(snapshotBlock(fake(blocks), '50', '0xbb'), 'another fork'));
   check('an RPC with no finalized block is refused', await refused(snapshotBlock(fake({}), '', ''), 'no finalized block'));
-  const env = roleReplayEnv({ PATH: 'x', AT_BLOCK: '1' }, 5042, 'https://rpc', { number: 77, hash: '0xcc' });
+  const env = roleReplayEnv({ PATH: 'x', AT_BLOCK: '1', SAFE: a(1), DEPLOYER_PRIVATE_KEY: 'the key', OTHER: 'y' }, 5042, 'https://rpc', { number: 77, hash: '0xcc' });
   check('the role replay is handed the gate\'s block and its hash, and nothing older',
-    env.AT_BLOCK === '77' && env.AT_BLOCK_HASH === '0xcc' && env.BEFORE_RENOUNCE === '1' && env.CHAIN_ID === '5042' && env.PATH === 'x',
+    env.AT_BLOCK === '77' && env.AT_BLOCK_HASH === '0xcc' && env.BEFORE_RENOUNCE === '1' && env.CHAIN_ID === '5042' && env.PATH === 'x' && env.SAFE === a(1),
     JSON.stringify(env));
+  check('the role replay is handed no key, and nothing it does not read',
+    !('DEPLOYER_PRIVATE_KEY' in env) && !('OTHER' in env), JSON.stringify(Object.keys(env)));
 
   // --- the queue read from a provider, as the gate reads it ---
   const TL = a(42);
@@ -359,6 +433,7 @@ async function selfTest(writeFixture = false) {
     safeNonce: 3, deployerNonce: 7, artifactBytes: Buffer.from('{"deployer":"fixture"}\n'),
     sourceCommit: '0'.repeat(40), sourceDirty: false, ops: fixtureOps, reviewed: [id(7)],
     pending: [{ id: id(7), state: 'Waiting', readyAt: 1_800_172_800, salt: ethers.id('salt'), calls: operationsFromLogs([scheduled(7, upgrade)]).get(id(7)).calls }],
+    reviewedProxies: [a(14)],
   });
   if (writeFixture) {
     writeFileSync(fixturePath, fixture);
