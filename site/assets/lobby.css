@@ -1,4 +1,8 @@
-/* The lobby on the Agents page (lobby.js). */
+/* The lobby on the Agents page (lobby.js). The page's column is 760px, too narrow for a room to read
+   at a glance, so this one card runs wider, centred on the column. */
+#lobbyCard { width: min(1180px, calc(100vw - 32px)); margin-left: calc((100% - min(1180px, calc(100vw - 32px))) / 2); }
+#lobbyCard > .netnote { max-width: 760px; }
+@media (max-width: 560px) { #lobbyCard { padding: 16px; } }
 .ag-lobby { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 .ag-room { display: block; width: 100%; height: auto; }
 .ag-walker { cursor: pointer; }
