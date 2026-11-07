@@ -451,6 +451,7 @@ describe('POST /attest for a payment on a payment chain', () => {
     // Found by the scan, then signed for.
     const scanned = base.addTx([{ from: payer.address, to: agent.agentAddress, amount: AMOUNT }], FINALIZED + 5);
     base.finalized = FINALIZED + 10;
+    await ethersCacheExpires();
     await nextEpoch(oracle);
     const [found] = await evidence(oracle, agent.didHash);
     assert.equal(found.success, null);
@@ -463,6 +464,7 @@ describe('POST /attest for a payment on a payment chain', () => {
     const other = ethers.Wallet.createRandom();
     const posted = base.addTx([{ from: other.address, to: agent.agentAddress, amount: AMOUNT }], FINALIZED + 15);
     base.finalized = FINALIZED + 20;
+    await ethersCacheExpires();
     assert.equal((await post(oracle, agent.didHash, posted, await signOutcome(agent.didHash, posted, other))).status, 200);
     await nextEpoch(oracle);
     const after = await evidence(oracle, agent.didHash);
@@ -496,6 +498,7 @@ describe('POST /attest for a payment on a payment chain', () => {
     const payer = ethers.Wallet.createRandom();
     const txHash = base.addTx([{ from: payer.address, to: agent.agentAddress, amount: AMOUNT }], FINALIZED - 10);
     base.blockTime = () => world.data.nowSec - 7200;
+    await ethersCacheExpires();
     const r = await post(oracle, agent.didHash, txHash, await signOutcome(agent.didHash, txHash, payer));
     assert.equal(r.status, 502, r.text);
     assert.equal(r.body.code, 'rpc_error');
@@ -525,6 +528,7 @@ describe('POST /attest for a payment on a payment chain', () => {
 
     // Finality moves on before the import, which must still read the block the peer recorded.
     base.finalized = FINALIZED + 50;
+    await ethersCacheExpires();
     await nextEpoch(b);
     assert.match(b.logs(), new RegExp(`payer outcomes from ${peer}: 1 imported, 0 refused`));
     const [e] = await evidence(b, agent.didHash);
