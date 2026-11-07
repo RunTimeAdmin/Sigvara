@@ -274,7 +274,7 @@ Open before it could go `on`, and none of it matters in shadow:
   with its own provider (decision 5).
 - **An endless answer.** ethers reads a whole response with no size limit, so a hostile endpoint might exhaust an
   operator's memory. This has not been tested. It is one reason shadow runs on one operator.
-- **The SDK's evidence check.** On any chain: `evidenceLeaf` in `packages/sdk/src/evidence.ts` builds only the five-word
-  leaf, and `sigvara_verify_evidence` drops `chainId`, so both would report a good root with a chain's payment in it as a
-  mismatch. The explorer already rebuilds the six-word leaf.
+- **The SDK's evidence check.** Closed in 1.0.0-alpha.17: `evidenceLeaf` builds the six-word leaf and
+  `sigvara_verify_evidence` keeps `chainId`. Versions before it report a good root with a chain's payment in it as a
+  mismatch.
 - **Mainnet.** Its chain id, RPC and contracts are published at launch, and decision 1's testnet-only posture holds.

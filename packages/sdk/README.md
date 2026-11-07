@@ -466,9 +466,10 @@ staking token's own decimals, read from the chain. The tools read the current st
 
 `sigvara_verify_evidence` makes a score checkable without trusting the oracle. It fetches the payments the
 oracle's `/evidence` lists and rebuilds every leaf from its fields, never from the leaf the oracle serves. It
-then finds which of them the finalized root on chain covers: all of them, those settled by a cut-off when more
+then finds which of them the finalized root on chain covers: all of them, those counted by a cut-off when more
 came later, or with an outcome the payer signed afterwards read as not yet reported. The same readings are
-tried by sigvara.xyz/agents. Up to the last 100 covered payments listed are confirmed with the contract's
+tried by sigvara.xyz/agents. A payment that settled on a payment chain has a leaf with its chain first and enters
+a root its delay after settling, and its row names the `chainId`. Up to the last 100 covered payments listed are confirmed with the contract's
 `verifyEvidence`, and the root match covers the rest. The contract's answer is a consistency check: the proofs
 come from a tree whose root was just read from it, so a refusal means the root changed in between.
 

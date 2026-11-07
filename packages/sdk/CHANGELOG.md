@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.0.0-alpha.17
+
+### Fixed: the evidence check reads a payment that settled on a payment chain
+
+Since Base Sepolia counts on both operators ([ADR 0009](../../docs/adr/0009-payments-on-base.md)), a root can hold a
+payment whose leaf has its chain first. `evidenceLeaf` built only the five-word leaf, and `sigvara_verify_evidence`
+dropped `chainId`, so a good root read as a mismatch. Both now handle it, and each payment in the tool's result names
+its `chainId`, or null on the scored chain.
+
+`matchEvidenceRoot` takes `delays` and `evidenceCut`, as the oracle serves them on `/evidence`, and the tool passes
+them. A payment chain's payment enters a root its delay after it settled, and with a chain on, a proposal's evidence is
+cut at a whole minute before it, on every agent. So without them a pending proposal could read as not reproduced with
+no payment chain's payment in it at all. `finalized.countedBy` gives the cut-off that reproduced a root, and
+`finalized.settledBy` stays null when a delayed payment is in the set, since the cut-off is then not a settlement time.
+
 ## 1.0.0-alpha.16
 
 ### Added: `minBond` on `SigvaraGate`
