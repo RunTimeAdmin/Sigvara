@@ -800,4 +800,4 @@ The token-launch contract set (fixed-supply `SVR`, vesting, public sale) and the
 
 ## License
 
-MIT
+MIT, for the code. Sigvara™ is a trademark, and the license does not cover the name.
