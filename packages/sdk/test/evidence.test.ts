@@ -101,6 +101,60 @@ describe('matchEvidenceRoot', () => {
   });
 });
 
+describe('a payment that settled on a payment chain', () => {
+  // The vector oracle/payment-chains.test.js pins to oracle/merkle.js, as /evidence would serve it.
+  const VECTOR: EvidenceRecord = {
+    chainId: 84532, txHash: `0x${'ab'.repeat(32)}`, payer: `0x${'11'.repeat(20)}`, amount: '1000000', settledAt: 1_700_000_000, success: null,
+  };
+  const root = (records: EvidenceRecord[]) => evidenceRoot(records.map((r) => evidenceLeaf(r)));
+  const arc = (settledAt: number): EvidenceRecord => ({ ...FIXTURE[0], settledAt });
+  const base = (settledAt: number, tx: string): EvidenceRecord => ({ ...VECTOR, txHash: `0x${tx.repeat(32)}`, settledAt });
+
+  it('has the leaf the oracle pins, with its chain first, and the scored chain\'s leaf stays as it was', () => {
+    expect(evidenceLeaf(VECTOR)).toBe('0x103dc346c3ba80385b6ece79600032b4a0af08aabdc9df0a63903f7e39ff4036');
+    const { chainId, ...onScoredChain } = VECTOR;
+    expect(evidenceLeaf(onScoredChain)).toBe('0xe5b9c0e3fd34ce7bf8d3c33f2ca52a295e71bd23366ddbf6d79f369e79c1adfb');
+    expect(evidenceLeaf({ ...onScoredChain, chainId: null })).toBe(evidenceLeaf(onScoredChain));
+    const inner = ethers.AbiCoder.defaultAbiCoder().encode(
+      ['uint256', 'bytes32', 'address', 'uint256', 'uint256', 'uint8'],
+      [chainId, VECTOR.txHash, ethers.getAddress(VECTOR.payer), 1_000_000n, 1_700_000_000n, 2],
+    );
+    expect(evidenceLeaf(VECTOR)).toBe(ethers.keccak256(ethers.keccak256(inner)));
+  });
+
+  it('refuses a chain id that is not one', () => {
+    for (const chainId of [-1, 0, 1.5, '84532' as unknown as number]) {
+      expect(() => evidenceLeaf({ ...VECTOR, chainId }), String(chainId)).toThrow(/chain id/);
+    }
+  });
+
+  it('counts for a cut-off only once its delay has passed', () => {
+    const t = 1_700_000_000;
+    const list = [arc(t), base(t - 7200, 'cc'), base(t - 1800, 'dd')];
+    // A proposal at t held the Arc payment and the Base payment old enough by then, and not the younger one.
+    const committed = root(list.slice(0, 2));
+    const delays = { 84532: 3600 };
+    expect(matchEvidenceRoot(list, committed, { at: t, delays })!.indexes).toEqual([0, 1]);
+    expect(matchEvidenceRoot(list, committed, { delays })!.indexes).toEqual([0, 1]);
+    // Without the delay, the younger payment reads as settled by then, and no reading finds this root.
+    expect(matchEvidenceRoot(list, committed, { at: t })).toBeNull();
+  });
+
+  it('tries the whole-minute cut-offs before a proposal, with evidenceCut, and at most maxCuts of them', () => {
+    const minute = 1_700_000_040; // a whole minute
+    const at = minute + 30;
+    // The evidence was cut 4 minutes before the proposal, and a payment came just after the cut.
+    const list = [arc(minute - 400), arc(minute - 200)];
+    const committed = root(list.slice(0, 1));
+    const evidenceCut = { quantumSeconds: 60, windowSeconds: 1800 };
+    expect(matchEvidenceRoot(list, committed, { at })).toBeNull();
+    expect(matchEvidenceRoot(list, committed, { at, evidenceCut })!.cut).toBe(minute - 240);
+    expect(matchEvidenceRoot(list, committed, { at, evidenceCut, maxCuts: 2 })).toBeNull();
+    // A window as wide as an answer likes costs no more than maxCuts rebuilds.
+    expect(matchEvidenceRoot(list, `0x${'99'.repeat(32)}`, { at, evidenceCut: { quantumSeconds: 1e-6, windowSeconds: 1e12 } })).toBeNull();
+  });
+});
+
 describe('the leaf written out by hand', () => {
   it('is the ABI coder\'s encoding, for any payment', () => {
     for (let i = 0; i < 200; i++) {

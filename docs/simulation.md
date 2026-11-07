@@ -1,9 +1,10 @@
 # Testnet simulation
 
-**Status:** built and installed on 2 November 2026. It starts when its treasury is funded with
-testnet gas; [sigvara.xyz/simulation](https://sigvara.xyz/simulation) shows where it is, day by day.
+**Status:** running since 2 November 2026, and it stops by itself on 30 November.
+[sigvara.xyz/simulation](https://sigvara.xyz/simulation) shows where it is, day by day, and
+[what changed during the run](#what-changed-during-the-run) is recorded below.
 
-Sigvara on Arc testnet has three registered agents, two of them its own, and two oracle operators,
+When this was built, Sigvara on Arc testnet had three registered agents, two of them its own, and two oracle operators,
 both its own. Nothing outside depends on a score yet. A protocol with that little traffic cannot
 show that its scoring, maturity, divergence checks and slashing behave as designed under load. So
 `sim/` runs a small agent economy on testnet for four weeks: 20 agents, 40 paying customers, a Sybil
@@ -57,12 +58,79 @@ victim's quarter returns to the simulation.
 It exercises registration, bonding, payment scanning, payer-signed outcomes, scoring, maturity,
 both operators' agreement, the explorer's evidence check, and a disputed and an undisputed slash.
 
-It does not exercise recorded failures (that needs `PAYER_OUTCOMES=both`), ERC-8004 links (the
-oracle's `/link` needs a credential), outcomes carried through CounterAudit, or agents that do real
-work. Those are the next phase, each needing an oracle configuration change.
+It does not exercise recorded failures (that needs `PAYER_OUTCOMES=both`), outcomes carried through
+CounterAudit, or agents that do real work. Those are the next phase, each needing an oracle
+configuration change. An ERC-8004 link and a Base payment have each been tried on one agent, by hand
+and beside the run, as the next section says.
 
 A score earned in the simulation measures the simulation. Read it as evidence the protocol works,
 never as evidence anyone wants it.
+
+## What changed during the run
+
+The simulation's own program has not changed. The protocol around it has, and one of its agents has
+been used for tests by hand. Read the results on 30 November against this list.
+
+| Date (UTC) | Run day | What changed | What it does to the numbers |
+|---|---|---|---|
+| 3 November | 1 | The solo agent registered ERC-8004 agent 897766 and set its `sigvara` key ([runbook, section 5](operations-runbook.md)) | Nothing in its Sigvara score. The publisher posts that score to ERC-8004, and this is the only agent it posts for |
+| 4 November | 2 | Reputation upgraded to `f35cbc6` ([#199](https://github.com/RunTimeAdmin/Sigvara/pull/199)) | Each finalize used to throw away the fraction of a point built up since the last, which gave about 3.4 points a day in place of 4. Compare maturity rates from this day on |
+| 5 November | 3 | Reputation upgraded to `dcad617` ([#218](https://github.com/RunTimeAdmin/Sigvara/pull/218)) | A score's age now runs from its proposal and not its finalize. Score values do not change |
+| 7 November | 5 | Payments on Base Sepolia count on both operators | Below |
+
+### Base Sepolia, from 7 November
+
+Both operators now also count payments that settle on Base Sepolia
+([ADR 0009](adr/0009-payments-on-base.md)). They scanned it in shadow from about 00:40 UTC, then went
+`on` from block 55462500, the checker at 01:54:45 UTC and the primary at 01:55:18 UTC. The simulation's
+customers still pay in SVR on Arc testnet, so for the cast this adds a second chain to scan and no
+payments.
+
+It does add a way for scoring to pause. An operator whose scan of a chain that is `on` has fallen
+behind scores nothing that epoch, and both operators read Base through keyless public endpoints. A
+gap in the run's scores from 7 November on may be that and not the simulation: `paymentChainHold` on
+each operator's `/health` says so, and `sigvara_oracle_epochs_held_by_payment_chain_total` counts it.
+
+One payment was made by hand to test the whole path, and it belongs to the solo agent:
+
+- **Agent:** `0x9d7181C8676fd40E4B31510dC0E573A0C0C2fa11`, ERC-8004 agent 897766.
+- **Payer:** `0x537Ae120b37374336E53B74855bF5B3a692387D3`, a Sigvara test wallet. It is not in the
+  cast or in `simulation.json`, so the explorer's evidence check shows a payer the cast does not list.
+- **Payment:** 0.02 Base Sepolia USDC in
+  [`0x222ce350…cd2f087`](https://sepolia.basescan.org/tx/0x222ce3503e8d6c768f09efb0cebb8fe029fd1075aba0dafdd017ca929760f087),
+  block 55477277, about 02:08 UTC.
+- **Outcome:** "delivered", signed with that wallet's key on chain 84532. `POST /attest` answered 503
+  `unconfirmed` until the block was finalized, and the primary accepted it at 02:31:00 UTC, checked at
+  block 55478313. The agent's attestations went from 45 to 46.
+
+- **Counted:** the one-hour delay passed at about 03:08:48 UTC. At 03:12 UTC both operators listed the
+  payment among the agent's 61, with the same leaf (`0x01fb5744…eccba99`) and the same root
+  (`0xc382a1c0…afde068e`). The checker had imported the outcome at 02:54:56 UTC, at the same checked
+  block.
+- **First epochs:** the 02:55 UTC epochs were the first to scan past the payment. Both operators reached
+  the same Base block, 55485014, and the primary proposed and finalized as usual. Neither held, and the
+  checker recorded no divergence.
+- **Score:** 38 on the primary at 03:12 UTC, from 46 attestations and 15 payers, one of each from this
+  payment. It moves no whole point: the success factor reads 13 at 45 of 45 and at 46 of 46, and
+  0.02 USDC is a 5,000th of a fee point at `FEE_UNIT=100000000`. Compare the solo agent with the other
+  steady agents knowing it has this extra payer.
+
+This is Sigvara paying itself in free faucet USDC, so it tests the mechanism and says nothing about
+demand. Circle's faucet also sent the same agent 20 USDC at block 55457467, about 01:02 UTC. Both
+shadow scans reported that as the one payment they would credit, which is how shadow was checked, and
+since it came before `FROM_BLOCK` it counts for nothing.
+
+Not yet seen: this payment in a proposal or a finalized root. The agent's proposal from 00:41 UTC
+stays pending until 06:41 UTC, so the first one to hold the payment comes at the primary's next epoch
+after that, about 06:55 UTC, and the checker audits it about an hour later.
+
+Not tested by this: a Wallet MCP x402 payment and a smart wallet's signature, which rollout step 4
+names, since this was a plain transfer signed with a plain key; an outcome carried through CounterAudit
+(CounterAudit#97 is merged and not deployed); and any volume.
+
+The explorer's evidence check reads this payment: at 03:13 UTC it rebuilt all 61 leaves and matched the
+served root. The SDK before 1.0.0-alpha.17 does not, so its `sigvara_verify_evidence` reports this
+agent's served root as differing, read against the live list at 03:13 UTC as one leaf of 61.
 
 ## Running it
 

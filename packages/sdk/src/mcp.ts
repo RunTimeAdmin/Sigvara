@@ -335,7 +335,7 @@ function readEvidence(body: unknown, didHash: string) {
   if (body === null || typeof body !== 'object' || Array.isArray(body)) {
     throw new ToolError('The oracle\'s answer is not an evidence list.');
   }
-  const b = body as { didHash?: unknown; evidence?: unknown; evidenceRoot?: unknown };
+  const b = body as { didHash?: unknown; evidence?: unknown; evidenceRoot?: unknown; paymentChains?: unknown; evidenceCut?: unknown };
   if (typeof b.didHash !== 'string' || b.didHash.toLowerCase() !== didHash.toLowerCase()) {
     throw new ToolError('The oracle\'s answer does not name this agent, so it is not checked.');
   }
@@ -362,6 +362,9 @@ function readEvidence(body: unknown, didHash: string) {
       success: e.success === true ? true : e.success === false ? false : null,
       outcomeSource: typeof e.outcomeSource === 'string' && OUTCOME_SOURCES.has(e.outcomeSource) ? e.outcomeSource : null,
     };
+    if (e.chainId !== undefined && e.chainId !== null) {
+      record.chainId = typeof e.chainId === 'number' && Number.isSafeInteger(e.chainId) && e.chainId > 0 ? e.chainId : -1;
+    }
     try {
       if (record.amount === '') throw new Error('a payment amount that is not a whole number');
       if (record.settledAt === -1) throw new Error('a payment time that is not a whole number of seconds before the year 10000');
@@ -374,7 +377,16 @@ function readEvidence(body: unknown, didHash: string) {
     records.push(record);
     servedLeaves.push(isHash(e.leaf) ? e.leaf.toLowerCase() : null);
   });
-  return { records, leaves, servedLeaves, problems, servedRoot: isHash(b.evidenceRoot) ? b.evidenceRoot.toLowerCase() : null };
+  // These only choose which readings of the list are tried, so a wrong one cannot make a root reproduce.
+  const delays: Record<number, number> = {};
+  for (const c of Array.isArray(b.paymentChains) ? b.paymentChains : []) {
+    if (Number.isSafeInteger(c?.chainId) && Number.isSafeInteger(c?.delaySeconds) && c.delaySeconds >= 0) delays[c.chainId] = c.delaySeconds;
+  }
+  const cut = (b.evidenceCut && typeof b.evidenceCut === 'object' ? b.evidenceCut : {}) as Record<string, unknown>;
+  const evidenceCut = typeof cut.quantumSeconds === 'number' && typeof cut.windowSeconds === 'number'
+    ? { quantumSeconds: cut.quantumSeconds, windowSeconds: cut.windowSeconds }
+    : null;
+  return { records, leaves, servedLeaves, problems, delays, evidenceCut, servedRoot: isHash(b.evidenceRoot) ? b.evidenceRoot.toLowerCase() : null };
 }
 
 function sumFactors(f: Factors): number {
@@ -676,7 +688,7 @@ export function createTrustServer(options: TrustServerOptions): TrustServer {
         ),
       ]);
       if (fetched.err !== undefined) throw new ToolError(`Could not fetch the oracle's evidence: ${fail(fetched.err)}`);
-      const { records, leaves, servedRoot, servedLeaves, problems } = readEvidence(fetched.body, didHash);
+      const { records, leaves, servedRoot, servedLeaves, problems, delays, evidenceCut } = readEvidence(fetched.body, didHash);
 
       const rebuiltRoot = problems.length ? null : evidenceRoot(leaves);
       const servedLeavesDiffering = problems.length ? null
@@ -694,7 +706,7 @@ export function createTrustServer(options: TrustServerOptions): TrustServer {
       } else if (finalRoot === ZERO_ROOT) {
         finalized = { root: null, reproduced: null, detail: 'No score with an evidence root has been finalized for this agent.' };
       } else {
-        const m = matchEvidenceRoot(records, finalRoot, { leaves, maxCuts });
+        const m = matchEvidenceRoot(records, finalRoot, { leaves, maxCuts, delays });
         if (!m) {
           finalized = { root: finalRoot, reproduced: false,
             detail: 'No reading of the payments listed reproduces the finalized root. The oracle no longer lists the set '
@@ -715,18 +727,22 @@ export function createTrustServer(options: TrustServerOptions): TrustServer {
           // A payment in the committed set twice was counted twice. Legs of one transaction share a txHash with
           // different payers, so it is identical leaves that are flagged, not shared hashes.
           const duplicated = m.leaves.length - new Set(m.leaves.map((l) => l.toLowerCase())).size;
+          // A payment chain's payment counts its delay after it settled, so with one in the set the cut-off is
+          // not a settlement time.
+          const delayed = m.indexes.some((i) => records[i].chainId != null);
           finalized = {
             root: finalRoot,
             reproduced: true,
             covers: m.indexes.length,
-            settledBy: m.cut === Infinity ? null : iso(m.cut),
+            settledBy: m.cut === Infinity || delayed ? null : iso(m.cut),
+            countedBy: m.cut === Infinity ? null : iso(m.cut),
             outcomesReadAsUnreported: readAsUnreported.size,
             duplicatedPayments: duplicated,
             checkedWithContract: confirmed.size,
             confirmedByContract: yes,
             detail: `Reproduced from ${m.indexes.length === records.length ? `all ${records.length}` : `${m.indexes.length} of the ${records.length}`} `
               + 'payments listed'
-              + (m.cut === Infinity || m.indexes.length === records.length ? '' : `, those settled by ${iso(m.cut)}`)
+              + (m.cut === Infinity || m.indexes.length === records.length ? '' : `, those ${delayed ? 'counted' : 'settled'} by ${iso(m.cut)}`)
               + (readAsUnreported.size ? `, reading ${readAsUnreported.size} outcome(s) the payer signed afterwards as not yet reported, as the root does` : '')
               + `. verifyEvidence confirmed ${yes} of the ${confirmed.size} checked`
               + (confirmed.size < m.indexes.length ? ', the last listed; the root match covers the rest' : '') + '.'
@@ -744,7 +760,7 @@ export function createTrustServer(options: TrustServerOptions): TrustServer {
           detail: 'Proposed with no evidence root, so it commits to no payments.' };
       } else if (pending.exists) {
         const m = problems.length ? null
-          : matchEvidenceRoot(records, pending.evidenceRoot, { at: Number(pending.proposedAt), leaves });
+          : matchEvidenceRoot(records, pending.evidenceRoot, { at: Number(pending.proposedAt), leaves, maxCuts, delays, evidenceCut });
         pendingResult = { root: pending.evidenceRoot, proposedAt: iso(pending.proposedAt), reproduced: problems.length ? null : !!m };
       }
       const notYetFinalized = problems.length ? null
@@ -768,6 +784,7 @@ export function createTrustServer(options: TrustServerOptions): TrustServer {
           return {
             txHash: r.txHash, payer: r.payer, amount: String(r.amount),
             settledAt: iso(BigInt(r.settledAt)),
+            chainId: r.chainId ?? null,
             // What the oracle lists now. A payer-signed outcome added after the root is the oracle's word here.
             outcome: label(r.success),
             outcomeSource: r.outcomeSource ?? null,
@@ -781,7 +798,7 @@ export function createTrustServer(options: TrustServerOptions): TrustServer {
         meaning: 'A reproduced finalized root shows the oracle scored on exactly the payments it lists, with the outcomes in '
           + 'committedOutcome; verifyEvidence is the contract agreeing, payment by payment. An outcome that differs from '
           + 'committedOutcome was added afterwards and is the oracle\'s word. Neither shows a transaction happened as '
-          + 'listed: read a payment\'s txHash on chain for that.',
+          + 'listed: read a payment\'s txHash on chain for that, on the chain its chainId names when it has one.',
         source: source(),
       };
     },
