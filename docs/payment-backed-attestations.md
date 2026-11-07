@@ -258,9 +258,10 @@ A payment that settled on a payment chain ([ADR 0009](adr/0009-payments-on-base.
 six-word leaf, with the chain first: `keccak256(keccak256(abi.encode(uint256 chainId, bytes32
 txHash, address payer, uint256 amount, uint256 settledAt, uint8 outcome)))`. The verifier reads
 the transaction from the chain `chainId` names, and every scored-chain leaf keeps the five words
-the published roots were made with (`oracle/merkle.js`). The explorer rebuilds both. The SDK's
-`evidenceLeaf`, and so `sigvara_verify_evidence` in `sigvara-mcp`, rebuilds only the five-word
-leaf. That is harmless until a chain is `on`, since a chain in shadow adds nothing to a root.
+the published roots were made with (`oracle/merkle.js`). The explorer rebuilds both, and so do the
+SDK's `evidenceLeaf` and `sigvara_verify_evidence` in `sigvara-mcp`, from 1.0.0-alpha.17. Earlier
+versions rebuild only the five-word leaf, so they report a good root with such a payment in it as
+a mismatch.
 
 Its payer can sign an outcome too, in the same typed data with that chain's id in the domain, and the
 request names the chain as `payment.chainId` (ADR 0009, section 7). The outcome goes into the leaf as
