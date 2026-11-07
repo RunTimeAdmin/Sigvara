@@ -1,7 +1,7 @@
 # ADR 0009: Count payments that settle on Base, starting with Base Sepolia
 
 **Status:** Accepted · 2026-11-03, with David's decisions below. Rollout step 1 is built, off by default
-(`oracle/payment-chains.js`): sections 1 to 8, with section 7 since 6 November 2026. Step 2, shadow on both operators, ran from about 00:40 UTC on 7 November 2026, and step 3 followed the same day: `on` from block 55462500, the checker at 01:54:45 UTC and the primary at 01:55:18 UTC. Step 4 has begun: a plain transfer from a test wallet, with an outcome signed by its key, is held alike by both operators and is in a proposal the checker has audited ([simulation.md](../simulation.md)). A Wallet MCP x402 payment and a smart wallet's signature are still to do.
+(`oracle/payment-chains.js`): sections 1 to 8, with section 7 since 6 November 2026. Step 2, shadow on both operators, ran from about 00:40 UTC on 7 November 2026, and step 3 followed the same day: `on` from block 55462500, the checker at 01:54:45 UTC and the primary at 01:55:18 UTC. Step 4 has begun: two plain transfers, one from a test wallet with an outcome signed by its key and one from a Base Account with an outcome checked through ERC-1271, are held alike by both operators and are in proposals the checker has audited, and the first is in a finalized root ([simulation.md](../simulation.md)). A Wallet MCP x402 payment is still to do.
 CounterAudit's forwarder takes the field from CounterAudit#97, which is not deployed yet, so an outcome for a payment chain's payment goes
 straight to an operator's `POST /attest` for now.
 
@@ -277,7 +277,8 @@ Open before it could go `on`, and none of it matters in shadow:
   with its own provider (decision 5).
 - **An endless answer.** ethers reads a whole response with no size limit, so a hostile endpoint might exhaust an
   operator's memory. This has not been tested. It is one reason shadow runs on one operator.
-- **The SDK's evidence check.** Closed in 1.0.0-alpha.17: `evidenceLeaf` builds the six-word leaf and
+- **The SDK's evidence check.** The leaf is closed in 1.0.0-alpha.17: `evidenceLeaf` builds the six-word leaf and
   `sigvara_verify_evidence` keeps `chainId`. Versions before it report a good root with a chain's payment in it as a
-  mismatch.
+  mismatch. In 1.0.0-alpha.17 the tool still fails on an agent with a long payment history, because it confirms up to
+  100 payments at a pace the public RPC refuses. The explorer's check does not.
 - **Mainnet.** Its chain id, RPC and contracts are published at launch, and decision 1's testnet-only posture holds.

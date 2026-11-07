@@ -91,7 +91,8 @@ behind scores nothing that epoch, and both operators read Base through keyless p
 gap in the run's scores from 7 November on may be that and not the simulation: `paymentChainHold` on
 each operator's `/health` says so, and `sigvara_oracle_epochs_held_by_payment_chain_total` counts it.
 
-One payment was made by hand to test the whole path, and it belongs to the solo agent:
+Two payments were made by hand to test the whole path, both to the solo agent. The first came from a
+plain key:
 
 - **Agent:** `0x9d7181C8676fd40E4B31510dC0E573A0C0C2fa11`, ERC-8004 agent 897766.
 - **Payer:** `0x537Ae120b37374336E53B74855bF5B3a692387D3`, a Sigvara test wallet. It is not in the
@@ -102,7 +103,6 @@ One payment was made by hand to test the whole path, and it belongs to the solo 
 - **Outcome:** "delivered", signed with that wallet's key on chain 84532. `POST /attest` answered 503
   `unconfirmed` until the block was finalized, and the primary accepted it at 02:31:00 UTC, checked at
   block 55478313. The agent's attestations went from 45 to 46.
-
 - **Counted:** the one-hour delay passed at about 03:08:48 UTC. At 03:12 UTC both operators listed the
   payment among the agent's 61, with the same leaf (`0x01fb5744…eccba99`) and the same root
   (`0xc382a1c0…afde068e`). The checker had imported the outcome at 02:54:56 UTC, at the same checked
@@ -112,27 +112,48 @@ One payment was made by hand to test the whole path, and it belongs to the solo 
   checker recorded no divergence.
 - **Score:** 38 on the primary at 03:12 UTC, from 46 attestations and 15 payers, one of each from this
   payment. It moves no whole point: the success factor reads 13 at 45 of 45 and at 46 of 46, and
-  0.02 USDC is a 5,000th of a fee point at `FEE_UNIT=100000000`. Compare the solo agent with the other
-  steady agents knowing it has this extra payer.
+  0.02 USDC is a 5,000th of a fee point at `FEE_UNIT=100000000`.
 
-This is Sigvara paying itself in free faucet USDC, so it tests the mechanism and says nothing about
+The first proposal to hold that payment came at 07:25:47 UTC, once the agent's proposal from 00:41 UTC had
+finalized: a score of 39, with root `0xe26d882f…f1646769`, over 64 of the 65 payments then listed. The
+checker's 08:24 UTC epoch checked it and recorded no divergence. It finalized in the primary's 14:25 UTC
+epoch, the first finalized root to hold a Base payment. At 15:31 UTC the reputation contract's
+`verifyEvidence` confirmed the payment against that root, and refused the same proof with the amount
+changed by one unit.
+
+A second payment tested a smart wallet the same day:
+
+- **Payer:** `0xEac45FCb608fFd7dde69BF5A591B27C991963df0`, a Base Account held by the Sigvara team. It is
+  not in the cast or in `simulation.json` either.
+- **Payment:** 0.02 Base Sepolia USDC in
+  [`0xa8bc7ab1…cf72c3de`](https://sepolia.basescan.org/tx/0xa8bc7ab19c11d758f3caa0207b91ce0af5154506b0b897cb131ed13fcf72c3de),
+  block 55630927, about 10:40 UTC. The payment also deployed the account on Base Sepolia.
+- **Outcome:** "delivered", signed by the account. The signature is 640 bytes, checked through ERC-1271.
+  The primary accepted it at 11:04:09 UTC, with `signer: contract`, checked at block 55632945, and the
+  checker imported it at about 11:24:32 UTC at the same block.
+- **Counted:** at 11:44 UTC both operators listed it among the agent's 69, with the same leaf
+  (`0xdc4ecb81…1742f8a7`) and the same root (`0x72144b3d…fbe7af30`).
+- **Proposal:** the proposal of 14:25:48 UTC holds both Base payments: a score of 40, with root
+  `0xa98b3383…5affee3`, over 70 of the 73 payments then listed. The checker's 15:24 UTC epoch recorded no
+  divergence. Its window closes at 20:25:48 UTC.
+- **Score:** 40 on the primary at 15:31 UTC, from 55 attestations and 16 payers. Compare the solo agent with
+  the other steady agents knowing it has these two extra payers.
+
+Both are Sigvara paying itself in free test USDC, so they test the mechanism and say nothing about
 demand. Circle's faucet also sent the same agent 20 USDC at block 55457467, about 01:02 UTC. Both
 shadow scans reported that as the one payment they would credit, which is how shadow was checked, and
 since it came before `FROM_BLOCK` it counts for nothing.
 
-The first proposal to hold it came at 07:25:47 UTC, once the agent's proposal from 00:41 UTC had
-finalized: a score of 39, with root `0xe26d882f…f1646769`, over 64 of the 65 payments then listed. The
-checker's 08:24 UTC epoch checked it and recorded no divergence, and at 08:30 UTC the root rebuilt from
-each operator's own list. Not yet seen at that time: a finalized root holding a Base payment. This
-proposal's window closes at 13:25:47 UTC, so that comes at the primary's next epoch after it.
+Not tested by these: a Wallet MCP x402 payment, which rollout step 4 names, since both were plain USDC
+transfers; an outcome carried through CounterAudit (CounterAudit#97 is merged and not deployed); and any
+volume.
 
-Not tested by this: a Wallet MCP x402 payment and a smart wallet's signature, which rollout step 4
-names, since this was a plain transfer signed with a plain key; an outcome carried through CounterAudit
-(CounterAudit#97 is merged and not deployed); and any volume.
-
-The explorer's evidence check reads this payment: at 03:13 UTC it rebuilt all 61 leaves and matched the
-served root. The SDK does too from 1.0.0-alpha.17, published that morning. Before it, `sigvara_verify_evidence`
-reports this agent's served root as differing, read against the live list at 03:13 UTC as one leaf of 61.
+The explorer's evidence check reads these payments: at 03:13 UTC it rebuilt all 61 leaves and matched the
+served root. The SDK's `evidenceLeaf` builds the same leaf from 1.0.0-alpha.17, published that morning.
+Before it, `sigvara_verify_evidence` reported this agent's served root as differing, read against the live
+list at 03:13 UTC as one leaf of 61. In 1.0.0-alpha.17 that tool still fails on this agent, with `Could not
+read the chain`: it confirms up to 100 payments at a pace the public RPC refuses. That says nothing about
+the agent.
 
 ## Running it
 

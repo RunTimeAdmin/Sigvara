@@ -12,7 +12,7 @@ As of 6 November 2026. This is the one list of what comes next. The [launch chec
 
 | Step | Finished when |
 |---|---|
-| Payer outcomes for Base payments are built ([ADR 0009](adr/0009-payments-on-base.md), section 7), and Base Sepolia has counted on both operators since 7 November. A plain transfer and its signed outcome went through ([simulation.md](simulation.md)). Next, the same from Wallet MCP | A Wallet MCP x402 payment on Base Sepolia is credited by both operators, and a payer outcome signed on Base is accepted by both |
+| Payer outcomes for Base payments are built ([ADR 0009](adr/0009-payments-on-base.md), section 7), and Base Sepolia has counted on both operators since 7 November. Plain transfers and their signed outcomes went through, from a key and from a smart wallet ([simulation.md](simulation.md)). Next, the same from Wallet MCP | A Wallet MCP x402 payment on Base Sepolia is credited by both operators, and a payer outcome signed on Base is accepted by both |
 | A read-only Sigvara plugin for Coinbase's Wallet MCP, once a score describes payments those agents can make | Submitted to `coinbase/agents` |
 | Design partners | One outside team has agreed to gate on a score |
 | The first outside gate in production | Outside consumers reads 1, and [/integrate](https://sigvara.xyz/integrate) says so |
