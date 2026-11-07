@@ -610,10 +610,11 @@ again. The next epoch scans from `FROM_BLOCK`. The operator must run a commit wi
 `PAYMENT_VERIFICATION=required`, `PAYMENT_SCAN_ENABLED=1` and `EXPECTED_CHAIN_ID`, or the process refuses to start. Base Sepolia (84532) has run in shadow on both operators since 7 November 2026, with asset `0x036CbD53842c5426634e7929541eC2318f3dCF7e`, `FROM_BLOCK=55444000`, `FEE_UNIT=100000000`, `MIN_AMOUNT=10000` and `CHUNK=2000`, through `base-sepolia-rpc.publicnode.com` on the primary and `base-sepolia.gateway.tenderly.co` on the checker.
 
 **Checking it.** `curl -s https://checker.sigvara.xyz/health | jq .paymentChains`. Each chain reports `mode`,
-`lastBlock`, `lastBlockTs` and `lastScan`, which holds `from`, `to`, `wouldCredit`, `skipped`, `reasons` and `canary`.
+`lastBlock`, `lastBlockTs` and `lastScan`, which holds `from`, `to`, `wouldCredit`, `skipped`, `reasons` and `canary`,
+and `readLimited` when a step stopped at `MAX_READS`.
 `canary: "unavailable"` is what a shadow scan with nothing to credit reports, because the canary needs a payment
-already held on that chain. `/health` moves after each step of at most `MAX_BLOCKS` blocks and not during one, so a step
-with many payments can look stuck for minutes. Also check that `lastBlockTs` moves between epochs.
+already held on that chain. `/health` moves after each step of at most `MAX_BLOCKS` blocks and `MAX_READS` reads and not
+during one, so a step with many payments can look stuck for minutes. Also check that `lastBlockTs` moves between epochs.
 
 **When a scan fails.** The log says `payment chain 99801 scan failed`, and `/metrics` counts it in
 `sigvara_oracle_payment_chain_scan_errors_total`. In shadow, scoring carries on, and the next epoch resumes from the

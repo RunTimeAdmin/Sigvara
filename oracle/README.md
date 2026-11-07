@@ -1123,7 +1123,7 @@ testnet only. Each setting below is per chain, with the chain id in its name.
 | `PAYMENT_CHAIN_<id>_MIN_AMOUNT` | required | As `PAYMENT_MIN_AMOUNT`, in this asset's base units, and above 0: at 0 a transfer of a single unit counts as a payment. Both operators use the same value. |
 | `PAYMENT_CHAIN_<id>_CHUNK` | `200` | Blocks per `getLogs` call. |
 | `PAYMENT_CHAIN_<id>_PACE_MS` | `500` | Milliseconds between `getLogs` calls. |
-| `PAYMENT_CHAIN_<id>_MAX_BLOCKS` | `36000` | Blocks one scan covers at most, so a catch-up moves forward a step an epoch (two hours of Base Sepolia). |
+| `PAYMENT_CHAIN_<id>_MAX_BLOCKS` | `36000` | Blocks one scan covers at most, so a catch-up moves forward a step an epoch (two hours of Base Sepolia). `PAYMENT_CHAIN_<id>_MAX_READS`, default `1000`, is what one scan spends on its payments' reads at most: it stops just before the block that would pass it and saves its place, and the next carries on. Operators need not share either value. |
 
 What differs from the scored chain's scan:
 
@@ -1308,7 +1308,7 @@ cd oracle
 node --test
 ```
 
-1319 tests (as of 6 November 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
+1322 tests (as of 7 November 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
 the trust weighting, Merkle evidence trees, HTTP helpers, store persistence and recovery,
 the streamed state file, chain access with backoff, scan checkpointing, fee caps and transaction replacement,
 metrics, and cooldown logic. Several of the files run the real `index.js` and `watcher.js`

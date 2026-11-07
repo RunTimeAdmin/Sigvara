@@ -508,6 +508,94 @@ test('a catch-up scan covers at most MAX_BLOCKS and moves its cursor that far', 
   assert.deepEqual({ lastBlock: out.state.lastBlock, lastBlockTs: out.state.lastBlockTs }, { lastBlock: 1499, lastBlockTs: 1_700_001_499 });
 });
 
+test('a scan of many payments stops at MAX_READS, saves its place, and the next one credits the rest', async () => {
+  const a = agent();
+  const payer = ethers.Wallet.createRandom().address;
+  const logs = Array.from({ length: 60 }, (_, i) => (
+    transferLog({ from: payer, to: a.agentAddress, amount: 1_000_000n, block: 1100 + i })
+  ));
+  // One the rules refuse, past the first stop, so it should be reported once.
+  logs.push(transferLog({ from: a.operator, to: a.agentAddress, amount: 1_000_000n, block: 1150 }));
+  const chain = fakeChain({ logs });
+  let reads = 0;
+  const provider = {
+    ...chain,
+    getCode: async (...args) => { reads += 1; return chain.getCode(...args); },
+    getBlock: async (tag) => { if (Number.isInteger(tag)) reads += 1; return chain.getBlock(tag); },
+  };
+  const { deps: d, credited } = deps({ provider, agents: [a] });
+  const capped = config({ [`PAYMENT_CHAIN_${BASE_SEPOLIA}_MAX_READS`]: '20' }).chains[0];
+
+  const first = await pc.scanChain(capped, d);
+  // Two reads a block, so ten blocks, and one more for the time of the block it stopped at.
+  assert.equal(first.to, 1109);
+  assert.equal(first.credited, 10);
+  assert.equal(reads, 21);
+  assert.equal(first.readLimited, true);
+  assert.equal(first.caughtUp, false, 'so the epoch takes another step');
+  assert.deepEqual({ lastBlock: first.state.lastBlock, lastBlockTs: first.state.lastBlockTs }, { lastBlock: 1109, lastBlockTs: 1_700_001_109 });
+
+  let out = first;
+  let scans = 1;
+  let skipped = first.skipped;
+  while (!out.caughtUp) {
+    out = await pc.scanChain(capped, { ...d, state: out.state });
+    scans += 1;
+    skipped += out.skipped;
+  }
+  assert.equal(scans, 6);
+  assert.equal(out.to, 2000);
+  assert.equal(out.readLimited, false);
+  assert.equal(credited.length, 60);
+  assert.equal(new Set(credited.map((c) => c.txHash)).size, 60, 'none lost, none twice');
+  assert.equal(skipped, 1);
+
+  assert.equal(config().chains[0].maxReads, 1000);
+  assert.throws(() => config({ [`PAYMENT_CHAIN_${BASE_SEPOLIA}_MAX_READS`]: '0' }), /MAX_READS/);
+});
+
+test('a scan keeps a block whole, and moves however many payments one block holds', async () => {
+  const agents = [agent(), agent(), agent(), agent(), agent()];
+  const payer = ethers.Wallet.createRandom().address;
+  const logs = agents.map((a) => transferLog({ from: payer, to: a.agentAddress, amount: 1_000_000n, block: 1100 }));
+  logs.push(transferLog({ from: payer, to: agents[0].agentAddress, amount: 1_000_000n, block: 1200 }));
+  const { deps: d, credited } = deps({ provider: fakeChain({ logs }), agents });
+  const capped = config({ [`PAYMENT_CHAIN_${BASE_SEPOLIA}_MAX_READS`]: '2' }).chains[0];
+  const first = await pc.scanChain(capped, d);
+  assert.equal(first.to, 1199);
+  assert.equal(credited.length, 5);
+  const second = await pc.scanChain(capped, { ...d, state: first.state });
+  assert.equal(second.to, 2000);
+  assert.equal(credited.length, 6);
+});
+
+test('where a scan stops cannot change what two operators hold, or the root they commit to', async () => {
+  const agents = [agent(), agent()];
+  const payers = [ethers.Wallet.createRandom().address, ethers.Wallet.createRandom().address];
+  const logs = Array.from({ length: 40 }, (_, i) => transferLog({
+    from: payers[i % 2], to: agents[i % 3 === 0 ? 1 : 0].agentAddress, amount: 1_000_000n + BigInt(i), block: 1100 + i * 7,
+  }));
+  async function operator(env) {
+    const chainCfg = config(env).chains[0];
+    const { deps: d, credited } = deps({ provider: fakeChain({ logs }), agents });
+    let out = await pc.scanChain(chainCfg, d);
+    while (!out.caughtUp) out = await pc.scanChain(chainCfg, { ...d, state: out.state });
+    return { credited, last: out.state.lastBlock };
+  }
+  const tight = await operator({ [`PAYMENT_CHAIN_${BASE_SEPOLIA}_MAX_READS`]: '9' });
+  const loose = await operator({});
+  assert.equal(tight.last, loose.last);
+  assert.deepEqual(tight.credited, loose.credited);
+
+  const cfg = config();
+  const events = ({ credited }) => credited.map((c) => Object.freeze({
+    chainId: BASE_SEPOLIA, txHash: c.txHash, payer: c.payer, amount: c.amount, ts: c.ts, success: null,
+  }));
+  const at = (1_700_000_000 + 2000) * 1000 + 2 * HOUR;
+  assert.equal(merkle.rootFor(pc.eventsAt(events(tight), at, cfg)), merkle.rootFor(pc.eventsAt(events(loose), at, cfg)));
+  assert.equal(pc.eventsAt(events(tight), at, cfg).length, 40);
+});
+
 test('two operators that credited the same payments in a different order commit to the same root', () => {
   const cfg = config();
   const old = arcEvent(NOW - 5 * HOUR);
