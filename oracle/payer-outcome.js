@@ -193,6 +193,15 @@ function packetIdOf(value) {
 }
 
 /**
+ * The chain a request or a peer names for a payment (ADR 0009, section 7): null when it names none,
+ * undefined when what it names is not a chain id.
+ */
+function chainIdOf(value) {
+  if (value === undefined || value === null) return null;
+  return Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
+/**
  * The `payerOutcome` of a request, checked for shape only.
  * @returns {{ ok: true, value: { payer: string, outcome: 1|2, evidence: string, signedAt: number,
  *   deadline: number, signature: string } } | { ok: false, error: string }}
@@ -443,8 +452,9 @@ async function fetchOutcomesPage(peer, since, { timeoutMs = 20_000, maxBytes = M
  * An item a peer served, checked for shape only: everything that matters is checked again
  * against this oracle's own chain view, as if it had been posted here.
  *
- * @returns {{ ok: true, value: { didHash: string, txHash: string, checkedAtBlock: number,
- *   acceptedAt: number, signed: object, packetId: string|null } } | { ok: false, error: string }}
+ * @returns {{ ok: true, value: { didHash: string, txHash: string, chainId: number|null,
+ *   checkedAtBlock: number, acceptedAt: number, signed: object, packetId: string|null } } |
+ *   { ok: false, error: string }}
  */
 function parseServed(item) {
   if (!item || typeof item !== 'object' || Array.isArray(item)) return { ok: false, error: 'not an object' };
@@ -453,6 +463,8 @@ function parseServed(item) {
   if (typeof txHash !== 'string' || !BYTES32.test(txHash)) return { ok: false, error: 'txHash is not 32 bytes' };
   if (!Number.isSafeInteger(checkedAtBlock) || checkedAtBlock < 0) return { ok: false, error: 'checkedAtBlock is not a block number' };
   if (!isMs(acceptedAt)) return { ok: false, error: 'acceptedAt is not a time' };
+  const chainId = chainIdOf(item.chainId);
+  if (chainId === undefined) return { ok: false, error: 'chainId is not a chain id' };
   const signed = parse(item);
   if (!signed.ok) return signed;
   return {
@@ -460,6 +472,7 @@ function parseServed(item) {
     value: {
       didHash: didHash.toLowerCase(),
       txHash: txHash.toLowerCase(),
+      chainId,
       checkedAtBlock,
       acceptedAt,
       signed: signed.value,
@@ -480,6 +493,7 @@ module.exports = {
   ERC1271_MAGIC,
   readConfig,
   domain,
+  chainIdOf,
   parse,
   packetIdOf,
   message,

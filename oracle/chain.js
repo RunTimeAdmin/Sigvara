@@ -293,6 +293,12 @@ async function getRegisteredAgents() {
   return Array.from(knownAgents.values());
 }
 
+// What the registry scan holds for one agent, or null for one it has not seen: registered since the
+// last scan, or slashed and forgotten.
+function knownAgent(didHash) {
+  return knownAgents.get(didHash) ?? null;
+}
+
 // Removes a slashed agent from the known set. Safe because Slashed is terminal in
 // SigvaraIdentity and didHash is deterministic — the same address can never
 // re-register, so there's no risk of losing track of an agent that could return.
@@ -1034,6 +1040,7 @@ module.exports = {
   getReputationData,
   resetStakeViewCache,
   getRegisteredAgents,
+  knownAgent,
   getAgentInfo,
   getProvider,
   isBonded,

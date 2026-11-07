@@ -258,7 +258,7 @@ instead of `success`, and only where `PAYER_OUTCOMES` is on:
 
 The signature is EIP-712 over `PaymentOutcome(bytes32 didHash, bytes32 txHash, address payer,
 uint8 outcome, bytes32 evidence, uint64 signedAt, uint64 deadline)` in the domain `Sigvara`,
-version `1`, on `EXPECTED_CHAIN_ID`, with `REPUTATION_ADDRESS` as the verifying contract.
+version `1`, on `EXPECTED_CHAIN_ID` (or the payment chain `payment.chainId` names), with `REPUTATION_ADDRESS` as the verifying contract.
 `outcome` is `1` delivered or `2` not delivered. A payer without code signs by recovery; one
 with code (a smart account, or an address delegated under EIP-7702) is asked through ERC-1271,
 the rule OpenZeppelin's `SignatureChecker` applies on chain, down to taking an answer longer than
@@ -1176,8 +1176,8 @@ What differs from the scored chain's scan:
   `abi.encode(chainId, txHash, payer, amount, settledAt, outcome)`. The scored chain's is
   unchanged. `/evidence` serves `chainId` on such a payment and each chain's delay.
 
-Payer-signed outcomes for a payment chain's payments are not taken yet: the outcome paths still
-look for the payment on the scored chain only.
+An outcome a payer signs for a payment chain's payment names it as `payment.chainId` and is signed in that chain's domain: only a chain that is `on`, looked up by the scan's rules, and checked there at its finalized block, with a 503 until the payment is finalized (ADR 0009, section 7).
+`GET /outcomes` and peer import carry `chainId`. The domain they and `/evidence` serve names the scored chain, so a verifier swaps in the payment's own.
 
 A state file that holds anything from a payment chain is written as format version 2, which a build
 from before this refuses to load; without payment chains it stays version 1, so a rollback is still
@@ -1308,7 +1308,7 @@ cd oracle
 node --test
 ```
 
-1298 tests (as of 6 November 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
+1319 tests (as of 6 November 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
 the trust weighting, Merkle evidence trees, HTTP helpers, store persistence and recovery,
 the streamed state file, chain access with backoff, scan checkpointing, fee caps and transaction replacement,
 metrics, and cooldown logic. Several of the files run the real `index.js` and `watcher.js`

@@ -41,6 +41,7 @@
 
 const net = require('net');
 const { ethers } = require('ethers');
+const payments = require('./payments');
 const paymentScan = require('./payment-scan');
 const { spanRefused } = require('./log-spans');
 
@@ -525,6 +526,65 @@ async function scanChain(chain, deps) {
   };
 }
 
+/**
+ * A payment named by its hash, for an outcome its payer signed (ADR 0009, section 7). The transfer rules
+ * are payments.verifyPayment's, which agree with the scan's. What a payment chain adds is what the scan
+ * asks too: the endpoint serves this chain, the payment is finalized and not before FROM_BLOCK, the agent
+ * had registered by then, and the recipient is the key's account on both chains. So a payment this
+ * accepts is one the scan credits as well, whichever of them gets there first.
+ *
+ * @param {object} chain one of readConfig().chains
+ * @param {object} deps
+ *   @param {object} deps.provider        the payment chain's
+ *   @param {object} deps.scoredProvider  the scored chain's, for the recipient's code there
+ *   @param {{ agentAddress: string, blockNumber: number }} deps.agent  as the registry scan holds it
+ *   @param {number} deps.registeredAtMs  when the agent registered, in ms
+ * @returns {Promise<object>} what payments.verifyPayment returns
+ * @throws {payments.PaymentError} whose message never carries the RPC URL
+ */
+async function lookUpPayment(chain, { provider, scoredProvider, agent, registeredAtMs }, txHash) {
+  const failed = (err) => new payments.PaymentError('rpc_error', rpcError(err, chain.rpcUrl).message);
+  const read = (fn) => withDeadline(fn).catch((err) => { throw failed(err); });
+
+  const actual = Number(BigInt(await read(() => provider.send('eth_chainId', []))));
+  if (actual !== chain.chainId) {
+    throw new payments.PaymentError('rpc_error', `the RPC for payment chain ${chain.chainId} serves chain ${actual}`);
+  }
+  let credited;
+  try {
+    credited = await withDeadline(() => payments.verifyPayment(
+      { provider, cfg: { asset: chain.asset, minAmount: chain.minAmount, minConfirmations: 1 } },
+      txHash,
+      agent.agentAddress,
+    ));
+  } catch (err) {
+    // Only a failed read quotes the provider. The rest are verifyPayment's own words.
+    if (err instanceof payments.PaymentError && err.code !== 'rpc_error') throw err;
+    throw failed(err);
+  }
+  const finalized = await read(() => provider.getBlock('finalized'));
+  if (!finalized || !Number.isInteger(finalized.number)) {
+    throw new payments.PaymentError('rpc_error', `payment chain ${chain.chainId} did not return a finalized block`);
+  }
+  if (credited.blockNumber > finalized.number) {
+    throw new payments.PaymentError('unconfirmed', `not finalized on chain ${chain.chainId} yet; try again later`);
+  }
+  if (credited.blockNumber < chain.fromBlock) {
+    throw new payments.PaymentError('before_from_block', `this oracle counts chain ${chain.chainId} from block ${chain.fromBlock}`);
+  }
+  if (credited.settledAt < registeredAtMs) {
+    throw new payments.PaymentError('before_registration', 'this payment was made before the agent registered');
+  }
+  const [here, scored] = await Promise.all([
+    read(() => provider.getCode(agent.agentAddress, credited.blockNumber)),
+    read(() => scoredProvider.getCode(agent.agentAddress, agent.blockNumber)),
+  ]);
+  if (!recipientCodeOk(here) || !recipientCodeOk(scored)) {
+    throw new payments.PaymentError('contract_recipient', 'an agent registered at a contract is not counted on a payment chain');
+  }
+  return credited;
+}
+
 async function chainCanary(chain, provider, knownOnChain, byDid, read) {
   const canary = paymentScan.pickCanary(knownOnChain, (did) => byDid.get(did)?.agentAddress ?? null);
   if (!canary || !Number.isInteger(canary.blockNumber)) return 'unavailable';
@@ -579,5 +639,6 @@ module.exports = {
   behind,
   publicView,
   scanChain,
+  lookUpPayment,
   rpcError,
 };

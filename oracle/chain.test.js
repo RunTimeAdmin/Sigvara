@@ -82,6 +82,20 @@ test('getRegisteredAgents: returns agents registered since fromBlock', async () 
   assert.deepEqual(agents.map(a => a.didHash).sort(), ['0xaaa', '0xbbb']);
 });
 
+test('knownAgent: what the scan found, with its registration block, and null for an agent it has not', async () => {
+  const events = [{ blockNumber: 105, args: { didHash: '0xaaa', agentAddress: '0xAgentA' } }];
+  chain.init(CFG, {
+    provider: makeFakeProvider(120),
+    identityContract: makeFakeIdentityContract({ events }),
+    reputationContract: makeFakeReputationContract(),
+  });
+  assert.equal(chain.knownAgent('0xaaa'), null, 'not before a scan');
+  await chain.getRegisteredAgents();
+  assert.equal(chain.knownAgent('0xaaa').blockNumber, 105);
+  assert.equal(chain.knownAgent('0xaaa').agentAddress, '0xAgentA');
+  assert.equal(chain.knownAgent('0xbbb'), null);
+});
+
 test('getRegisteredAgents: second call only scans new blocks but keeps prior agents', async () => {
   const firstBatch = [{ blockNumber: 105, args: { didHash: '0xaaa', agentAddress: '0xAgentA' } }];
   chain.init(CFG, {

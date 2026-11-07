@@ -243,7 +243,7 @@ describe('payer-outcome', () => {
     };
     const ok = payerOutcome.parseServed(good);
     assert.equal(ok.ok, true);
-    assert.deepEqual(Object.keys(ok.value).sort(), ['acceptedAt', 'checkedAtBlock', 'didHash', 'packetId', 'signed', 'txHash']);
+    assert.deepEqual(Object.keys(ok.value).sort(), ['acceptedAt', 'chainId', 'checkedAtBlock', 'didHash', 'packetId', 'signed', 'txHash']);
     assert.equal(ok.value.packetId, null);
     // The CounterAudit packet beside it, when there is one shaped like a packet id. Anything else is
     // left off rather than refused: the outcome stands on its signature, not on the pointer.

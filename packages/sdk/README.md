@@ -389,6 +389,10 @@ await fetch('https://oracle.sigvara.xyz/attest', {
 });
 ```
 
+For a payment on a payment chain ([ADR 0009](https://github.com/RunTimeAdmin/sigvara/blob/main/docs/adr/0009-payments-on-base.md)),
+sign with that chain's id and name it in the request: `payment: { txHash, chainId }`. Oracles that have
+the chain switched on answer 503 until the payment is finalized there, so send it again.
+
 A smart account pays and signs too, if it answers ERC-1271 for its owner's EIP-712
 signatures: pass the owner's signer and the account as `payer`. An account that wraps what
 its owner signs needs its own wallet SDK to sign the same typed data

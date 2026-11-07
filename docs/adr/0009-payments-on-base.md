@@ -1,9 +1,9 @@
 # ADR 0009: Count payments that settle on Base, starting with Base Sepolia
 
-**Status:** Accepted · 2026-11-03, with David's decisions below. Rollout step 1 is built for payments,
-off by default (`oracle/payment-chains.js`): sections 1 to 6 and 8. Section 7, payer-signed outcomes
-for a payment chain's payments, is not built yet; until it is, the outcome paths look for a payment on
-the scored chain only.
+**Status:** Accepted · 2026-11-03, with David's decisions below. Rollout step 1 is built, off by default
+(`oracle/payment-chains.js`): sections 1 to 8, with section 7 since 6 November 2026. Of section 7,
+CounterAudit's forwarder does not carry the field yet, so an outcome for a payment chain's payment goes
+straight to an operator's `POST /attest` for now.
 
 ## Context
 
@@ -145,6 +145,15 @@ up the payment, reads the payer's code and asks ERC-1271 on that chain. This is 
 wallet such as a Coinbase Smart Wallet sign: its `isValidSignature` exists only where it is
 deployed, and a payer that paid from it has deployed it. Peer import, the public outcome feed and
 CounterAudit's forwarder carry the field.
+
+As built, the field is `payment.chainId`, and only a chain that is `on` may be named. The payment is
+looked up by the rules the scan applies, so what can be signed for is what the scan credits: finalized,
+not before `FROM_BLOCK`, not before the agent registered, and not to a contract. Whichever of the scan
+and the outcome reaches a payment first credits it, once. The signature is checked at the chain's
+finalized block, which is recorded as `checkedAtBlock`, so another operator reads the same block. Until
+the payment is finalized the answer is a 503 rather than a refusal, since finality takes about a quarter
+of an hour and a carrier should send it again. A payment's operator is judged as the scan judges it, as
+of today, because the chain's blocks are not the registry's.
 
 Nothing on chain checks outcomes today. A contract can only check an outcome whose domain names its
 own chain, so the parity that ADR 0006's Foundry test shows with OpenZeppelin's `EIP712` would not
