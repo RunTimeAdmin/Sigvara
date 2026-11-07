@@ -20,6 +20,7 @@
   <link rel="stylesheet" href="assets/app.css?v=ac69814" />
   <link rel="stylesheet" href="assets/epochs.css?v=6081b79" />
   <link rel="stylesheet" href="assets/explorer.css?v=simview1" />
+  <link rel="stylesheet" href="assets/lobby.css?v=lobby1" />
 </head>
 <body>
 
@@ -52,6 +53,13 @@
   <p class="ep-lede">Every agent registered on this deployment, with its score and stake. A score is only as good as the payments behind it, so each one can be checked here: your browser rebuilds the Merkle root over the payments the oracle lists, compares it with the root committed on chain, and asks the reputation contract to confirm each payment is in it.</p>
   <p class="netnote">Arc testnet (5042002). Reads only: no wallet, and nothing is signed or sent. Registrations come from Sigvara's event index, a copy of the identity contract's logs that the Sigvara team keeps, and from the chain for the newest blocks; scores and stakes from the contracts themselves.</p>
 
+  <div class="app-card u-hidden" id="lobbyCard">
+    <h2>The lobby</h2>
+    <div class="ag-lobby" id="lobbyRoom"></div>
+    <div class="ag-pick" id="lobbyPick"><span class="netnote">Click an agent to see who it is.</span></div>
+    <p class="netnote">Every agent on this deployment, for fun. A look and a nickname come only from the address, so neither says how far to trust an agent: the scores below are for that. Awake, asleep and ghost follow its status on chain: active, suspended and slashed. A dashed ring marks a simulated agent, and a prop says which kind: a lunchbox for steady, a cup for mediocre, smoke for failing, and a hoop and mask for the Sybil ring. A hard hat is Sigvara's slash drill, a flag its demo agent, and a suitcase an agent from outside. The table below lists the same agents.</p>
+  </div>
+
   <div class="app-card" id="agentsCard">
     <h2>Registered agents</h2>
     <div class="card-body"><p class="netnote">Reading…</p></div>
@@ -79,6 +87,7 @@
 
 <script src="assets/did.js?v=32000f8"></script>
 <script src="assets/explorer.js?v=status1"></script>
-<script src="assets/agents.js?v=paychains1"></script>
+<script src="assets/lobby.js?v=lobby1"></script>
+<script src="assets/agents.js?v=lobby1"></script>
 </body>
 </html>

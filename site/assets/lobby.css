@@ -1,0 +1,35 @@
+/* The lobby on the Agents page (lobby.js). */
+.ag-lobby { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.ag-room { display: block; width: 100%; height: auto; }
+.ag-walker { cursor: pointer; }
+.ag-tag { pointer-events: none; }
+
+.ag-pick { margin-top: 12px; padding: 10px 12px; background: var(--sig-surface); border-radius: 8px; display: flex; flex-wrap: wrap; align-items: center; gap: 14px; font-size: 13px; }
+.ag-pick .ag-name { font-size: 15px; font-weight: 600; }
+.ag-pick .btn { margin-left: auto; }
+.ag-pick dl { display: grid; grid-template-columns: auto auto; gap: 1px 12px; margin: 6px 0 0; }
+.ag-pick dt { color: var(--muted); }
+.ag-pick dd { margin: 0; }
+
+.ag-cell { display: flex; align-items: center; gap: 8px; }
+.ag-cell .ag-char { flex: none; }
+.ag-cell .ag-bob, .ag-cell .ag-blink, .ag-cell .ag-smoke { animation: none; }
+
+@keyframes ag-bob { 50% { transform: translateY(-2px); } }
+@keyframes ag-blink { 0%, 94%, 100% { transform: scaleY(1); } 97% { transform: scaleY(.1); } }
+@keyframes ag-rise { 0% { transform: translateY(0); opacity: .8; } 100% { transform: translateY(-9px); opacity: 0; } }
+.ag-bob { animation: ag-bob 2.4s ease-in-out infinite; }
+.ag-blink { animation: ag-blink 5s infinite; transform-box: fill-box; transform-origin: center; }
+.ag-smoke { animation: ag-rise 2.2s ease-out infinite; }
+.ag-d0 { animation-delay: 0s; }
+.ag-d1 { animation-delay: .35s; }
+.ag-d2 { animation-delay: .7s; }
+.ag-d3 { animation-delay: 1.05s; }
+.ag-d4 { animation-delay: 1.4s; }
+.ag-d5 { animation-delay: 1.75s; }
+.ag-d6 { animation-delay: 2.1s; }
+.ag-d7 { animation-delay: 2.45s; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ag-bob, .ag-blink, .ag-smoke { animation: none; }
+}
