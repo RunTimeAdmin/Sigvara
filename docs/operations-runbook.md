@@ -21,8 +21,8 @@ one to trust when this table has gone stale.
 
 | Service | Host | Commit | Since (UTC) |
 |---|---|---|---|
-| Primary oracle | `archipelago-standby` | `5627f51` | 7 November, 00:41 |
-| Checker | `packrai-vps` | `5627f51` | 7 November, 00:39 |
+| Primary oracle | `archipelago-standby` | `e3addfa` | 7 November, 03:25 |
+| Checker | `packrai-vps` | `e3addfa` | 7 November, 03:24 |
 | Event index | `archipelago-standby` | `b95f0aa` | 5 November, 13:31 |
 | Watcher | a third host | `aa34cee` | 6 November, 08:37 |
 | Policy signer | `packrai-vps` | `b95f0aa` | 5 November, 13:33 |

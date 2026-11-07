@@ -120,17 +120,19 @@ demand. Circle's faucet also sent the same agent 20 USDC at block 55457467, abou
 shadow scans reported that as the one payment they would credit, which is how shadow was checked, and
 since it came before `FROM_BLOCK` it counts for nothing.
 
-Not yet seen: this payment in a proposal or a finalized root. The agent's proposal from 00:41 UTC
-stays pending until 06:41 UTC, so the first one to hold the payment comes at the primary's next epoch
-after that, about 06:55 UTC, and the checker audits it about an hour later.
+The first proposal to hold it came at 07:25:47 UTC, once the agent's proposal from 00:41 UTC had
+finalized: a score of 39, with root `0xe26d882f…f1646769`, over 64 of the 65 payments then listed. The
+checker's 08:24 UTC epoch checked it and recorded no divergence, and at 08:30 UTC the root rebuilt from
+each operator's own list. Not yet seen at that time: a finalized root holding a Base payment. This
+proposal's window closes at 13:25:47 UTC, so that comes at the primary's next epoch after it.
 
 Not tested by this: a Wallet MCP x402 payment and a smart wallet's signature, which rollout step 4
 names, since this was a plain transfer signed with a plain key; an outcome carried through CounterAudit
 (CounterAudit#97 is merged and not deployed); and any volume.
 
 The explorer's evidence check reads this payment: at 03:13 UTC it rebuilt all 61 leaves and matched the
-served root. The SDK before 1.0.0-alpha.17 does not, so its `sigvara_verify_evidence` reports this
-agent's served root as differing, read against the live list at 03:13 UTC as one leaf of 61.
+served root. The SDK does too from 1.0.0-alpha.17, published that morning. Before it, `sigvara_verify_evidence`
+reports this agent's served root as differing, read against the live list at 03:13 UTC as one leaf of 61.
 
 ## Running it
 
