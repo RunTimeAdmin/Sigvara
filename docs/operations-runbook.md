@@ -584,6 +584,11 @@ In `shadow` mode, the default, it scans and reports what it would credit, and cr
 or evidence root changes. A shadow scan runs beside the epoch, and its reads of the scored chain grow with the number of
 agents and not of payments, so a hung endpoint or a flood of payments cannot hold up a score.
 
+**Outcomes.** A chain that is `on` also takes payer-signed outcomes for its payments, where `PAYER_OUTCOMES` is on
+(ADR 0009, section 7). Each one costs a few reads of that chain's RPC. A smart wallet's outcome is imported by asking
+the wallet at the block the other operator recorded, which needs a node that keeps state that far back. Until it
+answers, the import tries again at the next epoch, and after three runs it passes the outcome over until a restart.
+
 **Adding one in shadow.** One operator is enough, and the checker is the one to use: nothing needs the two to agree
 while a chain counts for nothing, and a bad endpoint then reaches only one of them. Both need the same values before a
 chain goes `on`. Elysium testnet's settings, in the checker's `.env`:

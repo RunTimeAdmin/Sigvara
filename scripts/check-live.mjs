@@ -315,7 +315,7 @@ async function checkSlashes() {
 }
 
 /**
- * Two operators' payer-signed outcomes, matched by leg (didHash, txHash, payer). Pure, so it can be
+ * Two operators' payer-signed outcomes, matched by leg (chain, didHash, txHash, payer). Pure, so it can be
  * tried with `node -e`. Each operator's acceptedAt is its own time of taking the outcome, so for a leg
  * held by one side only it is how long the other has had to import it. An item without a readable
  * leg or acceptedAt is a failure: read as zero or NaN it would pass as in flight forever.
@@ -327,7 +327,7 @@ async function checkSlashes() {
 export function compareOutcomes(sides, { nowMs = Date.now(), lagMs = OUTCOMES_LAG_HOURS * 3_600_000 } = {}) {
   const failures = [];
   const inFlight = [];
-  const legOf = (o) => [o.didHash, o.txHash, o.payer].map((v) => v.toLowerCase()).join('|');
+  const legOf = (o) => [String(o.chainId ?? ''), o.didHash, o.txHash, o.payer].map((v) => v.toLowerCase()).join('|');
   const usable = (o) => o !== null && typeof o === 'object' &&
     [o.didHash, o.txHash, o.payer].every((v) => typeof v === 'string') && Number.isSafeInteger(o.acceptedAt);
   const [a, b] = sides.map(([name, list]) => {

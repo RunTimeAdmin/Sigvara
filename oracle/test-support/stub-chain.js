@@ -183,6 +183,12 @@ const chain = {
       operator: w.agents[didHash]?.operator ?? null, operators: w.agents[didHash]?.operators,
     }));
   },
+  knownAgent: (didHash) => {
+    const w = world();
+    if (!w.registered?.includes(didHash)) return null;
+    const a = w.agents[didHash];
+    return { didHash, agentAddress: a?.agentAddress ?? null, blockNumber: a?.registeredBlock ?? 1, operator: a?.operator ?? null };
+  },
   getScanState: () => (world().registryScannedTo === undefined ? null : { lastScannedBlock: world().registryScannedTo, agents: [] }),
   restoreScanState: () => false,
   verifyDidHashDerivation: async () => false,

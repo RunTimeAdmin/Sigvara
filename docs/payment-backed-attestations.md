@@ -141,6 +141,7 @@ The codes that depend on the payment check are below. The [oracle README](../ora
 | 402 | The payment did not check out. `code` says why |
 | 409 | This settlement was already credited, or it already has an outcome, which is final. For a payer-signed outcome it carries `sameOutcome`, and `outcome_recorded` names the held one (`heldOutcomeHash`) |
 | 502 | The RPC failed. Not a verdict on the payment, retry |
+| 503 | For a payment chain's payment only, and not a verdict either: it is not finalized (`unconfirmed`) or not found yet, or this operator has not read the agent's registration (`agent_not_seen`). Send it again |
 
 The 502 case matters. A node having a bad minute must not read as a caller trying
 it on, so RPC failures are counted separately from rejected attestations and are
@@ -260,6 +261,12 @@ the transaction from the chain `chainId` names, and every scored-chain leaf keep
 the published roots were made with (`oracle/merkle.js`). The explorer rebuilds both. The SDK's
 `evidenceLeaf`, and so `sigvara_verify_evidence` in `sigvara-mcp`, rebuilds only the five-word
 leaf. That is harmless until a chain is `on`, since a chain in shadow adds nothing to a root.
+
+Its payer can sign an outcome too, in the same typed data with that chain's id in the domain, and the
+request names the chain as `payment.chainId` (ADR 0009, section 7). The outcome goes into the leaf as
+any other does. The signature is checked on that chain at its finalized block, recorded as
+`checkedAtBlock`, so another operator can read the same block. Finality on Base Sepolia takes about a
+quarter of an hour, so an outcome posted straight after paying gets a 503 and should be sent again.
 
 `outcome` has three states for the same reason, and it was a `bool` until it caught the
 same trap. A payment found by scanning the chain carries no outcome, because whether the

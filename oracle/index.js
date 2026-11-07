@@ -1908,27 +1908,51 @@ function agentAtPayment(didHash, credited) {
 
 const badSignatures = payerOutcome.badSignatureLimiter();
 
-/** The EIP-712 hash of a leg's payer-signed outcome under this oracle's domain. */
-const payerOutcomeHashOf = (didHash, txHash, value) =>
-  payerOutcome.outcomeHash(payerOutcome.domain(cfg.expectedChainId, cfg.reputationAddress), didHash, txHash, value);
+/** The signing domain of a payment: on the payment chain it settled on, or on the scored chain when that is null. */
+const outcomeDomain = (chainId = null) => payerOutcome.domain(chainId ?? cfg.expectedChainId, cfg.reputationAddress);
+
+/** The EIP-712 hash of a leg's payer-signed outcome, in the domain of the chain its payment settled on. */
+const payerOutcomeHashOf = (didHash, txHash, value, chainId = null) =>
+  payerOutcome.outcomeHash(outcomeDomain(chainId), didHash, txHash, value);
 
 /**
  * What a 409 says of the payer-signed outcome already held for the posted one's leg: its hash,
  * and whether it is the posted outcome. A carrier sending an outcome again (CounterAudit's outbox)
  * can then tell its own outcome, taken before, from a different one held in its place.
  */
-function heldOutcomeReply(didHash, txHash, posted) {
-  const held = payerOutcomeFor(didHash, txHash, posted.payer);
+function heldOutcomeReply(didHash, txHash, posted, chainId = null) {
+  const held = payerOutcomeFor(didHash, txHash, posted.payer, chainId);
   if (!held) return { sameOutcome: false };
   // The stored record leaves out the payer: it is the leg's, the one looked up by.
-  const heldOutcomeHash = payerOutcomeHashOf(didHash, txHash, { ...held, payer: posted.payer });
+  const heldOutcomeHash = payerOutcomeHashOf(didHash, txHash, { ...held, payer: posted.payer }, chainId);
   return {
     heldOutcomeHash,
-    sameOutcome: heldOutcomeHash === payerOutcomeHashOf(didHash, txHash, posted),
+    sameOutcome: heldOutcomeHash === payerOutcomeHashOf(didHash, txHash, posted, chainId),
     // Held in memory but not yet saved (the last save failed), as a 202 says: a restart loses it.
     ...(getLastPersist().ok ? {} : { durable: false }),
   };
 }
+
+/**
+ * The payment an outcome names on a payment chain (ADR 0009, section 7). The agent must be one the
+ * registry scan has found, as the payment scan's must: the recipient's code on the scored chain is read
+ * at the block it registered in.
+ * @throws {payments.PaymentError}
+ */
+async function paymentOnChain(pc, didHash, info, txHash) {
+  const agent = chain.knownAgent(didHash);
+  if (!agent) throw new payments.PaymentError('agent_not_seen', 'this operator has not yet read this agent\'s registration; try again later');
+  return paymentChains.lookUpPayment(pc, {
+    provider: paymentChainProviders.get(pc.chainId),
+    scoredProvider: chain.getProvider(),
+    agent,
+    registeredAtMs: Number(info.registeredAt) * 1000,
+  }, txHash);
+}
+
+// What a payment chain's lookup says when the answer can still change. Finality alone takes a quarter
+// of an hour, so these are the usual answers to an outcome posted just after paying.
+const NOT_YET = ['unconfirmed', 'not_found', 'agent_not_seen'];
 
 /**
  * Takes an outcome the payer signed, once its payment has been verified
@@ -1944,11 +1968,18 @@ function heldOutcomeReply(didHash, txHash, posted) {
  * old block cannot reopen it. An import is also not throttled (the peer is configured, and each
  * run is bounded) and not saved one by one: the import saves once when it is done.
  *
+ * `pc` is the payment chain the payment settled on (ADR 0009, section 7), or null for the scored
+ * chain. The domain, the payer's code and ERC-1271 are then all that chain's, and its finalized block
+ * takes the place of the confirmed head, so that another operator can read the same block.
+ *
  * @returns {Promise<{ status: number, body: object, metric: string }>} the reply, and the counter
  *   a POST counts it under
  */
-async function admitPayerOutcome({ didHash, credited, info, signed, packetId = null }, { peerBlock = null, client = null } = {}) {
+async function admitPayerOutcome({ didHash, credited, info, signed, packetId = null, pc = null }, { peerBlock = null, client = null } = {}) {
   const fromPeer = peerBlock !== null;
+  const chainId = pc ? pc.chainId : null;
+  // Fit to log: on a payment chain the provider's message can carry the RPC URL, key and all.
+  const said = (err) => (pc ? paymentChains.rpcError(err, pc.rpcUrl).message : err.message);
   const refuse = (status, code, error, metric) => ({ status, body: { error, code }, metric });
   const leg = (credited.legs ?? []).find((l) => l.payer.toLowerCase() === signed.payer.toLowerCase());
   if (!leg) {
@@ -1958,7 +1989,8 @@ async function admitPayerOutcome({ didHash, credited, info, signed, packetId = n
     return refuse(402, 'self_payment', 'an agent cannot attest itself: the payer is its own operator or agent address', 'attestRejectedPayment');
   }
   const delivered = signed.outcome === payerOutcome.DELIVERED;
-  if (!delivered && leg.amount < payerOutcomeCfg.negativeMinAmount) {
+  // PAYER_NEGATIVE_MIN_AMOUNT is in the scored chain's asset. A payment chain's leg has met that chain's own minimum.
+  if (!pc && !delivered && leg.amount < payerOutcomeCfg.negativeMinAmount) {
     return refuse(402, 'below_minimum', `a "not delivered" needs a payment of at least ${payerOutcomeCfg.negativeMinAmount}`, 'attestRejectedPayment');
   }
   // The timing that needs no chain read, first.
@@ -1971,7 +2003,7 @@ async function admitPayerOutcome({ didHash, credited, info, signed, packetId = n
   if (!fromPeer && badSignatures.blocked(throttleKey)) {
     return refuse(429, 'bad_signature_throttled', 'too many bad signatures for this payment; try again later', 'attestRejectedOther');
   }
-  const provider = chain.getProvider();
+  const provider = pc ? paymentChainProviders.get(pc.chainId) : chain.getProvider();
   const blockMs = async (n) => {
     const ms = Number((await provider.getBlock(n))?.timestamp) * 1000;
     if (!Number.isFinite(ms) || ms <= 0) throw new Error(`no timestamp for block ${n}`);
@@ -1985,15 +2017,25 @@ async function admitPayerOutcome({ didHash, credited, info, signed, packetId = n
   let checkedAtMs;
   let arrivedAtMs;
   try {
-    confirmed = Math.max(0, (await provider.getBlockNumber()) - (paymentCfg.minConfirmations - 1));
+    if (pc) {
+      const finalized = await provider.getBlock('finalized');
+      if (!finalized || !Number.isInteger(finalized.number)) throw new Error(`payment chain ${pc.chainId} did not return a finalized block`);
+      confirmed = finalized.number;
+    } else {
+      confirmed = Math.max(0, (await provider.getBlockNumber()) - (paymentCfg.minConfirmations - 1));
+    }
     if (confirmed < credited.blockNumber) {
       // A node behind the one that just confirmed the payment (a load balancer's other half):
       // a block before the payment would be refused by every operator importing it.
       throw new Error(`confirmed head ${confirmed} is before the payment's block ${credited.blockNumber}`);
     }
     arrivedAtMs = await blockMs(confirmed);
-    // A node far behind would stretch the deadline and the window by as much.
-    const stale = clockSkewError(arrivedAtMs / 1000, Date.now(), cfg.maxClockSkewMs);
+    // A node far behind would stretch the deadline and the window by as much. A payment chain's
+    // finalized block is always a quarter of an hour behind, so its limit is the chain's delay: past
+    // that this operator is holding its epochs too (paymentChains.behind).
+    const stale = pc
+      ? (Date.now() - arrivedAtMs > pc.delayMs ? `chain ${pc.chainId}'s finalized block is older than its delay` : null)
+      : clockSkewError(arrivedAtMs / 1000, Date.now(), cfg.maxClockSkewMs);
     if (stale) throw new Error(stale);
     if (!fromPeer) {
       checkedAtBlock = confirmed;
@@ -2007,7 +2049,7 @@ async function admitPayerOutcome({ didHash, credited, info, signed, packetId = n
       checkedAtMs = await blockMs(peerBlock);
     }
   } catch (err) {
-    console.warn(`[oracle] payer outcome block read failed for ${didHash}: ${err.message}`);
+    console.warn(`[oracle] payer outcome block read failed for ${didHash}: ${said(err)}`);
     return refuse(502, 'rpc_error', 'could not read the chain', 'paymentRpcErrors');
   }
   // Before the signature, which can cost a contract call.
@@ -2015,7 +2057,7 @@ async function admitPayerOutcome({ didHash, credited, info, signed, packetId = n
     ?? (fromPeer ? payerOutcome.importLateProblem(signed, arrivedAtMs, payerOutcomeCfg.importGraceMs) : null);
   if (late) return refuse(400, 'outcome_window', late, 'attestRejectedOther');
 
-  const dom = payerOutcome.domain(cfg.expectedChainId, cfg.reputationAddress);
+  const dom = outcomeDomain(chainId);
   const msg = payerOutcome.message(didHash, credited.txHash, signed);
   let verdict;
   try {
@@ -2024,7 +2066,7 @@ async function admitPayerOutcome({ didHash, credited, info, signed, packetId = n
       ? await payerOutcome.verifyImported({ ...check, headBlock: confirmed })
       : await payerOutcome.verifySignature(check);
   } catch (err) {
-    console.warn(`[oracle] payer signature check failed for ${didHash}: ${err.message}`);
+    console.warn(`[oracle] payer signature check failed for ${didHash}: ${said(err)}`);
     return refuse(502, 'rpc_error', 'could not read the chain', 'paymentRpcErrors');
   }
   if (!verdict.valid) {
@@ -2037,7 +2079,7 @@ async function admitPayerOutcome({ didHash, credited, info, signed, packetId = n
   const paidLegs = (credited.legs ?? []).filter((l) => !payments.isSelfPayment(l.payer, info));
   let credits = 0;
   for (const l of paidLegs) {
-    if (creditPayment(didHash, credited.txHash, l.amount, l.payer, null, credited.settledAt, null, credited.blockNumber)) {
+    if (creditPayment(didHash, credited.txHash, l.amount, l.payer, null, credited.settledAt, null, credited.blockNumber, chainId)) {
       credits += 1;
     }
   }
@@ -2051,7 +2093,7 @@ async function admitPayerOutcome({ didHash, credited, info, signed, packetId = n
     checkedAtBlock,
   };
   const before = getPaymentEvents(didHash).find(
-    (e) => e.txHash === credited.txHash && String(e.payer).toLowerCase() === leg.payer.toLowerCase(),
+    (e) => (e.chainId ?? null) === chainId && e.txHash === credited.txHash && String(e.payer).toLowerCase() === leg.payer.toLowerCase(),
   );
   const previous = before ? before.success : null;
   const filed = recordPayerOutcome(didHash, credited.txHash, leg.payer, delivered, record, {
@@ -2061,6 +2103,7 @@ async function admitPayerOutcome({ didHash, credited, info, signed, packetId = n
     replaceable: paidLegs.length === 1,
     now: arrivedAtMs,
     packetId,
+    chainId,
   });
   if (filed === 'already_set' || filed === 'outside_window') {
     // Payments credited above stay credited; keep them through a restart.
@@ -2068,7 +2111,7 @@ async function admitPayerOutcome({ didHash, credited, info, signed, packetId = n
     const r = refuse(409, 'outcome_recorded', filed === 'already_set'
       ? 'the payer has already signed an outcome for this payment'
       : 'an outcome recorded for this payment is final', 'attestRejectedPayment');
-    return { ...r, body: { ...r.body, ...heldOutcomeReply(didHash, credited.txHash, signed) } };
+    return { ...r, body: { ...r.body, ...heldOutcomeReply(didHash, credited.txHash, signed, chainId) } };
   }
   if (filed === 'not_found') {
     if (credits > 0 && !fromPeer) persistState();
@@ -2095,11 +2138,11 @@ async function admitPayerOutcome({ didHash, credited, info, signed, packetId = n
       attester: leg.payer,
       ...att,
       ...(durable ? {} : { durable: false }),
-      payment: { txHash: credited.txHash, amount: leg.amount.toString() },
+      payment: { txHash: credited.txHash, amount: leg.amount.toString(), ...(pc ? { chainId } : {}) },
       outcomeRecorded: true,
       outcomeSource: 'payer_signed',
       // What was recorded, so a carrier can match the answer to the outcome it sealed.
-      outcomeHash: payerOutcomeHashOf(didHash, credited.txHash, signed),
+      outcomeHash: payerOutcomeHashOf(didHash, credited.txHash, signed, chainId),
       // 'replaced' when it took the place of a credentialed outcome inside the window.
       recorded: filed,
     },
@@ -2130,8 +2173,9 @@ const IMPORT_MAX_FUTURE_MS = 5 * 60_000;
  * @returns {Promise<{ kind: 'imported'|'held'|'refused'|'retry', code?: string }>} retry when the
  *   failure was this node's or the chain's, not the outcome's
  */
-async function importOne({ didHash, txHash, checkedAtBlock, signed, packetId }, peer) {
-  const held = payerOutcomeFor(didHash, txHash, signed.payer);
+async function importOne({ didHash, txHash, chainId, checkedAtBlock, signed, packetId }, peer) {
+  const settledOn = chainId === Number(cfg.expectedChainId) ? null : chainId;
+  const held = payerOutcomeFor(didHash, txHash, signed.payer, settledOn);
   if (held) {
     // Not checked, so not proof the payer signed both, and anyone serving it raises the count: a
     // peer serving something other than what this oracle holds is worth a look either way. What
@@ -2145,6 +2189,9 @@ async function importOne({ didHash, txHash, checkedAtBlock, signed, packetId }, 
   if (signed.outcome === payerOutcome.NOT_DELIVERED && payerOutcomeCfg.mode !== 'both') {
     return { kind: 'refused', code: 'negative_not_accepted' };
   }
+  const pc = settledOn === null ? null : paymentChainsCfg.byId.get(settledOn);
+  // A restart starts every peer from the beginning, and switching a chain on takes one.
+  if (settledOn !== null && pc?.mode !== 'on') return { kind: 'refused', code: 'payment_chain_off' };
   let info;
   try {
     info = await chain.getAgentInfo(didHash);
@@ -2156,22 +2203,25 @@ async function importOne({ didHash, txHash, checkedAtBlock, signed, packetId }, 
   if (!info || Number(info.registeredAt) === 0) return { kind: 'retry', code: 'unknown_agent' };
   let credited;
   try {
-    credited = await payments.verifyPayment({ provider: chain.getProvider(), cfg: paymentCfg }, txHash, info.agentAddress);
+    credited = pc
+      ? await paymentOnChain(pc, didHash, info, txHash)
+      : await payments.verifyPayment({ provider: chain.getProvider(), cfg: paymentCfg }, txHash, info.agentAddress);
   } catch (err) {
     // The peer saw this payment confirmed. This node not answering, or not seeing it yet, is
     // not the outcome's fault.
-    if (['rpc_error', 'unconfirmed', 'not_found'].includes(err.code)) return { kind: 'retry', code: err.code };
+    if (['rpc_error', ...NOT_YET].includes(err.code)) return { kind: 'retry', code: err.code };
     return { kind: 'refused', code: err.code || 'payment_invalid' };
   }
-  let atPayment;
+  // On a payment chain, today's operator, as the scan judges it: the chain's blocks are not the registry's.
+  let atPayment = info;
   try {
-    atPayment = await agentAtPayment(didHash, credited);
+    if (!pc) atPayment = await agentAtPayment(didHash, credited);
     if (Number(atPayment.registeredAt) === 0) return { kind: 'refused', code: 'before_registration' };
   } catch (err) {
     console.warn(`[oracle] payer outcome import: chain read failed for ${didHash}: ${err.message}`);
     return { kind: 'retry', code: 'rpc_error' };
   }
-  const r = await admitPayerOutcome({ didHash, credited, info: atPayment, signed, packetId }, { peerBlock: checkedAtBlock });
+  const r = await admitPayerOutcome({ didHash, credited, info: atPayment, signed, packetId, pc }, { peerBlock: checkedAtBlock });
   if (r.status === 200) return { kind: 'imported' };
   if (r.status === 502 || r.status === 503) return { kind: 'retry', code: r.body.code };
   return { kind: 'refused', code: r.body.code };
@@ -2272,7 +2322,10 @@ async function importPayerOutcomes() {
   if (changed) persistState();
 }
 
-/** The signing domain, as /evidence and /outcomes serve it. */
+/**
+ * The signing domain, as /evidence and /outcomes serve it. An outcome on a payment chain's payment
+ * is signed in the same domain with that chain's id, which is served beside it.
+ */
 const servedDomain = () => ({
   name: 'Sigvara',
   version: '1',
@@ -2540,6 +2593,27 @@ async function handleRequest(req, res) {
         signedOutcome = parsed.value;
       }
 
+      // The chain the payment settled on, which only an outcome the payer signed may name (ADR 0009,
+      // section 7). Left out, or naming the scored chain, it is the scored chain.
+      const namedChain = payerOutcome.chainIdOf(body.payment?.chainId);
+      if (namedChain === undefined) {
+        metrics.inc('attestRejectedOther');
+        return json(res, 400, { error: 'payment.chainId must be a chain id', code: 'bad_chain_id' });
+      }
+      const settledOn = namedChain === Number(cfg.expectedChainId) ? null : namedChain;
+      let pc = null;
+      if (settledOn !== null) {
+        if (!signedOutcome) {
+          metrics.inc('attestRejectedOther');
+          return json(res, 400, { error: 'payment.chainId goes with a payerOutcome', code: 'bad_chain_id' });
+        }
+        pc = paymentChainsCfg.byId.get(settledOn) ?? null;
+        if (pc?.mode !== 'on') {
+          metrics.inc('attestRejectedOther');
+          return json(res, 400, { error: `this oracle does not count payments on chain ${settledOn}`, code: 'payment_chain_off' });
+        }
+      }
+
       /* Authorisation depends on what is being claimed, so it is decided after the
        * body is read rather than before.
        *
@@ -2604,12 +2678,12 @@ async function handleRequest(req, res) {
       // A leg that already holds its payer's outcome is refused before any chain read: the
       // answer cannot change, and otherwise every replay costs this oracle's node the full check.
       if (signedOutcome && typeof body.payment?.txHash === 'string'
-        && hasPayerOutcome(didHash, body.payment.txHash, signedOutcome.payer)) {
+        && hasPayerOutcome(didHash, body.payment.txHash, signedOutcome.payer, settledOn)) {
         metrics.inc('attestRejectedPayment');
         return json(res, 409, {
           error: 'the payer has already signed an outcome for this payment',
           code: 'outcome_recorded',
-          ...heldOutcomeReply(didHash, body.payment.txHash, signedOutcome),
+          ...heldOutcomeReply(didHash, body.payment.txHash, signedOutcome, settledOn),
         });
       }
       // Only needed when payments are off; otherwise it comes from the transfer.
@@ -2644,11 +2718,13 @@ async function handleRequest(req, res) {
           return json(res, 400, { error: 'unknown didHash' });
         }
         try {
-          credited = await payments.verifyPayment(
-            { provider: chain.getProvider(), cfg: paymentCfg },
-            txHash,
-            info.agentAddress
-          );
+          credited = pc
+            ? await paymentOnChain(pc, didHash, info, txHash)
+            : await payments.verifyPayment(
+              { provider: chain.getProvider(), cfg: paymentCfg },
+              txHash,
+              info.agentAddress
+            );
         } catch (err) {
           // An RPC failure is not the caller's fault and must not be recorded as a
           // rejected attestation, or a flaky node would look like abuse.
@@ -2660,10 +2736,13 @@ async function handleRequest(req, res) {
             console.warn(`[oracle] /attest payment check failed for ${didHash}: ${err.message}`);
             return json(res, 502, { error: 'could not read the chain', code: 'rpc_error' });
           }
+          // Not a refusal: a carrier should send it again (CounterAudit's outbox ends delivery on a 4xx).
+          if (pc && NOT_YET.includes(err.code)) return json(res, 503, { error: err.message, code: err.code });
           return json(res, 402, { error: err.message, code: err.code || 'payment_invalid' });
         }
+        // On a payment chain, today's operator, as the scan judges it: the chain's blocks are not the registry's.
         try {
-          atPayment = await agentAtPayment(didHash, credited);
+          atPayment = pc ? info : await agentAtPayment(didHash, credited);
         } catch (err) {
           metrics.inc('paymentRpcErrors');
           console.warn(`[oracle] /attest chain read failed for ${didHash}: ${err.message}`);
@@ -2692,7 +2771,7 @@ async function handleRequest(req, res) {
         // outcome first fixes it, as they fix the outcome, and only the payer and those it gave the
         // signature to can do that.
         const r = await admitPayerOutcome({
-          didHash, credited, info: atPayment, signed: signedOutcome, packetId: payerOutcome.packetIdOf(packetId),
+          didHash, credited, info: atPayment, signed: signedOutcome, packetId: payerOutcome.packetIdOf(packetId), pc,
         }, { client: clientKey(req, isTrustedProxy) });
         metrics.inc(r.metric);
         return json(res, r.status, r.body);

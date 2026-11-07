@@ -644,6 +644,9 @@ function isCredited(txHash, didHash, payer, chainId = null) {
     || usedPaymentTxs.has(creditKey(tx, didHash, payer));
 }
 
+/** Whether a stored event settled on `chainId`, or on the scored chain when that is null. */
+const onChain = (event, chainId) => (chainId == null ? event.chainId == null : event.chainId === Number(chainId));
+
 function creditPayment(
   didHash, txHash, amount, payer, success, now = Date.now(), packetId = null, blockNumber = null, chainId = null,
 ) {
@@ -765,17 +768,20 @@ function setPaymentOutcome(didHash, txHash, payer, success, packetId = null) {
  * (payerOutcome.packetIdOf). It takes the place of the credential holder's, and like that one it
  * is corroboration, not evidence, and stays out of the leaf.
  *
+ * `chainId` is the payment chain the payment settled on (ADR 0009, section 7), null for the scored
+ * chain. A hash is only ever compared with hashes from the chain it came from.
+ *
  * @returns {'set'|'replaced'|'already_set'|'outside_window'|'not_found'}
  */
 function recordPayerOutcome(
-  didHash, txHash, payer, success, signed, { windowMs, replaceable = true, now = Date.now(), packetId = null },
+  didHash, txHash, payer, success, signed, { windowMs, replaceable = true, now = Date.now(), packetId = null, chainId = null },
 ) {
   if (typeof success !== 'boolean') throw new TypeError('recordPayerOutcome: success must be a boolean');
   const did = String(didHash).toLowerCase();
   const tx = String(txHash).toLowerCase();
   const who = String(payer).toLowerCase();
   const list = paymentEvents.get(did) ?? [];
-  const i = list.findIndex((e) => e.chainId == null && e.txHash === tx && String(e.payer).toLowerCase() === who);
+  const i = list.findIndex((e) => onChain(e, chainId) && e.txHash === tx && String(e.payer).toLowerCase() === who);
   if (i < 0) return 'not_found';
   const event = list[i];
   if (event.payerOutcome) return 'already_set';
@@ -820,6 +826,7 @@ function payerOutcomesSince(since, limit) {
         didHash: did,
         txHash: e.txHash,
         payer: e.payer,
+        ...(e.chainId != null ? { chainId: e.chainId } : {}),
         ...e.payerOutcome,
         ...(e.packetId ? { counterauditPacketId: e.packetId } : {}),
       });
@@ -829,21 +836,21 @@ function payerOutcomesSince(since, limit) {
 }
 
 /** The payer-signed outcome this oracle holds for a leg, or null. */
-function payerOutcomeFor(didHash, txHash, payer) {
+function payerOutcomeFor(didHash, txHash, payer, chainId = null) {
   const tx = String(txHash).toLowerCase();
   const who = String(payer).toLowerCase();
   const e = (paymentEvents.get(String(didHash).toLowerCase()) ?? []).find(
-    (x) => x.payerOutcome && x.txHash === tx && String(x.payer).toLowerCase() === who,
+    (x) => x.payerOutcome && onChain(x, chainId) && x.txHash === tx && String(x.payer).toLowerCase() === who,
   );
   return e ? e.payerOutcome : null;
 }
 
 /** Whether the payer has signed an outcome for its leg of this payment. */
-function hasPayerOutcome(didHash, txHash, payer) {
+function hasPayerOutcome(didHash, txHash, payer, chainId = null) {
   const tx = String(txHash).toLowerCase();
   const who = String(payer).toLowerCase();
   return (paymentEvents.get(String(didHash).toLowerCase()) ?? []).some(
-    (e) => e.payerOutcome && e.txHash === tx && String(e.payer).toLowerCase() === who,
+    (e) => e.payerOutcome && onChain(e, chainId) && e.txHash === tx && String(e.payer).toLowerCase() === who,
   );
 }
 
