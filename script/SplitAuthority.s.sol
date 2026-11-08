@@ -87,6 +87,12 @@ import {TimelockController} from "@openzeppelin/contracts/governance/TimelockCon
  *   PHASE=deploy-timelock SAFE=0x... \
  *     forge script script/SplitAuthority.s.sol --rpc-url arc_testnet --broadcast -vv
  *
+ *   # The treasury is a second timelock built the same way, so that a payment from it waits as long as an
+ *   # upgrade does. On mainnet it comes before script/DeployOracleBond.s.sol, which takes it as
+ *   # SLASH_BENEFICIARY and refuses a plain account there. Prints its address; export it as TREASURY.
+ *   PHASE=deploy-treasury SAFE=0x... \
+ *     forge script script/SplitAuthority.s.sol --rpc-url arc_testnet --broadcast -vv
+ *
  *   # 3. EOA grants admin to the Safe and upgrader to the timelock. Reversible: the EOA
  *   #    still holds both too. (`grant-admin` is the old name for this phase.)
  *   PHASE=grant SAFE=0x... TIMELOCK=0x... \
@@ -265,7 +271,8 @@ contract SplitAuthority is Script {
         bytes32 p = keccak256(bytes(phase));
 
         if (p == keccak256("plan")) return _plan();
-        if (p == keccak256("deploy-timelock")) return _deployTimelock();
+        if (p == keccak256("deploy-timelock")) return _deployTimelock("TIMELOCK");
+        if (p == keccak256("deploy-treasury")) return _deployTimelock("TREASURY");
         if (p == keccak256("grant") || p == keccak256("grant-admin")) return _grant();
         if (p == keccak256("safe-calldata")) return _safeCalldata();
         if (p == keccak256("renounce")) return _renounce();
@@ -385,8 +392,11 @@ contract SplitAuthority is Script {
      *      else. The Safe is a proposer, so it is not locked out, only delayed.
      *      Passing the Safe as admin instead would let it rewrite the proposer set
      *      instantly, which gives away most of the guarantee for convenience.
+     *
+     *      `name` is the variable the address is printed for: TIMELOCK for the one that
+     *      holds the upgrader role, TREASURY for the one that holds the protocol's funds.
      */
-    function _deployTimelock() internal {
+    function _deployTimelock(string memory name) internal {
         address safe = _requireSafe();
         uint256 minDelay = vm.envOr("TIMELOCK_MIN_DELAY", DEFAULT_MIN_DELAY);
 
@@ -399,18 +409,19 @@ contract SplitAuthority is Script {
         TimelockController timelock = new TimelockController(minDelay, proposers, executors, address(0));
         vm.stopBroadcast();
 
-        console2.log("=== timelock deployed ===");
+        console2.log(string.concat("=== timelock deployed, as ", name, " ==="));
         console2.log("address      ", address(timelock));
         console2.log("min delay (s)", minDelay);
         console2.log("proposer     ", safe);
         console2.log("executors     open");
         if (minDelay < DEFAULT_MIN_DELAY) {
-            console2.log("WARNING: under 48 hours. PHASE=renounce refuses this timelock. A delay meant as hours or");
-            console2.log("         days and typed as seconds is the usual way to land here.");
+            console2.log("WARNING: under 48 hours. PHASE=renounce refuses this as TIMELOCK, and on mainnet");
+            console2.log("         script/DeployOracleBond.s.sol refuses it as the treasury. A delay meant as hours");
+            console2.log("         or days and typed as seconds is the usual way to land here.");
         }
         console2.log("");
         // One string, so the line pastes into a shell. Two arguments print a space after the =.
-        console2.log(string.concat("export TIMELOCK=", vm.toString(address(timelock))));
+        console2.log(string.concat("export ", name, "=", vm.toString(address(timelock))));
     }
 
     // -------------------------------------------------------------------------

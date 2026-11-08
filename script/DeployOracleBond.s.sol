@@ -25,7 +25,9 @@ import "../src/SigvaraOracleBond.sol";
  * Optional env (default to the deployer, but the two must differ: the registry refuses one address
  * as both slasher and payee, so state at least one of them):
  *   SLASHER_ADDRESS       — granted SLASHER_ROLE (governance/committee)
- *   SLASH_BENEFICIARY     — destination for slashed bonds (defaults to deployer)
+ *   SLASH_BENEFICIARY     — destination for slashed bonds (defaults to deployer). On mainnet it must
+ *                           be the treasury timelock, made with PHASE=deploy-treasury in
+ *                           script/SplitAuthority.s.sol: a plain account is refused
  *   ORACLE_BOND_AMOUNT    — minimum bond in wei (default 1,000 SVR; the default is refused on
  *                           mainnet, so state the number there, and it may not be under the
  *                           published 2,500,000 SVR)
@@ -53,6 +55,10 @@ contract DeployOracleBond is Script {
     /// The ceiling it enforces in the same two places, pinned the same way.
     uint256 constant MAX_UNBONDING = 90 days;
 
+    /// The least notice the treasury gives before a payment: the same 48 hours the upgrade timelock gives
+    /// before an upgrade (docs/adr/0005).
+    uint256 constant MIN_TREASURY_DELAY = 48 hours;
+
     error RolesNotSeparated(address deployer, address slasher, address beneficiary);
     error SlasherIsBeneficiary(address account);
     error DefaultAmountOnMainnet(string name, uint256 value);
@@ -61,6 +67,9 @@ contract DeployOracleBond is Script {
     error AboveCeiling(string name, uint256 value, uint256 ceiling);
     error GuardianNotSet();
     error GuardianNotSeparated(address guardian);
+    error TreasuryNotATimelock(address treasury);
+    error TreasuryDelayTooShort(address treasury, uint256 delay, uint256 floor);
+    error TreasuryAnswersToTheDeployer(address treasury);
 
     function run() external {
         uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
@@ -77,6 +86,7 @@ contract DeployOracleBond is Script {
         _checkMainnetUnbonding(unbonding);
         address guardian = vm.envOr("GUARDIAN_ADDRESS", address(0));
         _checkMainnetGuardian(deployer, slasher, guardian);
+        _checkMainnetTreasury(deployer, beneficiary);
 
         vm.startBroadcast(deployerKey);
 
@@ -143,6 +153,32 @@ contract DeployOracleBond is Script {
         if (block.chainid != ARC_MAINNET) return;
         if (guardian == address(0)) revert GuardianNotSet();
         if (guardian == deployer || guardian == slasher) revert GuardianNotSeparated(guardian);
+    }
+
+    /// @dev Mainnet only. Slashed bonds go to the beneficiary, which is the treasury, and the treasury pays
+    ///      the costs docs/token.md lists. A plain account there is one key that can spend all of it at once,
+    ///      so the treasury must be a timelock the admin Safe drives (PHASE=deploy-treasury in
+    ///      script/SplitAuthority.s.sol): a payment is scheduled, and executes 48 hours later at the earliest.
+    ///      This reads the beneficiary's own answers. No code, a call it does not answer, a delay under 48
+    ///      hours, or a deployer that can propose to it or administer it is refused. That the admin Safe is
+    ///      the proposer is checked after the deploy, by check_treasury in scripts/check-mainnet.sh.
+    function _checkMainnetTreasury(address deployer, address treasury) internal view {
+        if (block.chainid != ARC_MAINNET) return;
+        uint256 delay = _treasuryRead(treasury, abi.encodeWithSignature("getMinDelay()"));
+        if (delay < MIN_TREASURY_DELAY) revert TreasuryDelayTooShort(treasury, delay, MIN_TREASURY_DELAY);
+        bytes32[2] memory roles = [keccak256("PROPOSER_ROLE"), bytes32(0)]; // bytes32(0) is the admin role
+        for (uint256 i = 0; i < roles.length; i++) {
+            bytes memory call = abi.encodeWithSignature("hasRole(bytes32,address)", roles[i], deployer);
+            if (_treasuryRead(treasury, call) != 0) revert TreasuryAnswersToTheDeployer(treasury);
+        }
+    }
+
+    /// @dev One word from the treasury. No code, a revert or a short answer all mean it is not a timelock.
+    function _treasuryRead(address treasury, bytes memory call) internal view returns (uint256) {
+        if (treasury.code.length == 0) revert TreasuryNotATimelock(treasury);
+        (bool ok, bytes memory ret) = treasury.staticcall(call);
+        if (!ok || ret.length < 32) revert TreasuryNotATimelock(treasury);
+        return abi.decode(ret, (uint256));
     }
 
     /// @dev The deployer keeps DEFAULT_ADMIN_ROLE and UPGRADER_ROLE. If it is also the

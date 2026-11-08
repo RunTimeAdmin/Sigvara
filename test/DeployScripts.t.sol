@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import "forge-std/Test.sol";
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/governance/TimelockController.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 
 import "../script/Deploy.s.sol";
@@ -48,6 +49,7 @@ contract DeployOracleBond_Harness is DeployOracleBond {
     function checkUnbonding(uint256 u) external view { _checkMainnetUnbonding(u); }
     function checkGuardian(address d, address s, address g) external view { _checkMainnetGuardian(d, s, g); }
     function checkRoles(address d, address s, address ben) external view { _checkRoleSeparation(d, s, ben); }
+    function checkTreasury(address d, address t) external view { _checkMainnetTreasury(d, t); }
     function floor() external pure returns (uint256) { return MIN_UNBONDING; }
     function ceiling() external pure returns (uint256) { return MAX_UNBONDING; }
     function bondTarget() external pure returns (uint256) { return MAINNET_BOND_AMOUNT; }
@@ -466,6 +468,57 @@ contract DeployScriptGuardsTest is Test {
         b.checkRoles(deployer, makeAddr("slasher"), deployer);
     }
 
+    // ---- the treasury, which receives slashed bonds
+
+    /// As PHASE=deploy-treasury in script/SplitAuthority.s.sol builds it, with a chosen delay and proposer.
+    function _timelock(uint256 delay, address proposer, address admin) internal returns (address) {
+        address[] memory proposers = new address[](1);
+        proposers[0] = proposer;
+        address[] memory executors = new address[](1);
+        return address(new TimelockController(delay, proposers, executors, admin));
+    }
+
+    /// A plain account as treasury is one key that can spend every slashed bond at once. Refused on mainnet,
+    /// and so is a contract that does not answer as a timelock.
+    function test_oracleBond_mainnet_refusesATreasuryThatIsNotATimelock() public {
+        vm.chainId(5042);
+        address eoa = makeAddr("treasury");
+        vm.expectRevert(abi.encodeWithSelector(DeployOracleBond.TreasuryNotATimelock.selector, eoa));
+        b.checkTreasury(deployer, eoa);
+        address silent = address(new SilentContract());
+        vm.expectRevert(abi.encodeWithSelector(DeployOracleBond.TreasuryNotATimelock.selector, silent));
+        b.checkTreasury(deployer, silent);
+    }
+
+    /// The treasury waits as long as an upgrade does. 24 hours, a common suggestion, is refused.
+    function test_oracleBond_mainnet_refusesATreasuryUnder48Hours() public {
+        vm.chainId(5042);
+        address t = _timelock(24 hours, makeAddr("safe"), address(0));
+        vm.expectRevert(abi.encodeWithSelector(DeployOracleBond.TreasuryDelayTooShort.selector, t, 24 hours, 48 hours));
+        b.checkTreasury(deployer, t);
+    }
+
+    /// A deployer that can propose payments, or rewrite the timelock's roles, makes the delay its own to waive.
+    function test_oracleBond_mainnet_refusesATreasuryTheDeployerControls() public {
+        vm.chainId(5042);
+        address proposedTo = _timelock(48 hours, deployer, address(0));
+        vm.expectRevert(abi.encodeWithSelector(DeployOracleBond.TreasuryAnswersToTheDeployer.selector, proposedTo));
+        b.checkTreasury(deployer, proposedTo);
+        address administered = _timelock(48 hours, makeAddr("safe"), deployer);
+        vm.expectRevert(abi.encodeWithSelector(DeployOracleBond.TreasuryAnswersToTheDeployer.selector, administered));
+        b.checkTreasury(deployer, administered);
+    }
+
+    function test_oracleBond_mainnet_acceptsATreasuryTimelock() public {
+        vm.chainId(5042);
+        b.checkTreasury(deployer, _timelock(48 hours, makeAddr("safe"), address(0)));
+    }
+
+    function test_oracleBond_testnet_stillAcceptsAPlainTreasury() public {
+        vm.chainId(5042002);
+        b.checkTreasury(deployer, makeAddr("treasury"));
+    }
+
     // ---- EpochFees roles
 
     function test_epochFees_mainnet_refusesTheDeployerAsOracle() public {
@@ -688,6 +741,18 @@ contract DeployScriptRunTest is Test {
         ob.run();
 
         vm.setEnv("GUARDIAN_ADDRESS", vm.toString(makeAddr("guardian")));
+
+        // Everything valid except a plain account as the treasury: refused.
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployOracleBond.TreasuryNotATimelock.selector, makeAddr("beneficiary"))
+        );
+        ob.run();
+
+        // The treasury as a timelock the Safe drives: deploys, and slashed bonds go to it.
+        address[] memory proposers = new address[](1);
+        proposers[0] = makeAddr("safe");
+        address treasury = address(new TimelockController(48 hours, proposers, new address[](1), address(0)));
+        vm.setEnv("SLASH_BENEFICIARY", vm.toString(treasury));
         vm.recordLogs();
         ob.run();
         address obProxy = _emitterOf(vm.getRecordedLogs(), keccak256("RoleGranted(bytes32,address,address)"));
@@ -697,6 +762,7 @@ contract DeployScriptRunTest is Test {
             SigvaraOracleBond(obProxy).hasRole(keccak256("GUARDIAN_ROLE"), makeAddr("guardian")),
             "the guardian can pause new bonds"
         );
+        assertEq(SigvaraOracleBond(obProxy).slashBeneficiary(), treasury, "slashed bonds go to the treasury timelock");
 
         // Leave the process environment as found, except DEPLOYER_PRIVATE_KEY. forge runs test
         // contracts in parallel threads of one process, and test/SplitAuthority.t.sol sets that

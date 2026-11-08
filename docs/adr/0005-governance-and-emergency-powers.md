@@ -186,6 +186,19 @@ This ADR records what was decided about each, and what was left as a stated trus
     not the accuser. The cost is some of the liveness decision 7 protects: a slash whose reporter is
     removed before anyone executes it cannot be executed, so a committee about to be replaced should
     execute or cancel what is ripe before it revokes.
+13. **The treasury is a timelock the admin Safe drives.** (8 November 2026.) The treasury receives slashed
+    operator bonds (`SLASH_BENEFICIARY`) and pays the costs `docs/token.md` lists. It was listed as a plain
+    address, one key that could have spent all of it at once. It is now a second `TimelockController`,
+    built like the upgrade timelock with `PHASE=deploy-treasury` in `script/SplitAuthority.s.sol`: the Safe
+    proposes and cancels, anyone executes, it administers itself, and its delay is the same 48 hours. A
+    payment is scheduled by the Safe and executes two days later at the earliest, so every spend is public
+    before it happens. The funds sit in the timelock and not in the Safe, because a transfer the Safe's
+    owners approve has no delay, and a delay module on a Safe does not slow its owners. It is a separate
+    timelock from the upgrade one so that the upgrade queue holds only upgrades. On chain 5042,
+    `script/DeployOracleBond.s.sol` refuses a beneficiary with no code, one that does not answer as a
+    timelock, a delay under 48 hours, and one the deployer can propose to or administer.
+    `check_treasury` and `check_treasury_queue` in `scripts/check-mainnet.sh` check the Safe's side and
+    every scheduled payment after the deploy.
 
 ## What stays on the admin Safe, and why
 
@@ -244,6 +257,9 @@ and its ceiling. That is a stated trust assumption, not an oversight:
 - A pause can be used against the protocol by a compromised guardian: it can close new registrations,
   deposits, proposals and bonds for three of every four days until the admin revokes it. That is a
   nuisance with an instant remedy, and the price of being able to stop a live bug while a fix is built.
+- Every treasury payment waits 48 hours from the Safe's scheduling transaction, an operator bond
+  top-up included, so one that cannot wait has to be planned two days ahead. The treasury depends on the
+  admin Safe's quorum as the upgrades do: if two signers can no longer sign, nothing leaves it.
 - Mainnet launches without `SigvaraEpochFees`. The oracle's `FEE_REGISTRY_ADDRESS` stays unset and the
   app's fee controls stay off, as they are on testnet today. Turning fees on later is a new deployment
   of a reworked module, not a switch.

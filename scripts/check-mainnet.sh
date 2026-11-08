@@ -15,9 +15,10 @@
 #   ORACLE     the oracle wallet
 #   COMMITTEE  the committee multisig
 #   GUARDIAN   the pause guardian    (check_core, check_bond_and_fees, check_holders)
-#   TREASURY   the slash beneficiary and reward pool    (check_bond_and_fees, check_safes)
-#   SAFE       the admin Safe        (check_authority, check_timelock, check_safes, check_holders)
-#   TIMELOCK   the timelock          (check_authority, check_timelock, check_holders, check_timelock_queue)
+#   TREASURY   the slash beneficiary and reward pool, a second timelock    (check_bond_and_fees, check_safes,
+#              check_treasury, check_treasury_queue)
+#   SAFE       the admin Safe        (check_authority, check_timelock, check_treasury, check_safes, check_holders)
+#   TIMELOCK   the timelock          (check_authority, check_timelock, check_treasury, check_holders, check_timelock_queue)
 # check_safes also reads SAFE_OWNERS, COMMITTEE_OWNERS and SAFE_THRESHOLD, which must be
 # copied from what the signers see on their own devices (see that function).
 # RPC defaults to the arc_mainnet alias in foundry.toml.
@@ -202,22 +203,47 @@ check_authority() {
   summary authority
 }
 
-# check_timelock: delay, who proposes and cancels, that anyone executes, and that nobody
-# can rewrite the timelock's own roles except through the timelock.
+# timelock_policy <address> <name>: delay, who proposes and cancels, that anyone executes, and that
+# nobody can rewrite the timelock's own roles except through the timelock. Shared by the two timelocks.
+timelock_policy() {
+  local tl=$1 n=$2 prop canc exec
+  prop=$(cast call $tl 'PROPOSER_ROLE()(bytes32)'  --rpc-url "$RPC" 2>/dev/null)
+  canc=$(cast call $tl 'CANCELLER_ROLE()(bytes32)' --rpc-url "$RPC" 2>/dev/null)
+  exec=$(cast call $tl 'EXECUTOR_ROLE()(bytes32)'  --rpc-url "$RPC" 2>/dev/null)
+  expect "$n.minDelay"                  "$WANT_TIMELOCK_DELAY" "$(val $tl 'getMinDelay()(uint256)')"
+  has $tl "$prop"     $SAFE      true  "$n: Safe can propose"
+  has $tl "$prop"     $DEPLOYER  false "$n: deployer cannot propose"
+  has $tl "$canc"     $SAFE      true  "$n: Safe can cancel"
+  has $tl "$exec"     $ZERO_ADDR true  "$n: anyone can execute"
+  has $tl $ADMIN_ROLE $SAFE      false "$n: Safe is not its admin"
+  has $tl $ADMIN_ROLE $DEPLOYER  false "$n: deployer is not its admin"
+  has $tl $ADMIN_ROLE $tl        true  "$n: administers itself"
+}
+
+# check_timelock: the upgrade timelock's policy.
 check_timelock() {
   FAIL=0
-  local prop canc exec
-  prop=$(cast call $TIMELOCK 'PROPOSER_ROLE()(bytes32)'  --rpc-url "$RPC" 2>/dev/null)
-  canc=$(cast call $TIMELOCK 'CANCELLER_ROLE()(bytes32)' --rpc-url "$RPC" 2>/dev/null)
-  exec=$(cast call $TIMELOCK 'EXECUTOR_ROLE()(bytes32)'  --rpc-url "$RPC" 2>/dev/null)
-  expect "timelock.minDelay"                  "$WANT_TIMELOCK_DELAY" "$(val $TIMELOCK 'getMinDelay()(uint256)')"
-  has $TIMELOCK "$prop"     $SAFE     true  "timelock: Safe can propose"
-  has $TIMELOCK "$canc"     $SAFE     true  "timelock: Safe can cancel"
-  has $TIMELOCK "$exec"     $ZERO_ADDR true "timelock: anyone can execute"
-  has $TIMELOCK $ADMIN_ROLE $SAFE     false "timelock: Safe is not its admin"
-  has $TIMELOCK $ADMIN_ROLE $DEPLOYER false "timelock: deployer is not its admin"
-  has $TIMELOCK $ADMIN_ROLE $TIMELOCK true  "timelock: administers itself"
+  timelock_policy $TIMELOCK timelock
   summary timelock
+}
+
+# check_treasury: the treasury is a timelock with the same policy, and a separate one, so that every
+# payment from it is scheduled by the admin Safe and waits as long as an upgrade (docs/adr/0005,
+# decision 13). script/DeployOracleBond.s.sol refuses a treasury without code before the deploy; this
+# checks the Safe's side, which that script cannot see. It reads TIMELOCK too, so run it after
+# PHASE=deploy-timelock.
+check_treasury() {
+  FAIL=0
+  local code=""
+  [ -n "$TREASURY" ] && code=$(cast code $TREASURY --rpc-url "$RPC" 2>/dev/null)
+  if [ -z "$code" ] || [ "$code" = "0x" ]; then
+    echo "FAIL  the treasury has no code, or was not read: a plain account is one key with no delay (${TREASURY:-unset})"; FAIL=1
+  else echo "ok    the treasury has code"; fi
+  if [ "${TREASURY,,}" = "${TIMELOCK,,}" ]; then
+    echo "FAIL  the treasury is the upgrade timelock: payments would share its queue"; FAIL=1
+  else echo "ok    the treasury is not the upgrade timelock"; fi
+  timelock_policy $TREASURY treasury
+  summary treasury
 }
 
 # check_impl <implementation address> <contract name>: the code at the address is what this
@@ -297,3 +323,12 @@ check_holders() { node scripts/check-role-holders.mjs; }
 # Needs TIMELOCK exported, and reads the log from the artifact's deployBlock unless TIMELOCK_FROM_BLOCK
 # names another start. RPC_URL (not RPC) picks the endpoint, as for check_holders.
 check_timelock_queue() { node scripts/timelock-operations.mjs; }
+
+# check_treasury_queue: the same for the treasury, where every operation is a payment. A payment still
+# waiting fails until its id is in REVIEWED_TIMELOCK_OPERATIONS. The treasury is deployed before the
+# registries, so the artifact's deployBlock is too late a start: TREASURY_FROM_BLOCK must name a block
+# before it was created.
+check_treasury_queue() {
+  if [ -z "$TREASURY_FROM_BLOCK" ]; then echo "FAIL  set TREASURY_FROM_BLOCK to a block before the treasury was deployed"; return 1; fi
+  TIMELOCK=$TREASURY TIMELOCK_FROM_BLOCK=$TREASURY_FROM_BLOCK node scripts/timelock-operations.mjs
+}
