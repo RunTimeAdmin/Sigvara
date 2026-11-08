@@ -1,5 +1,11 @@
 import { ethers, FetchRequest } from 'ethers';
 import { IDENTITY_ABI, REPUTATION_ABI, STAKING_ABI, ERC20_ABI } from './abis';
+
+/** Multicall3, at the address it has on most EVM chains, Arc testnet among them. */
+export const MULTICALL3 = '0xcA11bde05977b3631167028862bE2a173976CA11';
+const MULTICALL3_ABI = [
+  'function aggregate3((address target, bool allowFailure, bytes callData)[] calls) payable returns ((bool success, bytes returnData)[] returnData)',
+] as const;
 import { parseDid, computeDidHash } from './did';
 import { verifyChallenge, parseChallengePayload, isChallengeExpired } from './challenge';
 import { bytes32ToPubKey, pubKeyToMultibase } from './keys';
@@ -190,6 +196,39 @@ export class SigvaraVerifier {
   async verifyEvidence(did: string, leaf: string, proof: string[]): Promise<boolean> {
     const didHash = await this.didHashFromDid(did);
     return this.reputation().verifyEvidence(didHash, leaf, proof) as Promise<boolean>;
+  }
+
+  /**
+   * verifyEvidence for many payments, in one read through Multicall3. A public RPC that limits calls a
+   * second refuses a burst of single ones: Arc's refused the 29th of them within a second, and one refusal
+   * failed the whole check. Where Multicall3 has no code, they are asked one at a time instead.
+   */
+  async verifyEvidenceMany(did: string, items: { leaf: string; proof: string[] }[]): Promise<boolean[]> {
+    if (!items.length) return [];
+    const didHash = await this.didHashFromDid(did);
+    const reputation = this.reputation();
+    if (!(await this.hasMulticall3())) {
+      const answers: boolean[] = [];
+      for (const { leaf, proof } of items) answers.push(await reputation.verifyEvidence(didHash, leaf, proof));
+      return answers;
+    }
+    const target = await reputation.getAddress();
+    const calls = items.map(({ leaf, proof }) => ({
+      target,
+      allowFailure: false,
+      callData: reputation.interface.encodeFunctionData('verifyEvidence', [didHash, leaf, proof]),
+    }));
+    const results = await new ethers.Contract(MULTICALL3, MULTICALL3_ABI, this.provider).aggregate3.staticCall(calls);
+    return results.map((r: { returnData: string }) => reputation.interface.decodeFunctionResult('verifyEvidence', r.returnData)[0] === true);
+  }
+
+  private multicall3Present?: Promise<boolean>;
+  private hasMulticall3(): Promise<boolean> {
+    // A failed read is asked again next time rather than taken as an answer.
+    return (this.multicall3Present ??= this.provider.getCode(MULTICALL3).then(
+      (code) => code !== '0x',
+      (err) => { this.multicall3Present = undefined; throw err; },
+    ));
   }
 
   /** The stake an agent must hold to be Active, as the staking contract asks it now. */

@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.0-alpha.18
+
+### Fixed: `sigvara_verify_evidence` on an agent with a long payment history
+
+The tool asked the reputation contract's `verifyEvidence` about each covered payment in a separate call, up to 100
+of them, eight at a time. Arc's public RPC limits calls a second, and on 7 November 2026 it refused the 29th within a
+second with "rate limit exceeded". One refusal failed the whole check, so the tool failed on every agent with a long
+payment history, on both public RPCs.
+
+It now asks once, through Multicall3's `aggregate3`, with the new `SigvaraVerifier.verifyEvidenceMany`. Where
+Multicall3 has no code it asks one at a time, in turn. On the agent that failed every time, the check now
+confirms all 70 covered payments in about a second.
+
 ## 1.0.0-alpha.17
 
 ### Fixed: the evidence check reads a payment that settled on a payment chain
