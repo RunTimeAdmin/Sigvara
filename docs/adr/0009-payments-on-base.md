@@ -280,5 +280,5 @@ Open before it could go `on`, and none of it matters in shadow:
 - **The SDK's evidence check.** The leaf is closed in 1.0.0-alpha.17: `evidenceLeaf` builds the six-word leaf and
   `sigvara_verify_evidence` keeps `chainId`. Versions before it report a good root with a chain's payment in it as a
   mismatch. In 1.0.0-alpha.17 the tool still fails on an agent with a long payment history, because it confirms up to
-  100 payments at a pace the public RPC refuses. The explorer's check does not.
+  100 payments at a pace the public RPC refuses. 1.0.0-alpha.18 confirms them in one read through Multicall3. The explorer's check does not.
 - **Mainnet.** Its chain id, RPC and contracts are published at launch, and decision 1's testnet-only posture holds.

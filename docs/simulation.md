@@ -152,7 +152,7 @@ The explorer's evidence check reads these payments: at 03:13 UTC it rebuilt all 
 served root. The SDK's `evidenceLeaf` builds the same leaf from 1.0.0-alpha.17, published that morning.
 Before it, `sigvara_verify_evidence` reported this agent's served root as differing, read against the live
 list at 03:13 UTC as one leaf of 61. In 1.0.0-alpha.17 that tool still fails on this agent, with `Could not
-read the chain`: it confirms up to 100 payments at a pace the public RPC refuses. That says nothing about
+read the chain`: it confirms up to 100 payments at a pace the public RPC refuses. 1.0.0-alpha.18 confirms them in one read through Multicall3. That says nothing about
 the agent.
 
 ## Running it

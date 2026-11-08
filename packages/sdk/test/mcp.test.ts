@@ -527,20 +527,16 @@ describe('sigvara_verify_evidence', () => {
   /** A verifier whose finalized root is `finalRoot`, checking proofs the way MerkleProof.verify does. */
   function chainWith(finalRoot: string, pending?: { root: string; at: number }) {
     const v = stubbed();
-    let inFlight = 0;
-    const seen = { maxInFlight: 0, calls: 0 };
+    const seen = { calls: 0, items: 0 };
     v.getEvidenceRoot = vi.fn(async () => finalRoot);
     v.getPendingScore = vi.fn(async () => ({
       exists: !!pending, data: { feeScore: 0, successScore: 0, ageScore: 0, externalScore: 0, communityScore: 0, propagationScore: 0, lastUpdated: 0n },
       proposedAt: BigInt(pending?.at ?? 0), finalizableAt: 0n, evidenceRoot: pending?.root ?? ZERO_ROOT, proposer: '0x' + '0'.repeat(40),
     }));
-    v.verifyEvidence = vi.fn(async (_did: string, leaf: string, proof: string[]) => {
+    v.verifyEvidenceMany = vi.fn(async (_did: string, items: { leaf: string; proof: string[] }[]) => {
       seen.calls++;
-      inFlight++;
-      seen.maxInFlight = Math.max(seen.maxInFlight, inFlight);
-      await new Promise((r) => setTimeout(r, 1));
-      inFlight--;
-      return finalRoot !== ZERO_ROOT && proof.reduce((acc, s) => hashPair(acc, s), leaf) === finalRoot;
+      seen.items += items.length;
+      return items.map(({ leaf, proof }) => finalRoot !== ZERO_ROOT && proof.reduce((acc, s) => hashPair(acc, s), leaf) === finalRoot);
     });
     return { v, seen };
   }
@@ -548,7 +544,7 @@ describe('sigvara_verify_evidence', () => {
   const evidenceServer = (v: SigvaraVerifier, answer: unknown) =>
     server(v, { fetchEvidence: vi.fn(async () => answer) });
 
-  it('reproduces the finalized root and has the contract confirm every payment, eight at a time', async () => {
+  it('reproduces the finalized root and has the contract confirm every payment, in one read', async () => {
     const list = Array.from({ length: 20 }, (_, i) => payment(i));
     const { v, seen } = chainWith(rootOf(list));
     const r = await call(evidenceServer(v, body(list)), 'sigvara_verify_evidence', { agent: DID });
@@ -557,8 +553,9 @@ describe('sigvara_verify_evidence', () => {
     expect(r.value.servedRootMatches).toBe(true);
     expect(r.value.servedLeavesDiffering).toBe(0);
     expect(r.value.notYetFinalized).toBe(0);
-    expect(seen.calls).toBe(20);
-    expect(seen.maxInFlight).toBeLessThanOrEqual(8);
+    // One read for all twenty, not one call each.
+    expect(seen.calls).toBe(1);
+    expect(seen.items).toBe(20);
     expect(r.value.payments.every((p: any) => p.inFinalizedRoot && p.confirmedByContract === true)).toBe(true);
   });
 
@@ -717,7 +714,7 @@ describe('sigvara_verify_evidence, with a payment chain on', () => {
       exists: !!pending, data: { feeScore: 0, successScore: 0, ageScore: 0, externalScore: 0, communityScore: 0, propagationScore: 0, lastUpdated: 0n },
       proposedAt: BigInt(pending?.at ?? 0), finalizableAt: 0n, evidenceRoot: pending?.root ?? ZERO_ROOT, proposer: '0x' + '0'.repeat(40),
     }));
-    v.verifyEvidence = vi.fn(async (_d: string, leaf: string, proof: string[]) => proof.reduce((a, s) => hashPair(a, s), leaf) === finalRoot);
+    v.verifyEvidenceMany = vi.fn(async (_d: string, items: { leaf: string; proof: string[] }[]) => items.map(({ leaf, proof }) => proof.reduce((a, s) => hashPair(a, s), leaf) === finalRoot));
     return v;
   }
   const run = (v: SigvaraVerifier, body: unknown) => call(server(v, { fetchEvidence: vi.fn(async () => body) }), 'sigvara_verify_evidence', { agent: DID });
@@ -780,7 +777,7 @@ describe('sigvara_verify_evidence, after review', () => {
     const v = stubbed();
     v.getEvidenceRoot = vi.fn(async () => finalRoot);
     v.getPendingScore = vi.fn(async () => ({ exists: false, data: { feeScore: 0, successScore: 0, ageScore: 0, externalScore: 0, communityScore: 0, propagationScore: 0, lastUpdated: 0n }, proposedAt: 0n, finalizableAt: 0n, evidenceRoot: ZERO_ROOT, proposer: '0x' + '0'.repeat(40) }));
-    v.verifyEvidence = vi.fn(async (_d: string, leaf: string, proof: string[]) => proof.reduce((a, s) => hashPair(a, s), leaf) === finalRoot);
+    v.verifyEvidenceMany = vi.fn(async (_d: string, items: { leaf: string; proof: string[] }[]) => items.map(({ leaf, proof }) => proof.reduce((a, s) => hashPair(a, s), leaf) === finalRoot));
     return v;
   }
   const run = (v: SigvaraVerifier, body: unknown) => call(server(v, { fetchEvidence: vi.fn(async () => body) }), 'sigvara_verify_evidence', { agent: DID });
@@ -838,7 +835,7 @@ describe('sigvara_verify_evidence, after review', () => {
   it('says to run it again when the contract refuses what the root just matched', async () => {
     const list = [pay(0), pay(1)];
     const v = chain(leafRoot(list));
-    v.verifyEvidence = vi.fn(async () => false);
+    v.verifyEvidenceMany = vi.fn(async (_d: string, items: unknown[]) => items.map(() => false));
     const r = await run(v, answer(list));
     expect(r.value.finalized.confirmedByContract).toBe(0);
     expect(r.value.finalized.detail).toMatch(/root may have changed since it was read/);

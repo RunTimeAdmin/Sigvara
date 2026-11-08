@@ -470,7 +470,7 @@ then finds which of them the finalized root on chain covers: all of them, those 
 came later, or with an outcome the payer signed afterwards read as not yet reported. The same readings are
 tried by sigvara.xyz/agents. A payment that settled on a payment chain has a leaf with its chain first and enters
 a root its delay after settling, and its row names the `chainId`. Up to the last 100 covered payments listed are confirmed with the contract's
-`verifyEvidence`, and the root match covers the rest. The contract's answer is a consistency check: the proofs
+`verifyEvidence`, in one read through Multicall3, and the root match covers the rest. The contract's answer is a consistency check: the proofs
 come from a tree whose root was just read from it, so a refusal means the root changed in between.
 
 A reproduced root shows the oracle scored on exactly the payments it lists, with the outcome each row gives as

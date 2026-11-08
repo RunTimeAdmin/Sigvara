@@ -106,7 +106,7 @@ const MAX_EVIDENCE_RECORDS = 2_000;
  * minute. A long list gets fewer cut-offs, the newest first, where a finalized root usually sits.
  */
 const MATCH_BUDGET = 20_000;
-/** Payments confirmed one by one with verifyEvidence, the last listed. The root match covers the rest. */
+/** Payments confirmed with verifyEvidence, the last listed, in one read. The root match covers the rest. */
 const MAX_CONFIRMED = 100;
 /** Payments shown in the result, the last listed. Counts cover them all. */
 const MAX_LISTED = 50;
@@ -716,13 +716,10 @@ export function createTrustServer(options: TrustServerOptions): TrustServer {
           m.indexes.forEach((i) => covered.add(i));
           if (m.unset) m.indexes.forEach((i) => { if (records[i].outcomeSource === 'payer_signed') readAsUnreported.add(i); });
           const layers = evidenceLayers(m.leaves);
-          // The last listed, in waves of eight: the public Arc RPC refuses a batch of more than about ten.
+          // The last listed, in one read: the public Arc RPC refuses a burst of single calls.
           const positions = m.indexes.map((_, p) => p).slice(-MAX_CONFIRMED);
-          for (let w = 0; w < positions.length; w += 8) {
-            const wave = positions.slice(w, w + 8);
-            const answers = await Promise.all(wave.map((p) => verifier.verifyEvidence(did, m.leaves[p], evidenceProof(layers, p))));
-            wave.forEach((p, k) => confirmed.set(m.indexes[p], answers[k]));
-          }
+          const answers = await verifier.verifyEvidenceMany(did, positions.map((p) => ({ leaf: m.leaves[p], proof: evidenceProof(layers, p) })));
+          positions.forEach((p, k) => confirmed.set(m.indexes[p], answers[k]));
           const yes = [...confirmed.values()].filter(Boolean).length;
           // A payment in the committed set twice was counted twice. Legs of one transaction share a txHash with
           // different payers, so it is identical leaves that are flagged, not shared hashes.
