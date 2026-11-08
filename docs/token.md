@@ -41,14 +41,14 @@ a plain `IERC20`.
 | Role | Address |
 |---|---|
 | Deployer / creator | `0x8857A7C392d1Bb1A68647c64Ce18D9AA1Fd023b0` |
-| Treasury | `0xeDC966e23318782c0241aBe1790bd221b8aCE867` |
+| Treasury | A timelock the admin Safe drives, with a 48-hour delay. Its address goes here when it is deployed, before the registries |
 
 The SVR launch transaction and the Arc **mainnet** registry deployment will be sent
 from the deployer address above. A token or mainnet contract attributed to Sigvara
 that was not created by that address is not ours. Arc testnet is deployed from a
 separate address (see [deploy-testnet.md](deploy-testnet.md)) so that a testnet key
 never touches anything with value. The treasury address holds protocol-owned SVR and pays the
-costs listed under treasury policy; it holds nothing else.
+costs listed under treasury policy; it holds nothing else. The admin Safe schedules every payment from it, and a payment executes 48 hours later at the earliest, so each one is public two days before it happens ([ADR 0005](adr/0005-governance-and-emergency-powers.md), decision 13). Until 8 November 2026 this table listed `0xeDC966e23318782c0241aBe1790bd221b8aCE867` as the treasury. That is a single key, it is not the treasury, and nothing should be sent to it.
 
 ## Distribution
 
