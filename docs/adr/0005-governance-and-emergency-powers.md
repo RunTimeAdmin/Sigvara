@@ -198,7 +198,8 @@ This ADR records what was decided about each, and what was left as a stated trus
     `script/DeployOracleBond.s.sol` refuses a beneficiary with no code, one that does not answer as a
     timelock, a delay under 48 hours, and one the deployer can propose to or administer.
     `check_treasury` and `check_treasury_queue` in `scripts/check-mainnet.sh` check the Safe's side and
-    every scheduled payment after the deploy.
+    every scheduled payment after the deploy. It was rehearsed on Arc testnet from 8 November 2026, with a
+    throwaway 2-of-3 Safe: [treasury-rehearsal.md](../treasury-rehearsal.md).
 
 ## What stays on the admin Safe, and why
 

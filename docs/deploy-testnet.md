@@ -31,7 +31,7 @@ addresses rather than a redeploy.
 | Role | Address | Notes |
 |---|---|---|
 | Deployer (testnet) | `0x18CBcE50390f5f6ebe4E20Fc17833F25c8D94811` | Keeps `DEFAULT_ADMIN_ROLE` and `UPGRADER_ROLE` on every contract |
-| Treasury | none | Not used by this deployment. On mainnet it is a timelock the admin Safe drives (`PHASE=deploy-treasury`, ADR 0005 decision 13) |
+| Treasury | none | Not used by this deployment. On mainnet it is a timelock the admin Safe drives (`PHASE=deploy-treasury`, ADR 0005 decision 13), rehearsed on this chain in [treasury-rehearsal.md](treasury-rehearsal.md) |
 | Oracle | choose one | The wallet the oracle service signs with |
 | Committee | choose one | `SLASHING_COMMITTEE_ROLE` |
 
