@@ -688,8 +688,11 @@ async function scoreAt(didHash, { registeredAt, att, flagWeight, externalScore }
 // nonces from the shared oracle wallet.
 let epochRunning = false;
 
-// The chain the RPC was last seen on, once it has been checked. Reported by /health.
+// The chain the RPC was last verified on, once both checks pass. What the code relies on.
 let verifiedChainId = null;
+// The chain the RPC was last seen on, verified or not, which is what /health reports: after a failover
+// to another chain every epoch aborts, and the last verified chain said all was well.
+let seenChainId = null;
 let warnedNoExpectedChain = false;
 
 /**
@@ -703,7 +706,14 @@ let warnedNoExpectedChain = false;
  * the answer comes from the node each time, because ethers remembers its first.
  */
 async function ensureChain() {
-  const actual = await chain.assertChainId(cfg.expectedChainId);
+  let actual;
+  try {
+    actual = await chain.assertChainId(cfg.expectedChainId);
+  } catch (err) {
+    if (err instanceof chain.ChainMismatchError) seenChainId = err.actual;
+    throw err;
+  }
+  seenChainId = actual;
   const stored = getStateChainId();
   if (stored != null && stored !== actual) throw new chain.ChainMismatchError(stored, actual, 'state');
   if (stored == null) {
@@ -2565,7 +2575,7 @@ async function handleRequest(req, res) {
       stateSource: getLoadReport().source,
       // The chain the RPC was last seen on, and the one this oracle was configured for. Null
       // until the first check, and the expected one is null when EXPECTED_CHAIN_ID is unset.
-      chainId: verifiedChainId,
+      chainId: seenChainId,
       expectedChainId: cfg.expectedChainId,
       attestCooldownMs: ATTEST_COOLDOWN_MS,
       epochRunning,

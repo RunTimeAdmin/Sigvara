@@ -75,6 +75,25 @@ test('/health before the first epoch says so: no last epoch, a null gap, and an 
   assert.equal(typeof health.uptimeSeconds, 'number');
 });
 
+// A failover lands the RPC on another chain. Every epoch aborts from then on, and /health kept naming the
+// chain it had last verified, the expected one, so nothing outside could tell until scoring went stale.
+test('/health names the chain the node is on now, even one every epoch refuses', async () => {
+  const w = new World();
+  const o = await startOracle({ world: w, env: { ...ENV, EXPECTED_CHAIN_ID: '5042' } });
+  const health = async () => (await o.call('GET', '/health')).body;
+  try {
+    while ((await health()).chainId !== 5042) await new Promise((r) => setTimeout(r, 50));
+    w.set('chainId', 1);
+    while ((await o.call('POST', '/epoch', undefined, ADMIN)).status !== 202) await new Promise((r) => setTimeout(r, 50));
+    await o.waitForLog(/epoch aborted: EXPECTED_CHAIN_ID is 5042 but the RPC reports chain 1/);
+    const h = await health();
+    assert.equal(h.chainId, 1);
+    assert.equal(h.expectedChainId, 5042);
+  } finally {
+    await o.stop();
+  }
+});
+
 test('an ordinary request is still answered', async () => {
   assert.match(await oracle.raw('GET /health HTTP/1.1'), / 200 /);
   assert.match(await oracle.raw(`GET /evidence/${DID} HTTP/1.1`), / 200 /);
