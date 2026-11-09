@@ -678,7 +678,7 @@ nothing. If its transaction was already in flight, it reverts, and all that cost
   `deployments/5042002.json` is under its floor. This shares nothing with the keepers, so it is what
   notices when both are down.
 - **From each keeper, by webhook.** `WEBHOOK_URL`, as the watcher uses, hears about every execution,
-  a slash that is refused, a send that did not confirm, a dispute, a lapse, low gas, half an hour stuck behind
+  a slash that is refused, a send that did not go out or did not confirm, a dispute, a lapse, low gas, half an hour stuck behind
   its own pending transaction, and six failed runs in a row (then the run that ends them).
 - **On the host.** `docker ps` shows the container unhealthy when no run has finished
   for an hour.

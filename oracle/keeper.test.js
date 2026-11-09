@@ -335,6 +335,19 @@ test('a failed send is reported, stays open and is tried again', async () => {
   assert.equal(h.state().open[A], true);
 });
 
+// A fee or gas above its cap stops the send before anything is broadcast. The alert said the execution was
+// not confirmed, which sends a person looking for a transaction that does not exist.
+test('a send stopped by its fee or gas cap is reported as not sent, and one that went out as not confirmed', async () => {
+  const dear = senderHarness({ fee: { maxFeePerGas: 200n * 10n ** 9n } });
+  const capped = harness({ events: [{ block: 500, didHash: A }], proposals: { [A]: pending(1) }, send: (d) => dear.sender.send(d) });
+  await capped.keeper.runOnce();
+  assert.match(capped.alerts[0].title, /did not send an execution/);
+  const slow = senderHarness({ receipts: [null], waitMs: 20 });
+  const unconfirmed = harness({ events: [{ block: 500, didHash: A }], proposals: { [A]: pending(1) }, send: (d) => slow.sender.send(d) });
+  await unconfirmed.keeper.runOnce();
+  assert.match(unconfirmed.alerts[0].title, /did not confirm an execution/);
+});
+
 test('one proposal failing to send does not stop the next', async () => {
   const sent = [];
   const h = harness({

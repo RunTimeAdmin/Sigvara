@@ -264,7 +264,8 @@ function createKeeper({ cfg, reads, sender, state, notify = async () => {}, log 
     } catch (err) {
       const reason = said(err, cfg);
       r.failed.push({ didHash, reason });
-      await raise(s, nowSec, `failed:${didHash}`, 'alert', 'The slash keeper did not confirm an execution', [`agent ${didHash}`, reason.slice(0, 300), 'It looks again every run, and the other keeper tries too.']);
+      const title = err.notSent ? 'The slash keeper did not send an execution' : 'The slash keeper did not confirm an execution';
+      await raise(s, nowSec, `failed:${didHash}`, 'alert', title, [`agent ${didHash}`, reason.slice(0, 300), 'It looks again every run, and the other keeper tries too.']);
     }
   }
 
@@ -293,13 +294,16 @@ function localSender({ wallet, staking, maxFeeWei, maxGas, waitMs = 120_000, pol
   const provider = wallet.provider;
   return {
     async send(didHash) {
-      const fee = await provider.getFeeData();
+      // Nothing is broadcast before executeSlash is called, and a failure until then says so, so the
+      // alert does not send a person looking for a transaction that does not exist.
+      const notSent = (err) => { throw Object.assign(err, { notSent: true }); };
+      const fee = await provider.getFeeData().catch(notSent);
       const maxFeePerGas = fee.maxFeePerGas ?? fee.gasPrice;
-      if (maxFeePerGas > maxFeeWei) throw new Error(`fee ${ethers.formatUnits(maxFeePerGas, 'gwei')} gwei is above KEEPER_MAX_FEE_GWEI ${ethers.formatUnits(maxFeeWei, 'gwei')}`);
+      if (maxFeePerGas > maxFeeWei) notSent(new Error(`fee ${ethers.formatUnits(maxFeePerGas, 'gwei')} gwei is above KEEPER_MAX_FEE_GWEI ${ethers.formatUnits(maxFeeWei, 'gwei')}`));
       const tip = fee.maxPriorityFeePerGas ?? maxFeePerGas;
-      const estimate = await staking.executeSlash.estimateGas(didHash);
+      const estimate = await staking.executeSlash.estimateGas(didHash).catch(notSent);
       const gasLimit = estimate * 12n / 10n;
-      if (gasLimit > maxGas) throw new Error(`gas ${gasLimit} is above KEEPER_MAX_GAS ${maxGas}`);
+      if (gasLimit > maxGas) notSent(new Error(`gas ${gasLimit} is above KEEPER_MAX_GAS ${maxGas}`));
       const sent = await staking.connect(wallet).executeSlash(didHash, {
         gasLimit, maxFeePerGas, maxPriorityFeePerGas: tip < maxFeePerGas ? tip : maxFeePerGas,
       });
