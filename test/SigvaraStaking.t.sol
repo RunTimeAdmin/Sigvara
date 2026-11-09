@@ -1030,20 +1030,20 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
     }
 
     function test_claimWithdrawal_reverts_pendingSlash_evenAfterUnbondingElapsed() public {
-        // Make unbonding shorter than the 7-day challenge period so the claim
-        // window opens while the slash is still pending. Without the guard in
-        // claimWithdrawal, the operator could pull the queued funds mid-slash.
-        vm.prank(admin);
-        staking.setUnbondingPeriod(1 days);
-
+        // File late in the unbonding period so the claim window opens while the
+        // slash is still pending. Without the guard in claimWithdrawal, the
+        // operator could pull the queued funds mid-slash. (Unbonding can no longer
+        // be set shorter than the challenge period, which used to set this up.)
         _deposit();
+        uint256 queuedAt = block.timestamp;
         vm.prank(operator);
         staking.initiateWithdrawal(didHash, MIN_STAKE);
 
+        vm.warp(queuedAt + UNBONDING - 1 days);
         vm.prank(committee);
         staking.initiateSlash(didHash, victim, "evidence");
 
-        vm.warp(block.timestamp + 2 days); // past unbonding, inside the challenge period
+        vm.warp(queuedAt + UNBONDING + 1 days); // past unbonding, inside the challenge period
 
         vm.expectRevert(
             abi.encodeWithSelector(SigvaraStaking.SlashAlreadyPending.selector, didHash)
@@ -1355,6 +1355,108 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
         ));
         vm.prank(committee);
         staking.initiateSlash(didHash, victim, "again");
+    }
+
+    // -------------------------------------------------------------------------
+    // Unbonding stays longer than the challenge period
+    // -------------------------------------------------------------------------
+
+    /// A withdrawal queued after a drop stays slashable only because it waits longer than the refile
+    /// cooldown, which is one challenge period. With unbonding at or below the challenge period, a
+    /// committee's cancel let the whole bond out before it could file again: the operator suspends
+    /// itself, queues everything and claims while initiateSlash still refuses for the cooldown. The
+    /// setter refuses that configuration, and under the period in force the same moves leave the
+    /// bond in reach of the refiled slash.
+    function test_aCancelCannotOpenAnExitBeforeTheRefile() public {
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.PeriodTooShort.selector, 2 days, CHALLENGE + 1));
+        vm.prank(admin);
+        staking.setUnbondingPeriod(2 days);
+
+        _deposit();
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "evidence");
+        vm.prank(committee);
+        staking.cancelSlash(didHash);
+        uint256 droppedAt = block.timestamp;
+
+        vm.startPrank(operator);
+        identity.updateStatus(didHash, SigvaraIdentity.AgentStatus.Suspended);
+        staking.initiateWithdrawal(didHash, MIN_STAKE * 2);
+        vm.stopPrank();
+
+        vm.warp(droppedAt + 2 days);
+        vm.expectRevert(abi.encodeWithSelector(
+            SigvaraStaking.UnbondingPeriodActive.selector, didHash, droppedAt + UNBONDING
+        ));
+        vm.prank(operator);
+        staking.claimWithdrawal(didHash);
+
+        vm.warp(droppedAt + CHALLENGE);
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "with stronger evidence");
+        vm.warp(block.timestamp + CHALLENGE + 1);
+        staking.executeSlash(didHash);
+        assertEq(staking.claimable(victim), MIN_STAKE * 2 / 4, "the whole queued bond was still slashed");
+        assertEq(svr.balanceOf(operator), 10_000e18 - MIN_STAKE * 2, "nothing left before the refile");
+    }
+
+    /// The same ordering, held from the other side: the challenge period cannot be raised to meet
+    /// the unbonding period.
+    function test_setChallengePeriod_refusesAPeriodNotShorterThanTheUnbondingPeriod() public {
+        vm.prank(admin);
+        staking.setUnbondingPeriod(8 days);
+
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.PeriodTooLong.selector, 8 days, 8 days - 1));
+        vm.prank(admin);
+        staking.setChallengePeriod(8 days);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.PeriodTooLong.selector, 9 days, 8 days - 1));
+        vm.prank(admin);
+        staking.setChallengePeriod(9 days);
+
+        vm.prank(admin);
+        staking.setChallengePeriod(8 days - 1);
+        assertEq(staking.challengePeriod(), 8 days - 1);
+    }
+
+    function test_setUnbondingPeriod_acceptsOneSecondMoreThanTheChallengePeriod() public {
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.PeriodTooShort.selector, CHALLENGE, CHALLENGE + 1));
+        vm.prank(admin);
+        staking.setUnbondingPeriod(CHALLENGE);
+
+        vm.prank(admin);
+        staking.setUnbondingPeriod(CHALLENGE + 1);
+        assertEq(staking.unbondingPeriod(), CHALLENGE + 1);
+    }
+
+    /// What the ordering does not cover, and is accepted. A withdrawal queued BEFORE a slash was filed
+    /// has its claim time fixed already. If the committee cancels the proposal to re-file, the freeze
+    /// lifts and the withdrawal is claimable on its day, which can fall inside the refile cooldown.
+    /// With the default periods: queued on day 0 (claimable on day 21), filed on day 15, cancelled on
+    /// day 18, claimed on day 21, refile open on day 25. The committee keeps it in reach by letting the
+    /// proposal run to execution or dispute instead of cancelling (cancelSlash, docs/slash-drill.md).
+    function test_cancelSlash_releasesAWithdrawalQueuedBeforeTheSlash() public {
+        _deposit();
+        uint256 day0 = block.timestamp;
+        vm.prank(operator);
+        staking.initiateWithdrawal(didHash, MIN_STAKE); // Active, so it keeps its minimum
+
+        vm.warp(day0 + 15 days);
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "evidence");
+        vm.warp(day0 + 18 days);
+        vm.prank(committee);
+        staking.cancelSlash(didHash);
+
+        vm.warp(day0 + UNBONDING);
+        vm.prank(operator);
+        staking.claimWithdrawal(didHash);
+        assertEq(svr.balanceOf(operator), 10_000e18 - MIN_STAKE, "the queued amount left");
+
+        vm.expectRevert(abi.encodeWithSelector(
+            SigvaraStaking.SlashCooldownActive.selector, didHash, day0 + 18 days + CHALLENGE
+        ));
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "with stronger evidence");
     }
 
     // -------------------------------------------------------------------------
