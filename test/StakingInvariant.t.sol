@@ -337,6 +337,20 @@ contract StakingInvariantTest is Test, RegistrationHelper {
         }
     }
 
+    /// The slash lock in the identity registry follows the proposal. For an agent that is not
+    /// Slashed it is set exactly while a proposal is Pending or Disputed: filing sets it and every
+    /// drop lifts it. After Slashed it stays set, which nothing reads.
+    function invariant_slashLockMatchesAnOpenProposal() public view {
+        uint256 n = handler.agentCount();
+        for (uint256 i = 0; i < n; i++) {
+            bytes32 did = handler.didAt(i);
+            if (identity.getIdentity(did).status == SigvaraIdentity.AgentStatus.Slashed) continue;
+            SigvaraStaking.SlashState st = staking.getSlashProposal(did).state;
+            bool open = st == SigvaraStaking.SlashState.Pending || st == SigvaraStaking.SlashState.Disputed;
+            assertEq(identity.slashSuspended(did), open, "the slash lock is out of step with the proposal");
+        }
+    }
+
     /// An Active agent must be slashable, and it is only slashable if something is
     /// bonded. This is the property the suite was missing: every invariant here
     /// conserved tokens perfectly while an agent walked its whole bond out and came

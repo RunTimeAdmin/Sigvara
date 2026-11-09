@@ -114,6 +114,8 @@ import {TimelockController} from "@openzeppelin/contracts/governance/TimelockCon
  *
  *   # 5. Only now does the EOA drop anything. Refuses unless step 4 actually landed. SAFE_FACTORY and
  *   #    SAFE_CREATION_CALL come from the transaction that created the Safe: its factory and its input.
+ *   #    A run that stopped partway has moved the deployer's nonce, so run step 4b again for a fresh
+ *   #    report before running this again.
  *   PHASE=renounce SAFE=0x... TIMELOCK=0x... SAFE_FACTORY=0x... SAFE_CREATION_CALL=0x... \
  *     CONFIRM=yes-drop-the-deployer \
  *     forge script script/SplitAuthority.s.sol --rpc-url arc_testnet --broadcast -vv
@@ -626,8 +628,10 @@ contract SplitAuthority is Script {
         vm.startBroadcast(vm.envUint("DEPLOYER_PRIVATE_KEY"));
         for (uint256 i = 0; i < targets.length; i++) {
             IAccessControl c = IAccessControl(targets[i].addr);
-            if (c.hasRole(UPGRADER_ROLE, deployer)) c.renounceRole(UPGRADER_ROLE, deployer);
-            console2.log("deployer dropped upgrader on", targets[i].name);
+            if (c.hasRole(UPGRADER_ROLE, deployer)) {
+                c.renounceRole(UPGRADER_ROLE, deployer);
+                console2.log("deployer dropped upgrader on", targets[i].name);
+            }
         }
         vm.stopBroadcast();
 

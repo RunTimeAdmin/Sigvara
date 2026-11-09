@@ -59,7 +59,8 @@ through timing. Only a replay counts.
 
 The contract gives an operator no window, so policy does: three days' public notice before any
 `slash()`. An operator's exit takes seven days and the bond stays slashable throughout, so notice does not
-let it leave first.
+let it leave first. That holds only while the bond registry's unbonding period is longer than the notice:
+`setUnbondingPeriod` accepts anything down to one day.
 
 ### 4. What is not slashable
 

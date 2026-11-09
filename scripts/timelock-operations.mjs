@@ -102,8 +102,13 @@ export function operationsFromLogs(logs) {
     if (!ev) continue;
     const id = ev.args.id.toLowerCase();
     if (ev.name === 'CallScheduled') {
-      get(id).calls.push({
-        index: Number(ev.args.index), target: ev.args.target, value: ev.args.value.toString(), data: ev.args.data,
+      const op = get(id);
+      const index = Number(ev.args.index);
+      // An id is the hash of its calls and salt, so the same id can be scheduled again once cancelled. A call
+      // index already held means that happened: the calls are this schedule's, not added to the last one's.
+      if (op.calls.some((c) => c.index === index)) op.calls = [];
+      op.calls.push({
+        index, target: ev.args.target, value: ev.args.value.toString(), data: ev.args.data,
         predecessor: ev.args.predecessor, delay: Number(ev.args.delay), block: log.blockNumber, txHash: log.transactionHash,
       });
     } else if (ev.name === 'CallSalt') get(id).salt = ev.args.salt;

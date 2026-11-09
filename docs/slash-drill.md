@@ -256,6 +256,11 @@ against the same agent again. A drill that cancels and re-files has to wait that
 the two. After a veto, or a ruling for the agent, the same evidence is also refused for that
 agent (`EvidenceAlreadyRejected`), so a drill that re-files after one has to bring new evidence.
 
+Cancelling lifts the freeze, so it releases any queued withdrawal whose claim time falls before
+now plus `challengePeriod`, the moment the committee may file again. A withdrawal queued before
+the slash keeps the claim time it was given. To keep it in reach, let the proposal run to
+execution or dispute instead of cancelling to re-file.
+
 Whether you exercise the dispute branch is a choice. Doing it demonstrates more of the
 mechanism; skipping it keeps the drill to seven days instead of potentially twenty-one.
 
