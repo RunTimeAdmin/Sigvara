@@ -31,10 +31,10 @@ import "./interfaces/IOperatorSet.sol";
  * Optimistic scoring model:
  *   - The oracle proposes a score via proposeReputation(). A challenge window opens.
  *   - If unchallenged, anyone may call finalizeReputation() once the window elapses.
- *   - During the window, SLASHING_COMMITTEE_ROLE may reject a bad proposal outright —
- *     the committee's challenge is itself the ruling, mirroring how slash disputes
- *     already work in SigvaraStaking, rather than introducing a separate
- *     propose-then-arbitrate step.
+ *   - During the window, SLASHING_COMMITTEE_ROLE may reject a bad proposal outright.
+ *     The committee's challenge is itself the ruling, with no separate
+ *     propose-then-arbitrate step. A slash in SigvaraStaking differs: the committee
+ *     files it and the admin rules on a dispute.
  *   - A fresh proposal for the same agent replaces any still-pending one and restarts
  *     the window; the previous pending proposal is simply abandoned.
  *
@@ -86,7 +86,7 @@ contract SigvaraReputation is Initializable, TimelockedGrants, UUPSUpgradeable, 
     /// Granted to the StakingCore so it can zero scores on slash.
     bytes32 public constant STAKING_CORE_ROLE = keccak256("STAKING_CORE_ROLE");
 
-    /// Same committee that resolves slash disputes in SigvaraStaking — granted
+    /// Same committee that files slashes in SigvaraStaking, granted
     /// here separately since each contract keeps its own independent role registry.
     bytes32 public constant SLASHING_COMMITTEE_ROLE = keccak256("SLASHING_COMMITTEE_ROLE");
 
@@ -514,8 +514,9 @@ contract SigvaraReputation is Initializable, TimelockedGrants, UUPSUpgradeable, 
 
     /**
      * @notice Committee rejects a pending proposal during its challenge window.
-     * @dev    The committee's rejection is itself the ruling — no separate dispute
-     *         resolution step, mirroring how slash initiation works in SigvaraStaking.
+     * @dev    The committee's rejection is itself the ruling, with no separate dispute
+     *         step. A slash in SigvaraStaking differs: the committee files it and the
+     *         admin rules on a dispute.
      *         The agent's existing finalized score is untouched; only the pending
      *         proposal is discarded.
      */
@@ -565,7 +566,7 @@ contract SigvaraReputation is Initializable, TimelockedGrants, UUPSUpgradeable, 
 
     /**
      * @notice Zero out an agent's score after a slash. Called by StakingCore.
-     * @dev    Sets all scores to 0 but preserves lastUpdated so history is not lost.
+     * @dev    Sets all scores to 0 and lastUpdated to the time of the slash.
      *         Also clears any pending proposal — a slashed agent's score is terminal.
      */
     function zeroReputation(bytes32 didHash) external onlyRole(STAKING_CORE_ROLE) {
