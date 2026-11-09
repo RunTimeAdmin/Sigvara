@@ -73,6 +73,9 @@ const counters = {
   paymentChainScans: 0,
   paymentChainScanErrors: 0,
   epochsHeldByPaymentChain: 0,
+  // ADR 0011. Agents left unscored for a payer's "not delivered": due with its refunds not read yet, or starting to
+  // count before a proposal could land. A run of them for one agent means its refund read cannot keep up.
+  agentsHeldByPayerNegative: 0,
   // ADR 0006 peer import. Imported is outcomes another operator took that this one now holds
   // too. Refused is ones it served that fail this oracle's own checks: a few are expected (a
   // payment this node cannot find), many mean a peer serving what it should not. Errors are
@@ -361,6 +364,11 @@ function toPrometheusText(extra = {}) {
   lines.push('# HELP sigvara_oracle_epochs_held_by_payment_chain_total Epochs held back by a scan that was behind, wholly or for some agents');
   lines.push('# TYPE sigvara_oracle_epochs_held_by_payment_chain_total counter');
   lines.push(`sigvara_oracle_epochs_held_by_payment_chain_total ${counters.epochsHeldByPaymentChain}`);
+
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_agents_held_by_payer_negative_total Agents left unscored for a payer negative that was due and not read, or counted before a proposal could land (ADR 0011)');
+  lines.push('# TYPE sigvara_oracle_agents_held_by_payer_negative_total counter');
+  lines.push(`sigvara_oracle_agents_held_by_payer_negative_total ${counters.agentsHeldByPayerNegative}`);
 
   lines.push('');
   lines.push('# HELP sigvara_oracle_propose_throttled_total Proposals the RPC provider throttled');

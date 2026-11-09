@@ -185,12 +185,22 @@ function pruneFlags(minWeight = 0.001, now = Date.now(), halfLifeMs = FLAG_HALF_
 // file. A file with nothing from a payment chain is still written as version 1, so rolling back stays
 // possible until a payment chain is used. A chain in shadow does not count as used: an older build
 // drops its cursor, and all that costs is a report scanned again.
-const STATE_SCHEMA_VERSION = 2;
+//
+// Version 3 is a file holding a payer's "not delivered" (ADR 0011). A build before the hold would score its stored
+// `success: false` at once, under any PAYER_OUTCOMES, refunded or not, so it must refuse the file too. Without one
+// the file stays version 2 or 1.
+const STATE_SCHEMA_VERSION = 3;
 
 function holdsPaymentChainData() {
   if (Object.keys(paymentChainScanState).some((key) => !key.endsWith('/shadow'))) return true;
   for (const list of paymentEvents.values()) if (list.some((e) => e.chainId != null)) return true;
   return false;
+}
+
+/** The oldest format that can hold this state (STATE_SCHEMA_VERSION). */
+function schemaVersionFor() {
+  for (const list of paymentEvents.values()) if (list.some((e) => e.payerOutcome?.outcome === 2)) return 3;
+  return holdsPaymentChainData() ? 2 : 1;
 }
 
 // The previous good state, one save behind. persist() keeps it by linking the live file here
@@ -534,7 +544,7 @@ function persist() {
     try {
       // Written in pieces rather than as one string: see state-serialize.js for why.
       for (const piece of stateChunks({
-        schemaVersion: holdsPaymentChainData() ? 2 : 1,
+        schemaVersion: schemaVersionFor(),
         chainId: stateChainId,
         attestations: Object.fromEntries(attestations),
         flags: Object.fromEntries(flags),
@@ -771,10 +781,13 @@ function setPaymentOutcome(didHash, txHash, payer, success, packetId = null) {
  * `chainId` is the payment chain the payment settled on (ADR 0009, section 7), null for the scored
  * chain. A hash is only ever compared with hashes from the chain it came from.
  *
+ * `blockNumber` is the payment's block, as the payment was verified. It is kept on an event credited before blocks
+ * were (creditPayment), since a held negative's refund read starts there (negative-hold.js).
+ *
  * @returns {'set'|'replaced'|'already_set'|'outside_window'|'not_found'}
  */
 function recordPayerOutcome(
-  didHash, txHash, payer, success, signed, { windowMs, replaceable = true, now = Date.now(), packetId = null, chainId = null },
+  didHash, txHash, payer, success, signed, { windowMs, replaceable = true, now = Date.now(), packetId = null, chainId = null, blockNumber = null },
 ) {
   if (typeof success !== 'boolean') throw new TypeError('recordPayerOutcome: success must be a boolean');
   const did = String(didHash).toLowerCase();
@@ -794,6 +807,7 @@ function recordPayerOutcome(
     ...rest,
     success,
     ...(packetId ? { packetId: String(packetId) } : {}),
+    ...(Number.isInteger(blockNumber) && !Number.isInteger(event.blockNumber) ? { blockNumber } : {}),
     payerOutcome: Object.freeze({ ...signed, acceptedAt: lastAcceptedAt }),
   });
   paymentEvents.set(did, Object.freeze(next));
@@ -839,8 +853,9 @@ function payerOutcomesSince(since, limit) {
  * Records how far this operator has read an agent's transfers to a payer whose signed negative is held
  * (negative-hold.js, ADR 0011). Kept beside the leaf, not in it: `success` stays what the payer signed, and
  * negative-hold.present decides how the negative reads. Returns false when the payment has no payer outcome.
+ * A final check keeps the end of the hold it was read against, `holdEndMs`.
  *
- * @param {{ final: boolean, refunded: boolean|null, readThroughBlock: number, txHash?: string, blockNumber?: number }} check
+ * @param {{ final: boolean, refunded: boolean|null, readThroughBlock: number, txHash?: string, blockNumber?: number, holdEndMs?: number }} check
  */
 function setRefundCheck(didHash, txHash, payer, chainId, check) {
   const did = String(didHash).toLowerCase();
@@ -857,7 +872,36 @@ function setRefundCheck(didHash, txHash, payer, chainId, check) {
       refunded: check.refunded ?? null,
       readThroughBlock: check.readThroughBlock,
       ...(check.txHash ? { txHash: String(check.txHash).toLowerCase(), blockNumber: check.blockNumber } : {}),
+      ...(check.final === true && Number.isSafeInteger(check.holdEndMs) ? { holdEndMs: check.holdEndMs } : {}),
     }),
+  });
+  paymentEvents.set(did, Object.freeze(next));
+  return true;
+}
+
+/**
+ * Moves the block a payer-signed outcome counts as checked at, and that block's time (negative-hold.js): to date one
+ * recorded before the time was kept, or to the earlier acceptance of the same outcome by another operator. `check`
+ * says which fields change. `refundCheck` replaces the refund read when given, and null drops it. The signed
+ * payload, acceptedAt and the leaf stay as they were. Returns false when the payment has no payer outcome.
+ */
+function setPayerOutcomeCheck(didHash, txHash, payer, chainId, check, refundCheck) {
+  const did = String(didHash).toLowerCase();
+  const tx = String(txHash).toLowerCase();
+  const who = String(payer).toLowerCase();
+  const list = paymentEvents.get(did) ?? [];
+  const i = list.findIndex((e) => e.payerOutcome && onChain(e, chainId) && e.txHash === tx && String(e.payer).toLowerCase() === who);
+  if (i < 0) return false;
+  const { refundCheck: kept, ...rest } = list[i];
+  const changed = {};
+  if (Number.isInteger(check.checkedAtBlock)) changed.checkedAtBlock = check.checkedAtBlock;
+  if (Number.isSafeInteger(check.checkedAtMs)) changed.checkedAtMs = check.checkedAtMs;
+  const rc = refundCheck === undefined ? kept : refundCheck;
+  const next = [...list];
+  next[i] = Object.freeze({
+    ...rest,
+    payerOutcome: Object.freeze({ ...list[i].payerOutcome, ...changed }),
+    ...(rc ? { refundCheck: Object.freeze({ ...rc }) } : {}),
   });
   paymentEvents.set(did, Object.freeze(next));
   return true;
@@ -1036,6 +1080,7 @@ module.exports = {
   payerOutcomesSince,
   payerOutcomeFor,
   setRefundCheck,
+  setPayerOutcomeCheck,
   divergences,
   recordDivergence,
   getDivergences,

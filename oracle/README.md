@@ -1011,7 +1011,7 @@ with it off, the largest factor in the score is a count of HTTP requests.
 | `PAYMENT_FEE_UNIT` | `100000000` | Base units of volume per point of `feeScore`. With 6-decimal USDC this is one point per $100, so the 20-point cap lands at $2,000 of settled volume |
 | `PAYMENT_HALF_LIFE_DAYS` | `90` | Days after which a payment counts half. `0` disables decay, which makes the score answer "was this agent ever busy" instead of "is it busy now" |
 | `PAYMENT_MAX_PER_PAYER` | `4` | Most points of `feeScore`, and attestations of weight, any one payer can contribute. At 4, reaching the 20-point cap needs five distinct payers. `0` disables the cap |
-| `PAYER_OUTCOMES` | `off` | Payer-signed outcomes ([ADR 0006](../docs/adr/0006-payer-signed-outcomes.md)): `off`, `positive` (only "delivered") or `both`. Needs `PAYMENT_VERIFICATION=required`, `EXPECTED_CHAIN_ID` and `REPUTATION_ADDRESS`, or the process refuses to start. Set it the same on every operator: one taking them and another not is a delivery gap. `both` waits for a challenge process. Under `both` a negative is held `PAYER_NEGATIVE_HOLD_DAYS` (default 7, from 1 to 30, the same on every operator) from the block its signature was checked at, and counts an hour after that unless the agent refunded the payer in full by then; until it counts it reads as not reported ([ADR 0011](../docs/adr/0011-who-rules-negative-outcomes.md), `negative-hold.js`) |
+| `PAYER_OUTCOMES` | `off` | Payer-signed outcomes ([ADR 0006](../docs/adr/0006-payer-signed-outcomes.md)): `off`, `positive` (only "delivered") or `both`. Needs `PAYMENT_VERIFICATION=required`, `EXPECTED_CHAIN_ID` and `REPUTATION_ADDRESS`, or the process refuses to start. Set it the same on every operator: one taking them and another not is a delivery gap. `both` waits for a challenge process. Under `both` a negative is held `PAYER_NEGATIVE_HOLD_DAYS` (default 7, from 1 to 30, the same on every operator) from the block its signature was checked at (or from its signature, if later, and from the first operator's block once imported), and counts an hour after that unless the agent refunded the payer in full by then; until it counts it reads as not reported ([ADR 0011](../docs/adr/0011-who-rules-negative-outcomes.md), `negative-hold.js`) |
 | `PAYER_OUTCOMES_PUBLISH` | `off` | `on` serves each payer's signed payload in `/evidence` and lists them at `GET /outcomes`. Stays off on mainnet until the retention policy covers copies held by other operators |
 | `PAYER_OUTCOMES_PEERS` | (empty) | Comma-separated base URLs of the other operators to import payer-signed outcomes from, at the start of each epoch (see [`GET /outcomes`](#get-outcomessincems)). Needs `PAYER_OUTCOMES`. Off on mainnet for the same reason as publishing |
 | `PAYER_OUTCOMES_IMPORT_GRACE_HOURS` | `6` | How long after an outcome's deadline an import from a peer may still reach this operator, by its confirmed head. Past it the import is refused, since nothing proves the peer took it before the deadline |
@@ -1144,7 +1144,7 @@ What differs from the scored chain's scan:
   `paymentChainHold` on `/health`, and `/metrics` counts it as a failed epoch and in
   `sigvara_oracle_epochs_held_by_payment_chain_total`. Scans that fall behind while an epoch runs bring
   the cut-off down, below, and past that leave the remaining agents unscored. That epoch still counts as
-  succeeded: only the held counter moves, and `paymentChainHold.agents` says how many.
+  succeeded unless it held every agent: only the held counter moves, and `paymentChainHold.agents` says how many and `reasons` why (`scan_behind`, or `payer_negative` for a negative held under ADR 0011, which `sigvara_oracle_agents_held_by_payer_negative_total` counts instead).
 - **One cut-off.** With a payment chain on (shadow changes nothing), a score's evidence is
   everything that counted by a whole-minute cut-off: one minute before the chain's clock, read again
   for each agent, and brought down to where this operator's own scans of every chain have reached,
@@ -1181,7 +1181,7 @@ An outcome a payer signs for a payment chain's payment names it as `payment.chai
 
 A state file that holds anything from a payment chain is written as format version 2, which a build
 from before this refuses to load; without payment chains it stays version 1, so a rollback is still
-possible until a chain is used. Turning a chain back on keeps its old cursor and credits.
+possible until a chain is used. Turning a chain back on keeps its old cursor and credits. A file that holds a payer's "not delivered" is written as version 3 ([ADR 0011](../docs/adr/0011-who-rules-negative-outcomes.md)), since a build from before the hold would count it at once.
 
 `/health` reports each chain's mode, asset, `FROM_BLOCK`, fee unit, minimum, delay, cursor and last scan under `paymentChains`, so two operators can compare what they must share.
 
