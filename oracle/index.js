@@ -3224,7 +3224,15 @@ async function handleRequest(req, res) {
     if (!didHash) {
       return json(res, 400, { error: 'didHash must be a 32-byte hex string' });
     }
-    const events = evidenceAt(didHash, paymentChains.cutFor(Date.now(), paymentChainsCfg));
+    // A payer's negative is presented at the chain's clock, as a score presents it, so it starts to count here when it
+    // does there. Read only for an agent that holds one; this host's clock, as before, when the chain cannot answer.
+    let nowMs = Date.now();
+    if (getPaymentEvents(didHash).some(negativeHold.isPayerNegative)) {
+      try {
+        nowMs = (await chain.getLatestBlockTimestamp()) * 1000;
+      } catch { /* this host's clock */ }
+    }
+    const events = evidenceAt(didHash, paymentChains.cutFor(nowMs, paymentChainsCfg));
     const body = evidenceCache.get(didHash, events, () => buildEvidenceBody(didHash, events));
 
     // Same bytes a miss would have produced, so a hit is indistinguishable to the
