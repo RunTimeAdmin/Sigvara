@@ -823,7 +823,10 @@ async function runPaymentScan(agents) {
 
   const provider = chain.getProvider();
   const head = await provider.getBlockNumber();
-  const to = paymentScan.safeHead(head, paymentScanCfg.confirmations);
+  // No further than the registry scan has read, as the link scan (runLinkScan). Transfers are asked for only to
+  // the agents it knows, so past it a payment to an agent registered since would be passed over for good.
+  const reach = chain.getScanState()?.lastScannedBlock;
+  const to = Math.min(paymentScan.safeHead(head, paymentScanCfg.confirmations), Number.isInteger(reach) ? reach : Infinity);
   const checkpoint = getPaymentScanState();
   const from = checkpoint && Number.isInteger(checkpoint.lastBlock)
     ? checkpoint.lastBlock + 1
