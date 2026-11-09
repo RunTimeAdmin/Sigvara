@@ -33,7 +33,7 @@ require('./config').requireValidNumericConfig('keeper');
 
 const { ethers } = require('ethers');
 const { fileState } = require('./publisher');
-const { webhookPayload } = require('./watcher-policy');
+const { webhookPayload, trackPollOutcome } = require('./watcher-policy');
 const { redact } = require('./event-index');
 const { wordsOf } = require('./log-spans');
 const { readWithBackoff } = require('./read-retry');
@@ -112,8 +112,9 @@ function decide(didHash, proposal, nowSec, cfg) {
  *   notify  (level, title, lines) -> delivered to a person; failure is its own problem
  */
 function createKeeper({ cfg, reads, sender, state, notify = async () => {}, log = console.log, pause = () => new Promise((r) => setTimeout(r, SCAN_PACE_MS)) }) {
-  let failedRuns = 0;
-  const load = () => ({ scanBlock: cfg.fromBlock, open: {}, alerted: {}, executed: {}, ...(state.get() ?? {}) });
+  // Failed runs in a row, and whether a person has been told (trackPollOutcome).
+  let runHealth = { failures: 0, alerted: false };
+  const load =() => ({ scanBlock: cfg.fromBlock, open: {}, alerted: {}, executed: {}, ...(state.get() ?? {}) });
 
   // Once per problem, and again a day later if it is still there.
   async function raise(s, nowSec, key, level, title, lines) {
@@ -211,9 +212,14 @@ function createKeeper({ cfg, reads, sender, state, notify = async () => {}, log 
       delete s.alerted.blocked;
     }
     s.lastRunAt = nowSec;
+    // This host's clock, for the container's healthcheck. lastRunAt is chain time, and the scan rewrites
+    // the file early in every run, so neither the field nor the file's age said that a run finished.
+    s.lastRunWallMs = Date.now();
     state.set(s);
     state.persist();
-    failedRuns = 0;
+    const next = trackPollOutcome(runHealth, true, FAILED_RUNS_ALERT);
+    runHealth = next.state;
+    if (next.action === 'recovered') await notify('ok', 'The slash keeper is running again', ['A run finished after the failures reported earlier.']);
     return { ...r, open: Object.keys(s.open).length, head, nowSec };
   }
 
@@ -262,13 +268,15 @@ function createKeeper({ cfg, reads, sender, state, notify = async () => {}, log 
     }
   }
 
-  // A run that keeps failing is the one thing the loop has to report for itself.
+  // A run that keeps failing is the one thing the loop has to report for itself, and the run that
+  // ends it says so.
   async function runFailed(err) {
-    failedRuns += 1;
-    if (failedRuns === FAILED_RUNS_ALERT) {
-      await notify('alert', `The slash keeper has failed ${failedRuns} runs in a row`, [said(err, cfg).slice(0, 300)]);
+    const next = trackPollOutcome(runHealth, false, FAILED_RUNS_ALERT);
+    runHealth = next.state;
+    if (next.action === 'alert') {
+      await notify('alert', `The slash keeper has failed ${runHealth.failures} runs in a row`, [said(err, cfg).slice(0, 300)]);
     }
-    return failedRuns;
+    return runHealth.failures;
   }
 
   return { runOnce, runFailed };

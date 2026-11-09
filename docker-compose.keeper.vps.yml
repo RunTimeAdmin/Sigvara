@@ -39,10 +39,12 @@ services:
       options:
         max-size: 10m
         max-file: "5"
-    # Unhealthy when no run has finished lately, which docker ps shows. lastRunAt is chain time, so
-    # this compares the file's own age instead of trusting two clocks to agree.
+    # Unhealthy when no run has finished lately, which docker ps shows. lastRunWallMs is this host's
+    # clock when the last run finished (lastRunAt is chain time). The file's own age is no measure:
+    # the scan rewrites it early in every run, finished or not. A state file written before
+    # lastRunWallMs existed falls back to its age until the first run that finishes.
     healthcheck:
-      test: ["CMD", "node", "-e", "const f=require('fs').statSync('/data/keeper-state.json');process.exit(Date.now()-f.mtimeMs<3600000?0:1)"]
+      test: ["CMD", "node", "-e", "const fs=require('fs'),f='/data/keeper-state.json',t=JSON.parse(fs.readFileSync(f,'utf8')).lastRunWallMs??fs.statSync(f).mtimeMs;process.exit(Date.now()-t<3600000?0:1)"]
       interval: 5m
       timeout: 10s
       retries: 2

@@ -10,7 +10,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const { decide, createKeeper, localSender, readConfig, revertName, STAKING_ABI } = require('./keeper');
 
 const DAY = 86_400;
@@ -365,8 +365,64 @@ test('one failed run is routine, and the sixth in a row is reported once', async
   await h.keeper.runFailed(err);
   assert.equal(h.alerts.length, 1, 'not again on the seventh');
   await h.keeper.runOnce();
+  assert.equal(h.alerts.length, 2, 'the good run says it is running again');
   await h.keeper.runFailed(err);
-  assert.equal(h.alerts.length, 1, 'a good run starts the count over');
+  assert.equal(h.alerts.length, 2, 'a good run starts the count over');
+});
+
+test('a good run after the failure alert says the keeper is running again, once', async () => {
+  const h = harness();
+  const err = new Error('rate limit exceeded');
+  for (let i = 1; i <= 6; i++) await h.keeper.runFailed(err);
+  await h.keeper.runOnce();
+  await h.keeper.runOnce();
+  assert.deepEqual(h.alerts.map((a) => a.level), ['alert', 'ok']);
+  assert.match(h.alerts[1].title, /running again/);
+});
+
+// The container's healthcheck (docker-compose.keeper.vps.yml), run against state files. The scan rewrites
+// the file early in every run, so its age said nothing about a run finishing: a keeper whose every run
+// failed after the scan stayed healthy.
+test('the keeper healthcheck reads when a run last finished, not when the file was last written', () => {
+  const compose = fs.readFileSync(path.join(__dirname, '..', 'docker-compose.keeper.vps.yml'), 'utf8');
+  const script = JSON.parse(`"${compose.match(/\["CMD", "node", "-e", "(.+)"\]/)[1]}"`);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sigvara-keeper-health-'));
+  try {
+    const file = path.join(dir, 'keeper-state.json');
+    const healthy = (state) => {
+      fs.writeFileSync(file, JSON.stringify(state));
+      const run = spawnSync(process.execPath, ['-e', script.replaceAll('/data/keeper-state.json', file.replaceAll('\\', '/'))]);
+      return run.status === 0;
+    };
+    assert.equal(healthy({ scanBlock: 5, lastRunWallMs: Date.now() - 60_000 }), true, 'a run finished a minute ago');
+    assert.equal(healthy({ scanBlock: 5, lastRunWallMs: Date.now() - 2 * 3600_000 }), false, 'the file is new, the last finished run is not');
+    assert.equal(healthy({ scanBlock: 5 }), true, 'a state file from before the field: the file\'s own age, until a run writes it');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('only a run that finishes stamps the time the healthcheck reads', async () => {
+  let saved = null;
+  let failing = true;
+  const keeper = createKeeper({
+    cfg: { mode: 'shadow', name: 'test', fromBlock: 100, chunkSize: 400, minBalance: 0n, ...policy() },
+    reads: {
+      head: async () => 1000,
+      blockTime: async () => NOW,
+      slashInitiated: async () => [A],
+      proposal: async () => { if (failing) throw new Error('rate limit exceeded'); return pending(1); },
+      simulate: async () => null,
+    },
+    state: { get: () => saved, set: (s) => { saved = JSON.parse(JSON.stringify(s)); }, persist: () => {} },
+  });
+  await assert.rejects(keeper.runOnce());
+  assert.equal(saved.scanBlock, 981, 'the scan saved its progress');
+  assert.equal(saved.lastRunWallMs, undefined);
+  failing = false;
+  const before = Date.now();
+  await keeper.runOnce();
+  assert.ok(saved.lastRunWallMs >= before && saved.lastRunWallMs <= Date.now());
 });
 
 test('progress survives a read failing part way through', async () => {
