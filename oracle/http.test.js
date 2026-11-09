@@ -229,6 +229,22 @@ test('GET /jobs/:address answers from the job registry when one is configured', 
   }
 });
 
+test("GET /jobs/:address names the registry's chain once its node answers, after a first read that failed", async () => {
+  const jobsWorld = new World();
+  jobsWorld.set('jobs', { networkFails: true });
+  const withJobs = await startOracle({ world: jobsWorld, env: { ...ENV, JOBS_REGISTRY_ADDRESS: `0x${'44'.repeat(20)}` } });
+  try {
+    const first = await withJobs.call('GET', `/jobs/0x${'55'.repeat(20)}`);
+    assert.equal(first.status, 200, first.text);
+    assert.equal(first.body.chainId, null, 'unknown while the node does not say');
+    jobsWorld.set('jobs', {});
+    const second = await withJobs.call('GET', `/jobs/0x${'55'.repeat(20)}`);
+    assert.equal(second.body.chainId, 5042, 'asked again, not left unknown for the life of the process');
+  } finally {
+    await withJobs.stop();
+  }
+});
+
 test('/flag/resolve and /link refuse a didHash that is not a 32-byte hash', async () => {
   for (const [path, body] of [
     ['/flag/resolve', { didHash: 'nope' }],

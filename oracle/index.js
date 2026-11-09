@@ -467,6 +467,17 @@ let payerScoreCache = new Map();
 // which delays failover by one grace and never brings it forward.
 const emptySeenAt = new Map();
 const coveringLate = new Set();
+// What ends that memory. A slot found occupied, and an agent this checker did not look at in an epoch
+// (slashed, unbonded, held, or skipped on an error): an agent nobody scored for a week and then bonded
+// again is not a primary a week late, so the grace is counted afresh from the next look.
+const checkerSlots = {
+  occupied(didHash) { emptySeenAt.delete(didHash); coveringLate.delete(didHash); },
+  forget(didHash) { emptySeenAt.delete(didHash); coveringLate.delete(didHash); },
+  /** Forget every agent remembered whose slot was not read this epoch. */
+  forgetAllBut(read) {
+    for (const didHash of [...emptySeenAt.keys(), ...coveringLate]) if (!read.has(didHash)) this.forget(didHash);
+  },
+};
 
 // How fast to ask for payers' standing, as measured on Arc's public RPC on 4 Nov 2026. ethers sends what
 // is asked in one tick as one batch, the RPC refuses past 20 calls in a batch, and a payer with a
@@ -1060,6 +1071,22 @@ function cutTooOld(nowMs, cutMs) {
 }
 
 /**
+ * What a failed write was, one of: 'slot_taken' (a proposal landed first), 'throttled' (by the provider),
+ * 'fee_cap' (this oracle would not sign it), 'unconfirmed' (sent and not seen mined), 'stranded' (the
+ * pending proposal's proposer lost its authority), 'other'. Asked before the slot is read again: a write
+ * that was throttled, unsigned or unconfirmed leaves the slot as it was, and the re-read took that for a
+ * refusal, so one failure was counted twice.
+ */
+function classifyWrite(err) {
+  if (chain.isSlotTaken(err)) return 'slot_taken';
+  if (chain.isRateLimited(err)) return 'throttled';
+  if (chain.isFeeCap(err)) return 'fee_cap';
+  if (chain.isTxUnconfirmed(err)) return 'unconfirmed';
+  if (chain.isProposerNotAuthorized(err)) return 'stranded';
+  return 'other';
+}
+
+/**
  * The cut-off for the agent about to be scored, with a payment chain on (ADR 0009), and the clock it
  * was read at: a whole minute before the chain's clock, brought down to where every scan of this
  * operator has reached, so that the evidence holds everything that counted by it and nothing an
@@ -1186,10 +1213,29 @@ async function runEpochInner() {
     }
   }
   let proposed = 0;
+  // Agents this epoch computed a score for, proposed or not (the activeAgents gauge).
+  let scored = 0;
+  // Agents whose empty-slot memory a checker consulted this epoch (checkerSlots). The rest are forgotten.
+  const slotsJudged = new Set();
   // Set when a transaction from this wallet was sent and not seen mined, this epoch or before it, with a
   // payment chain on: everything sent after it queues behind it, so a proposal could land after the half
   // hour a checker searches.
   let proposalsStopped = stuck > 0;
+  // A finalize the provider throttled, that this oracle would not sign, or that was sent and not seen
+  // mined: said and counted once, as the propose path counts the same three. False for any other failure.
+  const countedFinalizeFailure = (failure, didHash, err) => {
+    if (failure === 'throttled') {
+      console.warn(`[oracle]   ${didHash.slice(0, 10)}… RPC throttled the finalize; retrying next epoch`);
+      metrics.inc('finalizeThrottled');
+    } else if (failure === 'fee_cap' || failure === 'unconfirmed') {
+      console.error(`[oracle]   ${didHash.slice(0, 10)}… ${err.message}`);
+      metrics.inc(failure === 'fee_cap' ? 'txCapped' : 'txUnconfirmed');
+      if (failure === 'unconfirmed') proposalsStopped = true;
+    } else {
+      return false;
+    }
+    return true;
+  };
   // Agents left unscored because this operator's scans fell behind while the epoch ran.
   let agentsHeld = 0;
   let finalized = 0;
@@ -1383,6 +1429,7 @@ async function runEpochInner() {
         if (fresh.status === chain.STATUS_SLASHED) {
           console.log(`[oracle]   ${didHash.slice(0, 10)}… slashed since the batch read, skipping`);
           chain.pruneAgent(didHash);
+          forgetAgent(didHash);
           continue;
         }
 
@@ -1417,7 +1464,13 @@ async function runEpochInner() {
             finalized++;
             metrics.inc('finalizeSuccesses');
           } catch (finalizeErr) {
-            if (chain.isProposerNotAuthorized(finalizeErr)) {
+            // Named before the slot is read again, as the checker's finalize is: a throttled send never
+            // reached the chain, so the slot still reads as held, and this used to count a finalize error
+            // and then, in the catch below, a throttled proposal as well. The slot is held either way, so
+            // nothing is proposed over it this epoch.
+            const failure = classifyWrite(finalizeErr);
+            if (countedFinalizeFailure(failure, didHash, finalizeErr)) continue;
+            if (failure === 'stranded') {
               // The proposer of the pending proposal has lost its authority: its operator was
               // removed, its signer cleared, or its role revoked. Nobody can finalize that
               // proposal, so it is not a failure of this epoch, and the proposal made below
@@ -1428,11 +1481,12 @@ async function runEpochInner() {
               // finalizeReputation is permissionless, so another party can front-run
               // us. If the pending proposal is gone, that's exactly what happened —
               // the score is live, carry on and propose fresh. Anything else is a
-              // real failure and should skip this agent via the outer catch.
+              // real failure, counted here once, and this agent is skipped.
               const still = await chain.getPendingScore(didHash);
               if (still.exists) {
+                console.error(`[oracle]   ${didHash.slice(0, 10)}… finalize failed: ${finalizeErr.message}`);
                 metrics.inc('finalizeErrors');
-                throw finalizeErr;
+                continue;
               }
               console.log(`[oracle]   ${didHash.slice(0, 10)}… already finalized by another party`);
               metrics.inc('finalizeSuccesses');
@@ -1482,12 +1536,24 @@ async function runEpochInner() {
           continue;
         }
         const held = evidenceAt(didHash, evidenceCutMs);
+        // A proposal lands after the clock it was scored at, and a checker reads the external factor at
+        // the snapshot of the proposal's own block, a UTC day (reviewers.snapshotOf). Scored at 23:59 and
+        // landing after midnight, it was audited against a reading it was never given. So a linked agent
+        // whose snapshot would change before its proposal could land is proposed next epoch instead.
+        if (!cfg.checkerMode && external.configured() && hasLink(didHash)) {
+          const landsByMs = (await chain.getLatestBlockTimestamp()) * 1000 + proposeMarginMs;
+          if (reviewers.snapshotOf(Math.floor(scoringNowMs / 1000)) !== reviewers.snapshotOf(Math.floor(landsByMs / 1000))) {
+            console.log(`[oracle]   ${didHash.slice(0, 10)}… its external factor's snapshot changes before a proposal could land; proposing next epoch`);
+            continue;
+          }
+        }
         // externalScore: only for agents linked to an ERC-8004 identity they own, and only from
         // the reviewers reviewers.js accepts. Ownership is re-verified inside externalScoreFor;
         // a registry the node cannot read skips the agent.
         const { score: externalScore } = await externalScoreOf(didHash, { operator, agentAddress }, scoringNowMs, held);
         const inputs = { registeredAt, att, flagWeight, externalScore };
         const { measured, scores } = await scoreAt(didHash, inputs, scoringNowMs, held);
+        scored++;
 
         // Checker mode: compare rather than compete. This oracle holds ORACLE_ROLE and a
         // bond like any other, so it *could* overwrite the primary's proposal — and must
@@ -1571,14 +1637,19 @@ async function runEpochInner() {
             // The external factor too, as the primary would have read it at its proposal: same
             // snapshot, same evidence. Computed at this epoch's clock instead, a reviewer that
             // changed in the hours between made an honest proposal look wrong.
+            // And this operator's flags weighed at the proposal's time, as its proposer weighed them then.
+            // Weighed at this epoch's clock, a flag that passed a step of its decay in between moved
+            // communityScore.
+            const flagWeightThen = decayedFlagCount(didHash, atProposalMs);
             const auditInputs = hasLink(didHash)
               ? {
                 ...inputs,
+                flagWeight: flagWeightThen,
                 externalScore: (await externalScoreOf(
                   didHash, { operator, agentAddress }, atProposalMs, asOf?.events ?? evidenceAt(didHash, atProposalMs),
                 )).score,
               }
-              : inputs;
+              : { ...inputs, flagWeight: flagWeightThen };
             auditScores = (await scoreAt(didHash, auditInputs, atProposalMs, asOf?.events)).scores;
           }
 
@@ -1594,9 +1665,9 @@ async function runEpochInner() {
           // A slot held by a stranded proposer counts as empty at once, and so does one this
           // checker emptied itself by finalizing for a primary that was already a grace late.
           let emptySince = 0;
+          slotsJudged.add(didHash);
           if (freshPending.exists) {
-            emptySeenAt.delete(didHash);
-            coveringLate.delete(didHash);
+            checkerSlots.occupied(didHash);
           } else if (!coveringStranded && !coveringLate.has(didHash)) {
             if (!emptySeenAt.has(didHash)) emptySeenAt.set(didHash, chainNow);
             const rep = await chain.getReputationData(didHash);
@@ -1688,38 +1759,38 @@ async function runEpochInner() {
               // Same distinction as the propose path, and checked before the pending
               // re-read: a throttled send never reached the chain, so the slot is still
               // occupied and the code below would otherwise read that as a failure to
-              // finalize and rethrow, inflating both counters for one throttle.
-              if (chain.isRateLimited(finalizeErr)) {
-                console.warn(
-                  `[oracle]   ${didHash.slice(0, 10)}… RPC throttled the finalize; retrying next epoch`,
-                );
-                metrics.inc('finalizeThrottled');
-                continue;
-              }
+              // finalize, counting one throttle twice.
+              const failure = classifyWrite(finalizeErr);
+              if (countedFinalizeFailure(failure, didHash, finalizeErr)) continue;
               // The proposer lost its authority between the probe above and this call. The next
               // epoch's probe sees it and covers for it.
-              if (chain.isProposerNotAuthorized(finalizeErr)) {
+              if (failure === 'stranded') {
                 console.log(`[oracle]   ${didHash.slice(0, 10)}… the proposer is no longer authorized; covering for it next epoch`);
                 metrics.inc('proposalsStranded');
                 continue;
               }
-              // An empty slot after a failed finalize has two very different causes, and
-              // counting both as success hides the one that matters most: the slashing
-              // committee rejecting a proposal deletes it too. That is the committee
-              // acting on this checker's alert, the entire point of running one, and it
-              // must not be indistinguishable from a routine finalize in the metrics.
               const still = await chain.getPendingScore(didHash);
-              if (still.exists) { metrics.inc('finalizeErrors'); throw finalizeErr; }
-              const live = await chain.getTotalScore(didHash);
-              if (live > 0 && live === auditScores.total) {
+              if (still.exists) {
+                console.error(`[oracle]   ${didHash.slice(0, 10)}… finalize failed: ${finalizeErr.message}`);
+                metrics.inc('finalizeErrors');
+                continue;
+              }
+              // The slot is empty, and not by a committee rejection: this checker finalizes only once the
+              // deadline is a grace past, and the committee can reject only before it. So someone else
+              // finalized it, which the contract records by dating the live score to the proposal and
+              // copying its factors. getTotalScore is no test of that: it serves the matured score, which
+              // lags a rising one by design. Anything else (a slash zeroes the score and clears the slot) is
+              // said, and not counted as a finalize or as a rejection.
+              const rep = await chain.getReputationData(didHash);
+              const live = scoreDivergence(freshPending.data, rep);
+              if (rep.lastUpdated === freshPending.proposedAt && live.comparable && Object.keys(live.factors).length === 0) {
                 console.log(`[oracle]   ${didHash.slice(0, 10)}… already finalized by another party`);
                 metrics.inc('finalizeSuccesses');
               } else {
                 console.warn(
-                  `[oracle]   ${didHash.slice(0, 10)}… pending proposal vanished without becoming live ` +
-                  `(live=${live}, ours=${auditScores.total}) — most likely a committee rejection`,
+                  `[oracle]   ${didHash.slice(0, 10)}… the pending proposal is gone, and the live score is not the one it proposed ` +
+                  `(live total ${live.ownTotal}, last updated ${rep.lastUpdated}; proposed ${live.pendingTotal} at ${freshPending.proposedAt})`,
                 );
-                metrics.inc('proposalsRejected');
               }
             }
             continue;
@@ -1829,7 +1900,8 @@ async function runEpochInner() {
         // a silent primary and the primary came back first, which is the outcome anyone
         // would want. Counting it as a failure would make a healthy handover look like
         // an incident, and would bury real propose errors in the same number.
-        if (chain.isSlotTaken(err)) {
+        const failure = classifyWrite(err);
+        if (failure === 'slot_taken') {
           console.log(`[oracle]   ${didHash.slice(0, 10)}… primary proposed first, standing down`);
           metrics.inc('proposeSlotTaken');
           continue;
@@ -1839,7 +1911,7 @@ async function runEpochInner() {
         // keeps meaning that, and logged as a sentence rather than the JSON-RPC payload
         // ethers wraps it in. The epoch will try again; nothing is resent now, because a
         // write that may already be in the mempool must not be repeated.
-        if (chain.isRateLimited(err)) {
+        if (failure === 'throttled') {
           console.warn(
             `[oracle]   ${didHash.slice(0, 10)}… RPC throttled the proposal; retrying next epoch`,
           );
@@ -1849,12 +1921,12 @@ async function runEpochInner() {
         // A transaction the oracle would not sign, or one that was sent and never seen mined.
         // Each has its own counter, because neither is the contract refusing and neither is
         // the provider throttling, and a fee cap that trips is a reason to look at the RPC.
-        if (chain.isFeeCap(err)) {
+        if (failure === 'fee_cap') {
           console.error(`[oracle]   ${didHash.slice(0, 10)}… ${err.message}`);
           metrics.inc('txCapped');
           continue;
         }
-        if (chain.isTxUnconfirmed(err)) {
+        if (failure === 'unconfirmed') {
           console.error(`[oracle]   ${didHash.slice(0, 10)}… ${err.message}`);
           metrics.inc('txUnconfirmed');
           proposalsStopped = true;
@@ -1865,6 +1937,7 @@ async function runEpochInner() {
       }
     }
   }
+  if (cfg.checkerMode) checkerSlots.forgetAllBut(slotsJudged);
 
   // Once an event's weight is negligible it cannot move an integer score, so
   // keeping it only grows the state file. Pruning here rather than on the write
@@ -1898,7 +1971,7 @@ async function runEpochInner() {
   );
   metrics.inc('epochsSucceeded');
   metrics.set('lastSuccessfulEpochMs', Date.now());
-  metrics.set('activeAgents', proposed);
+  metrics.set('activeAgents', scored);
 
   pruneExpiredCooldowns();
 }
@@ -1923,8 +1996,10 @@ const badgeCache = badge.createBadgeCache({ ttlMs: 60_000, maxEntries: 500 });
  */
 async function jobsProviderOrNull() {
   if (!jobs.enabled(jobsCfg)) return null;
-  if (!jobsProvider) {
-    jobsProvider = jobs.makeProvider(jobsCfg);
+  if (!jobsProvider) jobsProvider = jobs.makeProvider(jobsCfg);
+  // Asked again until the node answers. Asked only once, one failed read left it unknown for the life of
+  // the process.
+  if (jobsChainId === null) {
     try {
       jobsChainId = Number((await jobsProvider.getNetwork()).chainId);
     } catch {

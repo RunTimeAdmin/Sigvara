@@ -462,7 +462,7 @@ function renderOperators(didHash, primaryHealth, checkerHealth, divergence, chai
       const factors = Object.entries(d.factors || {}).map(([k, f]) => `${esc(k.replace(/Score$/, ""))} ${Number(f?.pending)} vs ${Number(f?.own)}`).join(", ");
       const gap = `the proposal says ${Number(d.pendingTotal)}, the checker got ${Number(d.ownTotal)} (${factors})`;
       verdict = laterRun
-        ? `<p><b>No disagreement recorded since ${when(d.at)}.</b> Before that the checker disagreed with this proposal ${mine.length === 1 ? "once" : `${mine.length} times`}: ${gap}. Its latest run, at ${when(lastEpochMs)}, recorded nothing. ${rule} ${notAPass}</p>`
+        ? `<p><b>No disagreement recorded since ${when(d.at)}.</b> Before that the checker disagreed with this proposal${Number(d.firstAt) < Number(d.at) ? `, from ${when(d.firstAt)}` : ""}: ${gap}. Its latest run, at ${when(lastEpochMs)}, recorded nothing. ${rule} ${notAPass}</p>`
         : `<p><span class="pill-err">Disagrees</span> with the pending proposal: ${gap}. Recorded at ${when(d.at)}.</p>`;
       if (isHash(ev.ownEvidenceRoot) && isHash(ev.proposedEvidenceRoot) && ev.ownEvidenceRoot.toLowerCase() !== ev.proposedEvidenceRoot.toLowerCase()) {
         verdict += `<p>That entry scored ${rootCode(ev.ownEvidenceRoot)} (${Number(ev.ownPaymentEvents)} payments) against a proposal made on ${rootCode(ev.proposedEvidenceRoot)}. Different evidence on each side can explain the gap, for example payments that settled after the proposal.</p>`;
