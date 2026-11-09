@@ -146,7 +146,7 @@
             <tr><td>Owner</td><td>The deployer. Ownership will be handed to the treasury timelock once it is deployed; it decides where the SVR goes, never when</td></tr>
           </tbody>
         </table>
-        <p>The 5,000,000 for the operator bonds stays with the deployer, so the bonds can be posted when the mainnet registries deploy. Anyone can read the lock's <code>start()</code>, <code>end()</code>, <code>owner()</code> and <code>releasable(SVR)</code> on chain.</p>
+        <p>The other 5,000,000 SVR of the first buy is <strong>not locked</strong>. It is for the two oracle operator bonds, the primary's and the checker's, at the 2,500,000 SVR that <code>SigvaraOracleBond</code> requires of each operator on mainnet (see Mainnet parameters). It stays with the deployer until the mainnet registries deploy and the bonds are posted, and that transfer is published here. Anyone can read the deployer's balance, and the lock's <code>start()</code>, <code>end()</code>, <code>owner()</code> and <code>releasable(SVR)</code>, on chain.</p>
 
         <h3>Treasury policy</h3>
         <p>The creator share of pool trading fees (64% of the 1% buy-side pool fee, paid in USDC and credited by Tolly's fee locker) is used to buy SVR on the open market. The treasury is also funded by direct open-market purchases. Both are disclosed.</p>

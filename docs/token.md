@@ -82,8 +82,11 @@ disclosed as it is bought.
 | Releases | Nothing before 9 May 2027 00:00 UTC, by anyone, the deployer included. From then all of it, to the lock's owner |
 | Owner | The deployer. Ownership will be handed to the treasury timelock once it is deployed; it decides where the SVR goes, never when |
 
-The 5,000,000 for the operator bonds stays with the deployer, so the bonds can be posted when the mainnet
-registries deploy. Anyone can read the lock's `start()`, `end()`, `owner()` and `releasable(SVR)` on chain.
+The other 5,000,000 SVR of the first buy is not locked. It is for the two oracle operator bonds, the primary's
+and the checker's, at the 2,500,000 SVR that `SigvaraOracleBond` requires of each operator on mainnet (see Mainnet
+parameters). It stays with the deployer until the mainnet registries deploy and the bonds are posted, and that
+transfer is published here. Anyone can read the deployer's balance, and the lock's `start()`, `end()`, `owner()`
+and `releasable(SVR)`, on chain.
 
 ## Treasury policy
 
