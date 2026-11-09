@@ -1520,6 +1520,17 @@ async function runEpochInner() {
           continue;
         }
         const held = evidenceAt(didHash, evidenceCutMs);
+        // A proposal lands after the clock it was scored at, and a checker reads the external factor at
+        // the snapshot of the proposal's own block, a UTC day (reviewers.snapshotOf). Scored at 23:59 and
+        // landing after midnight, it was audited against a reading it was never given. So a linked agent
+        // whose snapshot would change before its proposal could land is proposed next epoch instead.
+        if (!cfg.checkerMode && external.configured() && hasLink(didHash)) {
+          const landsByMs = (await chain.getLatestBlockTimestamp()) * 1000 + proposeMarginMs;
+          if (reviewers.snapshotOf(Math.floor(scoringNowMs / 1000)) !== reviewers.snapshotOf(Math.floor(landsByMs / 1000))) {
+            console.log(`[oracle]   ${didHash.slice(0, 10)}… its external factor's snapshot changes before a proposal could land; proposing next epoch`);
+            continue;
+          }
+        }
         // externalScore: only for agents linked to an ERC-8004 identity they own, and only from
         // the reviewers reviewers.js accepts. Ownership is re-verified inside externalScoreFor;
         // a registry the node cannot read skips the agent.
