@@ -128,11 +128,14 @@ function checkerStatus(health, divergencePayload, nowMs, maxSilenceMs, payloadEr
  * Everything worth telling a human about this poll.
  *
  * `seen` is the set of alert keys already sent; it is read here and updated by the
- * caller so this stays pure and testable.
+ * caller so this stays pure and testable. One proposal can be listed more than once (a
+ * checker recorded it again each epoch it disputed it), and it is still one dispute, so
+ * the keys raised here are remembered here too.
  */
 function triage({ divergences, pendingByDid, challengeWindowSec, nowSec, seen }) {
   const alerts = [];
   const counts = { actionable: 0, expired: 0, superseded: 0, closed: 0, suppressed: 0 };
+  const raised = new Set();
 
   for (const d of divergences ?? []) {
     const { state, secondsLeft } = classifyDivergence(
@@ -142,13 +145,31 @@ function triage({ divergences, pendingByDid, challengeWindowSec, nowSec, seen })
     if (state !== 'actionable') continue;
 
     const key = alertKey(d);
-    if (seen && seen.has(key)) { counts.suppressed += 1; counts.actionable -= 1; continue; }
+    if ((seen && seen.has(key)) || raised.has(key)) { counts.suppressed += 1; counts.actionable -= 1; continue; }
+    raised.add(key);
     alerts.push({ key, didHash: d.didHash, secondsLeft, divergence: d });
   }
   return { alerts, counts };
 }
 
-module.exports = { classifyDivergence, alertKey, checkerStatus, triage };
+/**
+ * What to send next about one dispute, given what has been sent. Pure.
+ *
+ * `level` is undefined when nothing has been sent, 0 after the first alert and 1 after the
+ * last call; `state` and `secondsLeft` are classifyDivergence's for the chain as it is now.
+ * Returns { action, level }: action is 'first', 'last', 'forget' or null, and level is what
+ * to remember afterwards, null when nothing is. A dispute first seen inside the final window
+ * gets one page, which is its last call too: it already says how little time is left.
+ */
+function nextAlert(level, state, secondsLeft, finalWarningSeconds) {
+  if (state !== 'actionable') return { action: level === undefined ? null : 'forget', level: null };
+  const final = secondsLeft <= finalWarningSeconds;
+  if (level === undefined) return { action: 'first', level: final ? 1 : 0 };
+  if (level === 0 && final) return { action: 'last', level: 1 };
+  return { action: null, level };
+}
+
+module.exports = { classifyDivergence, alertKey, checkerStatus, triage, nextAlert };
 
 /**
  * Shape an alert for whatever is on the other end of WEBHOOK_URL.

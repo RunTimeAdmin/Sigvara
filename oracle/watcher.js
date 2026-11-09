@@ -34,9 +34,8 @@ require('./config').requireValidNumericConfig('watcher');
 
 const { ethers } = require('ethers');
 const {
-  checkerStatus, triage, alertKey, webhookPayload, describeDivergence, trackPollOutcome,
+  checkerStatus, classifyDivergence, triage, nextAlert, webhookPayload, describeDivergence, trackPollOutcome,
 } = require('./watcher-policy');
-const { finalizableAtOf } = require('./epoch-policy');
 const { redact } = require('./event-index');
 const { wordsOf } = require('./log-spans');
 const { readWithBackoff } = require('./read-retry');
@@ -79,11 +78,14 @@ const reputation = new ethers.Contract(cfg.reputationAddress, ABI, provider);
 // which is somebody else's channel. The node's own words say what happened.
 const said = (err) => redact(wordsOf(err), [cfg.rpcUrl, cfg.webhookUrl]);
 
-// key -> highest escalation already sent (0 first sighting, 1 final warning).
-// In memory on purpose: a restart re-surfaces anything still open, which is the safe
-// direction. Losing the record of an alert nobody acted on is not a loss.
+// key -> { level, divergence }: the highest escalation already sent (0 first sighting, 1 final
+// warning), and the record it was about, so the final warning can go out from here whatever the
+// checker answers by then. In memory on purpose: a restart re-surfaces anything still open, which
+// is the safe direction. Losing the record of an alert nobody acted on is not a loss.
 const sent = new Map();
 let checkerWasOk = true;
+// Whether the checker's list was last seen cut short, so that is paged once a spell.
+let truncatedRaised = false;
 // Which of checkerStatus's kinds was last paged, so a new cause while not ok is paged too.
 let checkerKind = null;
 
@@ -177,15 +179,30 @@ async function poll() {
   // What a checker that is not ok still found is relayed all the same: its disputes are the
   // committee's only signal, and triage re-reads the chain, so a degraded checker cannot raise a
   // false one. Only a list that is missing, or not a checker's, has nothing to relay.
-  if (!payload || payload.mode !== 'checker') return;
-  const divergences = payload.divergences ?? [];
-  if (divergences.length === 0) return;
+  const listed = payload?.mode === 'checker';
+  const divergences = listed ? (payload.divergences ?? []) : [];
+
+  // /divergence serves the newest 100 records. With more, a dispute among the older ones is never
+  // seen here, so that is paged, once a spell like an outage. The count is rendered from a number:
+  // nothing the checker writes is quoted.
+  if (listed) {
+    if (payload.truncated === true && !truncatedRaised) {
+      const total = Number.isFinite(Number(payload.total)) ? Number(payload.total) : '?';
+      await notify('alert', 'the checker has more disputes than its list shows', [
+        `it recorded ${total}, and its list holds the newest ${divergences.length}`,
+        'A dispute among the others is not checked here. Ask the checker for one agent at /divergence/<didHash>.',
+      ]);
+    }
+    truncatedRaised = payload.truncated === true;
+  }
 
   // Re-read every disputed slot, one agent at a time. Read together they go out as one JSON-RPC
   // batch, and dRPC answers 400 to a whole batch over 10 calls (measured 6 November 2026), so every
   // read failed once enough agents were on the list, however few were still open. 100 agents take
-  // about 8 seconds this way, against a poll of minutes.
-  const dids = [...new Set(divergences.map(d => d.didHash))];
+  // about 8 seconds this way, against a poll of minutes. Every agent already raised is read too: its
+  // final warning is owed whatever the checker lists now, or whether it answers at all.
+  const dids = [...new Set([...divergences, ...[...sent.values()].map(e => e.divergence)].map(d => d.didHash))];
+  if (dids.length === 0) return;
   const challengeWindowSec = Number(await reputation.challengeWindow());
   const pendingByDid = {};
   for (const did of dids) {
@@ -207,34 +224,35 @@ async function poll() {
   });
 
   for (const a of alerts) {
-    sent.set(a.key, 0);
+    sent.set(a.key, { level: nextAlert(undefined, 'actionable', a.secondsLeft, cfg.finalWarningSeconds).level, divergence: a.divergence });
     await notify('alert', `checker disputes a score, ${hhmm(a.secondsLeft)} left to reject it`, [
       describeDivergence(a.divergence),
       `rejectReputation(${a.didHash}) from the committee wallet, before the window closes.`,
     ]);
   }
 
-  // Escalate anything still unresolved as its window runs out.
-  for (const d of readable) {
-    const key = alertKey(d);
-    if (sent.get(key) !== 0) continue;
-    const p = pendingByDid[d.didHash];
-    if (!p.exists || Number(p.proposedAt) !== Number(d.proposedAt)) { sent.delete(key); continue; }
-    const left = finalizableAtOf(p, challengeWindowSec) - nowSec;
-    if (left > 0 && left <= cfg.finalWarningSeconds) {
-      sent.set(key, 1);
-      await notify('alert', `LAST CALL: ${hhmm(left)} to reject a disputed score`, [
-        describeDivergence(d),
-        'After this window closes anyone can finalize it and the committee cannot stop it.',
-      ]);
-    }
+  // Escalate anything raised and still unresolved as its window runs out, and forget what is over.
+  for (const [key, { level, divergence }] of sent) {
+    const p = pendingByDid[divergence.didHash];
+    if (p === undefined) continue; // not read this poll, which fails it below
+    const { state, secondsLeft } = classifyDivergence(divergence, p, challengeWindowSec, nowSec);
+    const next = nextAlert(level, state, secondsLeft, cfg.finalWarningSeconds);
+    if (next.action === 'forget') sent.delete(key);
+    if (next.action !== 'last') continue;
+    sent.set(key, { level: next.level, divergence });
+    await notify('alert', `LAST CALL: ${hhmm(secondsLeft)} to reject a disputed score`, [
+      describeDivergence(divergence),
+      'After this window closes anyone can finalize it and the committee cannot stop it.',
+    ]);
   }
 
-  console.log(
-    `[watcher] ${divergences.length} recorded — ${counts.actionable} new actionable, ` +
-    `${counts.suppressed} already raised, ${counts.expired} expired, ` +
-    `${counts.superseded} superseded, ${counts.closed} closed`,
-  );
+  if (divergences.length) {
+    console.log(
+      `[watcher] ${divergences.length} recorded: ${counts.actionable} new actionable, ` +
+      `${counts.suppressed} already raised, ${counts.expired} expired, ` +
+      `${counts.superseded} superseded, ${counts.closed} closed`,
+    );
+  }
 
   // An agent it could not read has not been checked, so this poll did not do its job, and three in a
   // row raise the alert in runPoll. Last, so the agents it could read have already alerted.
@@ -275,7 +293,15 @@ async function runPoll() {
 }
 
 // runPoll handles its own failures; this is for the one it cannot, so a bug here costs a poll
-// and not the process.
-const tick = () => runPoll().catch((err) => console.error(`[watcher] unexpected error: ${said(err)}`));
+// and not the process. One poll at a time: a poll can outlast the interval (a node backing off, a
+// webhook slow to answer), and two at once each took a dispute the other was paging for unseen.
+let polling = false;
+const tick = () => {
+  if (polling) return;
+  polling = true;
+  runPoll()
+    .catch((err) => console.error(`[watcher] unexpected error: ${said(err)}`))
+    .finally(() => { polling = false; });
+};
 tick();
 setInterval(tick, cfg.pollSeconds * 1000);

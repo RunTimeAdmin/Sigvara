@@ -913,7 +913,7 @@ alerts, which is the failure this path exists to prevent.
 second says you are about to lose the ability to act.
 
 **A silent checker is an alert, not quiet.** This is the property that makes the
-component worth running. The watcher raises an alarm when the checker is unreachable,
+component worth running. The watcher raises an alarm when the checker is unreachable or says it is not ok (and still relays the disputes it lists),
 when it is up but has not completed an epoch within `MAX_SILENCE_MINUTES` (counted from the moment it
 started, if it has never completed one), when the URL
 turns out to be a primary rather than a checker, or when the checker reports
