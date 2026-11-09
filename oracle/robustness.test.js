@@ -1001,7 +1001,9 @@ test('two operators holding the same payments in different orders commit to the 
   assert.deepEqual(seen[0].txs, seen[1].txs, 'served in the order the root is built over');
 });
 
-test('a checker on this build matches a proposal over the order a primary stored, with an outcome signed since', async () => {
+// Checkers once also read the order this operator credited payments in, for proposals made before the
+// order was fixed (2026-11-04). None can still be pending, so a root over any other order is a disagreement.
+test('a checker reads only the fixed order: a proposal over another, with an outcome signed since, is disputed', async () => {
   const world = new World();
   const agent = world.addRegisteredAgent();
   // A second apart, so that the fixed order is this one.
@@ -1018,8 +1020,8 @@ test('a checker on this build matches a proposal over the order a primary stored
     env: { ...CHECKER_PAYMENT_ENV, DIVERGENCE_TOLERANCE: '0' },
     files: { 'state.json': JSON.stringify({ schemaVersion: 1, paymentEvents: { [agent.didHash]: [b, c, a, signedSince] } }) },
   }, ({ text, logs }) => {
-    assert.doesNotMatch(logs, /DIVERGENCE/);
-    assert.equal(counter(text, AGREED), 1, logs);
+    assert.match(logs, /DIVERGENCE/);
+    assert.equal(counter(text, DIVERGED), 1, logs);
   });
 });
 
