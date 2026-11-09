@@ -64,6 +64,11 @@ const FAILED_RUNS_ALERT = 6;
 // Between log reads. Arc's public RPCs refuse a burst of them within a handful of calls (measured 5
 // November 2026), and a first run has dozens to make. As the payment scan does.
 const SCAN_PACE_MS = 500;
+// How long a slash may wait behind a transaction of the keeper's own before a person hears of it.
+const BLOCKED_ALERT_SECONDS = 30 * 60;
+// The alerts raised about one agent's slash, keyed `<kind>:<didHash>` (refused adds `:<error>`). They
+// end with the slash: one left behind would silence the same alert about the next filing.
+const AGENT_ALERTS = Object.freeze(['disputed', 'dispute-unruled', 'lapsed', 'refused', 'failed']);
 
 const DID_HASH = /^0x[0-9a-f]{64}$/;
 
@@ -117,6 +122,13 @@ function createKeeper({ cfg, reads, sender, state, notify = async () => {}, log 
     await notify(level, title, lines);
   }
 
+  function forgetAlerts(s, didHash) {
+    for (const key of Object.keys(s.alerted)) {
+      const [kind, d] = key.split(':');
+      if (d === didHash && AGENT_ALERTS.includes(kind)) delete s.alerted[key];
+    }
+  }
+
   async function runOnce() {
     const s = load();
     const head = await reads.head();
@@ -152,6 +164,7 @@ function createKeeper({ cfg, reads, sender, state, notify = async () => {}, log 
           if (d.state === CANCELLED) await notify('ok', 'A slash the keeper was watching was dropped', [`agent ${didHash}`, 'Cancelled, vetoed, ruled for the agent, or expired.']);
         }
         delete s.executed[didHash];
+        forgetAlerts(s, didHash);
         continue;
       }
       s.open[didHash] = true;
@@ -192,6 +205,11 @@ function createKeeper({ cfg, reads, sender, state, notify = async () => {}, log 
         await raise(s, nowSec, 'balance', 'warn', 'The slash keeper is low on gas', [`it holds ${ethers.formatEther(balance)}; top it up above ${ethers.formatEther(cfg.minBalance)}`]);
       }
     }
+    // Blocked only while a run finds itself blocked, so the next spell gets its own half hour.
+    if (!r.blocked.length) {
+      delete s.blockedSince;
+      delete s.alerted.blocked;
+    }
     s.lastRunAt = nowSec;
     state.set(s);
     state.persist();
@@ -219,11 +237,22 @@ function createKeeper({ cfg, reads, sender, state, notify = async () => {}, log 
     // A transaction still in flight has this nonce. Sending another could only race it.
     if (await reads.pendingTxs() > 0) {
       r.blocked.push({ didHash, reason: 'a transaction of ours is still pending' });
+      s.blockedSince ??= nowSec;
+      if (nowSec - s.blockedSince >= BLOCKED_ALERT_SECONDS) {
+        await raise(s, nowSec, 'blocked', 'warn', 'The slash keeper is stuck behind a transaction of its own', [
+          `agent ${didHash} is due, and the keeper has found itself blocked since ${new Date(s.blockedSince * 1000).toISOString()}.`,
+          'It sends again once its pending transaction lands or is replaced. The other keeper may execute it meanwhile.',
+        ]);
+      }
       return;
     }
     try {
       const hash = await sender.send(didHash);
       s.executed[didHash] = hash;
+      // Saved now, not at the end of the run: a run that fails after this would lose it, and the
+      // slash would later be reported as settled by someone else.
+      state.set(s);
+      state.persist();
       r.executed.push({ didHash, hash });
       await notify('ok', 'The slash keeper executed a slash', [`agent ${didHash}`, `tx ${hash}`]);
     } catch (err) {
