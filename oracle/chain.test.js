@@ -707,6 +707,23 @@ test('readWithBackoff: gives up after the attempt cap rather than looping foreve
   assert.equal(calls, 3, 'should stop at the cap, not retry indefinitely');
 });
 
+test('getLatestBlockTimestamp: a throttled read is retried, rather than costing the epoch', async () => {
+  let calls = 0;
+  chain.init(CFG, {
+    provider: {
+      getBlock: async () => {
+        calls++;
+        if (calls === 1) throw Object.assign(new Error('429 too many requests'), { code: 'SERVER_ERROR' });
+        return { timestamp: 1_700_000_123n };
+      },
+    },
+    identityContract: makeFakeIdentityContract(),
+    reputationContract: makeFakeReputationContract(),
+  });
+  assert.equal(await chain.getLatestBlockTimestamp(), 1_700_000_123);
+  assert.equal(calls, 2);
+});
+
 // ---- isSlotTaken -----------------------------------------------------------
 //
 // A checker proposes only to cover a silent primary. If the primary comes back and wins

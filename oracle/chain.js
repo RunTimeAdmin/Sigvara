@@ -992,8 +992,10 @@ async function getChallengeWindow() {
 // The contract compares against block.timestamp, so epoch decisions should use
 // the chain's clock rather than the oracle host's (local skew ahead of the chain
 // would trigger premature finalize attempts that just revert and waste gas).
+// Retried like every other read: an epoch reads this before anything else, so one throttled
+// answer used to cost the whole epoch.
 async function getLatestBlockTimestamp() {
-  const block = await provider.getBlock('latest');
+  const block = await readWithBackoff('latest block', () => provider.getBlock('latest'));
   return Number(block.timestamp);
 }
 
