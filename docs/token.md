@@ -92,9 +92,10 @@ and `releasable(SVR)`, on chain.
 ## Treasury policy
 
 The creator share of pool trading fees (64% of the 1% buy-side pool fee, paid
-in USDC and credited by Tolly's fee locker) is
-used to buy SVR on the open market. The treasury is also funded by direct
-open-market purchases. Both are disclosed.
+in USDC and credited by Tolly's fee locker) is claimed once a month, on the 1st,
+and sent to the treasury timelock as USDC. It is held there and not spent until
+a buyback schedule is published on this page. The treasury is also funded by
+direct open-market purchases. Every claim and purchase is disclosed the same day.
 
 Treasury SVR is spent only on:
 
@@ -114,8 +115,9 @@ Treasury SVR is spent only on:
    directs to itself. It is not owed, and it is disclosed like every other treasury
    movement.
 
-Buybacks run on a published schedule, not in response to price. No fee revenue
-is paid out to the team, and no treasury SVR is sold.
+No buyback runs until its schedule is published here, and then it runs on that
+schedule, not in response to price. No fee revenue is paid out to the team, and
+no treasury SVR is sold.
 
 ## Staking rewards
 
