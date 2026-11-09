@@ -538,8 +538,8 @@ Stated because they are true, not because they are solved.
 
 ## 6. The token
 
-SVR is the bond and fee asset. It has not launched: there is no SVR contract address until
-[token.md](token.md) publishes one, and the bond token on Arc testnet is a faucet ERC-20
+SVR is the bond and fee asset. It launched on Arc mainnet on 9 November 2026 at
+`0xc79298521Ae84e7a43d20E71A2B2A1BB540E889B` ([token.md](token.md)); the bond token on Arc testnet is a faucet ERC-20
 with the same name. It is not a governance token and it is not a claim on revenue.
 
 **Supply** is 1,000,000,000, fixed at creation. The contract is a plain ERC-20 with no

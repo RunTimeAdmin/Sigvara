@@ -50,7 +50,7 @@
 >
 > **Still open, and still mainnet blockers.**
 > - No external security audit.
-> - The mainnet bond asset is decided (SVR, see [token.md](token.md)), but SVR has not launched.
+> - The mainnet bond asset is SVR, launched on 9 November 2026 ([token.md](token.md) has its address).
 > - Both oracle operators are run by the same party. A second bonded operator has run in
 >   checker mode since 20 September on separate hardware and a separate RPC provider, and
 >   `activeCount` is 2, but two independent recomputations agreeing is not two independent

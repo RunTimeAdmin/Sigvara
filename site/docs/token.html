@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>SVR token: not launched yet | Sigvara</title>
+  <title>SVR token | Sigvara</title>
   <meta name="description" content="SVR has not launched. Pre-launch reference for Sigvara's bond token: planned supply, treasury and reward rules, and the only official accounts and domains." />
   <link rel="canonical" href="https://sigvara.xyz/docs/token" />
-  <meta property="og:title" content="SVR token: not launched yet | Sigvara" />
+  <meta property="og:title" content="SVR token | Sigvara" />
   <meta property="og:description" content="SVR has not launched. Pre-launch reference for Sigvara's bond token: planned supply, treasury and reward rules, and the only official accounts and domains." />
   <meta property="og:url" content="https://sigvara.xyz/docs/token" />
   <meta property="og:image" content="https://sigvara.xyz/assets/sigvara-card.png" />
@@ -83,7 +83,7 @@
         <p class="lead">SVR is the bond and fee token of the Sigvara protocol. Operators bond it to activate agents, and slashing an agent's bond burns most of it. Oracle operators post it as a performance bond, which a slash sends to the slash beneficiary rather than burning. Scoring epochs will be charged in it once the epoch-fee module is deployed.</p>
 
         <div class="callout">
-          <p><strong>SVR has not launched.</strong> There is no contract address until this page publishes one. <strong>This page is the canonical description.</strong> Anything about SVR that does not appear here and on <a href="../">sigvara.xyz</a> first is not from this project. That includes anything posted by an account using this name, and it includes contract addresses.</p>
+          <p><strong>SVR launched on 9 November 2026.</strong> Its only address is <code>0xc79298521Ae84e7a43d20E71A2B2A1BB540E889B</code> on Arc mainnet. <strong>This page is the canonical description.</strong> Anything about SVR that does not appear here and on <a href="../">sigvara.xyz</a> first is not from this project. That includes anything posted by an account using this name, and it includes contract addresses.</p>
         </div>
 
         <h3>Contract</h3>
@@ -91,14 +91,14 @@
           <thead><tr><th>Item</th><th>Value</th></tr></thead>
           <tbody>
             <tr><td>Network</td><td>Arc mainnet, chain ID <code>5042</code></td></tr>
-            <tr><td>Address</td><td><span class="tag tag-amber">published here at launch</span></td></tr>
+            <tr><td>Address</td><td><a href="https://explorer.arc.io/address/0xc79298521Ae84e7a43d20E71A2B2A1BB540E889B" target="_blank" rel="noopener"><code>0xc79298521Ae84e7a43d20E71A2B2A1BB540E889B</code></a></td></tr>
             <tr><td>Symbol / name</td><td><code>SVR</code> / Sigvara</td></tr>
             <tr><td>Supply</td><td>1,000,000,000, fixed at creation</td></tr>
             <tr><td>Decimals</td><td>18</td></tr>
             <tr><td>Owner / mint / pause</td><td>none</td></tr>
             <tr><td>Launch venue</td><td>Tolly on Arc (pad <code>0xcad7ee36ac193bf2eddb7b3e2736c5bdb8269c8b</code>), Uniswap V3 pool, 1% tier, USDC quote</td></tr>
             <tr><td>Liquidity</td><td>Whole supply seeded single-sided at launch. The LP NFT is held by Tolly's ownerless, collect-only fee locker <code>0xe20e4297759597da75c8998ee76ec900600ad920</code>, which has no withdraw path in code.</td></tr>
-            <tr><td>Pool</td><td><span class="tag tag-amber">published here at launch</span></td></tr>
+            <tr><td>Pool</td><td><a href="https://explorer.arc.io/address/0xa9Be080545C6d61529c27294512bDb3Bde67A735" target="_blank" rel="noopener"><code>0xa9Be080545C6d61529c27294512bDb3Bde67A735</code></a>, created in the launch transaction <a href="https://explorer.arc.io/tx/0x67ac918fbe80bd9f4556c44f03daf739aa996b6d63d34b99201ed69b5126d749" target="_blank" rel="noopener"><code>0x67ac918f…d749</code></a> (block 30269650, sent by the deployer to the pad). The LP NFT is #59419, held by the fee locker.</td></tr>
           </tbody>
         </table>
 
@@ -119,9 +119,22 @@
         <h3>Distribution</h3>
         <p>There is no team allocation, no treasury allocation, no vesting and no sale. The full supply enters the pool at launch, and the only way to hold SVR is to buy it there or earn it through the protocol.</p>
 
-        <p>The team's position is whatever it buys on the open market, starting at the opening price. Every acquisition is published here: amount, transaction, the address that holds it, and which of the four permitted purposes below it is held against. Launch-day buys are published the same day. There are no wallets holding SVR for the protocol that are not listed on this page.</p>
+        <p>The team's position is whatever it buys on the open market, starting at the opening price. Every acquisition is published here: amount, transaction, the address that holds it, and which of the five permitted purposes below it is held against. Launch-day buys are published the same day. There are no wallets holding SVR for the protocol that are not listed on this page.</p>
 
         <p>The anti-snipe cap limits any single wallet to 3% of supply for the first 300 seconds. The team does not split buys across wallets to work around it. A position larger than that cap is accumulated afterwards, on the open market, disclosed as it is bought.</p>
+
+        <h3>Team acquisitions</h3>
+        <table class="data-table">
+          <thead><tr><th>9 November 2026</th><th>First buy</th></tr></thead>
+          <tbody>
+            <tr><td>Time (UTC)</td><td>01:20:37, in the launch transaction, at the opening price</td></tr>
+            <tr><td>SVR</td><td>22,283,004.212403886</td></tr>
+            <tr><td>Paid</td><td>115 USDC</td></tr>
+            <tr><td>Transaction</td><td><a href="https://explorer.arc.io/tx/0x67ac918fbe80bd9f4556c44f03daf739aa996b6d63d34b99201ed69b5126d749" target="_blank" rel="noopener"><code>0x67ac918f…d749</code></a></td></tr>
+            <tr><td>Held by</td><td>The deployer, <code>0x8857A7C392d1Bb1A68647c64Ce18D9AA1Fd023b0</code></td></tr>
+            <tr><td>Held for</td><td>5,000,000 for the two oracle operator bonds (2,500,000 each, primary and checker). The other 17,283,004.212403886 is treasury inventory, held by the deployer until the treasury timelock is deployed, then moved into it; that transfer is published here too.</td></tr>
+          </tbody>
+        </table>
 
         <h3>Treasury policy</h3>
         <p>The creator share of pool trading fees (64% of the 1% buy-side pool fee, paid in USDC and credited by Tolly's fee locker) is used to buy SVR on the open market. The treasury is also funded by direct open-market purchases. Both are disclosed.</p>
