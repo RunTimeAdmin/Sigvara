@@ -406,6 +406,22 @@ test('an epoch held by a payment chain finalizes nothing, and /health names the 
   assert.deepEqual(health.body.paymentChainHold.chains, [BASE]);
 });
 
+test("an epoch that stops before it reaches the scans does not leave the last epoch's hold on /health", async () => {
+  const world = new World();
+  world.addRegisteredAgent();
+  const now = world.data.nowSec;
+  base = await startBase({ blockTime: () => now - 7200 });
+  oracle = await startOracle({ world, env: env(base.url) });
+  await waitFor(/scoring nothing this epoch/);
+  assert.deepEqual((await oracle.call('GET', '/health')).body.paymentChainHold.chains, [BASE]);
+  // The next epoch stops at its first check: the RPC now serves another chain.
+  world.set('chainId', 1);
+  assert.equal((await oracle.call('POST', '/epoch', undefined, ADMIN)).status, 202);
+  const deadline = Date.now() + 20_000;
+  while (!/epoch aborted/.test(oracle.logs()) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+  assert.equal((await oracle.call('GET', '/health')).body.paymentChainHold, null, 'this epoch held nothing');
+});
+
 test('scans that fall too far behind during an epoch leave later agents unscored, neither finalized nor charged', async () => {
   const world = new World();
   const first = world.addRegisteredAgent();
@@ -426,7 +442,9 @@ test('scans that fall too far behind during an epoch leave later agents unscored
   assert.match(oracle.logs(), /2 agent\(s\) left unscored/);
   const text = (await oracle.call('GET', '/metrics')).text;
   assert.match(text, /sigvara_oracle_epochs_held_by_payment_chain_total 1/);
-  assert.equal((await oracle.call('GET', '/health')).body.paymentChainHold.agents, 2);
+  const hold = (await oracle.call('GET', '/health')).body.paymentChainHold;
+  assert.equal(hold.agents, 2);
+  assert.deepEqual(hold.reasons, ['scan_behind'], 'the scans, not a payer negative');
 });
 
 test('a scan further behind, but not too far to land in time, still proposes at its cut-off', async () => {

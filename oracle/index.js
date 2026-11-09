@@ -208,8 +208,11 @@ let shadowScansRunning = false;
 // The last scan of each payment chain, for /health.
 const lastPaymentChainScans = new Map();
 // What held back the last epoch, for /health: the chains whose scans held all of it, or how many agents
-// were left unscored when the scans fell behind while it ran. Null when it was not held.
+// were left unscored when the scans fell behind while it ran, and why (HOLD). Null when it was not held.
 let lastEpochHold = null;
+// Why an epoch left agents unscored: a scan behind where the evidence must be cut, or a payer's negative that is due
+// and not read, or starts to count before a proposal could land (negative-hold.js).
+const HOLD = Object.freeze({ SCAN_BEHIND: 'scan_behind', PAYER_NEGATIVE: 'payer_negative' });
 // The cut-off the scans were last run again for (evidenceCutFor).
 let lastRescanForMs = null;
 // How long one epoch spends catching a payment chain up, in steps of MAX_BLOCKS, before it leaves the
@@ -1122,6 +1125,8 @@ async function evidenceCutFor() {
 async function runEpochInner() {
   const start = Date.now();
   payerScoreCache = new Map();
+  // This epoch's own, so one that stops early does not leave the last one's showing.
+  lastEpochHold = null;
   console.log(`[oracle] epoch start — ${new Date().toISOString()}`);
   metrics.inc('epochsStarted');
 
@@ -1212,8 +1217,10 @@ async function runEpochInner() {
   // payment chain on: everything sent after it queues behind it, so a proposal could land after the half
   // hour a checker searches.
   let proposalsStopped = stuck > 0;
-  // Agents left unscored because this operator's scans fell behind while the epoch ran.
+  // Agents left unscored because this operator's scans fell behind while the epoch ran, and because of a payer's
+  // negative (HOLD).
   let agentsHeld = 0;
+  let agentsHeldByNegative = 0;
   let finalized = 0;
   let diverged = 0;
 
@@ -1246,7 +1253,6 @@ async function runEpochInner() {
   const heldBy = paymentChains.behind(paymentChainsCfg, getPaymentChainScanState, wantCutMs);
   const scoredHeld = paymentChains.active(paymentChainsCfg) && !heldBy.length
     && cutTooOld(chainNowMs, paymentChains.coveredCut(wantCutMs, scoredReachMs(), paymentChainsCfg, getPaymentChainScanState));
-  lastEpochHold = null;
   if (heldBy.length || scoredHeld) {
     for (const h of heldBy) {
       const reached = h.reachedMs === null ? 'no block yet' : new Date(h.reachedMs).toISOString();
@@ -1265,6 +1271,7 @@ async function runEpochInner() {
     lastEpochHold = {
       at: new Date().toISOString(),
       chains: [...heldBy.map((h) => h.chainId), ...(scoredHeld ? [Number(cfg.expectedChainId)] : [])],
+      reasons: [HOLD.SCAN_BEHIND],
     };
     metrics.inc('epochsHeldByPaymentChain');
     metrics.inc('epochsFailed');
@@ -1498,9 +1505,20 @@ async function runEpochInner() {
         }
         // A payer's negative that should count by now, whose refunds this operator has not finished reading
         // (negative-hold.js): read differently from the other operator's, it would be a disagreement that is not one.
-        if (negativeHold.unresolvedAt(getPaymentEvents(didHash), evidenceCutMs, negativeHoldCfg).length) {
+        // Only one in the evidence: one on a payment chain this operator no longer reads never counts, and is not read.
+        const chosen = paymentChains.eventsAt(getPaymentEvents(didHash), evidenceCutMs, paymentChainsCfg);
+        if (negativeHold.unresolvedAt(chosen, evidenceCutMs, negativeHoldCfg).length) {
           console.log(`[oracle]   ${didHash.slice(0, 10)}… a payer negative is due and its refunds are not read yet, skipping`);
-          agentsHeld++;
+          agentsHeldByNegative++;
+          continue;
+        }
+        // One that starts to count after this evidence time and before the proposal can land: the checker reads the
+        // evidence at the proposal's own time, so it would count it where this does not. Proposed next epoch.
+        if (!cfg.checkerMode && chosen.some(negativeHold.isPayerNegative) && negativeHold.startingBetween(
+          chosen, evidenceCutMs, (await chain.getLatestBlockTimestamp()) * 1000 + proposeMarginMs, negativeHoldCfg,
+        ).length) {
+          console.log(`[oracle]   ${didHash.slice(0, 10)}… a payer negative starts to count before a proposal could land, skipping`);
+          agentsHeldByNegative++;
           continue;
         }
         const held = evidenceAt(didHash, evidenceCutMs);
@@ -1910,7 +1928,17 @@ async function runEpochInner() {
   if (agentsHeld) {
     console.error(`[oracle] ${agentsHeld} agent(s) left unscored: this operator's scans fell behind while the epoch ran`);
     metrics.inc('epochsHeldByPaymentChain');
-    lastEpochHold = { at: new Date().toISOString(), agents: agentsHeld };
+  }
+  if (agentsHeldByNegative) {
+    console.warn(`[oracle] ${agentsHeldByNegative} agent(s) left unscored for a payer's negative: due with its refunds not read, or counting before a proposal could land`);
+    metrics.inc('agentsHeldByPayerNegative', agentsHeldByNegative);
+  }
+  if (agentsHeld || agentsHeldByNegative) {
+    lastEpochHold = {
+      at: new Date().toISOString(),
+      agents: agentsHeld + agentsHeldByNegative,
+      reasons: [...(agentsHeld ? [HOLD.SCAN_BEHIND] : []), ...(agentsHeldByNegative ? [HOLD.PAYER_NEGATIVE] : [])],
+    };
   }
 
   console.log(
@@ -1918,8 +1946,13 @@ async function runEpochInner() {
     (cfg.checkerMode ? `, ${diverged} diverged` : '') +
     ` in ${Date.now() - start}ms`,
   );
-  metrics.inc('epochsSucceeded');
-  metrics.set('lastSuccessfulEpochMs', Date.now());
+  // One that held every agent it would have scored did no more than one held at its start, and counts the same.
+  if (candidates.length && agentsHeld + agentsHeldByNegative === candidates.length) {
+    metrics.inc('epochsFailed');
+  } else {
+    metrics.inc('epochsSucceeded');
+    metrics.set('lastSuccessfulEpochMs', Date.now());
+  }
   metrics.set('activeAgents', proposed);
 
   pruneExpiredCooldowns();
