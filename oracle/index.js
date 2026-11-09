@@ -1620,14 +1620,19 @@ async function runEpochInner() {
             // The external factor too, as the primary would have read it at its proposal: same
             // snapshot, same evidence. Computed at this epoch's clock instead, a reviewer that
             // changed in the hours between made an honest proposal look wrong.
+            // And this operator's flags weighed at the proposal's time, as its proposer weighed them then.
+            // Weighed at this epoch's clock, a flag that passed a step of its decay in between moved
+            // communityScore.
+            const flagWeightThen = decayedFlagCount(didHash, atProposalMs);
             const auditInputs = hasLink(didHash)
               ? {
                 ...inputs,
+                flagWeight: flagWeightThen,
                 externalScore: (await externalScoreOf(
                   didHash, { operator, agentAddress }, atProposalMs, asOf?.events ?? evidenceAt(didHash, atProposalMs),
                 )).score,
               }
-              : inputs;
+              : { ...inputs, flagWeight: flagWeightThen };
             auditScores = (await scoreAt(didHash, auditInputs, atProposalMs, asOf?.events)).scores;
           }
 

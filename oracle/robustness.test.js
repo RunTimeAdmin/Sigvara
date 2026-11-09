@@ -996,6 +996,26 @@ test('a finalize not seen mined, or refused inside its window, is counted once a
   }
 });
 
+test("a checker weighs this operator's flags at the proposal's time, not at its own", async () => {
+  const agreed = await computedScores();
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  const proposedAt = world.data.nowSec - 3 * 3600;
+  // Raised an hour short of a half-life (30 days) before the proposal, so it then weighed just over one half
+  // and cost two points. It has passed the half-life since, and now costs one.
+  const raisedMs = (proposedAt - 30 * 86_400 + 3600) * 1000;
+  world.setFor('pending', agent.didHash, { exists: true, proposedAt, data: { ...agreed, communityScore: 3 }, evidenceRoot: null });
+
+  await inEpoch({
+    world,
+    env: { ...CHECKER_ENV, DIVERGENCE_TOLERANCE: '0' },
+    files: { 'state.json': JSON.stringify({ schemaVersion: 1, flags: { [agent.didHash]: [raisedMs] } }) },
+  }, ({ text, logs }) => {
+    assert.doesNotMatch(logs, /DIVERGENCE/);
+    assert.equal(counter(text, AGREED), 1);
+  });
+});
+
 test('a grace shorter than the checker\'s own epoch stops it at startup', async () => {
   for (const [grace, why] of [['30', /shorter than this checker's epoch of 1440 minutes/], ['-5', /CHECKER_GRACE_MINUTES="-5" is below the minimum of 0/]]) {
     const { code, log } = await runToExit({ world: new World(), env: { ...CHECKER_ENV, CHECKER_GRACE_MINUTES: grace } });
