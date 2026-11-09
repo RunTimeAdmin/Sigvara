@@ -114,3 +114,66 @@ test('a payment made before the agent registered is skipped, and the scan goes o
     [ethers.id(`pay-${registeredBlock}`), ethers.id(`pay-${registeredBlock + 1}`)].sort(),
   );
 });
+
+// The scan asks for transfers only to the agents the registry scan has found, so it must not read past where
+// that scan reached. Past it, a payment to an agent registered since was passed over and never read again.
+const REACH = HEAD - 30;
+const transferLog = (from, to, block) => ({
+  address: ASSET,
+  topics: [TRANSFER_TOPIC, ethers.zeroPadValue(from, 32), ethers.zeroPadValue(to, 32)],
+  data: ethers.toBeHex(5n * USDC, 32),
+  blockNumber: block,
+  transactionHash: ethers.id(`pay-${from}-${block}`),
+  logIndex: 0,
+  removed: false,
+});
+
+async function nextEpoch(n) {
+  const r = await oracle.call('POST', '/epoch', undefined, ADMIN);
+  assert.equal(r.status, 202, r.text);
+  await waitForEpochs(n);
+}
+
+const evidenceTxs = async (didHash) => (await oracle.call('GET', `/evidence/${didHash}`)).body.evidence.map((e) => e.txHash);
+
+test('a payment to an agent registered past the registry scan\'s reach is credited at the next run', async () => {
+  const world = new World();
+  world.addRegisteredAgent();
+  // Registered and paid after the block the registry scan has read to, which the payment scan's safe head has passed.
+  const late = world.addAgent({ registeredBlock: REACH + 3 });
+  const payment = transferLog(wallet(), late.agentAddress, REACH + 5);
+  world.set('registryScannedTo', REACH);
+  world.set('scanLogs', [payment]);
+  oracle = await startOracle({ world, env: ENV });
+  await waitForEpochs(1);
+  assert.equal(savedCheckpoint(), REACH, 'the scan stops where the registry scan has read to');
+
+  // The registry scan finds the agent at the next epoch.
+  world.set('registered', [...world.data.registered, late.didHash]);
+  world.set('registryScannedTo', HEAD);
+  await nextEpoch(2);
+  assert.deepEqual(await evidenceTxs(late.didHash), [payment.transactionHash], 'credited at the next run');
+  assert.equal(savedCheckpoint(), HEAD - CONFIRMATIONS);
+});
+
+test('an operator handed over past the registry scan\'s reach cannot pay its own agent as a customer', async () => {
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  // The agent changes hands at REACH + 2 and its new operator pays it at REACH + 5. The registry scan has not
+  // read the handover yet, so as far as it knows the payer is a stranger.
+  const newOperator = wallet();
+  const selfPayment = transferLog(newOperator, agent.agentAddress, REACH + 5);
+  world.set('registryScannedTo', REACH);
+  world.set('scanLogs', [selfPayment]);
+  oracle = await startOracle({ world, env: ENV });
+  await waitForEpochs(1);
+  assert.deepEqual(await evidenceTxs(agent.didHash), [], 'not credited while the registry scan has not read that far');
+
+  const first = world.data.agents[agent.didHash].operator;
+  world.data.agents[agent.didHash].operator = newOperator;
+  world.data.agents[agent.didHash].operators = [{ fromBlock: 1, operator: first }, { fromBlock: REACH + 2, operator: newOperator }];
+  world.set('registryScannedTo', HEAD);
+  await nextEpoch(2);
+  assert.match(oracle.logs(), /"self_payment":1/);
+  assert.deepEqual(await evidenceTxs(agent.didHash), [], 'refused as the operator paying its own agent');
+});
