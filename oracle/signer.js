@@ -153,10 +153,12 @@ function signedRecord(file) {
 /**
  * The HTTP handler. `wallet` is an ethers Wallet, `secret` the shared HMAC secret, `allowFrom` the
  * set of addresses requests may come from, `chain()` what the chain says now, `record` the
- * signedRecord. It refuses to sign for MAX_SKEW_SECONDS after it starts: the record of requests
- * already used does not survive a restart, and a request older than that is refused anyway.
+ * signedRecord. It refuses to sign for twice MAX_SKEW_SECONDS after it starts: the record of
+ * requests already used does not survive a restart, and a request is accepted while its time is
+ * within MAX_SKEW_SECONDS of this clock either side, so one stamped ahead of the clock just before a
+ * restart can come again until twice that after it.
  */
-function createSigner({ wallet, policy, secret, allowFrom, maxPerHour, chainId, chain, record, log = console.log, now = () => Math.floor(Date.now() / 1000), warmup = MAX_SKEW_SECONDS }) {
+function createSigner({ wallet, policy, secret, allowFrom, maxPerHour, chainId, chain, record, log = console.log, now = () => Math.floor(Date.now() / 1000), warmup = 2 * MAX_SKEW_SECONDS }) {
   const seen = new Map();
   const startedAt = now();
   let busy = Promise.resolve();
