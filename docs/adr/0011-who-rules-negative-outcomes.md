@@ -7,7 +7,7 @@
 
 - **ADR 0006** lets a payer sign `1` delivered or `2` not delivered for a payment it made. One outcome per payer
   and payment leg, no revision; a refund is a separate, linked event. Operators run `PAYER_OUTCOMES=positive`:
-  a signed "not delivered" is refused (`oracle/index.js:2187`, `2584`) until "a challenge process exists", and
+  a signed "not delivered" is refused (`oracle/index.js:2248`, `2655`) until "a challenge process exists", and
   once on, negatives are "presented as payer-reported, not as verified fact". A negative already costs a real
   payment to the agent it criticises, and the per-payer cap and decay apply (ADR 0006, section 5).
 - **ADR 0010** lists non-delivery as slashable (A3): paid and neither delivered nor refunded, by 3 independent
