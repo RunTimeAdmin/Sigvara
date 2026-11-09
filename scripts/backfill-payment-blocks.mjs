@@ -18,7 +18,7 @@
 // Dry run unless --write is passed. Writes via temp file and rename, the same way the
 // oracle does, and refuses to touch an event whose shape the oracle would reject on load.
 
-import { readFileSync, writeFileSync, renameSync, copyFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, copyFileSync, existsSync, statSync, unlinkSync } from 'node:fs';
 
 const arg = (name, dflt = null) => {
   const i = process.argv.indexOf(`--${name}`);
@@ -96,7 +96,16 @@ const unusable = (e) => {
   return null;
 };
 
+// The file as read, so the write can refuse if anything rewrote it since: a running oracle persists on
+// every epoch, and renaming over that would throw away what it wrote.
+const stamp = () => { const s = statSync(STATE); return `${s.mtimeMs}:${s.size}`; };
+const readStamp = stamp();
 const state = JSON.parse(readFileSync(STATE, 'utf8'));
+const unchanged = () => {
+  if (stamp() === readStamp) return true;
+  console.error(`\n${STATE} changed while this ran, so nothing was written. Stop the oracle, then run this again.`);
+  return false;
+};
 const head = Number(BigInt(await rpc('eth_blockNumber', [])));
 console.log(`state: ${STATE}`);
 console.log(`head : ${head}`);
@@ -140,10 +149,12 @@ console.log(`\nfilled ${filled}, already had one ${already}, failed ${failed}, s
 if (!WRITE) { console.log('\ndry run: nothing written. Re-run with --write.'); process.exit(failed ? 1 : 0); }
 if (!filled) { console.log('\nnothing to write.'); process.exit(failed ? 1 : 0); }
 
+if (!unchanged()) process.exit(1);
 const backup = `${STATE}.bak-backfill-${new Date().toISOString().slice(0, 10)}`;
 if (!existsSync(backup)) copyFileSync(STATE, backup);
 const tmp = `${STATE}.tmp-backfill`;
 writeFileSync(tmp, JSON.stringify(state));
+if (!unchanged()) { unlinkSync(tmp); process.exit(1); }
 renameSync(tmp, STATE);
 console.log(`\nwrote ${filled} block number(s). Backup at ${backup}.`);
 process.exit(failed ? 1 : 0);

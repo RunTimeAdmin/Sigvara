@@ -83,6 +83,7 @@ async function renderSlashes(staking) {
   let html = `<p><b>${plural(list.length, "slash", "slashes")}</b> filed on this deployment: ${executed} executed, ${dropped} dropped, ${open} open.`
     + (list.some((p) => p.end?.legacy) ? " Slashes executed before 2 November 2026 paid the member who filed them a quarter of the stake; since then the committee is paid nothing (ADR 0007)." : "")
     + "</p>";
+  if (X.simUnknown()) html += '<p class="pill-warn">The list of the testnet simulation\'s agents could not be read, so its agents are not marked as simulated below. Reload to try again.</p>';
   html += [...list].reverse().map((p) => {
     const addr = addrOf.get(p.didHash);
     const agent = (X.isAddr(addr) && !/^0x0{40}$/.test(addr) ? `<a href="epochs?a=${addr}"><code>${X.short(addr)}</code></a>` : `<code>${X.esc(X.short(p.didHash))}</code>`)

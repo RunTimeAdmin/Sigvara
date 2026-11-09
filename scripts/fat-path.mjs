@@ -156,6 +156,12 @@ async function main() {
   // headroom by design.
   const payers = Array.from({ length: PAYERS }, () => ethers.Wallet.createRandom().connect(provider));
   const record = { agent: AGENT, didHash, at: new Date().toISOString(), payments: [] };
+  // Payer keys are deliberately not written anywhere. They are throwaways holding dust,
+  // and a file of live private keys is a worse artifact than a lost few cents of gas.
+  //
+  // Written after every payment and attestation, so a run that stops part way still says what it paid.
+  const out = `fat-path-${Date.now()}.json`;
+  const save = () => fs.writeFileSync(out, JSON.stringify(record, null, 2));
 
   for (const [i, p] of payers.entries()) {
     log(`\npayer ${i + 1}/${PAYERS}  ${p.address}`);
@@ -166,6 +172,7 @@ async function main() {
     const receipt = await tx.wait(1);
     log(`  paid ${AMOUNT} SVR  tx=${receipt.hash}`);
     record.payments.push({ payer: p.address, amount: AMOUNT, txHash: receipt.hash });
+    save();
 
     // The oracle reads the payer off the transfer log and re-verifies the transaction
     // against the chain, so this asserts nothing it cannot check. No token needed: the
@@ -178,12 +185,10 @@ async function main() {
     const body = await res.json().catch(() => ({}));
     log(`  attested ${res.status} ${body.error ? body.error : `successful=${body.successful}/${body.total}`}`);
     record.payments[record.payments.length - 1].attested = res.ok;
+    save();
   }
 
-  // Payer keys are deliberately not written anywhere. They are throwaways holding dust,
-  // and a file of live private keys is a worse artifact than a lost few cents of gas.
-  const out = `fat-path-${Date.now()}.json`;
-  fs.writeFileSync(out, JSON.stringify(record, null, 2));
+  save();
   log(`\nwrote ${out} (${record.payments.length} payments, ${record.payments.filter(p => p.attested).length} attested)`);
   log(`\nThe score moves on the oracle's next epoch. Check:`);
   log(`  curl -s ${ORACLE}/score/${didHash}`);

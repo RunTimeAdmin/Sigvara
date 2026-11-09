@@ -137,6 +137,9 @@ async function tick(state, opts = {}) {
   }
 
   for (const a of actions) {
+    // Checked before every action, not once a tick: an hour's actions can take minutes of waits, and
+    // nothing is sent once the pause file exists.
+    if (existsSync(PAUSE_FILE)) { log(`paused: ${PAUSE_FILE} exists, the rest of this hour is left`); break; }
     try {
       if (a.type === 'fund') {
         // The ring's customers are funded by the ring's operator, not the treasury, so the money
@@ -180,6 +183,9 @@ async function tick(state, opts = {}) {
         }
         if (!(await svrFor(payer, amount))) { state.skipped++; done(a, { skipped: 'no SVR until the faucet cooldown ends' }); continue; }
         const tx = await svr(payer).transfer(agent.address, amount);
+        // Done as soon as it is sent: a wait that times out, an oracle that is down or a kill after
+        // this must not make a later tick pay again. The outcome's post is recorded on its own below.
+        done(a, { tx: tx.hash, amount: a.amount, delivered: a.delivered, attest: a.post ? 'pending' : null });
         await tx.wait(2);
         let posted = null;
         if (a.post) {
@@ -191,8 +197,9 @@ async function tick(state, opts = {}) {
             body: JSON.stringify({ didHash: w.didOf(a.agent), payment: { txHash: tx.hash }, payerOutcome }),
           });
           posted = res.status;
+          state.done[a.id].attest = posted;
+          saveState(state);
         }
-        done(a, { tx: tx.hash, amount: a.amount, delivered: a.delivered, attest: posted });
         log(`${payer.address} paid ${a.amount} SVR to ${agent.address}, ${a.delivered ? 'delivered' : 'not delivered'}${posted ? `, outcome posted (${posted})` : ''}`);
       } else if (a.type === 'manual') {
         const did = w.didOf(a.agent);
@@ -214,32 +221,41 @@ async function tick(state, opts = {}) {
 // admin key goes to the manual steps file.
 async function enforce(state, w, staking, ringOp) {
   for (const s of SLASHES) {
+    if (existsSync(PAUSE_FILE)) break;
     const agentId = cast.agents.filter((a) => a.profile === 'ring')[s.ring].id;
-    const did = w.didOf(agentId);
-    const p = await staking().getSlashProposal(did);
-    const st = SLASH_STATE[Number(p.state)];
-    const m = state.manual[agentId];
-    if (!m) continue;
-    if (st === 'Pending' && s.dispute && !m.disputed) {
-      const tx = await staking(w.at(ringOp.id)).disputeSlash(did);
-      await tx.wait();
-      m.disputed = tx.hash;
-      m.step = 'rule-dispute';
-      log(`ring operator disputed the slash of ${w.at(agentId).address}: ${tx.hash}`);
-    } else if (st === 'Pending' && !s.dispute && Date.now() / 1000 > Number(p.challengeDeadline)) {
-      const tx = await staking(w.at(cast.treasury)).executeSlash(did);
-      await tx.wait();
-      m.executed = tx.hash;
-      m.step = 'done';
-      log(`executed the slash of ${w.at(agentId).address}: ${tx.hash}`);
-    } else if (st === 'Pending' && m.step === 'file-slash') {
-      m.step = s.dispute ? 'awaiting-dispute' : 'awaiting-window';
-    } else if (['Executed', 'Cancelled'].includes(st)) {
-      m.step = 'done';
-      m.outcome = st;
+    // Each slash on its own, so one that cannot be read or sent leaves the others, and the manual file, current.
+    try {
+      const did = w.didOf(agentId);
+      const p = await staking().getSlashProposal(did);
+      const st = SLASH_STATE[Number(p.state)];
+      const m = state.manual[agentId];
+      if (!m) continue;
+      if (st === 'Pending' && s.dispute && !m.disputed) {
+        const tx = await staking(w.at(ringOp.id)).disputeSlash(did);
+        await tx.wait();
+        m.disputed = tx.hash;
+        m.step = 'rule-dispute';
+        log(`ring operator disputed the slash of ${w.at(agentId).address}: ${tx.hash}`);
+      } else if (st === 'Pending' && !s.dispute && Date.now() / 1000 > Number(p.challengeDeadline)) {
+        const tx = await staking(w.at(cast.treasury)).executeSlash(did);
+        await tx.wait();
+        m.executed = tx.hash;
+        m.step = 'done';
+        log(`executed the slash of ${w.at(agentId).address}: ${tx.hash}`);
+      } else if (st === 'Pending' && m.step === 'file-slash') {
+        m.step = s.dispute ? 'awaiting-dispute' : 'awaiting-window';
+      } else if (st === 'Disputed' && m.step !== 'rule-dispute') {
+        // Disputed on chain whatever this file says, for instance when the wait after the dispute threw.
+        m.step = 'rule-dispute';
+      } else if (['Executed', 'Cancelled'].includes(st)) {
+        m.step = 'done';
+        m.outcome = st;
+      }
+      m.state = st;
+      saveState(state);
+    } catch (e) {
+      log(`the slash of ${w.at(agentId).address}: ${e.shortMessage ?? e.message}`);
     }
-    m.state = st;
-    saveState(state);
   }
   writeManual(state, w);
 }

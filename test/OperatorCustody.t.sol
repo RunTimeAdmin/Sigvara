@@ -469,4 +469,67 @@ contract OperatorCustodyTest is StackFixture {
         assertFalse(bondReg.isActiveOperator(signer), "demoted below the requirement, so its signer is out too");
         assertEq(bondReg.operatorOfSigner(signer), cold, "still named until the operator tops up, leaves or clears it");
     }
+
+    // -------------------------------------------------------------------------
+    // A stranded proposal does not wait for its proposer to come back
+    // -------------------------------------------------------------------------
+
+    /// The signer proposes, a partial slash demotes its operator inside the window, and nobody
+    /// rejects. Finalize refuses while the operator is out, and the committee's window passes.
+    function _strandByDemotion() internal {
+        _propose(signer, _perfect());
+        vm.prank(slasher);
+        bondReg.slash(cold, 1e18);
+        assertFalse(bondReg.isActiveOperator(signer), "demoted, so the proposal is stranded");
+
+        vm.warp(block.timestamp + SCORE_WINDOW + 1);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraReputation.ProposerNotAuthorized.selector, didHash, signer));
+        reputation.finalizeReputation(didHash);
+    }
+
+    /// The operator tops up and governance admits it again.
+    function _readmit() internal {
+        svr.mint(cold, 1e18);
+        vm.prank(cold);
+        bondReg.depositBond(1e18);
+        vm.prank(admin);
+        bondReg.admit(cold);
+        assertTrue(bondReg.isActiveOperator(signer));
+    }
+
+    /// Left alone, a stranded proposal revives: once the operator is back, anyone can finalize a
+    /// score the committee can no longer reject.
+    function test_aStrandedProposal_revivesWhenItsOperatorIsReadmitted() public {
+        _strandByDemotion();
+        _readmit();
+        reputation.finalizeReputation(didHash);
+        assertEq(reputation.getEarnedScore(didHash), 100);
+    }
+
+    /// Anyone can discard it while it is stranded, and re-admission then brings nothing back.
+    function test_aDiscardedStrandedProposal_staysDeadAfterReadmission() public {
+        _strandByDemotion();
+
+        vm.expectEmit(true, true, false, true, address(reputation));
+        emit SigvaraReputation.StrandedScoreDiscarded(didHash, signer, funder);
+        vm.prank(funder);
+        reputation.discardStrandedScore(didHash);
+        assertFalse(reputation.getPendingScore(didHash).exists);
+
+        _readmit();
+        vm.expectRevert(abi.encodeWithSelector(SigvaraReputation.NoScorePending.selector, didHash));
+        reputation.finalizeReputation(didHash);
+        assertEq(reputation.getEarnedScore(didHash), 0);
+    }
+
+    /// A proposal whose proposer is still authorized is not stranded, and is left alone.
+    function test_discardStrandedScore_refusesALiveProposal() public {
+        _propose(signer, _perfect());
+        vm.expectRevert(abi.encodeWithSelector(
+            SigvaraReputation.ScoreAlreadyPending.selector, didHash, block.timestamp
+        ));
+        vm.prank(funder);
+        reputation.discardStrandedScore(didHash);
+        assertTrue(reputation.getPendingScore(didHash).exists);
+    }
 }

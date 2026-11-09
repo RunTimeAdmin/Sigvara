@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { id } from 'ethers';
 import { SigvaraGate, atomicNonceStore } from '../src/gate';
-import { signChallenge } from '../src/challenge';
+import { isChallengeExpired, signChallenge } from '../src/challenge';
 import { seedToKeyPair } from '../src/keys';
 
 const ADDRESSES = {
@@ -457,6 +457,49 @@ describe('SigvaraGate: two gates behind one load balancer', () => {
     const second = issue(a);
     const both = await Promise.all([a.admit(DID, second.c, second.sig), b.admit(DID, second.c, second.sig)]);
     expect(both.map((r) => r.ok)).toEqual([true, true]);
+  });
+
+  it('refuses a replay at a gate whose clock lags the store that expires the spent mark', async () => {
+    // A Redis SET with EXAT drops the key by Redis's clock, not the gate's. Here the store runs 30 s ahead of
+    // both gates. The second gate is asked at the last second its own clock still calls the payload fresh, and by
+    // then the store's clock has passed timestamp + ttl. If the mark expired there, the replay would be admitted.
+    const lead = 30;
+    const store = (() => {
+      const rows = new Map<string, number>();
+      const storeNow = () => Math.floor(Date.now() / 1000) + lead;
+      return {
+        seen: () => { throw new Error('consume() should be preferred'); },
+        add: () => { throw new Error('consume() should be preferred'); },
+        prune: () => {},
+        consume: (n: string, exp: number) => {
+          const at = rows.get(n);
+          if (at !== undefined && storeNow() < at) return false;
+          rows.set(n, exp);
+          return true;
+        },
+      };
+    })();
+    const [a, b] = [gateWith({ score: 50, store }), gateWith({ score: 50, store })];
+    // A real verifier refuses a stale payload, so let freshness decide here too.
+    for (const g of [a, b]) {
+      (g as any).verifier.verifySignature = vi.fn(
+        async (_did: string, payload: string, _sig: string, ttl: number) => !isChallengeExpired(payload, ttl),
+      );
+    }
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-11-09T12:00:00Z'));
+      const { c, sig } = issue(a);
+      expect((await a.admit(DID, c, sig)).ok).toBe(true);
+
+      vi.setSystemTime(Date.now() + 300 * 1000);
+      expect(isChallengeExpired(c.payload, 300)).toBe(false);
+      const replay = await b.admit(DID, c, sig);
+      expect(replay.reason).toBe('replayed');
+      expect(replay.ok).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('does not admit, or read the agent, when the shared store cannot be reached', async () => {

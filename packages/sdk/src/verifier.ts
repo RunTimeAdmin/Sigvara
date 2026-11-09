@@ -430,5 +430,13 @@ export async function registerAgent(
       // not this event
     }
   }
+  if (!didHash) {
+    // The transaction succeeded but no AgentRegistered log decoded, for instance a receipt served
+    // without its logs. The didHash is a pure function of the agent address and the chain, so it is
+    // derived rather than returned empty.
+    const network = await signer.provider?.getNetwork();
+    if (!network) throw new Error(`registerAgent: ${receipt.hash} succeeded, but it has no AgentRegistered event and the signer has no provider to read the chain id from`);
+    didHash = computeDidHash(agentAddress, network.chainId);
+  }
   return { didHash, txHash: receipt.hash };
 }
