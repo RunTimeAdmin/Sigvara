@@ -71,7 +71,19 @@ disclosed as it is bought.
 
 | Date (UTC) | SVR | Paid | Transaction | Held by | Held for |
 |---|---|---|---|---|---|
-| 9 November 2026, 01:20:37 | 22,283,004.212403886 | 115 USDC, the first buy in the launch transaction, at the opening price | [`0x67ac918f…d749`](https://explorer.arc.io/tx/0x67ac918fbe80bd9f4556c44f03daf739aa996b6d63d34b99201ed69b5126d749) | The deployer, [`0x8857A7C392d1Bb1A68647c64Ce18D9AA1Fd023b0`](https://explorer.arc.io/address/0x8857A7C392d1Bb1A68647c64Ce18D9AA1Fd023b0) | 5,000,000 for the two oracle operator bonds (2,500,000 each, primary and checker). The other 17,283,004.212403886 is treasury inventory, held by the deployer until the treasury timelock is deployed, then moved into it; that transfer is published here too |
+| 9 November 2026, 01:20:37 | 22,283,004.212403886 | 115 USDC, the first buy in the launch transaction, at the opening price | [`0x67ac918f…d749`](https://explorer.arc.io/tx/0x67ac918fbe80bd9f4556c44f03daf739aa996b6d63d34b99201ed69b5126d749) | The deployer, [`0x8857A7C392d1Bb1A68647c64Ce18D9AA1Fd023b0`](https://explorer.arc.io/address/0x8857A7C392d1Bb1A68647c64Ce18D9AA1Fd023b0) | 5,000,000 for the two oracle operator bonds (2,500,000 each, primary and checker). The other 17,283,004.212403886 is treasury inventory, locked until 9 May 2027 (below) |
+
+### Locked
+
+| | |
+|---|---|
+| Lock | [`0xE246eaF919a39d7E0ff656320f7132Ee8AfBB8FB`](https://explorer.arc.io/address/0xE246eaF919a39d7E0ff656320f7132Ee8AfBB8FB), OpenZeppelin's `VestingWallet` with a duration of zero, deployed by the deployer with [`script/LockTreasurySvr.s.sol`](../script/LockTreasurySvr.s.sol) in [`0xa62b579e…3aa5`](https://explorer.arc.io/tx/0xa62b579e9310d03dca13c7cf062c525824b17f371b60c7ec0bf4a6b862a93aa5) |
+| Holds | 17,283,004.212403886 SVR, the treasury share of the first buy, sent on 9 November 2026 in [`0x3db63954…3230`](https://explorer.arc.io/tx/0x3db63954f4c8503f1f0679dca5d48c30b37f414ed29ae602ce6b12d466563230) |
+| Releases | Nothing before 9 May 2027 00:00 UTC, by anyone, the deployer included. From then all of it, to the lock's owner |
+| Owner | The deployer. Ownership will be handed to the treasury timelock once it is deployed; it decides where the SVR goes, never when |
+
+The 5,000,000 for the operator bonds stays with the deployer, so the bonds can be posted when the mainnet
+registries deploy. Anyone can read the lock's `start()`, `end()`, `owner()` and `releasable(SVR)` on chain.
 
 ## Treasury policy
 

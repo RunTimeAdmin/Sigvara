@@ -132,9 +132,21 @@
             <tr><td>Paid</td><td>115 USDC</td></tr>
             <tr><td>Transaction</td><td><a href="https://explorer.arc.io/tx/0x67ac918fbe80bd9f4556c44f03daf739aa996b6d63d34b99201ed69b5126d749" target="_blank" rel="noopener"><code>0x67ac918f…d749</code></a></td></tr>
             <tr><td>Held by</td><td>The deployer, <code>0x8857A7C392d1Bb1A68647c64Ce18D9AA1Fd023b0</code></td></tr>
-            <tr><td>Held for</td><td>5,000,000 for the two oracle operator bonds (2,500,000 each, primary and checker). The other 17,283,004.212403886 is treasury inventory, held by the deployer until the treasury timelock is deployed, then moved into it; that transfer is published here too.</td></tr>
+            <tr><td>Held for</td><td>5,000,000 for the two oracle operator bonds (2,500,000 each, primary and checker). The other 17,283,004.212403886 is treasury inventory, locked until 9 May 2027 (below).</td></tr>
           </tbody>
         </table>
+
+        <h3>Locked</h3>
+        <table class="data-table">
+          <thead><tr><th>Lock</th><th><a href="https://explorer.arc.io/address/0xE246eaF919a39d7E0ff656320f7132Ee8AfBB8FB" target="_blank" rel="noopener"><code>0xE246eaF9…B8FB</code></a></th></tr></thead>
+          <tbody>
+            <tr><td>Contract</td><td>OpenZeppelin's <code>VestingWallet</code> with a duration of zero, deployed by the deployer with <a href="https://github.com/RunTimeAdmin/Sigvara/blob/main/script/LockTreasurySvr.s.sol" target="_blank" rel="noopener"><code>LockTreasurySvr.s.sol</code></a> in <a href="https://explorer.arc.io/tx/0xa62b579e9310d03dca13c7cf062c525824b17f371b60c7ec0bf4a6b862a93aa5" target="_blank" rel="noopener"><code>0xa62b579e…3aa5</code></a>. Full address: <code>0xE246eaF919a39d7E0ff656320f7132Ee8AfBB8FB</code></td></tr>
+            <tr><td>Holds</td><td>17,283,004.212403886 SVR, the treasury share of the first buy, sent on 9 November 2026 in <a href="https://explorer.arc.io/tx/0x3db63954f4c8503f1f0679dca5d48c30b37f414ed29ae602ce6b12d466563230" target="_blank" rel="noopener"><code>0x3db63954…3230</code></a></td></tr>
+            <tr><td>Releases</td><td>Nothing before 9 May 2027 00:00 UTC, by anyone, the deployer included. From then all of it, to the lock's owner</td></tr>
+            <tr><td>Owner</td><td>The deployer. Ownership will be handed to the treasury timelock once it is deployed; it decides where the SVR goes, never when</td></tr>
+          </tbody>
+        </table>
+        <p>The 5,000,000 for the operator bonds stays with the deployer, so the bonds can be posted when the mainnet registries deploy. Anyone can read the lock's <code>start()</code>, <code>end()</code>, <code>owner()</code> and <code>releasable(SVR)</code> on chain.</p>
 
         <h3>Treasury policy</h3>
         <p>The creator share of pool trading fees (64% of the 1% buy-side pool fee, paid in USDC and credited by Tolly's fee locker) is used to buy SVR on the open market. The treasury is also funded by direct open-market purchases. Both are disclosed.</p>
