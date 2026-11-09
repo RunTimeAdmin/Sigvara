@@ -27,7 +27,7 @@ As of 6 November 2026. This is the one list of what comes next. The [launch chec
 | Testnet roles to a Safe and a timelock. Upgrades then wait 48 hours, so this follows the staking upgrade | After the staking upgrade |
 | An ADR on who rules a contested negative outcome | Any time |
 | A limit on operators' total epoch spend, and the reads an unstaked registration adds | Before agents grow |
-| SVR launch through Tolly (checklist phase 3) | The owner's decision. It does not wait for the registries |
+| SVR launch through Tolly (checklist phase 3) | Done, 9 November 2026: the address is in [token.md](token.md) |
 | External audit, and fixing what it finds (phase 2) | After the staking upgrade, so it reads what will run |
 | Registries on Arc mainnet with bonds in SVR, mainnet keepers, pinned operators (phase 4) | After the audit's fixes |
 
