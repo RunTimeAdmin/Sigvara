@@ -719,6 +719,12 @@ meant to be left alone has to be listed on both hosts first. Expect a `dropped` 
 lands between the refile and the cancel, and `lapsed` alerts for C from both keepers from
 24 November 03:45 UTC, repeating daily until `expireSlash(C)`.
 
+**Before rewiring staking.** Resolve every Pending or Disputed slash proposal before `setStakeView`
+repoints the identity registry, or before `STAKING_CORE_ROLE` is revoked from the staking contract. A
+dropped proposal reinstates its agent only if that stake view says it is bonded, and every drop and every
+execution calls the identity registry with that role. Without the role they revert, and the bond stays
+frozen until the wiring is restored.
+
 **Stopping them.** Set `KEEPER_MODE=shadow` in `.env` on each host and run `docker compose up -d`. They
 then read and send nothing. `retrying in` in the log is normal: public RPCs refuse a burst of reads, so
 the keeper waits 500 ms between log reads and tries a throttled read again.

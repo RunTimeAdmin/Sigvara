@@ -83,10 +83,12 @@ contract SigvaraIdentity is Initializable, TimelockedGrants, UUPSUpgradeable, In
     // the mappings above (see the same discipline in SigvaraStaking).
     //
     /// True while the agent is Suspended because the staking core initiated a
-    /// slash. The operator may NOT lift this suspension — only the staking core
-    /// can (on dispute resolution). Without this, an operator could call
+    /// slash. The operator may NOT lift this suspension. Only the staking core
+    /// can, when it drops the proposal (a cancel, a veto, a ruling for the agent or
+    /// an expiry). Without this, an operator could call
     /// updateStatus(Active) to un-suspend themselves mid-challenge-window,
-    /// defeating the halt initiateSlash relies on.
+    /// defeating the halt initiateSlash relies on. It stays set once the agent is
+    /// Slashed, which is terminal, and nothing reads it after that.
     mapping(bytes32 => bool) public slashSuspended;
 
     /// Collateral oracle for status transitions. Appended after slashSuspended so
@@ -358,7 +360,7 @@ contract SigvaraIdentity is Initializable, TimelockedGrants, UUPSUpgradeable, In
             // Everyone else must be the operator.
             _requireOperator(id, didHash);
             // An operator cannot clear a suspension the staking core applied for a
-            // pending slash. Only the staking core reinstates it (via disputeSlash).
+            // pending slash. Only the staking core lifts it, when it drops the proposal.
             if (slashSuspended[didHash]) revert SlashSuspensionLocked(didHash);
         }
 
@@ -376,7 +378,7 @@ contract SigvaraIdentity is Initializable, TimelockedGrants, UUPSUpgradeable, In
         // This applies to the staking core too. Exempting it left the same escape one
         // step further round: queue a withdrawal while Suspended, draw a slash, dispute
         // it, and the reinstatement that follows a dropped proposal put the agent back
-        // to Active under-collateralised. SigvaraStaking checks the bond before
+        // to Active under-collateralised. SigvaraStaking asks this same stakeView before
         // reinstating and leaves the agent Suspended otherwise, so this never reverts a
         // permissionless call.
         if (newStatus == AgentStatus.Active) {
@@ -527,6 +529,12 @@ contract SigvaraIdentity is Initializable, TimelockedGrants, UUPSUpgradeable, In
      *         points at decides who counts as bonded, and a contract of the caller's choosing can
      *         answer yes for everyone, so the call is about as consequential as an upgrade and gets
      *         the same notice: it is scheduled on the timelock and executes after its delay.
+     *
+     *         Resolve every Pending or Disputed slash proposal before repointing this, or before
+     *         revoking STAKING_CORE_ROLE from the staking contract. A dropped proposal reinstates
+     *         the agent only if this view says it is bonded, and every drop and every executed
+     *         slash calls back here with that role, so without it they revert and the bond stays
+     *         frozen until the wiring is restored.
      */
     function setStakeView(address stakeView_) external onlyRole(UPGRADER_ROLE) {
         if (stakeView_ == address(0)) revert StakeViewNotSet();
