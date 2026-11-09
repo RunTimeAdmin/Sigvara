@@ -50,11 +50,13 @@ As of 6 November 2026. Everything runs on Arc testnet, and nothing is on mainnet
 
 ## Phase 3 — SVR token launch on Tolly (Arc)
 
-- [ ] **Confirm deployer address** `0x8857A7C392d1Bb1A68647c64Ce18D9AA1Fd023b0` is the sole creator; anything attributed to Sigvara not created by it is not ours.
-- [ ] **Seed the Uniswap V3 pool** (1% tier, USDC quote) with the whole 1B supply single-sided. LP NFT goes to Tolly's ownerless collect-only fee locker — no withdraw path in code.
-- [ ] **Publish the token address** on `docs/token.md` and sigvara.xyz *before* any social announcement. Never announce on social first.
-- [ ] **Anti-snipe cap** (3% of supply per wallet, first 300 seconds) is the only deviation from vanilla ERC-20. After 300 seconds it is a plain token — exactly what the bond contracts require.
-- [ ] **Team position**: whatever is bought on the open market at the opening price, disclosed same-day. No split buys to work around the cap.
+Launched 9 November 2026 at 01:20:37 UTC: [`0xc79298521Ae84e7a43d20E71A2B2A1BB540E889B`](https://explorer.arc.io/address/0xc79298521Ae84e7a43d20E71A2B2A1BB540E889B), pool `0xa9Be080545C6d61529c27294512bDb3Bde67A735`, launch transaction [`0x67ac918f…d749`](https://explorer.arc.io/tx/0x67ac918fbe80bd9f4556c44f03daf739aa996b6d63d34b99201ed69b5126d749) from the deployer through the pad. The first buy and what it is held for are in [token.md](token.md#team-acquisitions).
+
+- [x] **Confirm deployer address** `0x8857A7C392d1Bb1A68647c64Ce18D9AA1Fd023b0` is the sole creator; anything attributed to Sigvara not created by it is not ours.
+- [x] **Seed the Uniswap V3 pool** (1% tier, USDC quote) with the whole 1B supply single-sided. LP NFT goes to Tolly's ownerless collect-only fee locker — no withdraw path in code.
+- [x] **Publish the token address** on `docs/token.md` and sigvara.xyz *before* any social announcement. Never announce on social first.
+- [x] **Anti-snipe cap** (3% of supply per wallet, first 300 seconds) is the only deviation from vanilla ERC-20. After 300 seconds it is a plain token — exactly what the bond contracts require.
+- [x] **Team position**: whatever is bought on the open market at the opening price, disclosed same-day. No split buys to work around the cap.
 - [ ] **Treasury buybacks** run on a published schedule from the 64% creator share of buy-side fees (paid in USDC via the fee locker), not in response to price. No fee revenue paid to the team; no treasury SVR sold.
 
 ## Phase 4 — Mainnet registry deployment (gated on Phase 2)

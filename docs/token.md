@@ -1,7 +1,7 @@
 # SVR
 
-> **SVR has not launched.** There is no SVR contract address until this page publishes one. The bond token
-> on Arc testnet carries the same name, but it is a faucet ERC-20 that anyone can mint.
+> **SVR launched on 9 November 2026.** Its only address is [`0xc79298521Ae84e7a43d20E71A2B2A1BB540E889B`](https://explorer.arc.io/address/0xc79298521Ae84e7a43d20E71A2B2A1BB540E889B) on Arc
+> mainnet. The bond token on Arc testnet carries the same name, but it is a faucet ERC-20 that anyone can mint.
 
 SVR is the bond and fee token of the Sigvara protocol. Operators bond it to
 activate agents, and slashing an agent's bond burns most of it. Oracle operators
@@ -18,14 +18,14 @@ project.
 | Item | Value |
 |---|---|
 | Network | Arc mainnet, chain ID `5042` |
-| Address | _published here at launch_ |
+| Address | [`0xc79298521Ae84e7a43d20E71A2B2A1BB540E889B`](https://explorer.arc.io/address/0xc79298521Ae84e7a43d20E71A2B2A1BB540E889B) |
 | Symbol / name | `SVR` / Sigvara |
 | Supply | 1,000,000,000, fixed at creation |
 | Decimals | 18 |
 | Owner / mint / pause | none |
 | Launch venue | Tolly on Arc (pad `0xcad7ee36ac193bf2eddb7b3e2736c5bdb8269c8b`), Uniswap V3 pool, 1% tier, USDC quote |
 | Liquidity | Whole supply seeded single-sided at launch; LP NFT held by Tolly's ownerless, collect-only fee locker `0xe20e4297759597da75c8998ee76ec900600ad920` (no withdraw path in code) |
-| Pool | _published here at launch_ |
+| Pool | [`0xa9Be080545C6d61529c27294512bDb3Bde67A735`](https://explorer.arc.io/address/0xa9Be080545C6d61529c27294512bDb3Bde67A735), created in the launch transaction [`0x67ac918f…d749`](https://explorer.arc.io/tx/0x67ac918fbe80bd9f4556c44f03daf739aa996b6d63d34b99201ed69b5126d749) (block 30269650, sent by the deployer to the pad); the LP NFT is #59419, held by the fee locker |
 
 The token contract is Tolly's `TollyToken`, a plain OpenZeppelin ERC-20 with
 public source ([TollyLabs/v3-contracts](https://github.com/TollyLabs/v3-contracts)).
@@ -58,7 +58,7 @@ buy it there or earn it through the protocol.
 
 The team's position is whatever it buys on the open market, starting at the
 opening price. Every acquisition is published here: amount, transaction, the
-address that holds it, and which of the four permitted purposes below it is
+address that holds it, and which of the five permitted purposes below it is
 held against. Launch-day buys are published the same day. There are no wallets
 holding SVR for the protocol that are not listed on this page.
 
@@ -66,6 +66,12 @@ The anti-snipe cap limits any single wallet to 3% of supply for the first 300
 seconds. The team does not split buys across wallets to work around it. A
 position larger than that cap is accumulated afterwards, on the open market,
 disclosed as it is bought.
+
+### Team acquisitions
+
+| Date (UTC) | SVR | Paid | Transaction | Held by | Held for |
+|---|---|---|---|---|---|
+| 9 November 2026, 01:20:37 | 22,283,004.212403886 | 115 USDC, the first buy in the launch transaction, at the opening price | [`0x67ac918f…d749`](https://explorer.arc.io/tx/0x67ac918fbe80bd9f4556c44f03daf739aa996b6d63d34b99201ed69b5126d749) | The deployer, [`0x8857A7C392d1Bb1A68647c64Ce18D9AA1Fd023b0`](https://explorer.arc.io/address/0x8857A7C392d1Bb1A68647c64Ce18D9AA1Fd023b0) | 5,000,000 for the two oracle operator bonds (2,500,000 each, primary and checker). The other 17,283,004.212403886 is treasury inventory, held by the deployer until the treasury timelock is deployed, then moved into it; that transfer is published here too |
 
 ## Treasury policy
 
