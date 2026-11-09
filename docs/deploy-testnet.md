@@ -36,7 +36,7 @@ addresses rather than a redeploy.
 | Committee | choose one | `SLASHING_COMMITTEE_ROLE` |
 
 The testnet deployer is deliberately a different address from the one in
-[docs/token.md](token.md), which is reserved for the mainnet SVR launch and the
+[docs/token.md](token.md), which sent the mainnet SVR launch and is reserved for the
 mainnet registry deployment. Keeping them apart means a testnet key, which is
 handled far more casually, never touches anything that matters on mainnet.
 
