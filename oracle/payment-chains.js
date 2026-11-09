@@ -424,6 +424,7 @@ function scanEnd(credits, to, maxReads) {
  *   @param {Map<string, object[]>} deps.knownOnChain  this chain's payments already held, for the canary
  *   @param {(label, fn) => Promise} deps.read  backoff for one RPC read; its errors must not carry the URL
  *   @param {(ms) => Promise} [deps.sleep]
+ *   @param {number|null} [deps.reachMs]  the time of the last block the registry scan has read; the scan stops before it
  * @returns {Promise<object>} a summary; `state` is what to store, or null to leave it as it was
  */
 async function scanChain(chain, deps) {
@@ -442,12 +443,30 @@ async function scanChain(chain, deps) {
     return { from, to: finalized.number, credited: 0, skipped: 0, upToDate: true, state: null, reasons: {} };
   }
   // At most maxBlocks a scan, so a long catch-up moves forward a step at a time.
-  const to = Math.min(finalized.number, from + chain.maxBlocks - 1);
+  let to = Math.min(finalized.number, from + chain.maxBlocks - 1);
   let toTs = Number(finalized.timestamp);
   if (to !== finalized.number) {
     const block = await read('payment chain getBlock', () => provider.getBlock(to));
     if (!block) throw new Error(`payment chain ${chain.chainId} did not return block ${to}`);
     toTs = Number(block.timestamp);
+  }
+  // Only blocks from before the registry scan's reach. Transfers are asked for only to the agents it has found, so
+  // past it a payment to one registered since would be passed over for good; one registered later cannot have been
+  // paid before its registration. Only a chain that finalizes close to its head reaches that far.
+  const capped = Number.isFinite(deps.reachMs) && toTs * 1000 >= deps.reachMs;
+  if (capped) {
+    let lo = from - 1;
+    let loTs = null;
+    let hi = to;
+    while (hi - lo > 1) {
+      const mid = Math.floor((lo + hi) / 2);
+      const block = await read('payment chain getBlock', () => provider.getBlock(mid));
+      if (!block) throw new Error(`payment chain ${chain.chainId} did not return block ${mid}`);
+      if (Number(block.timestamp) * 1000 < deps.reachMs) { lo = mid; loTs = Number(block.timestamp); } else hi = mid;
+    }
+    if (lo < from) return { from, to: lo, credited: 0, skipped: 0, upToDate: true, state: null, reasons: {} };
+    to = lo;
+    toTs = loTs;
   }
 
   const byAddress = new Map();
@@ -554,7 +573,7 @@ async function scanChain(chain, deps) {
   for (const sk of skipped) reasons[sk.reason] = (reasons[sk.reason] || 0) + 1;
   return {
     from, to: end, credited, refused, skipped: skipped.length, unresolved: unresolved.length,
-    canary, reasons, state: next, caughtUp: end === finalized.number, readLimited: end < to,
+    canary, reasons, state: next, caughtUp: end === finalized.number || (capped && end === to), readLimited: end < to,
   };
 }
 

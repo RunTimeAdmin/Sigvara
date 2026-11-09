@@ -823,7 +823,10 @@ async function runPaymentScan(agents) {
 
   const provider = chain.getProvider();
   const head = await provider.getBlockNumber();
-  const to = paymentScan.safeHead(head, paymentScanCfg.confirmations);
+  // No further than the registry scan has read, as the link scan (runLinkScan). Transfers are asked for only to
+  // the agents it knows, so past it a payment to an agent registered since would be passed over for good.
+  const reach = chain.getScanState()?.lastScannedBlock;
+  const to = Math.min(paymentScan.safeHead(head, paymentScanCfg.confirmations), Number.isInteger(reach) ? reach : Infinity);
   const checkpoint = getPaymentScanState();
   const from = checkpoint && Number.isInteger(checkpoint.lastBlock)
     ? checkpoint.lastBlock + 1
@@ -960,6 +963,9 @@ async function runPaymentScan(agents) {
 async function runPaymentChainScans(agents, chains) {
   // When each agent registered, in ms, read once a run (scanChain's before_registration).
   const registered = new Map();
+  // The time of the last block the registry scan has read, read once a run: no scan reads a block from then on
+  // (scanChain's reachMs). Null before the registry scan has read anything.
+  let reachMs;
   for (const pc of chains) {
     const key = paymentChains.stateKey(pc);
     const startedAt = Date.now();
@@ -967,6 +973,13 @@ async function runPaymentChainScans(agents, chains) {
     // finalized block or the time budget is spent. One step an epoch could not keep up with a chain that makes
     // more blocks an epoch than a step covers, and a failure costs only the step it happens in.
     try {
+      if (reachMs === undefined) {
+        const reach = chain.getScanState()?.lastScannedBlock;
+        const block = Number.isInteger(reach)
+          ? await chain.readWithBackoff('registry reach getBlock', () => chain.getProvider().getBlock(reach)) : null;
+        if (Number.isInteger(reach) && !block) throw new Error(`the scored chain did not return block ${reach}`);
+        reachMs = block ? Number(block.timestamp) * 1000 : null;
+      }
       for (;;) {
         const summary = await paymentChains.scanChain(pc, {
           provider: paymentChainProviders.get(pc.chainId),
@@ -982,6 +995,7 @@ async function runPaymentChainScans(agents, chains) {
           },
           // Every error leaves here without the URL, which carries the provider's key (paymentChains.rpcError).
           read: (label, fn) => chain.readWithBackoff(label, () => paymentChains.withDeadline(fn)).catch((err) => { throw paymentChains.rpcError(err, pc.rpcUrl); }),
+          reachMs,
         });
         if (summary.state) setPaymentChainScanState(key, summary.state);
         metrics.inc('paymentChainScans');
