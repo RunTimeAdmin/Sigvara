@@ -26,6 +26,15 @@ const ZERO = ethers.ZeroAddress;
 
 const wallet = () => ethers.Wallet.createRandom().address;
 
+// The chain's clock a world starts at: this host's, except in the last six minutes before a UTC midnight,
+// where it starts six minutes earlier, inside the oracle's clock-skew limit. A primary leaves a linked agent
+// for the next epoch when the day would change before its proposal could land, and a test that happened to
+// run then would find nothing proposed.
+const MIDNIGHT_MARGIN_SEC = 360;
+function startingClock(hostSec) {
+  return 86_400 - (hostSec % 86_400) <= MIDNIGHT_MARGIN_SEC ? hostSec - MIDNIGHT_MARGIN_SEC : hostSec;
+}
+
 /**
  * The world the stubbed chain describes. Builders write through to the file the running
  * oracle reads, so a test can extend the world between requests.
@@ -33,7 +42,7 @@ const wallet = () => ethers.Wallet.createRandom().address;
 class World {
   constructor() {
     this.data = {
-      nowSec: Math.floor(Date.now() / 1000),
+      nowSec: startingClock(Math.floor(Date.now() / 1000)),
       head: 1_000_000,
       receipts: {},
       agents: {},

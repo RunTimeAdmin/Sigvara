@@ -98,12 +98,12 @@ contract UnbondingSnapshotTest is Test, RegistrationHelper {
     /// The admin cannot shorten an exit that is already waiting.
     function test_loweringThePeriod_doesNotShortenAQueuedExit() public {
         uint256 queuedAt = _queue();
-        _setPeriod(1 days);
+        _setPeriod(8 days); // shorter, and still above the 7 day challenge period as the setter requires
 
         (, uint256 claimableAt) = staking.getPendingWithdrawal(didHash);
         assertEq(claimableAt, queuedAt + UNBONDING, "the view reports the time fixed at queueing");
 
-        vm.warp(queuedAt + 1 days + 1);
+        vm.warp(queuedAt + 8 days + 1);
         _claimRevertsUntil(queuedAt + UNBONDING);
 
         vm.warp(queuedAt + UNBONDING);
@@ -137,11 +137,11 @@ contract UnbondingSnapshotTest is Test, RegistrationHelper {
         staking.depositStake(didHash, 1e18);
         vm.stopPrank();
 
-        _setPeriod(3 days);
+        _setPeriod(10 days);
         vm.prank(operator);
         staking.initiateWithdrawal(didHash, 1e18);
         (, uint256 claimableAt) = staking.getPendingWithdrawal(didHash);
-        assertEq(claimableAt, block.timestamp + 3 days);
+        assertEq(claimableAt, block.timestamp + 10 days);
     }
 
     function test_theQueueingEvent_carriesTheFixedTime() public {
@@ -187,11 +187,11 @@ contract UnbondingSnapshotTest is Test, RegistrationHelper {
         vm.store(address(staking), keccak256(abi.encode(didHash, uint256(10))), bytes32(0));
         assertEq(staking.unbondingClaimableAt(didHash), 0);
 
-        _setPeriod(5 days);
+        _setPeriod(10 days);
         (, uint256 claimableAt) = staking.getPendingWithdrawal(didHash);
-        assertEq(claimableAt, queuedAt + 5 days, "the live period still governs a legacy entry");
+        assertEq(claimableAt, queuedAt + 10 days, "the live period still governs a legacy entry");
 
-        vm.warp(queuedAt + 5 days);
+        vm.warp(queuedAt + 10 days);
         vm.prank(operator);
         staking.claimWithdrawal(didHash);
         assertEq(svr.balanceOf(operator), QUEUED);
@@ -199,7 +199,7 @@ contract UnbondingSnapshotTest is Test, RegistrationHelper {
 
     /// Whatever the admin does between queueing and claiming, the exit is the day it was promised.
     function testFuzz_claimTimeIsFixedWhenQueued(uint256 newPeriod, uint256 wait) public {
-        newPeriod = bound(newPeriod, 1 days, 90 days);
+        newPeriod = bound(newPeriod, CHALLENGE + 1, 90 days); // the setter keeps it above the challenge period
         wait = bound(wait, 0, 120 days);
 
         uint256 queuedAt = _queue();

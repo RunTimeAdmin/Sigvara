@@ -864,6 +864,170 @@ test('a checker that cannot read when a slot was last scored sends nothing for t
   });
 });
 
+test('a checker counts the grace afresh for an agent it stopped looking at while it was unbonded', async () => {
+  // The first epoch to find the slot empty starts the count. The agent is then unbonded for longer than the
+  // grace, so neither operator scores it, and bonded again. That is not a primary a grace late.
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  world.setFor('reputation', agent.didHash, { lastUpdated: world.data.nowSec - DEFAULT_GRACE - 600 });
+
+  await withOracle({ world, env: MOVING_CLOCK_ENV }, async (oracle) => {
+    let text = await epochsFinished(oracle, 1);
+    assert.equal(counter(text, DEFERRED_PROPOSE), 1);
+
+    world.setFor('bonded', agent.didHash, false);
+    world.set('nowSec', world.data.nowSec + DEFAULT_GRACE);
+    assert.equal((await oracle.call('POST', '/epoch', {}, ADMIN)).status, 202);
+    text = await epochsFinished(oracle, 2);
+    assert.equal(counter(text, 'sigvara_oracle_skipped_unbonded_total'), 1);
+
+    world.setFor('bonded', agent.didHash, true);
+    world.set('nowSec', world.data.nowSec + 600);
+    assert.equal((await oracle.call('POST', '/epoch', {}, ADMIN)).status, 202);
+    text = await epochsFinished(oracle, 3);
+    assert.deepEqual(names(oracle.calls()), [], 'nothing proposed ahead of the primary');
+    assert.equal(counter(text, DEFERRED_PROPOSE), 2, 'deferred again, counted from the epoch it was bonded');
+  });
+});
+
+test('a checker that loses a finalize to another party says so, and never calls it a committee rejection', async () => {
+  // The checker's finalize reverts NoScorePending and the slot is empty. getTotalScore serves the matured
+  // score, lower than the one just finalized, so compared against it a finalize read as a rejection. A
+  // rejection is not possible here at all: the checker finalizes only past the deadline, and the committee
+  // can reject only before it.
+  const agreed = await computedScores();
+  for (const finalizedAsProposed of [true, false]) {
+    const world = new World();
+    const agent = world.addRegisteredAgent();
+    const pending = pendingProposal(world, { agedPastGrace: true, data: agreed });
+    world.setFor('pending', agent.didHash, pending);
+    world.setFor('reputation', agent.didHash, finalizedAsProposed
+      ? { ...agreed, lastUpdated: pending.proposedAt }
+      : { ...agreed, lastUpdated: pending.proposedAt - 86_400 });
+    world.setFor('totalScore', agent.didHash, 1);
+    world.set('finalize', 'raced');
+
+    await inEpoch({ world, env: CHECKER_ENV }, ({ text, calls, logs }) => {
+      assert.deepEqual(names(calls), ['canPropose', 'finalizeScore']);
+      assert.doesNotMatch(logs, /committee rejection/);
+      assert.equal(counter(text, 'sigvara_oracle_proposals_rejected_total'), 0, 'no rejection is counted');
+      if (finalizedAsProposed) {
+        assert.match(logs, /already finalized by another party/);
+        assert.equal(counter(text, 'sigvara_oracle_finalize_total{result="success"}'), 1);
+      } else {
+        assert.match(logs, /the pending proposal is gone, and the live score is not the one it proposed/);
+        assert.equal(counter(text, 'sigvara_oracle_finalize_total{result="success"}'), 0);
+      }
+    });
+  }
+});
+
+test('two epochs disputing one proposal leave one divergence record, dated by both', async () => {
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  world.setFor('pending', agent.didHash, pendingProposal(world, { data: HIGH_SCORE }));
+
+  await withOracle({ world, env: CHECKER_ENV }, async (oracle) => {
+    await epochsFinished(oracle, 1);
+    const [first] = (await oracle.call('GET', '/divergence')).body.divergences;
+    assert.equal((await oracle.call('POST', '/epoch', {}, ADMIN)).status, 202);
+    const text = await epochsFinished(oracle, 2);
+    assert.equal(counter(text, DIVERGED), 2, 'disputed at both epochs');
+    const page = (await oracle.call('GET', '/divergence')).body;
+    assert.equal(page.total, 1, 'one record for one proposal');
+    assert.equal(page.divergences[0].firstAt, first.at, 'first seen at the first epoch');
+    assert.ok(page.divergences[0].at > first.at, 'and dated by the newest');
+  });
+});
+
+test('an agent slashed since the batch read loses its divergence records, as one slashed before it does', async () => {
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  // Active at the batch read, slashed at the guard read just after it.
+  world.data.agents[agent.didHash].slashedFromRead = 2;
+  world.flush();
+  const record = { at: Date.now() - 60_000, proposedAt: world.data.nowSec - 3600, pendingTotal: 80, ownTotal: 40, factors: {} };
+
+  await inEpoch({
+    world,
+    env: CHECKER_ENV,
+    files: { 'state.json': JSON.stringify({ schemaVersion: 1, divergences: { [agent.didHash]: [record] } }) },
+  }, async ({ oracle, logs }) => {
+    assert.match(logs, /slashed since the batch read, skipping/);
+    assert.deepEqual((await oracle.call('GET', `/divergence/${agent.didHash}`)).body.divergences, []);
+  });
+});
+
+test('a throttled finalize is counted once, as a throttled finalize, and nothing is proposed over it', async () => {
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  world.setFor('pending', agent.didHash, pendingProposal(world, { agedPastWindow: true }));
+  world.set('finalize', 'throttled');
+
+  await inEpoch({ world, env: BASE_ENV }, ({ text, calls, logs }) => {
+    assert.deepEqual(names(calls), ['finalizeScore'], 'the slot is still held, so no proposal');
+    assert.match(logs, /RPC throttled the finalize; retrying next epoch/);
+    assert.doesNotMatch(logs, /throttled the proposal/);
+    assert.equal(counter(text, 'sigvara_oracle_finalize_throttled_total'), 1);
+    assert.equal(counter(text, 'sigvara_oracle_finalize_total{result="error"}'), 0);
+    assert.equal(counter(text, 'sigvara_oracle_propose_throttled_total'), 0);
+    assert.equal(counter(text, 'sigvara_oracle_propose_total{result="error"}'), 0);
+  });
+});
+
+test('a finalize not seen mined, or refused inside its window, is counted once and not as a failed proposal', async () => {
+  for (const [mode, once] of [
+    ['unconfirmed', 'sigvara_oracle_tx_refused_total{reason="unconfirmed"}'],
+    ['window_active', 'sigvara_oracle_finalize_total{result="error"}'],
+  ]) {
+    const world = new World();
+    const agent = world.addRegisteredAgent();
+    world.setFor('pending', agent.didHash, pendingProposal(world, { agedPastWindow: true }));
+    world.set('finalize', mode);
+
+    await inEpoch({ world, env: BASE_ENV }, ({ text, calls }) => {
+      assert.deepEqual(names(calls), ['finalizeScore'], mode);
+      assert.equal(counter(text, once), 1, mode);
+      const counted = ['sigvara_oracle_finalize_total{result="error"}', 'sigvara_oracle_tx_refused_total{reason="unconfirmed"}',
+        'sigvara_oracle_propose_total{result="error"}', 'sigvara_oracle_propose_throttled_total']
+        .reduce((sum, name) => sum + counter(text, name), 0);
+      assert.equal(counted, 1, `${mode}: counted once in all`);
+    });
+  }
+});
+
+test('the active agents gauge counts the agents an epoch scored, not the proposals it made', async () => {
+  const agreed = await computedScores();
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  world.setFor('pending', agent.didHash, pendingProposal(world, { data: agreed }));
+
+  await inEpoch({ world, env: CHECKER_ENV }, ({ text, calls }) => {
+    assert.deepEqual(names(calls), ['canPropose'], 'it agreed, and sent nothing');
+    assert.equal(counter(text, 'sigvara_oracle_active_agents'), 1);
+  });
+});
+
+test("a checker weighs this operator's flags at the proposal's time, not at its own", async () => {
+  const agreed = await computedScores();
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  const proposedAt = world.data.nowSec - 3 * 3600;
+  // Raised an hour short of a half-life (30 days) before the proposal, so it then weighed just over one half
+  // and cost two points. It has passed the half-life since, and now costs one.
+  const raisedMs = (proposedAt - 30 * 86_400 + 3600) * 1000;
+  world.setFor('pending', agent.didHash, { exists: true, proposedAt, data: { ...agreed, communityScore: 3 }, evidenceRoot: null });
+
+  await inEpoch({
+    world,
+    env: { ...CHECKER_ENV, DIVERGENCE_TOLERANCE: '0' },
+    files: { 'state.json': JSON.stringify({ schemaVersion: 1, flags: { [agent.didHash]: [raisedMs] } }) },
+  }, ({ text, logs }) => {
+    assert.doesNotMatch(logs, /DIVERGENCE/);
+    assert.equal(counter(text, AGREED), 1);
+  });
+});
+
 test('a grace shorter than the checker\'s own epoch stops it at startup', async () => {
   for (const [grace, why] of [['30', /shorter than this checker's epoch of 1440 minutes/], ['-5', /CHECKER_GRACE_MINUTES="-5" is below the minimum of 0/]]) {
     const { code, log } = await runToExit({ world: new World(), env: { ...CHECKER_ENV, CHECKER_GRACE_MINUTES: grace } });

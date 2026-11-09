@@ -481,6 +481,29 @@ test('end to end: a reviewer the node cannot answer for skips the agent this epo
   }
 });
 
+test('end to end: a linked agent reached just before a UTC midnight is proposed after it, not across it', async () => {
+  // The checker reads the external factor at the snapshot of the proposal's own block. A proposal scored at
+  // 23:59:30 lands after midnight, in the next snapshot, and was disputed for a reading it was never given.
+  const { w, files } = linkedWorld(5);
+  const midnight = snapshotOf(w.data.nowSec) + 86_400;
+  w.set('nowSec', midnight - 30);
+  const oracle = await startOracle({ world: w, env: { ORACLE_ADMIN_TOKEN: ADMIN, MAX_CLOCK_SKEW_SECONDS: String(2 * 86_400) }, files });
+  try {
+    await untilEpoch(oracle);
+    assert.deepEqual(oracle.calls().filter((c) => c.name === 'proposeScore'), [], 'nothing proposed across the midnight');
+    assert.match(oracle.logs(), /its external factor's snapshot changes before a proposal could land; proposing next epoch/);
+
+    w.set('nowSec', midnight + 60);
+    assert.equal((await oracle.call('POST', '/epoch', {}, ADMIN)).status, 202);
+    for (let i = 0; i < 300 && !oracle.calls().some((c) => c.name === 'proposeScore'); i++) await sleep(50);
+    const call = oracle.calls().find((c) => c.name === 'proposeScore');
+    assert.ok(call, `nothing was proposed after the midnight:\n${oracle.logs()}`);
+    assert.equal(call.args[1].externalScore, MAX_EXTERNAL_SCORE);
+  } finally {
+    await oracle.stop();
+  }
+});
+
 test('end to end: a checker re-measures the external factor of a proposal and agrees with it exactly', async () => {
   const { w, agent, files } = linkedWorld(5);
   const { scores } = await proposed(w, files);

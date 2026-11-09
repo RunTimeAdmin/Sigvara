@@ -170,14 +170,28 @@ function certDaysLeft(host) {
   });
 }
 
+/**
+ * What /health says about the last completed epoch, as a problem or null. timeSinceLastEpochMs is null
+ * until the first epoch completes, which Number() would read as 0; that is late only once the process
+ * has been up longer than a missed run.
+ */
+export function epochProblem(j, staleMs = EPOCH_STALE_MS) {
+  if (j.timeSinceLastEpochMs == null) {
+    const up = Number(j.uptimeSeconds) * 1000;
+    return Number.isFinite(up) && up > staleMs ? `no epoch has completed in the ${Math.round(up / 60000)} minutes since it started` : null;
+  }
+  const since = Number(j.timeSinceLastEpochMs);
+  return Number.isFinite(since) && since > staleMs ? `no completed epoch for ${Math.round(since / 60000)} minutes` : null;
+}
+
 async function checkServices() {
   for (const [name, base] of [['oracle', ORACLE], ['checker', CHECKER]]) {
     try {
       const { res, body } = await get(base + '/health');
       const j = JSON.parse(body.toString('utf8'));
       if (res.status !== 200 || j.ok !== true) fail(`${name}: /health status ${res.status}, ok=${j.ok}`);
-      const since = Number(j.timeSinceLastEpochMs);
-      if (Number.isFinite(since) && since > EPOCH_STALE_MS) fail(`${name}: no completed epoch for ${Math.round(since / 60000)} minutes`);
+      const late = epochProblem(j);
+      if (late) fail(`${name}: ${late}`);
       if (j.storeWritable === false || j.statePersisted === false) fail(`${name}: state is not being saved`);
     } catch (e) {
       fail(`${name}: /health unreachable or unreadable (${e.message})`);
@@ -290,15 +304,35 @@ export function decodeSlashProposal(didHash, hex) {
   return { didHash, state: Number(BigInt('0x' + word(5))), challengeDeadline: Number(BigInt('0x' + word(7))) };
 }
 
+/**
+ * Every log the event index holds for `query`. A long history comes a page at a time, and each
+ * answer's `next` asks for the rest (docs/event-index.md), as indexLogs in site/assets/explorer.js reads it.
+ */
+export async function indexLogs(query, read = async (url) => {
+  const { res, body } = await get(url);
+  if (res.status !== 200) throw new Error(`the event index answered ${res.status}`);
+  return JSON.parse(body.toString('utf8'));
+}) {
+  const logs = [];
+  for (let after = null, page = 0; ; page++) {
+    if (page === 20) throw new Error('the event index has more than 20 pages for this history');
+    const j = await read(`${INDEX}/events?${query}${after ? `&after=${encodeURIComponent(after)}` : ''}`);
+    if (!Array.isArray(j?.logs)) throw new Error('the event index answered without a list of logs');
+    logs.push(...j.logs);
+    if (typeof j.next !== 'string' || j.next === '') return logs;
+    if (j.next === after) throw new Error('the event index gave the same page twice');
+    after = j.next;
+  }
+}
+
 // A slash the keepers should have settled, whatever state the keepers think they are in. This
 // watches the outcome from a place that shares nothing with them, so it is what notices when both
 // are down, misconfigured or out of gas.
 async function checkSlashes() {
   try {
     const deployed = JSON.parse(readFileSync('deployments/5042002.json', 'utf8'));
-    const { res, body } = await get(`${INDEX}/events?address=${deployed.staking}&topic0=${SLASH_INITIATED}`);
-    if (res.status !== 200) throw new Error(`the event index answered ${res.status}`);
-    const filed = [...new Set(JSON.parse(body.toString('utf8')).logs.map((l) => l.topics[1].toLowerCase()))];
+    const logs = await indexLogs(`address=${deployed.staking}&topic0=${SLASH_INITIATED}`);
+    const filed = [...new Set(logs.map((l) => l.topics[1].toLowerCase()))];
     const proposals = [];
     for (const didHash of filed) {
       proposals.push(decodeSlashProposal(didHash, await rpcCall('eth_call', [{ to: deployed.staking, data: GET_SLASH_PROPOSAL + didHash.slice(2) }, 'latest'])));

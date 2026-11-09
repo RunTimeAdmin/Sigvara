@@ -128,6 +128,31 @@ test('an endpoint that answers a byte at a time still runs out of time', async (
   }
 });
 
+test("a payer outcome's reads on a payment chain run out of time too, through a provider bounded the same way", async () => {
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    const drip = setInterval(() => res.write(' '), 20);
+    res.on('close', () => clearInterval(drip));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const provider = pc.providerFor({ rpcUrl: `http://127.0.0.1:${server.address().port}/`, chainId: BASE_SEPOLIA }, 60_000);
+  const bounded = pc.boundedProvider(provider, 200);
+  const started = Date.now();
+  try {
+    for (const read of [() => bounded.getBlock('finalized'), () => bounded.getCode(USDC, 5), () => bounded.call({ to: USDC, data: '0x' })]) {
+      await assert.rejects(read(), (err) => {
+        assert.equal(err.code, 'TIMEOUT');
+        return true;
+      });
+    }
+    assert.ok(Date.now() - started < 5000, 'each gave up on the deadline');
+  } finally {
+    provider.destroy();
+    server.closeAllConnections();
+    server.close();
+  }
+});
+
 test('a shadow scan keeps its own cursor, so turning a chain on starts at FROM_BLOCK', () => {
   const on = config().chains[0];
   const shadow = config({ [`PAYMENT_CHAIN_${BASE_SEPOLIA}_MODE`]: 'shadow' }).chains[0];
@@ -497,6 +522,22 @@ test('a payment made before the agent registered is skipped, so the scan time ca
   const out = await pc.scanChain(config().chains[0], d);
   assert.deepEqual(credited.map((c) => c.amount), ['2000000']);
   assert.equal(out.reasons.before_registration, 1);
+});
+
+test("a scan stops before the registry scan's reach, so a payment to an agent registered since is credited later", async () => {
+  const known = agent();
+  const late = agent();
+  const payer = ethers.Wallet.createRandom().address;
+  // A chain that finalizes at its head, and a registry scan that has read up to block 1700's time.
+  const provider = fakeChain({ finalized: 2000, head: 2000, logs: [transferLog({ from: payer, to: late.agentAddress, amount: 1_000_000n, block: 1800 })] });
+  const reachMs = (1_700_000_000 + 1700) * 1000;
+  const first = deps({ provider, agents: [known], reachMs });
+  const out = await pc.scanChain(config().chains[0], first.deps);
+  assert.equal(out.state.lastBlock, 1699, 'the cursor stops before the first block at the reach');
+  // The next run, once the registry scan has found the agent and read past the payment.
+  const { deps: d, credited } = deps({ provider, agents: [known, late], state: out.state, reachMs: (1_700_000_000 + 2001) * 1000 });
+  await pc.scanChain(config().chains[0], d);
+  assert.deepEqual(credited.map((c) => c.didHash), [late.didHash], 'credited once the registry scan has found the agent');
 });
 
 test('a catch-up scan covers at most MAX_BLOCKS and moves its cursor that far', async () => {

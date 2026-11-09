@@ -462,7 +462,7 @@ function renderOperators(didHash, primaryHealth, checkerHealth, divergence, chai
       const factors = Object.entries(d.factors || {}).map(([k, f]) => `${esc(k.replace(/Score$/, ""))} ${Number(f?.pending)} vs ${Number(f?.own)}`).join(", ");
       const gap = `the proposal says ${Number(d.pendingTotal)}, the checker got ${Number(d.ownTotal)} (${factors})`;
       verdict = laterRun
-        ? `<p><b>No disagreement recorded since ${when(d.at)}.</b> Before that the checker disagreed with this proposal ${mine.length === 1 ? "once" : `${mine.length} times`}: ${gap}. Its latest run, at ${when(lastEpochMs)}, recorded nothing. ${rule} ${notAPass}</p>`
+        ? `<p><b>No disagreement recorded since ${when(d.at)}.</b> Before that the checker disagreed with this proposal${Number(d.firstAt) < Number(d.at) ? `, from ${when(d.firstAt)}` : ""}: ${gap}. Its latest run, at ${when(lastEpochMs)}, recorded nothing. ${rule} ${notAPass}</p>`
         : `<p><span class="pill-err">Disagrees</span> with the pending proposal: ${gap}. Recorded at ${when(d.at)}.</p>`;
       if (isHash(ev.ownEvidenceRoot) && isHash(ev.proposedEvidenceRoot) && ev.ownEvidenceRoot.toLowerCase() !== ev.proposedEvidenceRoot.toLowerCase()) {
         verdict += `<p>That entry scored ${rootCode(ev.ownEvidenceRoot)} (${Number(ev.ownPaymentEvents)} payments) against a proposal made on ${rootCode(ev.proposedEvidenceRoot)}. Different evidence on each side can explain the gap, for example payments that settled after the proposal.</p>`;
@@ -491,7 +491,8 @@ function renderOperators(didHash, primaryHealth, checkerHealth, divergence, chai
     ${verdict}`);
 }
 
-function epochItem(e, prevRoot, chain) {
+// `indexer` names where the history came from, for a proposal the chain no longer holds.
+function epochItem(e, prevRoot, chain, indexer = "The explorer") {
   if (e.zeroed) {
     return `<li class="ep ep-cleared"><div class="ep-head"><b>Score zeroed by a slash</b><span>${esc(fmtWhen(e.at))}</span></div><div class="ep-meta">${txLink(e.tx)}</div></li>`;
   }
@@ -503,7 +504,7 @@ function epochItem(e, prevRoot, chain) {
       const left = p.finalizableAt - Math.floor(Date.now() / 1000);
       outcome = `Pending, ${p.total} proposed. ` + (left > 0 ? `Finalizable from ${esc(fmtWhen(p.finalizableAt))}.` : "Finalizable now.");
     } else {
-      outcome = "No longer pending on chain. The explorer has not indexed what ended it yet.";
+      outcome = `No longer pending on chain. ${indexer} has not indexed what ended it yet.`;
     }
     cls = "ep-pending";
   } else if (f.kind === "finalized") {
@@ -539,8 +540,9 @@ function renderTimeline(history, chain, showAll) {
   // of committed payments changed.
   const items = [];
   let prevRoot;
+  const indexer = history.value.tail?.source === "index" ? "Sigvara's event index" : "The explorer";
   for (const e of epochs) {
-    items.push(epochItem(e, prevRoot, chain));
+    items.push(epochItem(e, prevRoot, chain, indexer));
     if (!e.zeroed) prevRoot = e.root;
   }
   items.reverse();
@@ -559,6 +561,8 @@ function renderTimeline(history, chain, showAll) {
 // ---- recent activity across all agents ----
 async function loadRecent() {
   const card = "recentCard";
+  // An agent looked up meanwhile hides this card, and an answer arriving after that must not show it again.
+  const seq = lookupSeq;
   setCard(card, "<p class=\"netnote\">Reading the last day of proposals…</p>");
   try {
     // From the event index. When it does not answer, the day comes from the chain, 18 log reads,
@@ -575,6 +579,7 @@ async function loadRecent() {
       logs = await chainHistory(null, floor, head);
       note = '<p class="netnote">Read from the chain itself, because Sigvara\'s event index did not answer.</p>';
     }
+    if (seq !== lookupSeq) return;
     const byAgent = new Map();
     for (const l of logs) {
       if (!isHash(l.didHash)) continue;
@@ -588,6 +593,7 @@ async function loadRecent() {
     if (!agents.length) return setCard(card, "<p>No agent was scored in the last day.</p>" + note);
     // Up to twenty reads, more than the RPC takes in one batch, so they go through explorer.js.
     const idents = await X.ethCalls(agents.map(a => ({ to: IDENTITY, data: SEL.identities + pad32(a.didHash) })));
+    if (seq !== lookupSeq) return;
     const verb = { ScoreProposed: "proposed", ReputationUpdated: "finalized", ScoreRejected: "rejected", ReputationZeroed: "zeroed by a slash" };
     setCard(card, `<p>Agents with a proposal, finalization or rejection in about the last day, most recent first.</p>
       <ul class="recent">${agents.map((a, i) => {
@@ -599,7 +605,7 @@ async function loadRecent() {
       }).join("")}</ul>`
       + note);
   } catch (e) {
-    setCard(card, failed("recent activity", e));
+    if (seq === lookupSeq) setCard(card, failed("recent activity", e));
   }
 }
 

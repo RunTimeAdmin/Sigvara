@@ -543,4 +543,47 @@ describe('POST /attest for a payment on a payment chain', () => {
     assert.match(shadowed.logs(), /payment_chain_off/);
     assert.equal((await evidence(shadowed, agent.didHash)).length, 0);
   });
+
+  test('an import while this node cannot reach Base passes nothing over, and takes everything once it can', async () => {
+    const { world, agent } = await up();
+    const peer = `http://127.0.0.1:${oracle.port}`;
+    const b = await startOracle({ world, env: env(base.url, { PAYER_OUTCOMES_PEERS: peer }) });
+    others = [b];
+    const files = [oracle, b].map((o) => path.join(o.dir, 'world.json'));
+    world.flush = function flush() {
+      for (const f of files) fs.writeFileSync(f, JSON.stringify(this.data));
+    };
+    world.flush();
+    await waitFor(b, /\[oracle\] epoch done/);
+
+    const payers = [ethers.Wallet.createRandom(), ethers.Wallet.createRandom()];
+    for (const payer of payers) {
+      const txHash = base.addTx([{ from: payer.address, to: agent.agentAddress, amount: AMOUNT }], FINALIZED - 10);
+      assert.equal((await post(oracle, agent.didHash, txHash, await signOutcome(agent.didHash, txHash, payer))).status, 200);
+    }
+    const runs = /payer outcomes from http:\/\/127\.0\.0\.1:\d+:/;
+    async function importRun() {
+      const before = (b.logs().match(new RegExp(runs.source, 'g')) || []).length;
+      for (;;) {
+        const r = await b.call('POST', '/epoch', undefined, ADMIN);
+        if (r.status === 202) break;
+        assert.equal(r.status, 409, r.text);
+        await new Promise((res) => setTimeout(res, 50));
+      }
+      await waitFor(b, runs, before + 1);
+    }
+
+    // Base answers nothing to this node for three runs, one more than an outcome may stall.
+    for (const m of ['eth_chainId', 'eth_blockNumber', 'eth_getBlockByNumber', 'eth_getTransactionReceipt', 'eth_getCode', 'eth_call', 'eth_getLogs']) base.failing.add(m);
+    await ethersCacheExpires();
+    for (let i = 0; i < 3; i += 1) await importRun();
+    assert.doesNotMatch(b.logs(), /passing over/);
+    assert.match(b.logs(), /stopped early \(rpc_down\)/);
+
+    base.failing.clear();
+    await ethersCacheExpires();
+    await importRun();
+    const held = (await evidence(b, agent.didHash)).filter((e) => e.outcomeSource === 'payer_signed');
+    assert.equal(held.length, 2, 'both outcomes taken once Base answers');
+  });
 });

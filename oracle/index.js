@@ -208,8 +208,11 @@ let shadowScansRunning = false;
 // The last scan of each payment chain, for /health.
 const lastPaymentChainScans = new Map();
 // What held back the last epoch, for /health: the chains whose scans held all of it, or how many agents
-// were left unscored when the scans fell behind while it ran. Null when it was not held.
+// were left unscored when the scans fell behind while it ran, and why (HOLD). Null when it was not held.
 let lastEpochHold = null;
+// Why an epoch left agents unscored: a scan behind where the evidence must be cut, or a payer's negative that is due
+// and not read, or starts to count before a proposal could land (negative-hold.js).
+const HOLD = Object.freeze({ SCAN_BEHIND: 'scan_behind', PAYER_NEGATIVE: 'payer_negative' });
 // The cut-off the scans were last run again for (evidenceCutFor).
 let lastRescanForMs = null;
 // How long one epoch spends catching a payment chain up, in steps of MAX_BLOCKS, before it leaves the
@@ -344,6 +347,7 @@ const {
   pruneDivergences,
   forgetAgent,
   setRefundCheck,
+  setPayerOutcomeCheck,
   ATTEST_COOLDOWN_MS,
 } = require('./store');
 
@@ -422,33 +426,65 @@ function measuredFactorsFor(didHash, now, payerScores = null, held = evidenceAt(
  * For each payer's "not delivered" still held, reads the agent's transfers to that payer from where the last
  * read stopped (negative-hold.readRefund), and records how far it got and whether a refund cured it
  * (docs/adr/0011-who-rules-negative-outcomes.md). Only agents with such a negative cost any read, so with
- * PAYER_OUTCOMES at its default nothing is read. A read that fails is tried again next epoch; until it
- * finishes, an agent whose negative is due is skipped rather than scored on a guess.
+ * PAYER_OUTCOMES at its default nothing is read. A read that fails is tried again next epoch, from where it got;
+ * until it finishes, an agent whose negative is due is skipped rather than scored on a guess. Each negative gets
+ * enough reads to reach its hold's end by the time it counts (negative-hold.readBudget), and all of them together
+ * at most REFUND_READ_BUDGET_MS an epoch.
  */
 async function settleNegatives(agentInfos) {
   let recorded = false;
+  const deadline = Date.now() + REFUND_READ_BUDGET_MS;
   for (const info of agentInfos) {
     if (info.error || !info.agentAddress) continue;
-    for (const e of negativeHold.toRead(getPaymentEvents(info.didHash))) {
+    for (let e of negativeHold.toRead(getPaymentEvents(info.didHash))) {
       const pc = e.chainId != null ? paymentChainsCfg.byId.get(e.chainId) : null;
       if (e.chainId != null && !pc) continue;
       const provider = pc ? paymentChainProviders.get(pc.chainId) : chain.getProvider();
+      // With backoff, as the scans read, and on a payment chain with their deadline and without the URL in an error.
+      const read = pc
+        ? (label, fn) => chain.readWithBackoff(label, () => paymentChains.withDeadline(fn)).catch((err) => { throw paymentChains.rpcError(err, pc.rpcUrl); })
+        : (label, fn) => chain.readWithBackoff(label, fn);
+      const blockMs = async (n) => {
+        const block = await read('refund read getBlock', () => provider.getBlock(n));
+        if (!block) throw new Error(`no block ${n}`);
+        return Number(block.timestamp) * 1000;
+      };
       try {
+        // An outcome recorded before its block's time was kept: dated from that block on the payment's chain, as an
+        // operator importing it dates it, so that every operator holds it from the same moment.
+        const checkedAtBlock = e.payerOutcome.checkedAtBlock;
+        if (!Number.isSafeInteger(e.payerOutcome.checkedAtMs) && Number.isInteger(checkedAtBlock)) {
+          const checkedAtMs = await blockMs(checkedAtBlock);
+          recorded = setPayerOutcomeCheck(info.didHash, e.txHash, e.payer, e.chainId ?? null, { checkedAtMs }) || recorded;
+          e = { ...e, payerOutcome: { ...e.payerOutcome, checkedAtMs } };
+        }
         const headBlock = pc
-          ? (await provider.getBlock('finalized')).number
-          : Math.max(0, (await provider.getBlockNumber()) - (paymentCfg.minConfirmations - 1));
+          ? (await read('refund read finalized block', () => provider.getBlock('finalized'))).number
+          : paymentScan.safeHead(await read('refund read head', () => provider.getBlockNumber()), paymentScanCfg.confirmations);
         const check = await negativeHold.readRefund(e, negativeHoldCfg, {
-          getLogs: (filter) => provider.getLogs(filter),
-          blockMs: async (n) => Number((await provider.getBlock(n)).timestamp) * 1000,
+          getLogs: (filter) => read('refund read getLogs', () => provider.getLogs(filter)),
+          blockMs,
           asset: pc ? pc.asset : paymentCfg.asset,
           agent: info.agentAddress,
           headBlock,
           chunk: pc ? pc.chunkSize : paymentScanCfg.chunkSize,
           paceMs: pc ? pc.paceMs : 0,
+          epochMs: cfg.epochMs,
+          deadline,
         });
-        recorded = setRefundCheck(info.didHash, e.txHash, e.payer, e.chainId ?? null, check) || recorded;
+        // A final read keeps the end of the hold it was read against.
+        const kept = check.final ? { ...check, holdEndMs: negativeHold.holdEndMs(e, negativeHoldCfg) } : check;
+        recorded = setRefundCheck(info.didHash, e.txHash, e.payer, e.chainId ?? null, kept) || recorded;
         if (check.final) {
           console.log(`[oracle]   ${info.didHash.slice(0, 10)}… payer negative on ${e.txHash.slice(0, 10)}…: ${check.refunded ? 'refunded, so it does not count' : 'not refunded, so it counts'}`);
+        } else if (check.error) {
+          console.warn(`[oracle]   ${info.didHash.slice(0, 10)}… could not read refunds for ${e.txHash.slice(0, 10)}… past block ${check.readThroughBlock}: ${check.error.message}`);
+        } else if (Date.now() >= deadline) {
+          const countsFrom = negativeHold.countsFromMs(e, negativeHoldCfg);
+          console.warn(
+            `[oracle]   ${info.didHash.slice(0, 10)}… refunds for ${e.txHash.slice(0, 10)}… read through block ${check.readThroughBlock}, ` +
+            `and this epoch's time for reading them is spent: it may not be settled by ${Number.isFinite(countsFrom) ? new Date(countsFrom).toISOString() : 'the time it counts'}`,
+          );
         }
       } catch (err) {
         const message = pc ? paymentChains.rpcError(err, pc.rpcUrl).message : err.message;
@@ -458,6 +494,9 @@ async function settleNegatives(agentInfos) {
   }
   if (recorded) persistState();
 }
+
+// How long one epoch spends reading refunds, for every held negative together, before it leaves the rest to the next.
+const REFUND_READ_BUDGET_MS = PAYMENT_CHAIN_SCAN_BUDGET_MS;
 
 // Counterparty standing, for the web of trust. Resolved once per epoch per address:
 // an agent's payers repeat across epochs and within one, and each lookup is three
@@ -470,6 +509,17 @@ let payerScoreCache = new Map();
 // which delays failover by one grace and never brings it forward.
 const emptySeenAt = new Map();
 const coveringLate = new Set();
+// What ends that memory. A slot found occupied, and an agent this checker did not look at in an epoch
+// (slashed, unbonded, held, or skipped on an error): an agent nobody scored for a week and then bonded
+// again is not a primary a week late, so the grace is counted afresh from the next look.
+const checkerSlots = {
+  occupied(didHash) { emptySeenAt.delete(didHash); coveringLate.delete(didHash); },
+  forget(didHash) { emptySeenAt.delete(didHash); coveringLate.delete(didHash); },
+  /** Forget every agent remembered whose slot was not read this epoch. */
+  forgetAllBut(read) {
+    for (const didHash of [...emptySeenAt.keys(), ...coveringLate]) if (!read.has(didHash)) this.forget(didHash);
+  },
+};
 
 // How fast to ask for payers' standing, as measured on Arc's public RPC on 4 Nov 2026. ethers sends what
 // is asked in one tick as one batch, the RPC refuses past 20 calls in a batch, and a payer with a
@@ -836,7 +886,10 @@ async function runPaymentScan(agents) {
 
   const provider = chain.getProvider();
   const head = await provider.getBlockNumber();
-  const to = paymentScan.safeHead(head, paymentScanCfg.confirmations);
+  // No further than the registry scan has read, as the link scan (runLinkScan). Transfers are asked for only to
+  // the agents it knows, so past it a payment to an agent registered since would be passed over for good.
+  const reach = chain.getScanState()?.lastScannedBlock;
+  const to = Math.min(paymentScan.safeHead(head, paymentScanCfg.confirmations), Number.isInteger(reach) ? reach : Infinity);
   const checkpoint = getPaymentScanState();
   const from = checkpoint && Number.isInteger(checkpoint.lastBlock)
     ? checkpoint.lastBlock + 1
@@ -973,6 +1026,9 @@ async function runPaymentScan(agents) {
 async function runPaymentChainScans(agents, chains) {
   // When each agent registered, in ms, read once a run (scanChain's before_registration).
   const registered = new Map();
+  // The time of the last block the registry scan has read, read once a run: no scan reads a block from then on
+  // (scanChain's reachMs). Null before the registry scan has read anything.
+  let reachMs;
   for (const pc of chains) {
     const key = paymentChains.stateKey(pc);
     const startedAt = Date.now();
@@ -980,6 +1036,13 @@ async function runPaymentChainScans(agents, chains) {
     // finalized block or the time budget is spent. One step an epoch could not keep up with a chain that makes
     // more blocks an epoch than a step covers, and a failure costs only the step it happens in.
     try {
+      if (reachMs === undefined) {
+        const reach = chain.getScanState()?.lastScannedBlock;
+        const block = Number.isInteger(reach)
+          ? await chain.readWithBackoff('registry reach getBlock', () => chain.getProvider().getBlock(reach)) : null;
+        if (Number.isInteger(reach) && !block) throw new Error(`the scored chain did not return block ${reach}`);
+        reachMs = block ? Number(block.timestamp) * 1000 : null;
+      }
       for (;;) {
         const summary = await paymentChains.scanChain(pc, {
           provider: paymentChainProviders.get(pc.chainId),
@@ -995,6 +1058,7 @@ async function runPaymentChainScans(agents, chains) {
           },
           // Every error leaves here without the URL, which carries the provider's key (paymentChains.rpcError).
           read: (label, fn) => chain.readWithBackoff(label, () => paymentChains.withDeadline(fn)).catch((err) => { throw paymentChains.rpcError(err, pc.rpcUrl); }),
+          reachMs,
         });
         if (summary.state) setPaymentChainScanState(key, summary.state);
         metrics.inc('paymentChainScans');
@@ -1059,6 +1123,22 @@ function cutTooOld(nowMs, cutMs) {
 }
 
 /**
+ * What a failed write was, one of: 'slot_taken' (a proposal landed first), 'throttled' (by the provider),
+ * 'fee_cap' (this oracle would not sign it), 'unconfirmed' (sent and not seen mined), 'stranded' (the
+ * pending proposal's proposer lost its authority), 'other'. Asked before the slot is read again: a write
+ * that was throttled, unsigned or unconfirmed leaves the slot as it was, and the re-read took that for a
+ * refusal, so one failure was counted twice.
+ */
+function classifyWrite(err) {
+  if (chain.isSlotTaken(err)) return 'slot_taken';
+  if (chain.isRateLimited(err)) return 'throttled';
+  if (chain.isFeeCap(err)) return 'fee_cap';
+  if (chain.isTxUnconfirmed(err)) return 'unconfirmed';
+  if (chain.isProposerNotAuthorized(err)) return 'stranded';
+  return 'other';
+}
+
+/**
  * The cut-off for the agent about to be scored, with a payment chain on (ADR 0009), and the clock it
  * was read at: a whole minute before the chain's clock, brought down to where every scan of this
  * operator has reached, so that the evidence holds everything that counted by it and nothing an
@@ -1099,6 +1179,8 @@ async function evidenceCutFor() {
 async function runEpochInner() {
   const start = Date.now();
   payerScoreCache = new Map();
+  // This epoch's own, so one that stops early does not leave the last one's showing.
+  lastEpochHold = null;
   console.log(`[oracle] epoch start — ${new Date().toISOString()}`);
   metrics.inc('epochsStarted');
 
@@ -1185,12 +1267,33 @@ async function runEpochInner() {
     }
   }
   let proposed = 0;
+  // Agents this epoch computed a score for, proposed or not (the activeAgents gauge).
+  let scored = 0;
+  // Agents whose empty-slot memory a checker consulted this epoch (checkerSlots). The rest are forgotten.
+  const slotsJudged = new Set();
   // Set when a transaction from this wallet was sent and not seen mined, this epoch or before it, with a
   // payment chain on: everything sent after it queues behind it, so a proposal could land after the half
   // hour a checker searches.
   let proposalsStopped = stuck > 0;
-  // Agents left unscored because this operator's scans fell behind while the epoch ran.
+  // A finalize the provider throttled, that this oracle would not sign, or that was sent and not seen
+  // mined: said and counted once, as the propose path counts the same three. False for any other failure.
+  const countedFinalizeFailure = (failure, didHash, err) => {
+    if (failure === 'throttled') {
+      console.warn(`[oracle]   ${didHash.slice(0, 10)}… RPC throttled the finalize; retrying next epoch`);
+      metrics.inc('finalizeThrottled');
+    } else if (failure === 'fee_cap' || failure === 'unconfirmed') {
+      console.error(`[oracle]   ${didHash.slice(0, 10)}… ${err.message}`);
+      metrics.inc(failure === 'fee_cap' ? 'txCapped' : 'txUnconfirmed');
+      if (failure === 'unconfirmed') proposalsStopped = true;
+    } else {
+      return false;
+    }
+    return true;
+  };
+  // Agents left unscored because this operator's scans fell behind while the epoch ran, and because of a payer's
+  // negative (HOLD).
   let agentsHeld = 0;
+  let agentsHeldByNegative = 0;
   let finalized = 0;
   let diverged = 0;
 
@@ -1223,7 +1326,6 @@ async function runEpochInner() {
   const heldBy = paymentChains.behind(paymentChainsCfg, getPaymentChainScanState, wantCutMs);
   const scoredHeld = paymentChains.active(paymentChainsCfg) && !heldBy.length
     && cutTooOld(chainNowMs, paymentChains.coveredCut(wantCutMs, scoredReachMs(), paymentChainsCfg, getPaymentChainScanState));
-  lastEpochHold = null;
   if (heldBy.length || scoredHeld) {
     for (const h of heldBy) {
       const reached = h.reachedMs === null ? 'no block yet' : new Date(h.reachedMs).toISOString();
@@ -1242,6 +1344,7 @@ async function runEpochInner() {
     lastEpochHold = {
       at: new Date().toISOString(),
       chains: [...heldBy.map((h) => h.chainId), ...(scoredHeld ? [Number(cfg.expectedChainId)] : [])],
+      reasons: [HOLD.SCAN_BEHIND],
     };
     metrics.inc('epochsHeldByPaymentChain');
     metrics.inc('epochsFailed');
@@ -1382,6 +1485,7 @@ async function runEpochInner() {
         if (fresh.status === chain.STATUS_SLASHED) {
           console.log(`[oracle]   ${didHash.slice(0, 10)}… slashed since the batch read, skipping`);
           chain.pruneAgent(didHash);
+          forgetAgent(didHash);
           continue;
         }
 
@@ -1416,7 +1520,13 @@ async function runEpochInner() {
             finalized++;
             metrics.inc('finalizeSuccesses');
           } catch (finalizeErr) {
-            if (chain.isProposerNotAuthorized(finalizeErr)) {
+            // Named before the slot is read again, as the checker's finalize is: a throttled send never
+            // reached the chain, so the slot still reads as held, and this used to count a finalize error
+            // and then, in the catch below, a throttled proposal as well. The slot is held either way, so
+            // nothing is proposed over it this epoch.
+            const failure = classifyWrite(finalizeErr);
+            if (countedFinalizeFailure(failure, didHash, finalizeErr)) continue;
+            if (failure === 'stranded') {
               // The proposer of the pending proposal has lost its authority: its operator was
               // removed, its signer cleared, or its role revoked. Nobody can finalize that
               // proposal, so it is not a failure of this epoch, and the proposal made below
@@ -1427,11 +1537,12 @@ async function runEpochInner() {
               // finalizeReputation is permissionless, so another party can front-run
               // us. If the pending proposal is gone, that's exactly what happened —
               // the score is live, carry on and propose fresh. Anything else is a
-              // real failure and should skip this agent via the outer catch.
+              // real failure, counted here once, and this agent is skipped.
               const still = await chain.getPendingScore(didHash);
               if (still.exists) {
+                console.error(`[oracle]   ${didHash.slice(0, 10)}… finalize failed: ${finalizeErr.message}`);
                 metrics.inc('finalizeErrors');
-                throw finalizeErr;
+                continue;
               }
               console.log(`[oracle]   ${didHash.slice(0, 10)}… already finalized by another party`);
               metrics.inc('finalizeSuccesses');
@@ -1475,18 +1586,41 @@ async function runEpochInner() {
         }
         // A payer's negative that should count by now, whose refunds this operator has not finished reading
         // (negative-hold.js): read differently from the other operator's, it would be a disagreement that is not one.
-        if (negativeHold.unresolvedAt(getPaymentEvents(didHash), evidenceCutMs, negativeHoldCfg).length) {
+        // Only one in the evidence: one on a payment chain this operator no longer reads never counts, and is not read.
+        const chosen = paymentChains.eventsAt(getPaymentEvents(didHash), evidenceCutMs, paymentChainsCfg);
+        if (negativeHold.unresolvedAt(chosen, evidenceCutMs, negativeHoldCfg).length) {
           console.log(`[oracle]   ${didHash.slice(0, 10)}… a payer negative is due and its refunds are not read yet, skipping`);
-          agentsHeld++;
+          agentsHeldByNegative++;
+          continue;
+        }
+        // One that starts to count after this evidence time and before the proposal can land: the checker reads the
+        // evidence at the proposal's own time, so it would count it where this does not. Proposed next epoch.
+        if (!cfg.checkerMode && chosen.some(negativeHold.isPayerNegative) && negativeHold.startingBetween(
+          chosen, evidenceCutMs, (await chain.getLatestBlockTimestamp()) * 1000 + proposeMarginMs, negativeHoldCfg,
+        ).length) {
+          console.log(`[oracle]   ${didHash.slice(0, 10)}… a payer negative starts to count before a proposal could land, skipping`);
+          agentsHeldByNegative++;
           continue;
         }
         const held = evidenceAt(didHash, evidenceCutMs);
+        // A proposal lands after the clock it was scored at, and a checker reads the external factor at
+        // the snapshot of the proposal's own block, a UTC day (reviewers.snapshotOf). Scored at 23:59 and
+        // landing after midnight, it was audited against a reading it was never given. So a linked agent
+        // whose snapshot would change before its proposal could land is proposed next epoch instead.
+        if (!cfg.checkerMode && external.configured() && hasLink(didHash)) {
+          const landsByMs = (await chain.getLatestBlockTimestamp()) * 1000 + proposeMarginMs;
+          if (reviewers.snapshotOf(Math.floor(scoringNowMs / 1000)) !== reviewers.snapshotOf(Math.floor(landsByMs / 1000))) {
+            console.log(`[oracle]   ${didHash.slice(0, 10)}… its external factor's snapshot changes before a proposal could land; proposing next epoch`);
+            continue;
+          }
+        }
         // externalScore: only for agents linked to an ERC-8004 identity they own, and only from
         // the reviewers reviewers.js accepts. Ownership is re-verified inside externalScoreFor;
         // a registry the node cannot read skips the agent.
         const { score: externalScore } = await externalScoreOf(didHash, { operator, agentAddress }, scoringNowMs, held);
         const inputs = { registeredAt, att, flagWeight, externalScore };
         const { measured, scores } = await scoreAt(didHash, inputs, scoringNowMs, held);
+        scored++;
 
         // Checker mode: compare rather than compete. This oracle holds ORACLE_ROLE and a
         // bond like any other, so it *could* overwrite the primary's proposal — and must
@@ -1570,14 +1704,19 @@ async function runEpochInner() {
             // The external factor too, as the primary would have read it at its proposal: same
             // snapshot, same evidence. Computed at this epoch's clock instead, a reviewer that
             // changed in the hours between made an honest proposal look wrong.
+            // And this operator's flags weighed at the proposal's time, as its proposer weighed them then.
+            // Weighed at this epoch's clock, a flag that passed a step of its decay in between moved
+            // communityScore.
+            const flagWeightThen = decayedFlagCount(didHash, atProposalMs);
             const auditInputs = hasLink(didHash)
               ? {
                 ...inputs,
+                flagWeight: flagWeightThen,
                 externalScore: (await externalScoreOf(
                   didHash, { operator, agentAddress }, atProposalMs, asOf?.events ?? evidenceAt(didHash, atProposalMs),
                 )).score,
               }
-              : inputs;
+              : { ...inputs, flagWeight: flagWeightThen };
             auditScores = (await scoreAt(didHash, auditInputs, atProposalMs, asOf?.events)).scores;
           }
 
@@ -1593,9 +1732,9 @@ async function runEpochInner() {
           // A slot held by a stranded proposer counts as empty at once, and so does one this
           // checker emptied itself by finalizing for a primary that was already a grace late.
           let emptySince = 0;
+          slotsJudged.add(didHash);
           if (freshPending.exists) {
-            emptySeenAt.delete(didHash);
-            coveringLate.delete(didHash);
+            checkerSlots.occupied(didHash);
           } else if (!coveringStranded && !coveringLate.has(didHash)) {
             if (!emptySeenAt.has(didHash)) emptySeenAt.set(didHash, chainNow);
             const rep = await chain.getReputationData(didHash);
@@ -1687,38 +1826,38 @@ async function runEpochInner() {
               // Same distinction as the propose path, and checked before the pending
               // re-read: a throttled send never reached the chain, so the slot is still
               // occupied and the code below would otherwise read that as a failure to
-              // finalize and rethrow, inflating both counters for one throttle.
-              if (chain.isRateLimited(finalizeErr)) {
-                console.warn(
-                  `[oracle]   ${didHash.slice(0, 10)}… RPC throttled the finalize; retrying next epoch`,
-                );
-                metrics.inc('finalizeThrottled');
-                continue;
-              }
+              // finalize, counting one throttle twice.
+              const failure = classifyWrite(finalizeErr);
+              if (countedFinalizeFailure(failure, didHash, finalizeErr)) continue;
               // The proposer lost its authority between the probe above and this call. The next
               // epoch's probe sees it and covers for it.
-              if (chain.isProposerNotAuthorized(finalizeErr)) {
+              if (failure === 'stranded') {
                 console.log(`[oracle]   ${didHash.slice(0, 10)}… the proposer is no longer authorized; covering for it next epoch`);
                 metrics.inc('proposalsStranded');
                 continue;
               }
-              // An empty slot after a failed finalize has two very different causes, and
-              // counting both as success hides the one that matters most: the slashing
-              // committee rejecting a proposal deletes it too. That is the committee
-              // acting on this checker's alert, the entire point of running one, and it
-              // must not be indistinguishable from a routine finalize in the metrics.
               const still = await chain.getPendingScore(didHash);
-              if (still.exists) { metrics.inc('finalizeErrors'); throw finalizeErr; }
-              const live = await chain.getTotalScore(didHash);
-              if (live > 0 && live === auditScores.total) {
+              if (still.exists) {
+                console.error(`[oracle]   ${didHash.slice(0, 10)}… finalize failed: ${finalizeErr.message}`);
+                metrics.inc('finalizeErrors');
+                continue;
+              }
+              // The slot is empty, and not by a committee rejection: this checker finalizes only once the
+              // deadline is a grace past, and the committee can reject only before it. So someone else
+              // finalized it, which the contract records by dating the live score to the proposal and
+              // copying its factors. getTotalScore is no test of that: it serves the matured score, which
+              // lags a rising one by design. Anything else (a slash zeroes the score and clears the slot) is
+              // said, and not counted as a finalize or as a rejection.
+              const rep = await chain.getReputationData(didHash);
+              const live = scoreDivergence(freshPending.data, rep);
+              if (rep.lastUpdated === freshPending.proposedAt && live.comparable && Object.keys(live.factors).length === 0) {
                 console.log(`[oracle]   ${didHash.slice(0, 10)}… already finalized by another party`);
                 metrics.inc('finalizeSuccesses');
               } else {
                 console.warn(
-                  `[oracle]   ${didHash.slice(0, 10)}… pending proposal vanished without becoming live ` +
-                  `(live=${live}, ours=${auditScores.total}) — most likely a committee rejection`,
+                  `[oracle]   ${didHash.slice(0, 10)}… the pending proposal is gone, and the live score is not the one it proposed ` +
+                  `(live total ${live.ownTotal}, last updated ${rep.lastUpdated}; proposed ${live.pendingTotal} at ${freshPending.proposedAt})`,
                 );
-                metrics.inc('proposalsRejected');
               }
             }
             continue;
@@ -1828,7 +1967,8 @@ async function runEpochInner() {
         // a silent primary and the primary came back first, which is the outcome anyone
         // would want. Counting it as a failure would make a healthy handover look like
         // an incident, and would bury real propose errors in the same number.
-        if (chain.isSlotTaken(err)) {
+        const failure = classifyWrite(err);
+        if (failure === 'slot_taken') {
           console.log(`[oracle]   ${didHash.slice(0, 10)}… primary proposed first, standing down`);
           metrics.inc('proposeSlotTaken');
           continue;
@@ -1838,7 +1978,7 @@ async function runEpochInner() {
         // keeps meaning that, and logged as a sentence rather than the JSON-RPC payload
         // ethers wraps it in. The epoch will try again; nothing is resent now, because a
         // write that may already be in the mempool must not be repeated.
-        if (chain.isRateLimited(err)) {
+        if (failure === 'throttled') {
           console.warn(
             `[oracle]   ${didHash.slice(0, 10)}… RPC throttled the proposal; retrying next epoch`,
           );
@@ -1848,12 +1988,12 @@ async function runEpochInner() {
         // A transaction the oracle would not sign, or one that was sent and never seen mined.
         // Each has its own counter, because neither is the contract refusing and neither is
         // the provider throttling, and a fee cap that trips is a reason to look at the RPC.
-        if (chain.isFeeCap(err)) {
+        if (failure === 'fee_cap') {
           console.error(`[oracle]   ${didHash.slice(0, 10)}… ${err.message}`);
           metrics.inc('txCapped');
           continue;
         }
-        if (chain.isTxUnconfirmed(err)) {
+        if (failure === 'unconfirmed') {
           console.error(`[oracle]   ${didHash.slice(0, 10)}… ${err.message}`);
           metrics.inc('txUnconfirmed');
           proposalsStopped = true;
@@ -1864,6 +2004,7 @@ async function runEpochInner() {
       }
     }
   }
+  if (cfg.checkerMode) checkerSlots.forgetAllBut(slotsJudged);
 
   // Once an event's weight is negligible it cannot move an integer score, so
   // keeping it only grows the state file. Pruning here rather than on the write
@@ -1887,7 +2028,17 @@ async function runEpochInner() {
   if (agentsHeld) {
     console.error(`[oracle] ${agentsHeld} agent(s) left unscored: this operator's scans fell behind while the epoch ran`);
     metrics.inc('epochsHeldByPaymentChain');
-    lastEpochHold = { at: new Date().toISOString(), agents: agentsHeld };
+  }
+  if (agentsHeldByNegative) {
+    console.warn(`[oracle] ${agentsHeldByNegative} agent(s) left unscored for a payer's negative: due with its refunds not read, or counting before a proposal could land`);
+    metrics.inc('agentsHeldByPayerNegative', agentsHeldByNegative);
+  }
+  if (agentsHeld || agentsHeldByNegative) {
+    lastEpochHold = {
+      at: new Date().toISOString(),
+      agents: agentsHeld + agentsHeldByNegative,
+      reasons: [...(agentsHeld ? [HOLD.SCAN_BEHIND] : []), ...(agentsHeldByNegative ? [HOLD.PAYER_NEGATIVE] : [])],
+    };
   }
 
   console.log(
@@ -1895,9 +2046,14 @@ async function runEpochInner() {
     (cfg.checkerMode ? `, ${diverged} diverged` : '') +
     ` in ${Date.now() - start}ms`,
   );
-  metrics.inc('epochsSucceeded');
-  metrics.set('lastSuccessfulEpochMs', Date.now());
-  metrics.set('activeAgents', proposed);
+  // One that held every agent it would have scored did no more than one held at its start, and counts the same.
+  if (candidates.length && agentsHeld + agentsHeldByNegative === candidates.length) {
+    metrics.inc('epochsFailed');
+  } else {
+    metrics.inc('epochsSucceeded');
+    metrics.set('lastSuccessfulEpochMs', Date.now());
+  }
+  metrics.set('activeAgents', scored);
 
   pruneExpiredCooldowns();
 }
@@ -1922,8 +2078,10 @@ const badgeCache = badge.createBadgeCache({ ttlMs: 60_000, maxEntries: 500 });
  */
 async function jobsProviderOrNull() {
   if (!jobs.enabled(jobsCfg)) return null;
-  if (!jobsProvider) {
-    jobsProvider = jobs.makeProvider(jobsCfg);
+  if (!jobsProvider) jobsProvider = jobs.makeProvider(jobsCfg);
+  // Asked again until the node answers. Asked only once, one failed read left it unknown for the life of
+  // the process.
+  if (jobsChainId === null) {
     try {
       jobsChainId = Number((await jobsProvider.getNetwork()).chainId);
     } catch {
@@ -2072,7 +2230,9 @@ async function admitPayerOutcome({ didHash, credited, info, signed, packetId = n
   if (!fromPeer && badSignatures.blocked(throttleKey)) {
     return refuse(429, 'bad_signature_throttled', 'too many bad signatures for this payment; try again later', 'attestRejectedOther');
   }
-  const provider = pc ? paymentChainProviders.get(pc.chainId) : chain.getProvider();
+  // On a payment chain each read has the scan's deadline, since an endpoint answering a byte at a time would hold an
+  // import, and so the epoch, for good.
+  const provider = pc ? paymentChains.boundedProvider(paymentChainProviders.get(pc.chainId)) : chain.getProvider();
   const blockMs = async (n) => {
     const ms = Number((await provider.getBlock(n))?.timestamp) * 1000;
     if (!Number.isFinite(ms) || ms <= 0) throw new Error(`no timestamp for block ${n}`);
@@ -2176,6 +2336,7 @@ async function admitPayerOutcome({ didHash, credited, info, signed, packetId = n
     now: arrivedAtMs,
     packetId,
     chainId,
+    blockNumber: credited.blockNumber,
   });
   if (filed === 'already_set' || filed === 'outside_window') {
     // Payments credited above stay credited; keep them through a restart.
@@ -2256,6 +2417,16 @@ async function importOne({ didHash, txHash, chainId, checkedAtBlock, signed, pac
       metrics.inc('payerOutcomeConflicts');
       console.warn(`[oracle] peer ${peer} serves outcome ${signed.outcome} for ${txHash} from ${signed.payer}; this oracle holds ${held.outcome}`);
     }
+    // The same negative, taken by the peer at an earlier block than here (adoptEarlierAcceptance).
+    if (signed.outcome === payerOutcome.NOT_DELIVERED && Number.isInteger(held.checkedAtBlock) && checkedAtBlock < held.checkedAtBlock
+        && payerOutcomeHashOf(didHash, txHash, { ...held, payer: signed.payer }, settledOn) === payerOutcomeHashOf(didHash, txHash, signed, settledOn)) {
+      const moved = await adoptEarlierAcceptance({ didHash, txHash, signed, checkedAtBlock, settledOn, held });
+      if (moved === null) return { kind: 'retry', code: 'rpc_error' };
+      if (moved) {
+        console.log(`[oracle] payer outcome import: ${peer} took the negative on ${txHash} at block ${checkedAtBlock}, before this oracle did; its hold now runs from there`);
+        return { kind: 'held', moved: true };
+      }
+    }
     return { kind: 'held' };
   }
   if (signed.outcome === payerOutcome.NOT_DELIVERED && payerOutcomeCfg.mode !== 'both') {
@@ -2297,6 +2468,69 @@ async function importOne({ didHash, txHash, chainId, checkedAtBlock, signed, pac
   if (r.status === 200) return { kind: 'imported' };
   if (r.status === 502 || r.status === 503) return { kind: 'retry', code: r.body.code };
   return { kind: 'refused', code: r.body.code };
+}
+
+/**
+ * A negative this oracle took at a later block than a peer did. Its hold runs from the first operator's acceptance
+ * (ADR 0011, section 4), so this one moves to the peer's block once it has checked the outcome there as an import is
+ * checked: after the payment, the deadline not passed, and the signature valid at that block. The hold keeps its
+ * length and now ends sooner, so a refund found after the new end no longer cures and is read again; a read that
+ * found no refund still holds.
+ * @returns {Promise<boolean|null>} whether it moved, or null when this node could not read the chain
+ */
+async function adoptEarlierAcceptance({ didHash, txHash, signed, checkedAtBlock, settledOn, held }) {
+  const e = getPaymentEvents(didHash).find((x) => x.payerOutcome && (x.chainId ?? null) === settledOn
+    && x.txHash === String(txHash).toLowerCase() && String(x.payer).toLowerCase() === signed.payer.toLowerCase());
+  if (!e || !(checkedAtBlock >= Number(e.blockNumber))) return false;
+  const pc = settledOn === null ? null : paymentChainsCfg.byId.get(settledOn);
+  if (settledOn !== null && !pc) return false;
+  const provider = pc ? paymentChains.boundedProvider(paymentChainProviders.get(pc.chainId)) : chain.getProvider();
+  const blockMs = async (n) => {
+    const ms = Number((await provider.getBlock(n))?.timestamp) * 1000;
+    if (!Number.isFinite(ms) || ms <= 0) throw new Error(`no timestamp for block ${n}`);
+    return ms;
+  };
+  let checkedAtMs;
+  let verdict;
+  let refundMs = null;
+  try {
+    checkedAtMs = await blockMs(checkedAtBlock);
+    if (payerOutcome.checkedBlockProblem(signed, checkedAtMs)) return false;
+    verdict = await payerOutcome.verifyImported({
+      provider, dom: outcomeDomain(settledOn), msg: payerOutcome.message(didHash, txHash, signed),
+      signature: signed.signature, blockNumber: checkedAtBlock, headBlock: held.checkedAtBlock,
+    });
+    if (e.refundCheck?.final === true && e.refundCheck.refunded === true) refundMs = await blockMs(e.refundCheck.blockNumber);
+  } catch (err) {
+    console.warn(`[oracle] payer outcome import: could not check ${txHash} at block ${checkedAtBlock}: ${pc ? paymentChains.rpcError(err, pc.rpcUrl).message : err.message}`);
+    return null;
+  }
+  if (!verdict.valid) return false;
+  const rc = e.refundCheck;
+  let refundCheck;
+  if (rc?.final === true) {
+    const was = rc.holdEndMs - negativeHold.holdStartMs(e);
+    const length = Number.isFinite(was) ? was : negativeHoldCfg.holdMs;
+    const holdEndMs = negativeHold.holdStartMs({ ...e, payerOutcome: { ...e.payerOutcome, checkedAtMs } }) + length;
+    refundCheck = rc.refunded === true && refundMs > holdEndMs ? null : { ...rc, holdEndMs };
+  }
+  return setPayerOutcomeCheck(didHash, txHash, signed.payer, settledOn, { checkedAtBlock, checkedAtMs }, refundCheck);
+}
+
+/**
+ * Whether the chain an outcome's payment settled on answers this node at all: its block number, in time. A retry
+ * for a failed read is the outcome's stall only when it does.
+ */
+async function chainAnswers(chainId) {
+  const settledOn = chainId === Number(cfg.expectedChainId) ? null : chainId ?? null;
+  const provider = settledOn === null ? chain.getProvider() : paymentChainProviders.get(settledOn);
+  if (!provider) return true;
+  try {
+    await paymentChains.withDeadline(() => provider.getBlockNumber());
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -2346,6 +2580,13 @@ async function importFromPeer(peer, tally) {
       }
       let r = await importOne(item, peer);
       if (r.kind === 'retry') {
+        // This node's own RPC not answering says nothing about the outcome. The run stops without counting it a
+        // stall, so an outage costs time, not the outcomes it covers.
+        if (r.code === 'rpc_error' && !(await chainAnswers(item.chainId))) {
+          metrics.inc('payerOutcomeImportErrors');
+          tally.stopped = 'rpc_down';
+          return;
+        }
         state.stalls += 1;
         if (state.stalls < IMPORT_MAX_STALLS) {
           metrics.inc('payerOutcomeImportErrors');
@@ -2358,7 +2599,10 @@ async function importFromPeer(peer, tally) {
       state.stalls = 0;
       state.cursor = item.acceptedAt;
       moved = true;
-      if (r.kind === 'held') continue;
+      if (r.kind === 'held') {
+        if (r.moved) tally.moved += 1;
+        continue;
+      }
       checks += 1;
       if (r.kind === 'imported') {
         tally.imported += 1;
@@ -2377,18 +2621,19 @@ async function importFromPeer(peer, tally) {
 async function importPayerOutcomes() {
   let changed = false;
   for (const peer of payerOutcomeCfg.peers) {
-    const t = { imported: 0, refused: 0, stopped: null };
+    const t = { imported: 0, refused: 0, moved: 0, stopped: null };
     try {
       await importFromPeer(peer, t);
       console.log(
         `[oracle] payer outcomes from ${peer}: ${t.imported} imported, ${t.refused} refused` +
+        (t.moved ? `, ${t.moved} held from the peer's earlier acceptance` : '') +
         (t.stopped ? `, stopped early (${t.stopped})` : ''),
       );
     } catch (err) {
       metrics.inc('payerOutcomeImportErrors');
       console.warn(`[oracle] payer outcome import from ${peer} failed after ${t.imported} imported: ${err.message}`);
     }
-    changed = changed || t.imported + t.refused > 0;
+    changed = changed || t.imported + t.refused + t.moved > 0;
   }
   // A refused outcome may still have credited its payment's legs.
   if (changed) persistState();
@@ -3116,7 +3361,15 @@ async function handleRequest(req, res) {
     if (!didHash) {
       return json(res, 400, { error: 'didHash must be a 32-byte hex string' });
     }
-    const events = evidenceAt(didHash, paymentChains.cutFor(Date.now(), paymentChainsCfg));
+    // A payer's negative is presented at the chain's clock, as a score presents it, so it starts to count here when it
+    // does there. Read only for an agent that holds one; this host's clock, as before, when the chain cannot answer.
+    let nowMs = Date.now();
+    if (getPaymentEvents(didHash).some(negativeHold.isPayerNegative)) {
+      try {
+        nowMs = (await chain.getLatestBlockTimestamp()) * 1000;
+      } catch { /* this host's clock */ }
+    }
+    const events = evidenceAt(didHash, paymentChains.cutFor(nowMs, paymentChainsCfg));
     const body = evidenceCache.get(didHash, events, () => buildEvidenceBody(didHash, events));
 
     // Same bytes a miss would have produced, so a hit is indistinguishable to the

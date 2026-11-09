@@ -7,7 +7,7 @@
 
 - **ADR 0006** lets a payer sign `1` delivered or `2` not delivered for a payment it made. One outcome per payer
   and payment leg, no revision; a refund is a separate, linked event. Operators run `PAYER_OUTCOMES=positive`:
-  a signed "not delivered" is refused (`oracle/index.js:2248`, `2655`) until "a challenge process exists", and
+  a signed "not delivered" is refused (`oracle/index.js:2330`, `2811`) until "a challenge process exists", and
   once on, negatives are "presented as payer-reported, not as verified fact". A negative already costs a real
   payment to the agent it criticises, and the per-payer cap and decay apply (ADR 0006, section 5).
 - **ADR 0010** lists non-delivery as slashable (A3): paid and neither delivered nor refunded, by 3 independent
@@ -81,11 +81,12 @@ where a bond is at stake and a judge already exists; and the outside arbiter fit
 
 | | Proposal |
 |---|---|
-| Contest window | 7 days from the first operator's acceptance of the negative |
-| What cures | A transfer agent to payer, same asset and chain, at least the payment amount, after the payment and before the window closes. Partial refunds do not cure |
+| Contest window | 7 days from the first operator's acceptance of the negative, and never from before the payer signed it. An operator that accepted the same negative later moves to the first acceptance's block when it imports it. Once a negative's refunds are read past the window, a later change of its length does not move that negative |
+| What cures | A transfer agent to payer, same asset and chain, at least the payment amount, in a block after the payment's and before the window closes. Partial refunds do not cure. A refund is not used up: one transfer that meets these terms for several negatives of the same payer cures each of them |
 | Weight | The same as a positive |
 | Price of a negative | `PAYER_NEGATIVE_MIN_AMOUNT`, starting at `PAYMENT_MIN_AMOUNT` (ADR 0006) |
 | Label | Payer-reported in `/evidence` and the explorer; "refunded" when cured |
+| Switching mode | `PAYER_OUTCOMES` decides what an operator takes. Negatives already taken under `both` are still held, read and counted after a switch back to `positive` or `off` |
 
 ## 5. Consequences
 

@@ -155,7 +155,10 @@ function statusOf(a, start) {
   if (a.slash === "executed" || a.status === 2) return ["slashed", "Slashed"];
   if (a.slash === "disputed") return ["warn", "Slash disputed"];
   if (a.slash === "pending") return ["warn", "Slash pending"];
-  if (a.stake === 0n) return ["waiting", "Not bonded yet"];
+  // After the slash checks, since a slash proposal also suspends its agent and says more. A stake
+  // alone does not make an agent Active: Suspended keeps its stake, and PendingBond may hold part of one.
+  if (a.status === 1) return ["warn", "Suspended"];
+  if (a.status === 3 || a.stake === 0n) return ["waiting", "Not bonded yet"];
   return ["live", "Active"];
 }
 
