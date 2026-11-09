@@ -835,6 +835,34 @@ function payerOutcomesSince(since, limit) {
   return { outcomes, more: i < acceptedOrder.length };
 }
 
+/**
+ * Records how far this operator has read an agent's transfers to a payer whose signed negative is held
+ * (negative-hold.js, ADR 0011). Kept beside the leaf, not in it: `success` stays what the payer signed, and
+ * negative-hold.present decides how the negative reads. Returns false when the payment has no payer outcome.
+ *
+ * @param {{ final: boolean, refunded: boolean|null, readThroughBlock: number, txHash?: string, blockNumber?: number }} check
+ */
+function setRefundCheck(didHash, txHash, payer, chainId, check) {
+  const did = String(didHash).toLowerCase();
+  const tx = String(txHash).toLowerCase();
+  const who = String(payer).toLowerCase();
+  const list = paymentEvents.get(did) ?? [];
+  const i = list.findIndex((e) => e.payerOutcome && onChain(e, chainId) && e.txHash === tx && String(e.payer).toLowerCase() === who);
+  if (i < 0) return false;
+  const next = [...list];
+  next[i] = Object.freeze({
+    ...list[i],
+    refundCheck: Object.freeze({
+      final: check.final === true,
+      refunded: check.refunded ?? null,
+      readThroughBlock: check.readThroughBlock,
+      ...(check.txHash ? { txHash: String(check.txHash).toLowerCase(), blockNumber: check.blockNumber } : {}),
+    }),
+  });
+  paymentEvents.set(did, Object.freeze(next));
+  return true;
+}
+
 /** The payer-signed outcome this oracle holds for a leg, or null. */
 function payerOutcomeFor(didHash, txHash, payer, chainId = null) {
   const tx = String(txHash).toLowerCase();
@@ -998,6 +1026,7 @@ module.exports = {
   hasPayerOutcome,
   payerOutcomesSince,
   payerOutcomeFor,
+  setRefundCheck,
   divergences,
   recordDivergence,
   getDivergences,

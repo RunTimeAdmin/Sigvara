@@ -571,7 +571,11 @@ describe('POST /attest with a payer-signed outcome', () => {
 
     const ok = await post(oracle, agent.didHash, txHash, await signOutcome(agent.didHash, txHash, payer, { outcome: 2 }));
     assert.equal(ok.status, 200, ok.text);
-    assert.equal((await evidence(oracle, agent.didHash))[0].success, false);
+    // Held under ADR 0011: it reads as not reported until the hold ends with no refund.
+    const [held] = await evidence(oracle, agent.didHash);
+    assert.equal(held.success, null);
+    assert.equal(held.payerNegative.settled, false);
+    assert.ok(Date.parse(held.payerNegative.countsFrom) > Date.now(), held.payerNegative.countsFrom);
   });
 
   test('replaces a credentialed outcome inside the window, and a credentialed one never replaces it', async () => {

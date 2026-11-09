@@ -1,7 +1,7 @@
 # ADR 0011: Who rules a contested negative outcome
 
-**Status:** Accepted · 2026-11-09, the owner's choice of option D (section 3). This is policy and a plan: no
-contract or oracle code changes with it. Operators keep `PAYER_OUTCOMES=positive` until rollout step 3.
+**Status:** Accepted · 2026-11-09, the owner's choice of option D (section 3). Rollout steps 1 and 2 are built in
+`oracle/negative-hold.js`, off unless `PAYER_OUTCOMES=both`. Operators keep `PAYER_OUTCOMES=positive` until rollout step 3.
 
 ## 1. Context
 

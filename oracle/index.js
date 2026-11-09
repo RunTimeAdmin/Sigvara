@@ -39,6 +39,7 @@ const jobs = require('./jobs');
 const paymentScan = require('./payment-scan');
 const paymentChains = require('./payment-chains');
 const payerOutcome = require('./payer-outcome');
+const negativeHold = require('./negative-hold');
 const metrics = require('./metrics');
 const { readPrivateKey } = require('./secrets');
 
@@ -48,6 +49,9 @@ const paymentCfg = payments.readConfig();
 // Outcomes signed by the payer (docs/adr/0006-payer-signed-outcomes.md). Off unless set, and
 // to be set the same on every operator: one taking them and another not is a delivery gap.
 const payerOutcomeCfg = payerOutcome.readConfig(process.env, paymentCfg);
+// How long a payer's "not delivered" is held before it counts, unless the agent refunds the payer
+// (docs/adr/0011-who-rules-negative-outcomes.md). Only negatives, so only under PAYER_OUTCOMES=both.
+const negativeHoldCfg = negativeHold.readConfig(process.env);
 
 // A minimum of zero with verification on means a transfer of one unit counts as a payment,
 // so a counterparty that is not real costs only the gas to send it. The setting is easy to
@@ -336,6 +340,7 @@ const {
   allDivergences,
   pruneDivergences,
   forgetAgent,
+  setRefundCheck,
   ATTEST_COOLDOWN_MS,
 } = require('./store');
 
@@ -345,7 +350,9 @@ const {
  * root, the checker's audit and /score all choose evidence here, so they cannot drift apart.
  */
 function evidenceAt(didHash, atMs) {
-  return paymentChains.eventsAt(getPaymentEvents(didHash), atMs, paymentChainsCfg);
+  // A payer's "not delivered" reads as not reported until it counts (negative-hold.present), here, so the
+  // score, the root and the audit all see it the same way.
+  return negativeHold.present(paymentChains.eventsAt(getPaymentEvents(didHash), atMs, paymentChainsCfg), atMs, negativeHoldCfg);
 }
 
 /**
@@ -406,6 +413,47 @@ function measuredFactorsFor(didHash, now, payerScores = null, held = evidenceAt(
     // was the cheapest twenty points an idle farm could collect.
     activity: payments.activityWindow(events, paymentCfg.halfLifeMs, now),
   };
+}
+
+/**
+ * For each payer's "not delivered" still held, reads the agent's transfers to that payer from where the last
+ * read stopped (negative-hold.readRefund), and records how far it got and whether a refund cured it
+ * (docs/adr/0011-who-rules-negative-outcomes.md). Only agents with such a negative cost any read, so with
+ * PAYER_OUTCOMES at its default nothing is read. A read that fails is tried again next epoch; until it
+ * finishes, an agent whose negative is due is skipped rather than scored on a guess.
+ */
+async function settleNegatives(agentInfos) {
+  let recorded = false;
+  for (const info of agentInfos) {
+    if (info.error || !info.agentAddress) continue;
+    for (const e of negativeHold.toRead(getPaymentEvents(info.didHash))) {
+      const pc = e.chainId != null ? paymentChainsCfg.byId.get(e.chainId) : null;
+      if (e.chainId != null && !pc) continue;
+      const provider = pc ? paymentChainProviders.get(pc.chainId) : chain.getProvider();
+      try {
+        const headBlock = pc
+          ? (await provider.getBlock('finalized')).number
+          : Math.max(0, (await provider.getBlockNumber()) - (paymentCfg.minConfirmations - 1));
+        const check = await negativeHold.readRefund(e, negativeHoldCfg, {
+          getLogs: (filter) => provider.getLogs(filter),
+          blockMs: async (n) => Number((await provider.getBlock(n)).timestamp) * 1000,
+          asset: pc ? pc.asset : paymentCfg.asset,
+          agent: info.agentAddress,
+          headBlock,
+          chunk: pc ? pc.chunkSize : paymentScanCfg.chunkSize,
+          paceMs: pc ? pc.paceMs : 0,
+        });
+        recorded = setRefundCheck(info.didHash, e.txHash, e.payer, e.chainId ?? null, check) || recorded;
+        if (check.final) {
+          console.log(`[oracle]   ${info.didHash.slice(0, 10)}… payer negative on ${e.txHash.slice(0, 10)}…: ${check.refunded ? 'refunded, so it does not count' : 'not refunded, so it counts'}`);
+        }
+      } catch (err) {
+        const message = pc ? paymentChains.rpcError(err, pc.rpcUrl).message : err.message;
+        console.warn(`[oracle]   ${info.didHash.slice(0, 10)}… could not read refunds for ${e.txHash.slice(0, 10)}…: ${message}`);
+      }
+    }
+  }
+  if (recorded) persistState();
 }
 
 // Counterparty standing, for the web of trust. Resolved once per epoch per address:
@@ -1256,6 +1304,9 @@ async function runEpochInner() {
     }
   }, READ_PACE_MS);
 
+  // Refund reads for payers' held negatives, before any agent's evidence is chosen (ADR 0011).
+  await settleNegatives(agentInfos);
+
   // Agents worth writing for, filtered from the phase-1 batch before any further reads.
   const candidates = [];
   for (const info of agentInfos) {
@@ -1408,6 +1459,13 @@ async function runEpochInner() {
           }
           scoringNowMs = cut.nowMs;
           evidenceCutMs = cut.cutMs;
+        }
+        // A payer's negative that should count by now, whose refunds this operator has not finished reading
+        // (negative-hold.js): read differently from the other operator's, it would be a disagreement that is not one.
+        if (negativeHold.unresolvedAt(getPaymentEvents(didHash), evidenceCutMs, negativeHoldCfg).length) {
+          console.log(`[oracle]   ${didHash.slice(0, 10)}… a payer negative is due and its refunds are not read yet, skipping`);
+          agentsHeld++;
+          continue;
         }
         const held = evidenceAt(didHash, evidenceCutMs);
         // externalScore: only for agents linked to an ERC-8004 identity they own, and only from
@@ -2089,6 +2147,9 @@ async function admitPayerOutcome({ didHash, credited, info, signed, packetId = n
     signature: signed.signature,
     signer: verdict.signer,
     checkedAtBlock,
+    // The time of that block. A negative's hold runs from it (negative-hold.js), and an importing operator,
+    // which checks at the same block, reads the same time.
+    checkedAtMs,
   };
   const before = getPaymentEvents(didHash).find(
     (e) => (e.chainId ?? null) === chainId && e.txHash === credited.txHash && String(e.payer).toLowerCase() === leg.payer.toLowerCase(),
@@ -2394,6 +2455,16 @@ function buildEvidenceBody(didHash, events) {
       // Who the outcome is the word of (docs/adr/0006-payer-signed-outcomes.md): the payer, by a
       // signature anyone can check, or a credential holder. null when there is none.
       outcomeSource: outcomeSource(e),
+      // A payer's "not delivered" (ADR 0011): when it counts from, and the refund that cured it if one did.
+      // `success` above is how it reads in this evidence, null until it counts. Not part of the leaf.
+      ...(e.payerOutcome?.outcome === negativeHold.NOT_DELIVERED ? {
+        payerNegative: {
+          countsFrom: Number.isFinite(negativeHold.countsFromMs(e, negativeHoldCfg))
+            ? new Date(negativeHold.countsFromMs(e, negativeHoldCfg)).toISOString() : null,
+          settled: e.refundCheck?.final === true,
+          refundTx: e.refundCheck?.txHash ?? null,
+        },
+      } : {}),
       leaf: tree.leaves[i],
       proof: merkle.proofFor(tree, i),
       // Not part of the leaf and not verified here. See committedFields and unverifiedFields above.
