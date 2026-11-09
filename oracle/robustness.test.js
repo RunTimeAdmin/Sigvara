@@ -864,6 +864,32 @@ test('a checker that cannot read when a slot was last scored sends nothing for t
   });
 });
 
+test('a checker counts the grace afresh for an agent it stopped looking at while it was unbonded', async () => {
+  // The first epoch to find the slot empty starts the count. The agent is then unbonded for longer than the
+  // grace, so neither operator scores it, and bonded again. That is not a primary a grace late.
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  world.setFor('reputation', agent.didHash, { lastUpdated: world.data.nowSec - DEFAULT_GRACE - 600 });
+
+  await withOracle({ world, env: MOVING_CLOCK_ENV }, async (oracle) => {
+    let text = await epochsFinished(oracle, 1);
+    assert.equal(counter(text, DEFERRED_PROPOSE), 1);
+
+    world.setFor('bonded', agent.didHash, false);
+    world.set('nowSec', world.data.nowSec + DEFAULT_GRACE);
+    assert.equal((await oracle.call('POST', '/epoch', {}, ADMIN)).status, 202);
+    text = await epochsFinished(oracle, 2);
+    assert.equal(counter(text, 'sigvara_oracle_skipped_unbonded_total'), 1);
+
+    world.setFor('bonded', agent.didHash, true);
+    world.set('nowSec', world.data.nowSec + 600);
+    assert.equal((await oracle.call('POST', '/epoch', {}, ADMIN)).status, 202);
+    text = await epochsFinished(oracle, 3);
+    assert.deepEqual(names(oracle.calls()), [], 'nothing proposed ahead of the primary');
+    assert.equal(counter(text, DEFERRED_PROPOSE), 2, 'deferred again, counted from the epoch it was bonded');
+  });
+});
+
 test('a grace shorter than the checker\'s own epoch stops it at startup', async () => {
   for (const [grace, why] of [['30', /shorter than this checker's epoch of 1440 minutes/], ['-5', /CHECKER_GRACE_MINUTES="-5" is below the minimum of 0/]]) {
     const { code, log } = await runToExit({ world: new World(), env: { ...CHECKER_ENV, CHECKER_GRACE_MINUTES: grace } });

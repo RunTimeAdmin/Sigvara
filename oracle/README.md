@@ -867,7 +867,7 @@ Setup, step by step with the exact transactions, is in
    primary's fee path would debit the agent a second time for one scoring epoch; a current
    one would refuse the second charge, and the two operators would still be racing for it.
    Startup refuses `ORACLE_MODE=checker` together with a fee registry. A checker's
-   failover proposals are unbilled.
+   failover proposals are unbilled, and it cannot see coverage: with fee gating on, a checker's failover can score an agent the primary dropped as uncovered, once the slot has been empty for the grace.
 6. **`EPOCH_HOURS` below half the challenge window** (so under 3 on Arc testnet, where
    the window is 6h). A proposal is only auditable while it sits in `pendingScores`; a
    checker on a longer cadence misses proposals entirely and its empty `/divergence`

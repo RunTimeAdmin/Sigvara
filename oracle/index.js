@@ -467,6 +467,17 @@ let payerScoreCache = new Map();
 // which delays failover by one grace and never brings it forward.
 const emptySeenAt = new Map();
 const coveringLate = new Set();
+// What ends that memory. A slot found occupied, and an agent this checker did not look at in an epoch
+// (slashed, unbonded, held, or skipped on an error): an agent nobody scored for a week and then bonded
+// again is not a primary a week late, so the grace is counted afresh from the next look.
+const checkerSlots = {
+  occupied(didHash) { emptySeenAt.delete(didHash); coveringLate.delete(didHash); },
+  forget(didHash) { emptySeenAt.delete(didHash); coveringLate.delete(didHash); },
+  /** Forget every agent remembered whose slot was not read this epoch. */
+  forgetAllBut(read) {
+    for (const didHash of [...emptySeenAt.keys(), ...coveringLate]) if (!read.has(didHash)) this.forget(didHash);
+  },
+};
 
 // How fast to ask for payers' standing, as measured on Arc's public RPC on 4 Nov 2026. ethers sends what
 // is asked in one tick as one batch, the RPC refuses past 20 calls in a batch, and a payer with a
@@ -1172,6 +1183,8 @@ async function runEpochInner() {
     }
   }
   let proposed = 0;
+  // Agents whose empty-slot memory a checker consulted this epoch (checkerSlots). The rest are forgotten.
+  const slotsJudged = new Set();
   // Set when a transaction from this wallet was sent and not seen mined, this epoch or before it, with a
   // payment chain on: everything sent after it queues behind it, so a proposal could land after the half
   // hour a checker searches.
@@ -1580,9 +1593,9 @@ async function runEpochInner() {
           // A slot held by a stranded proposer counts as empty at once, and so does one this
           // checker emptied itself by finalizing for a primary that was already a grace late.
           let emptySince = 0;
+          slotsJudged.add(didHash);
           if (freshPending.exists) {
-            emptySeenAt.delete(didHash);
-            coveringLate.delete(didHash);
+            checkerSlots.occupied(didHash);
           } else if (!coveringStranded && !coveringLate.has(didHash)) {
             if (!emptySeenAt.has(didHash)) emptySeenAt.set(didHash, chainNow);
             const rep = await chain.getReputationData(didHash);
@@ -1851,6 +1864,7 @@ async function runEpochInner() {
       }
     }
   }
+  if (cfg.checkerMode) checkerSlots.forgetAllBut(slotsJudged);
 
   // Once an event's weight is negligible it cannot move an integer score, so
   // keeping it only grows the state file. Pruning here rather than on the write
