@@ -205,6 +205,19 @@ function withDeadline(fn, ms = RPC_TIMEOUT_MS) {
   return Promise.race([fn(), deadline]).finally(() => clearTimeout(timer));
 }
 
+/**
+ * `provider` with every method under withDeadline, for code that takes a provider rather than one read at a time: a
+ * payer outcome's block reads and signature check, which would otherwise wait on such an endpoint for good.
+ */
+function boundedProvider(provider, ms = RPC_TIMEOUT_MS) {
+  return new Proxy(provider, {
+    get(target, key) {
+      const value = Reflect.get(target, key);
+      return typeof value === 'function' ? (...args) => withDeadline(() => value.apply(target, args), ms) : value;
+    },
+  });
+}
+
 /** The state key for a chain's scan. A shadow scan keeps its own cursor, so turning a chain on starts at FROM_BLOCK. */
 function stateKey(chain) {
   return chain.mode === 'on' ? String(chain.chainId) : `${chain.chainId}/shadow`;
@@ -658,6 +671,7 @@ module.exports = {
   readConfig,
   providerFor,
   withDeadline,
+  boundedProvider,
   active,
   cutFor,
   coveredCut,

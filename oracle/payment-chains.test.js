@@ -128,6 +128,31 @@ test('an endpoint that answers a byte at a time still runs out of time', async (
   }
 });
 
+test("a payer outcome's reads on a payment chain run out of time too, through a provider bounded the same way", async () => {
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    const drip = setInterval(() => res.write(' '), 20);
+    res.on('close', () => clearInterval(drip));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const provider = pc.providerFor({ rpcUrl: `http://127.0.0.1:${server.address().port}/`, chainId: BASE_SEPOLIA }, 60_000);
+  const bounded = pc.boundedProvider(provider, 200);
+  const started = Date.now();
+  try {
+    for (const read of [() => bounded.getBlock('finalized'), () => bounded.getCode(USDC, 5), () => bounded.call({ to: USDC, data: '0x' })]) {
+      await assert.rejects(read(), (err) => {
+        assert.equal(err.code, 'TIMEOUT');
+        return true;
+      });
+    }
+    assert.ok(Date.now() - started < 5000, 'each gave up on the deadline');
+  } finally {
+    provider.destroy();
+    server.closeAllConnections();
+    server.close();
+  }
+});
+
 test('a shadow scan keeps its own cursor, so turning a chain on starts at FROM_BLOCK', () => {
   const on = config().chains[0];
   const shadow = config({ [`PAYMENT_CHAIN_${BASE_SEPOLIA}_MODE`]: 'shadow' }).chains[0];

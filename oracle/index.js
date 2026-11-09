@@ -2128,7 +2128,9 @@ async function admitPayerOutcome({ didHash, credited, info, signed, packetId = n
   if (!fromPeer && badSignatures.blocked(throttleKey)) {
     return refuse(429, 'bad_signature_throttled', 'too many bad signatures for this payment; try again later', 'attestRejectedOther');
   }
-  const provider = pc ? paymentChainProviders.get(pc.chainId) : chain.getProvider();
+  // On a payment chain each read has the scan's deadline, since an endpoint answering a byte at a time would hold an
+  // import, and so the epoch, for good.
+  const provider = pc ? paymentChains.boundedProvider(paymentChainProviders.get(pc.chainId)) : chain.getProvider();
   const blockMs = async (n) => {
     const ms = Number((await provider.getBlock(n))?.timestamp) * 1000;
     if (!Number.isFinite(ms) || ms <= 0) throw new Error(`no timestamp for block ${n}`);
@@ -2232,6 +2234,7 @@ async function admitPayerOutcome({ didHash, credited, info, signed, packetId = n
     now: arrivedAtMs,
     packetId,
     chainId,
+    blockNumber: credited.blockNumber,
   });
   if (filed === 'already_set' || filed === 'outside_window') {
     // Payments credited above stay credited; keep them through a restart.
@@ -2312,6 +2315,16 @@ async function importOne({ didHash, txHash, chainId, checkedAtBlock, signed, pac
       metrics.inc('payerOutcomeConflicts');
       console.warn(`[oracle] peer ${peer} serves outcome ${signed.outcome} for ${txHash} from ${signed.payer}; this oracle holds ${held.outcome}`);
     }
+    // The same negative, taken by the peer at an earlier block than here (adoptEarlierAcceptance).
+    if (signed.outcome === payerOutcome.NOT_DELIVERED && Number.isInteger(held.checkedAtBlock) && checkedAtBlock < held.checkedAtBlock
+        && payerOutcomeHashOf(didHash, txHash, { ...held, payer: signed.payer }, settledOn) === payerOutcomeHashOf(didHash, txHash, signed, settledOn)) {
+      const moved = await adoptEarlierAcceptance({ didHash, txHash, signed, checkedAtBlock, settledOn, held });
+      if (moved === null) return { kind: 'retry', code: 'rpc_error' };
+      if (moved) {
+        console.log(`[oracle] payer outcome import: ${peer} took the negative on ${txHash} at block ${checkedAtBlock}, before this oracle did; its hold now runs from there`);
+        return { kind: 'held', moved: true };
+      }
+    }
     return { kind: 'held' };
   }
   if (signed.outcome === payerOutcome.NOT_DELIVERED && payerOutcomeCfg.mode !== 'both') {
@@ -2353,6 +2366,69 @@ async function importOne({ didHash, txHash, chainId, checkedAtBlock, signed, pac
   if (r.status === 200) return { kind: 'imported' };
   if (r.status === 502 || r.status === 503) return { kind: 'retry', code: r.body.code };
   return { kind: 'refused', code: r.body.code };
+}
+
+/**
+ * A negative this oracle took at a later block than a peer did. Its hold runs from the first operator's acceptance
+ * (ADR 0011, section 4), so this one moves to the peer's block once it has checked the outcome there as an import is
+ * checked: after the payment, the deadline not passed, and the signature valid at that block. The hold keeps its
+ * length and now ends sooner, so a refund found after the new end no longer cures and is read again; a read that
+ * found no refund still holds.
+ * @returns {Promise<boolean|null>} whether it moved, or null when this node could not read the chain
+ */
+async function adoptEarlierAcceptance({ didHash, txHash, signed, checkedAtBlock, settledOn, held }) {
+  const e = getPaymentEvents(didHash).find((x) => x.payerOutcome && (x.chainId ?? null) === settledOn
+    && x.txHash === String(txHash).toLowerCase() && String(x.payer).toLowerCase() === signed.payer.toLowerCase());
+  if (!e || !(checkedAtBlock >= Number(e.blockNumber))) return false;
+  const pc = settledOn === null ? null : paymentChainsCfg.byId.get(settledOn);
+  if (settledOn !== null && !pc) return false;
+  const provider = pc ? paymentChains.boundedProvider(paymentChainProviders.get(pc.chainId)) : chain.getProvider();
+  const blockMs = async (n) => {
+    const ms = Number((await provider.getBlock(n))?.timestamp) * 1000;
+    if (!Number.isFinite(ms) || ms <= 0) throw new Error(`no timestamp for block ${n}`);
+    return ms;
+  };
+  let checkedAtMs;
+  let verdict;
+  let refundMs = null;
+  try {
+    checkedAtMs = await blockMs(checkedAtBlock);
+    if (payerOutcome.checkedBlockProblem(signed, checkedAtMs)) return false;
+    verdict = await payerOutcome.verifyImported({
+      provider, dom: outcomeDomain(settledOn), msg: payerOutcome.message(didHash, txHash, signed),
+      signature: signed.signature, blockNumber: checkedAtBlock, headBlock: held.checkedAtBlock,
+    });
+    if (e.refundCheck?.final === true && e.refundCheck.refunded === true) refundMs = await blockMs(e.refundCheck.blockNumber);
+  } catch (err) {
+    console.warn(`[oracle] payer outcome import: could not check ${txHash} at block ${checkedAtBlock}: ${pc ? paymentChains.rpcError(err, pc.rpcUrl).message : err.message}`);
+    return null;
+  }
+  if (!verdict.valid) return false;
+  const rc = e.refundCheck;
+  let refundCheck;
+  if (rc?.final === true) {
+    const was = rc.holdEndMs - negativeHold.holdStartMs(e);
+    const length = Number.isFinite(was) ? was : negativeHoldCfg.holdMs;
+    const holdEndMs = negativeHold.holdStartMs({ ...e, payerOutcome: { ...e.payerOutcome, checkedAtMs } }) + length;
+    refundCheck = rc.refunded === true && refundMs > holdEndMs ? null : { ...rc, holdEndMs };
+  }
+  return setPayerOutcomeCheck(didHash, txHash, signed.payer, settledOn, { checkedAtBlock, checkedAtMs }, refundCheck);
+}
+
+/**
+ * Whether the chain an outcome's payment settled on answers this node at all: its block number, in time. A retry
+ * for a failed read is the outcome's stall only when it does.
+ */
+async function chainAnswers(chainId) {
+  const settledOn = chainId === Number(cfg.expectedChainId) ? null : chainId ?? null;
+  const provider = settledOn === null ? chain.getProvider() : paymentChainProviders.get(settledOn);
+  if (!provider) return true;
+  try {
+    await paymentChains.withDeadline(() => provider.getBlockNumber());
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -2402,6 +2478,13 @@ async function importFromPeer(peer, tally) {
       }
       let r = await importOne(item, peer);
       if (r.kind === 'retry') {
+        // This node's own RPC not answering says nothing about the outcome. The run stops without counting it a
+        // stall, so an outage costs time, not the outcomes it covers.
+        if (r.code === 'rpc_error' && !(await chainAnswers(item.chainId))) {
+          metrics.inc('payerOutcomeImportErrors');
+          tally.stopped = 'rpc_down';
+          return;
+        }
         state.stalls += 1;
         if (state.stalls < IMPORT_MAX_STALLS) {
           metrics.inc('payerOutcomeImportErrors');
@@ -2414,7 +2497,10 @@ async function importFromPeer(peer, tally) {
       state.stalls = 0;
       state.cursor = item.acceptedAt;
       moved = true;
-      if (r.kind === 'held') continue;
+      if (r.kind === 'held') {
+        if (r.moved) tally.moved += 1;
+        continue;
+      }
       checks += 1;
       if (r.kind === 'imported') {
         tally.imported += 1;
@@ -2433,18 +2519,19 @@ async function importFromPeer(peer, tally) {
 async function importPayerOutcomes() {
   let changed = false;
   for (const peer of payerOutcomeCfg.peers) {
-    const t = { imported: 0, refused: 0, stopped: null };
+    const t = { imported: 0, refused: 0, moved: 0, stopped: null };
     try {
       await importFromPeer(peer, t);
       console.log(
         `[oracle] payer outcomes from ${peer}: ${t.imported} imported, ${t.refused} refused` +
+        (t.moved ? `, ${t.moved} held from the peer's earlier acceptance` : '') +
         (t.stopped ? `, stopped early (${t.stopped})` : ''),
       );
     } catch (err) {
       metrics.inc('payerOutcomeImportErrors');
       console.warn(`[oracle] payer outcome import from ${peer} failed after ${t.imported} imported: ${err.message}`);
     }
-    changed = changed || t.imported + t.refused > 0;
+    changed = changed || t.imported + t.refused + t.moved > 0;
   }
   // A refused outcome may still have credited its payment's legs.
   if (changed) persistState();
