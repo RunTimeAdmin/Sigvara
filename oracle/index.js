@@ -285,6 +285,9 @@ external.init(cfg);
 // and a feed pointed at a dead host is visible from the first request rather than the
 // first time somebody thinks to check.
 external.refreshChainId().catch(() => {});
+// How old the feed's last check may be before /health asks again. Asked only while unreachable, a
+// feed reached once read as configured for as long as the process ran, whatever became of it.
+const EXTERNAL_RECHECK_MS = 5 * 60_000;
 
 // Most recent divergences returned by the collection route. Bounded so an anonymous
 // caller cannot make the oracle serialise its whole history on every request.
@@ -2545,7 +2548,7 @@ async function handleRequest(req, res) {
     // Never awaited. /health has to answer while the thing it reports on is broken,
     // which is exactly when an unreachable RPC would make it hang.
     const externalState = external.chainState();
-    if (externalState.status === 'unreachable') external.refreshChainId().catch(() => {});
+    external.refreshChainId(EXTERNAL_RECHECK_MS).catch(() => {});
     const lastEpoch = metrics.get('lastSuccessfulEpochMs');
     const timeSinceLastEpoch = lastEpoch ? Date.now() - lastEpoch : null;
     const storeWritable = isStatePathWritable();

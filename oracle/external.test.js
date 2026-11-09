@@ -179,6 +179,40 @@ test('refreshChainId: a hung provider does not hang the caller forever', async (
   assert.match(external.chainState().error, /timeout/i);
 });
 
+// A caller arriving while a check is in flight used to get the cached value without waiting, null on a feed
+// not yet reached, so an epoch that asked while /health was checking read the registry as unreachable.
+test('refreshChainId: a second caller waits for the check in flight', async () => {
+  let release;
+  let calls = 0;
+  external.init(CFG, {
+    provider: { getNetwork: () => { calls += 1; return new Promise((r) => { release = () => r({ chainId: 5042002n }); }); } },
+    idContract: {}, repContract: {},
+  });
+  const first = external.refreshChainId();
+  const second = external.refreshChainId();
+  release();
+  assert.deepStrictEqual(await Promise.all([first, second]), [5042002, 5042002]);
+  assert.strictEqual(calls, 1, 'one check, shared');
+});
+
+// After one good check the feed read as configured for as long as the process ran, whatever became of it.
+test('refreshChainId: a cached id is kept for maxAgeMs, then checked again, and a failed check reads as unreachable', async () => {
+  let up = true;
+  let calls = 0;
+  external.init(CFG, {
+    provider: { getNetwork: async () => { calls += 1; if (!up) throw new Error('ECONNREFUSED'); return { chainId: 5042002n }; } },
+    idContract: {}, repContract: {},
+  });
+  await external.refreshChainId();
+  up = false;
+  const FIVE_MIN = 5 * 60_000;
+  assert.strictEqual(await external.refreshChainId(FIVE_MIN), 5042002, 'fresh enough: not asked again');
+  assert.strictEqual(calls, 1);
+  assert.strictEqual(await external.refreshChainId(FIVE_MIN, Date.now() + FIVE_MIN + 1), null);
+  assert.strictEqual(calls, 2);
+  assert.strictEqual(external.chainState().status, 'unreachable');
+});
+
 // ---- tags are chosen by whoever posts the feedback --------------------------
 
 test('externalScore: a tag that names an Object.prototype member is just an unrecognized tag', () => {

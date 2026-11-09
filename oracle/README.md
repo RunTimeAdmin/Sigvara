@@ -165,7 +165,7 @@ agent is not linked to an ERC-8004 id, or no reviewer of it passes `reviewers.js
 recognized tag (the epoch log says which). Those need different responses and the score cannot tell them apart.
 
 `externalChainId` is the chain the feed actually reached, read from the provider rather
-than parsed out of the URL, and `null` when it could not be reached.
+than parsed out of the URL, and `null` when it could not be reached. `/health` has it checked again once the last check is five minutes old.
 
 Both fields exist because the earlier version of this one could not fail. It was a
 truthiness check on three environment strings, so it reported `configured` for a

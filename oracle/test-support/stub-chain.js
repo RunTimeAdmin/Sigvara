@@ -34,6 +34,7 @@
 //     linkLogsFail: an error every read of those logs fails with, such as a rate limit
 //     externalReadFails: the node cannot answer for the registry, so ownership and feedback reads throw
 //     recordExternalReads: record each read of a linked agent's feedback as externalRead
+//     recordExternalRefresh: record each request to check the ERC-8004 registry's chain as externalRefresh
 //     recordEpochReads: record the epoch's batched reads as epochRead, with the time
 //     registryScannedTo: how far the registry scan has read (default: not reported, which reads as the head)
 //     snapshotBlock: the block the snapshot falls in (default `head`)
@@ -300,7 +301,10 @@ const chain = {
 
 const external = {
   init() {},
-  refreshChainId: async () => null,
+  refreshChainId: async (...args) => {
+    if (world().recordExternalRefresh) record('externalRefresh', ...args);
+    return null;
+  },
   configured: () => world().externalOwns !== undefined,
   // world.explodeHealth makes the /health route throw, which is how a test proves that a
   // handler error costs one request and not the process.

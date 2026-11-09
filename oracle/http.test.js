@@ -94,6 +94,24 @@ test('/health names the chain the node is on now, even one every epoch refuses',
   }
 });
 
+// /health asked the ERC-8004 feed to check its chain only while it read as unreachable, so after one good
+// check it said `configured` for as long as the process ran, whatever became of the feed.
+test('/health has a configured ERC-8004 feed checked again once its last check is five minutes old', async () => {
+  world.set('externalChainId', 5042);
+  world.set('recordExternalRefresh', true);
+  try {
+    const health = (await oracle.call('GET', '/health')).body;
+    assert.equal(health.externalFeed, 'configured');
+    assert.ok(
+      oracle.calls().some((c) => c.name === 'externalRefresh' && c.args[0] === 5 * 60_000),
+      JSON.stringify(oracle.calls().filter((c) => c.name === 'externalRefresh')),
+    );
+  } finally {
+    world.set('recordExternalRefresh', false);
+    world.set('externalChainId', undefined);
+  }
+});
+
 test('an ordinary request is still answered', async () => {
   assert.match(await oracle.raw('GET /health HTTP/1.1'), / 200 /);
   assert.match(await oracle.raw(`GET /evidence/${DID} HTTP/1.1`), / 200 /);
