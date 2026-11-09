@@ -664,9 +664,77 @@ function fakeProvider({ maxFeePerGas = 20n * 10n ** 9n } = {}) {
     estimateGas: async () => 150_000n,
     getTransactionCount: async () => 4,
     broadcastTransaction: async (raw) => { broadcast.push(raw); return { hash: ethers.Transaction.from(raw).hash }; },
-    waitForTransaction: async () => ({ status: 1 }),
+    getTransactionReceipt: async () => ({ status: 1 }),
   };
 }
+
+// waitForTransaction counts a confirmation only once it has seen a block after the transaction's, so a post
+// that had landed, read before the next block, timed out and was reported as not confirmed. The keeper polls
+// for the receipt for that reason, and the publisher now does the same.
+test('remoteSigner: a receipt is enough, without waiting for a block after it', async () => {
+  const s = await fakeSigner();
+  try {
+    let reads = 0;
+    const provider = {
+      ...fakeProvider(),
+      waitForTransaction: async () => { throw new Error('timeout'); },
+      // Not there on the first read, and a read that fails says nothing either way.
+      getTransactionReceipt: async () => {
+        reads += 1;
+        if (reads === 1) return null;
+        if (reads === 2) throw new Error('rate limit exceeded');
+        return { status: 1 };
+      },
+    };
+    const signer = remoteSigner({ url: s.url, secret: SECRET, publisher: s.address, provider, chainId: 5042002, to: REGISTRY, maxFeeWei: 50n * 10n ** 9n, maxGas: 400_000n, pollMs: 1 });
+    const hash = await signer.send('revoke', 7, [7, 1]);
+    assert.equal(hash, ethers.Transaction.from(provider.broadcast[0]).hash);
+    assert.equal(reads, 3);
+  } finally {
+    await s.close();
+  }
+});
+
+test('remoteSigner: a reverted post, and one with no receipt in time, name the transaction', async () => {
+  const s = await fakeSigner();
+  try {
+    for (const [receipt, words] of [[{ status: 0 }, /revoke 0x[0-9a-f]{64} reverted/], [null, /revoke 0x[0-9a-f]{64} was sent, with no receipt.*Check it before assuming it failed/]]) {
+      const provider = { ...fakeProvider(), getTransactionReceipt: async () => receipt };
+      const signer = remoteSigner({ url: s.url, secret: SECRET, publisher: s.address, provider, chainId: 5042002, to: REGISTRY, maxFeeWei: 50n * 10n ** 9n, maxGas: 400_000n, waitMs: 20, pollMs: 1 });
+      await assert.rejects(signer.send('revoke', 7, [7, 1]), words);
+    }
+  } finally {
+    await s.close();
+  }
+});
+
+// fs.writeSync may write less than it is given, and the state file was written with one call.
+test('fileState: a write the system takes in pieces still lands whole', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { fileState } = require('./publisher');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sigvara-filestate-'));
+  const real = fs.writeSync;
+  // At most 7 bytes a call.
+  fs.writeSync = (fd, data, ...rest) => {
+    if (typeof data === 'string') return real(fd, data.slice(0, 7));
+    const [offset = 0, length = data.length - offset] = rest;
+    return real(fd, data, offset, Math.min(length, 7));
+  };
+  try {
+    const file = path.join(dir, 'state.json');
+    const value = { scanBlock: 12_345, open: { [did(1)]: true }, note: 'é'.repeat(40) };
+    const s = fileState(file);
+    s.set(value);
+    s.persist();
+    fs.writeSync = real;
+    assert.deepEqual(fileState(file).get(), value);
+  } finally {
+    fs.writeSync = real;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test('remoteSigner: signs through the remote signer, checks what came back, and broadcasts it', async () => {
   const s = await fakeSigner();

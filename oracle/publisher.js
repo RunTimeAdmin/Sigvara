@@ -294,8 +294,12 @@ function createPublisher({ cfg, chain, scanner, reads, signer, state, log = cons
  * A remote signer speaking Ethereum JSON-RPC (eth_accounts, eth_signTransaction), such as
  * Web3Signer in front of a KMS or HSM, on another host. The key never reaches this process. Each
  * signed transaction is decoded and checked against what was asked before it is broadcast.
+ *
+ * The receipt is polled for, as the keeper does, rather than waited on with waitForTransaction,
+ * which counts a confirmation only once it has seen a new block, so a post that had landed could
+ * be reported as not confirmed. A failure after broadcast names the transaction: it may still land.
  */
-function remoteSigner({ url, secret, publisher, provider, chainId, to, maxFeeWei, maxGas, waitMs = 120_000 }) {
+function remoteSigner({ url, secret, publisher, provider, chainId, to, maxFeeWei, maxGas, waitMs = 120_000, pollMs = 2000 }) {
   const iface = new ethers.Interface(FEEDBACK_ABI);
   let id = 0;
   async function rpc(method, params) {
@@ -347,9 +351,17 @@ function remoteSigner({ url, secret, publisher, provider, chainId, to, maxFeeWei
         throw new Error('the signer returned a transaction other than the one asked for; not sent');
       }
       const sent = await provider.broadcastTransaction(signed.serialized);
-      const receipt = await provider.waitForTransaction(sent.hash, 1, waitMs);
-      if (!receipt || receipt.status !== 1) throw new Error(`${kind} ${sent.hash} did not confirm`);
-      return sent.hash;
+      const giveUpAt = Date.now() + waitMs;
+      for (;;) {
+        // A receipt read that fails says nothing about the transaction, so it counts as not yet.
+        const receipt = await provider.getTransactionReceipt(sent.hash).catch(() => null);
+        if (receipt) {
+          if (receipt.status !== 1) throw new Error(`${kind} ${sent.hash} reverted`);
+          return sent.hash;
+        }
+        if (Date.now() >= giveUpAt) throw new Error(`${kind} ${sent.hash} was sent, with no receipt after ${Math.round(waitMs / 1000)} seconds. Check it before assuming it failed`);
+        await new Promise((resolve) => setTimeout(resolve, pollMs));
+      }
     },
   };
 }
@@ -365,7 +377,9 @@ function fileState(file) {
       fs.mkdirSync(path.dirname(file), { recursive: true });
       const fd = fs.openSync(`${file}.tmp`, 'w');
       try {
-        fs.writeSync(fd, JSON.stringify(current));
+        // In a loop, as store.js writeAll does: fs.writeSync may write less than it is given.
+        const bytes = Buffer.from(JSON.stringify(current), 'utf8');
+        for (let done = 0; done < bytes.length;) done += fs.writeSync(fd, bytes, done, bytes.length - done);
         // Flushed before the rename, so a crash leaves the old file or the new one, never an empty one.
         fs.fsyncSync(fd);
       } finally {
