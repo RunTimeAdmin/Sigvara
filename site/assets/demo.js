@@ -137,6 +137,8 @@
   Simulator.prototype.reset = function () {
     this.now = Math.floor(Date.now() / 1000);
     this.events = [];
+    // Blocks count every event since the reset, so clearing the log does not number them again from the start.
+    this.emitted = 0;
     this.operator = '0x' + bytesToHex(randomBytes(20));
     // SLASHING_COMMITTEE_ROLE holder. On testnet this is a dedicated key, not the deployer; on mainnet a multisig.
     this.committee = '0x' + bytesToHex(randomBytes(20));
@@ -156,7 +158,7 @@
     this.burned = 0n;
   };
   Simulator.prototype.emit = function (name, args, note) {
-    var e = { name: name, args: args, note: note || '', at: this.now, block: 62607069 + this.events.length };
+    var e = { name: name, args: args, note: note || '', at: this.now, block: 62607069 + this.emitted++ };
     this.events.push(e);
     return e;
   };
