@@ -22,6 +22,7 @@ vi.mock('ethers', async (importOriginal) => {
 import { ethers } from 'ethers';
 import { registerAgent } from '../src/verifier';
 import { IDENTITY_ABI } from '../src/abis';
+import { computeDidHash } from '../src/did';
 
 const OPERATOR = '0x00000000000000000000000000000000000000cc';
 const AGENT = '0x00000000000000000000000000000000000000aa';
@@ -69,9 +70,10 @@ describe('registerAgent', () => {
     expect(res.didHash).toBe(DID_HASH);
   });
 
-  it('returns an empty didHash when the receipt carries no registration event', async () => {
+  it('derives the didHash from the agent and the chain when the receipt carries no registration event', async () => {
     logs = [{ topics: [ethers.id('Unrelated(uint256)')], data: '0x' }];
-    const res = await registerAgent(operatorSigner, AGENT, KEY, '0xidentity', { signature: '0x' });
-    expect(res).toEqual({ didHash: '', txHash: '0xreceipt' });
+    const signer = { ...operatorSigner, provider: { getNetwork: async () => ({ chainId: 5042002n }) } } as any;
+    const res = await registerAgent(signer, AGENT, KEY, '0xidentity', { signature: '0x' });
+    expect(res).toEqual({ didHash: computeDidHash(AGENT, 5042002), txHash: '0xreceipt' });
   });
 });
