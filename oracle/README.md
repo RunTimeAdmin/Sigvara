@@ -1011,7 +1011,7 @@ with it off, the largest factor in the score is a count of HTTP requests.
 | `PAYMENT_FEE_UNIT` | `100000000` | Base units of volume per point of `feeScore`. With 6-decimal USDC this is one point per $100, so the 20-point cap lands at $2,000 of settled volume |
 | `PAYMENT_HALF_LIFE_DAYS` | `90` | Days after which a payment counts half. `0` disables decay, which makes the score answer "was this agent ever busy" instead of "is it busy now" |
 | `PAYMENT_MAX_PER_PAYER` | `4` | Most points of `feeScore`, and attestations of weight, any one payer can contribute. At 4, reaching the 20-point cap needs five distinct payers. `0` disables the cap |
-| `PAYER_OUTCOMES` | `off` | Payer-signed outcomes ([ADR 0006](../docs/adr/0006-payer-signed-outcomes.md)): `off`, `positive` (only "delivered") or `both`. Needs `PAYMENT_VERIFICATION=required`, `EXPECTED_CHAIN_ID` and `REPUTATION_ADDRESS`, or the process refuses to start. Set it the same on every operator: one taking them and another not is a delivery gap. `both` waits for a challenge process |
+| `PAYER_OUTCOMES` | `off` | Payer-signed outcomes ([ADR 0006](../docs/adr/0006-payer-signed-outcomes.md)): `off`, `positive` (only "delivered") or `both`. Needs `PAYMENT_VERIFICATION=required`, `EXPECTED_CHAIN_ID` and `REPUTATION_ADDRESS`, or the process refuses to start. Set it the same on every operator: one taking them and another not is a delivery gap. `both` waits for a challenge process. Under `both` a negative is held `PAYER_NEGATIVE_HOLD_DAYS` (default 7, from 1 to 30, the same on every operator) from the block its signature was checked at, and counts an hour after that unless the agent refunded the payer in full by then; until it counts it reads as not reported ([ADR 0011](../docs/adr/0011-who-rules-negative-outcomes.md), `negative-hold.js`) |
 | `PAYER_OUTCOMES_PUBLISH` | `off` | `on` serves each payer's signed payload in `/evidence` and lists them at `GET /outcomes`. Stays off on mainnet until the retention policy covers copies held by other operators |
 | `PAYER_OUTCOMES_PEERS` | (empty) | Comma-separated base URLs of the other operators to import payer-signed outcomes from, at the start of each epoch (see [`GET /outcomes`](#get-outcomessincems)). Needs `PAYER_OUTCOMES`. Off on mainnet for the same reason as publishing |
 | `PAYER_OUTCOMES_IMPORT_GRACE_HOURS` | `6` | How long after an outcome's deadline an import from a peer may still reach this operator, by its confirmed head. Past it the import is refused, since nothing proves the peer took it before the deadline |
@@ -1308,7 +1308,7 @@ cd oracle
 node --test
 ```
 
-1328 tests (as of 7 November 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
+1340 tests (as of 9 November 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
 the trust weighting, Merkle evidence trees, HTTP helpers, store persistence and recovery,
 the streamed state file, chain access with backoff, scan checkpointing, fee caps and transaction replacement,
 metrics, and cooldown logic. Several of the files run the real `index.js` and `watcher.js`
