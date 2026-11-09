@@ -1119,3 +1119,28 @@ test('a final refund read keeps the end of the hold it was read against', () => 
   `);
   assert.deepEqual(JSON.parse(out.trim().split('\n').at(-1)), { partial: null, final: 7 });
 });
+
+// ---- the payment ledger's caps ------------------------------------------------------------------------------
+
+test('a payment past the per-agent or total cap is not credited, not marked used, and holds the agent', () => {
+  const out = inChildWithState(null, `
+    process.env.PAYMENT_MAX_EVENTS_PER_AGENT = '2';
+    process.env.PAYMENT_MAX_EVENTS_TOTAL = '3';
+    const s = require('./store');
+    const a = '0x' + 'aa'.repeat(32), b = '0x' + 'bb'.repeat(32), payer = '0x' + '11'.repeat(20);
+    const tx = (n) => '0x' + n.toString(16).padStart(64, '0');
+    const credited = [s.creditPayment(a, tx(1), '5', payer, null), s.creditPayment(a, tx(2), '5', payer, null)];
+    const capped = s.creditPayment(a, tx(3), '5', payer, null);
+    const atCap = [s.atEventCap(a), s.atEventCap(b)];
+    const thirdOverall = s.creditPayment(b, tx(4), '5', payer, null);
+    const pastTotal = s.creditPayment(b, tx(5), '5', payer, null);
+    console.log(JSON.stringify({
+      credited, capped, atCap, thirdOverall, pastTotal,
+      used: s.isCredited(tx(3), a, payer), ledger: s.ledgerStatus(),
+    }));
+  `);
+  assert.deepEqual(JSON.parse(out.trim().split('\n').at(-1)), {
+    credited: [true, true], capped: false, atCap: [true, false], thirdOverall: true, pastTotal: false,
+    used: false, ledger: { events: 3, maxTotal: 3, maxPerAgent: 2, refused: 2 },
+  });
+});

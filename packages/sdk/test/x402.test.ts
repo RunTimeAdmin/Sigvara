@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { sigvaraX402Fetch, x402OffersFrom, X402SellerRefused } from '../src/x402';
+import { sigvaraX402Fetch, x402OffersFrom, X402SellerRefused, X402_MAX_BYTES, X402_MAX_OFFERS } from '../src/x402';
 import type { TrustVerdict } from '../src/standing';
 
 const GOOD = '0x1111111111111111111111111111111111111111';
@@ -144,5 +144,46 @@ describe('sigvaraX402Fetch', () => {
     const pay = client(sigvaraX402Fetch((async () => required({ body: { accepts: [offer(BAD)] } })) as unknown as typeof fetch, trustOnly(GOOD)));
     await expect(pay('https://seller.example/resource')).rejects.toBeInstanceOf(X402SellerRefused);
     expect(sign).not.toHaveBeenCalled();
+  });
+});
+
+describe('x402 guard limits', () => {
+  it('refuses a body larger than the limit, and stops reading it', async () => {
+    const big = JSON.stringify({ accepts: [offer(GOOD)], pad: 'x'.repeat(X402_MAX_BYTES) });
+    const trust = trustOnly(GOOD);
+    await expect(guarded(required({ rawBody: big }), trust)).rejects.toBeInstanceOf(X402SellerRefused);
+    expect(trust.check).not.toHaveBeenCalled();
+  });
+
+  it('refuses a header larger than the limit', async () => {
+    const big = encode({ accepts: [offer(GOOD)], pad: 'x'.repeat(X402_MAX_BYTES) });
+    await expect(guarded(required({ rawHeader: big }), trustOnly(GOOD))).rejects.toBeInstanceOf(X402SellerRefused);
+  });
+
+  it('refuses more offers than the limit without checking any', async () => {
+    const many = Array.from({ length: X402_MAX_OFFERS + 1 }, (_, i) => offer(`0x${(i + 1).toString(16).padStart(40, '0')}`));
+    const trust = trustOnly();
+    await expect(guarded(required({ body: { accepts: many } }), trust)).rejects.toBeInstanceOf(X402SellerRefused);
+    expect(trust.check).not.toHaveBeenCalled();
+  });
+
+  it('checks one payee spelled two ways once, and at most four at a time', async () => {
+    let running = 0;
+    let most = 0;
+    const payees = Array.from({ length: 10 }, (_, i) => `0x${(i + 1).toString(16).padStart(40, 'a')}`);
+    const trust = {
+      check: vi.fn(async (agent: string): Promise<TrustVerdict> => {
+        running += 1;
+        most = Math.max(most, running);
+        await new Promise((r) => setTimeout(r, 5));
+        running -= 1;
+        return { ok: true, agent, score: 50 };
+      }),
+    };
+    const offers = [...payees.map(offer), offer(payees[0].toUpperCase().replace('0X', '0x'))];
+    const res = await guarded(required({ body: { accepts: offers } }), trust);
+    expect(res.status).toBe(402);
+    expect(trust.check).toHaveBeenCalledTimes(10);
+    expect(most).toBeLessThanOrEqual(4);
   });
 });

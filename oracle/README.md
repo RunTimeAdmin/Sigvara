@@ -1010,7 +1010,7 @@ with it off, the largest factor in the score is a count of HTTP requests.
 | `PAYMENT_MIN_CONFIRMATIONS` | `1` | Confirmations before a settlement is accepted |
 | `PAYMENT_FEE_UNIT` | `100000000` | Base units of volume per point of `feeScore`. With 6-decimal USDC this is one point per $100, so the 20-point cap lands at $2,000 of settled volume |
 | `PAYMENT_HALF_LIFE_DAYS` | `90` | Days after which a payment counts half. `0` disables decay, which makes the score answer "was this agent ever busy" instead of "is it busy now" |
-| `PAYMENT_MAX_PER_PAYER` | `4` | Most points of `feeScore`, and attestations of weight, any one payer can contribute. At 4, reaching the 20-point cap needs five distinct payers. `0` disables the cap |
+| `PAYMENT_MAX_PER_PAYER` | `4` | Most points of `feeScore`, and attestations of weight, any one payer can contribute. At 4, reaching the 20-point cap needs five distinct payers. `0` disables the cap. Separately, `PAYMENT_MAX_EVENTS_PER_AGENT` (25,000) and `PAYMENT_MAX_EVENTS_TOTAL` (150,000) bound the stored ledger: a payment past either is not credited, an agent at its own cap is held rather than scored, and `/health` reports the ledger as `paymentLedger` |
 | `PAYER_OUTCOMES` | `off` | Payer-signed outcomes ([ADR 0006](../docs/adr/0006-payer-signed-outcomes.md)): `off`, `positive` (only "delivered") or `both`. Needs `PAYMENT_VERIFICATION=required`, `EXPECTED_CHAIN_ID` and `REPUTATION_ADDRESS`, or the process refuses to start. Set it the same on every operator: one taking them and another not is a delivery gap. `both` waits for a challenge process. Under `both` a negative is held `PAYER_NEGATIVE_HOLD_DAYS` (default 7, from 1 to 30, the same on every operator) from the block its signature was checked at (or from its signature, if later, and from the first operator's block once imported), and counts an hour after that unless the agent refunded the payer in full by then; until it counts it reads as not reported ([ADR 0011](../docs/adr/0011-who-rules-negative-outcomes.md), `negative-hold.js`) |
 | `PAYER_OUTCOMES_PUBLISH` | `off` | `on` serves each payer's signed payload in `/evidence` and lists them at `GET /outcomes`. Stays off on mainnet until the retention policy covers copies held by other operators |
 | `PAYER_OUTCOMES_PEERS` | (empty) | Comma-separated base URLs of the other operators to import payer-signed outcomes from, at the start of each epoch (see [`GET /outcomes`](#get-outcomessincems)). Needs `PAYER_OUTCOMES`. Off on mainnet for the same reason as publishing |
@@ -1308,7 +1308,7 @@ cd oracle
 node --test
 ```
 
-1418 tests (as of 9 November 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
+1419 tests (as of 9 November 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
 the trust weighting, Merkle evidence trees, HTTP helpers, store persistence and recovery,
 the streamed state file, chain access with backoff, scan checkpointing, fee caps and transaction replacement,
 metrics, and cooldown logic. Several of the files run the real `index.js` and `watcher.js`
