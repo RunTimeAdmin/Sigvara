@@ -1771,6 +1771,44 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
         rep.proposeIfEmpty(DID, maxScore, bytes32(0));
     }
 
+    /// Nothing to discard.
+    function test_discardStrandedScore_reverts_whenNothingIsPending() public {
+        vm.expectRevert(abi.encodeWithSelector(SigvaraReputation.NoScorePending.selector, DID));
+        vm.prank(stranger);
+        rep.discardStrandedScore(DID);
+    }
+
+    /// A legacy proposal has nobody to ask, counts as live, and is not discarded.
+    function test_discardStrandedScore_leavesALegacyProposalAlone() public {
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
+        _clearProposerSlot(DID);
+        _revokeOracle(oracle);
+
+        vm.expectRevert(abi.encodeWithSelector(
+            SigvaraReputation.ScoreAlreadyPending.selector, DID, block.timestamp
+        ));
+        vm.prank(stranger);
+        rep.discardStrandedScore(DID);
+    }
+
+    /// With no operator set the role alone decides: a proposal whose proposer lost the role is
+    /// stranded, and anyone may discard it, inside its window or after.
+    function test_discardStrandedScore_deadByRole() public {
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, bytes32(0));
+        _revokeOracle(oracle);
+
+        vm.prank(stranger);
+        rep.discardStrandedScore(DID);
+        assertFalse(rep.getPendingScore(DID).exists);
+
+        _grantOracle(oracle);
+        vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraReputation.NoScorePending.selector, DID));
+        rep.finalizeReputation(DID);
+    }
+
     /// With no operator set, the role alone decides, for the slot as for finalization.
     function test_proposeIfEmpty_deadByRoleWithNoOperatorSet() public {
         vm.prank(oracle);

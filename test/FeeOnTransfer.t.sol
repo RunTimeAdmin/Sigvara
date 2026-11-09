@@ -271,6 +271,20 @@ contract FeeOnTransferSiblingsTest is Test, RegistrationHelper {
         assertLe(bond, token.balanceOf(address(bondReg)), "slashable bond is not fully held");
     }
 
+    /// A deposit that credits nothing used to move a fresh address from None to Bonded with a bond of
+    /// zero. Once it started to leave, nothing could move it again: withdrawBond and slash revert for
+    /// want of a bond, removeOperator and depositBond on its status.
+    function test_oracleBond_aDepositThatCreditsNothingIsRefused() public {
+        token.setFee(10_000); // the whole amount is taken in transit
+        vm.expectRevert(SigvaraOracleBond.ZeroAmount.selector);
+        vm.prank(operator);
+        bondReg.depositBond(1000e18);
+
+        (uint256 bond, SigvaraOracleBond.Status status,) = bondReg.operators(operator);
+        assertEq(bond, 0);
+        assertEq(uint8(status), uint8(SigvaraOracleBond.Status.None), "the address is still free to bond");
+    }
+
     function test_epochFees_creditsWhatArrived() public {
         vm.prank(funder);
         fees.depositFor(didHash, 1000e18);
