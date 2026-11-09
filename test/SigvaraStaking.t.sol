@@ -20,6 +20,13 @@ contract MockSVR is ERC20 {
     }
 }
 
+/// A stake view the identity registry is repointed at, such as a redeployed staking contract.
+contract RepointedStakeView is IStakeView {
+    bool public bonded;
+    function set(bool v) external { bonded = v; }
+    function hasMinimumStake(bytes32) external view returns (bool) { return bonded; }
+}
+
 contract SigvaraStakingTest is Test, RegistrationHelper {
     MockSVR svr;
     SigvaraIdentity identity;
@@ -1457,6 +1464,37 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
         ));
         vm.prank(committee);
         staking.initiateSlash(didHash, victim, "with stronger evidence");
+    }
+
+    // -------------------------------------------------------------------------
+    // The drop asks the identity registry's stake view
+    // -------------------------------------------------------------------------
+
+    /// The drop used to decide reinstatement from this contract's own stakes, while the identity
+    /// registry checks the bond through its stakeView. With the view repointed mid-dispute at one
+    /// that answers no, the drop asked to reinstate, the registry refused, and expireDispute
+    /// reverted, leaving the bond frozen until the wiring was restored. It now asks the same view.
+    function test_expireDispute_succeedsAfterTheStakeViewIsRepointed() public {
+        _deposit();
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "evidence");
+        vm.prank(operator);
+        staking.disputeSlash(didHash);
+
+        RepointedStakeView other = new RepointedStakeView();
+        vm.prank(admin);
+        identity.setStakeView(address(other));
+
+        vm.warp(block.timestamp + staking.DISPUTE_RESOLUTION_PERIOD() + 1);
+        staking.expireDispute(didHash);
+
+        assertEq(uint8(staking.getSlashProposal(didHash).state), uint8(SigvaraStaking.SlashState.Cancelled));
+        assertFalse(identity.slashSuspended(didHash), "slash lock lifted");
+        assertEq(
+            uint8(identity.getIdentity(didHash).status),
+            uint8(SigvaraIdentity.AgentStatus.Suspended),
+            "not reinstated: the view in force says unbonded"
+        );
     }
 
     // -------------------------------------------------------------------------

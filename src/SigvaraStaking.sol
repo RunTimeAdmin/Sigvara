@@ -705,7 +705,13 @@ contract SigvaraStaking is
         // stake may sit below minimumStake, and reinstating would hand back Active
         // status with nothing slashable behind it. Leaving it Suspended keeps the
         // operator in control: deposit back over the minimum and reactivate.
-        if (stakes[didHash].amount >= minimumStake) {
+        //
+        // Asked through the identity registry's stake view, the check updateStatus makes before
+        // it lets an agent back to Active. Under the default wiring that view is this contract,
+        // so the answer is the same. Read from this contract's stakes, a view repointed elsewhere
+        // could refuse the reinstatement and make every drop revert, freezing the bond.
+        IStakeView bondView = identityRegistry.stakeView();
+        if (address(bondView) != address(0) && bondView.hasMinimumStake(didHash)) {
             identityRegistry.updateStatus(didHash, SigvaraIdentity.AgentStatus.Active);
         } else {
             identityRegistry.clearSlashSuspension(didHash);
