@@ -1382,6 +1382,7 @@ async function runEpochInner() {
         if (fresh.status === chain.STATUS_SLASHED) {
           console.log(`[oracle]   ${didHash.slice(0, 10)}… slashed since the batch read, skipping`);
           chain.pruneAgent(didHash);
+          forgetAgent(didHash);
           continue;
         }
 

@@ -922,6 +922,42 @@ test('a checker that loses a finalize to another party says so, and never calls 
   }
 });
 
+test('two epochs disputing one proposal leave one divergence record, dated by both', async () => {
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  world.setFor('pending', agent.didHash, pendingProposal(world, { data: HIGH_SCORE }));
+
+  await withOracle({ world, env: CHECKER_ENV }, async (oracle) => {
+    await epochsFinished(oracle, 1);
+    const [first] = (await oracle.call('GET', '/divergence')).body.divergences;
+    assert.equal((await oracle.call('POST', '/epoch', {}, ADMIN)).status, 202);
+    const text = await epochsFinished(oracle, 2);
+    assert.equal(counter(text, DIVERGED), 2, 'disputed at both epochs');
+    const page = (await oracle.call('GET', '/divergence')).body;
+    assert.equal(page.total, 1, 'one record for one proposal');
+    assert.equal(page.divergences[0].firstAt, first.at, 'first seen at the first epoch');
+    assert.ok(page.divergences[0].at > first.at, 'and dated by the newest');
+  });
+});
+
+test('an agent slashed since the batch read loses its divergence records, as one slashed before it does', async () => {
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  // Active at the batch read, slashed at the guard read just after it.
+  world.data.agents[agent.didHash].slashedFromRead = 2;
+  world.flush();
+  const record = { at: Date.now() - 60_000, proposedAt: world.data.nowSec - 3600, pendingTotal: 80, ownTotal: 40, factors: {} };
+
+  await inEpoch({
+    world,
+    env: CHECKER_ENV,
+    files: { 'state.json': JSON.stringify({ schemaVersion: 1, divergences: { [agent.didHash]: [record] } }) },
+  }, async ({ oracle, logs }) => {
+    assert.match(logs, /slashed since the batch read, skipping/);
+    assert.deepEqual((await oracle.call('GET', `/divergence/${agent.didHash}`)).body.divergences, []);
+  });
+});
+
 test('a grace shorter than the checker\'s own epoch stops it at startup', async () => {
   for (const [grace, why] of [['30', /shorter than this checker's epoch of 1440 minutes/], ['-5', /CHECKER_GRACE_MINUTES="-5" is below the minimum of 0/]]) {
     const { code, log } = await runToExit({ world: new World(), env: { ...CHECKER_ENV, CHECKER_GRACE_MINUTES: grace } });

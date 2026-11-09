@@ -83,6 +83,8 @@
 //     finalize:        "ok", or "raced": another party finalized first, so the send reverts NoScorePending
 //                      and the slot reads empty after
 //     totalScore:      { "<didhash>": the matured score getTotalScore serves }  (default 0)
+//     agents[didHash].slashedFromRead: the read of the agent (at no block) from which it reads slashed,
+//                      counting from 1, for an agent slashed between an epoch's batch read and its guard read
 //   }
 //
 // Every write the oracle attempts is appended to the file named by STUB_CALLS, one JSON line
@@ -161,6 +163,8 @@ const provider = {
 
 // Slots another party finalized just before this oracle tried to (world.finalize "raced").
 const finalizedByOther = new Set();
+// How many times each agent has been read at no block (agents[didHash].slashedFromRead).
+const infoReads = new Map();
 
 const chain = {
   // What index.js hands the chain module, so a test can see its settings arrive.
@@ -179,6 +183,11 @@ const chain = {
       return { operator: ZERO, agentAddress: ZERO, registeredAt: 0, status: 0 };
     }
     const changed = agent.operators && asOf(agent.operators, blockTag);
+    if (blockTag === undefined && agent.slashedFromRead) {
+      const n = (infoReads.get(didHash) ?? 0) + 1;
+      infoReads.set(didHash, n);
+      if (n >= agent.slashedFromRead) return { ...agent, status: 2 };
+    }
     return changed ? { ...agent, operator: changed.operator } : agent;
   },
   getRegisteredAgents: async () => {
