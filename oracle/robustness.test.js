@@ -958,6 +958,44 @@ test('an agent slashed since the batch read loses its divergence records, as one
   });
 });
 
+test('a throttled finalize is counted once, as a throttled finalize, and nothing is proposed over it', async () => {
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  world.setFor('pending', agent.didHash, pendingProposal(world, { agedPastWindow: true }));
+  world.set('finalize', 'throttled');
+
+  await inEpoch({ world, env: BASE_ENV }, ({ text, calls, logs }) => {
+    assert.deepEqual(names(calls), ['finalizeScore'], 'the slot is still held, so no proposal');
+    assert.match(logs, /RPC throttled the finalize; retrying next epoch/);
+    assert.doesNotMatch(logs, /throttled the proposal/);
+    assert.equal(counter(text, 'sigvara_oracle_finalize_throttled_total'), 1);
+    assert.equal(counter(text, 'sigvara_oracle_finalize_total{result="error"}'), 0);
+    assert.equal(counter(text, 'sigvara_oracle_propose_throttled_total'), 0);
+    assert.equal(counter(text, 'sigvara_oracle_propose_total{result="error"}'), 0);
+  });
+});
+
+test('a finalize not seen mined, or refused inside its window, is counted once and not as a failed proposal', async () => {
+  for (const [mode, once] of [
+    ['unconfirmed', 'sigvara_oracle_tx_refused_total{reason="unconfirmed"}'],
+    ['window_active', 'sigvara_oracle_finalize_total{result="error"}'],
+  ]) {
+    const world = new World();
+    const agent = world.addRegisteredAgent();
+    world.setFor('pending', agent.didHash, pendingProposal(world, { agedPastWindow: true }));
+    world.set('finalize', mode);
+
+    await inEpoch({ world, env: BASE_ENV }, ({ text, calls }) => {
+      assert.deepEqual(names(calls), ['finalizeScore'], mode);
+      assert.equal(counter(text, once), 1, mode);
+      const counted = ['sigvara_oracle_finalize_total{result="error"}', 'sigvara_oracle_tx_refused_total{reason="unconfirmed"}',
+        'sigvara_oracle_propose_total{result="error"}', 'sigvara_oracle_propose_throttled_total']
+        .reduce((sum, name) => sum + counter(text, name), 0);
+      assert.equal(counted, 1, `${mode}: counted once in all`);
+    });
+  }
+});
+
 test('a grace shorter than the checker\'s own epoch stops it at startup', async () => {
   for (const [grace, why] of [['30', /shorter than this checker's epoch of 1440 minutes/], ['-5', /CHECKER_GRACE_MINUTES="-5" is below the minimum of 0/]]) {
     const { code, log } = await runToExit({ world: new World(), env: { ...CHECKER_ENV, CHECKER_GRACE_MINUTES: grace } });

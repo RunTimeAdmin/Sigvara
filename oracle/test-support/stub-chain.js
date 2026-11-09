@@ -80,8 +80,8 @@
 //                      the compare-and-swap entry point refuses a slot held by a live proposer)
 //     charge:          "ok" | "fail" | "already_charged" | "unconfirmed"
 //     propose:         "ok" | "revert" | "fee_cap" | "unconfirmed"
-//     finalize:        "ok", or "raced": another party finalized first, so the send reverts NoScorePending
-//                      and the slot reads empty after
+//     finalize:        "ok" | "throttled" | "unconfirmed" | "window_active", or "raced": another party
+//                      finalized first, so the send reverts NoScorePending and the slot reads empty after
 //     totalScore:      { "<didhash>": the matured score getTotalScore serves }  (default 0)
 //     agents[didHash].slashedFromRead: the read of the agent (at no block) from which it reads slashed,
 //                      counting from 1, for an agent slashed between an epoch's batch read and its guard read
@@ -165,6 +165,9 @@ const provider = {
 const finalizedByOther = new Set();
 // How many times each agent has been read at no block (agents[didHash].slashedFromRead).
 const infoReads = new Map();
+// A write the world throttles (world.finalize "throttled"). Only these read as throttled, by the real
+// predicate; a read that fails reaches the oracle as any other error, as it always has here.
+const THROTTLED = Symbol('throttled write');
 
 const chain = {
   // What index.js hands the chain module, so a test can see its settings arrive.
@@ -273,7 +276,7 @@ const chain = {
   blockAtOrBefore: async () => world().snapshotBlock ?? world().head ?? 1,
   pruneAgent() {},
   isSlotTaken: () => false,
-  isRateLimited: () => false,
+  isRateLimited: (err) => err?.[THROTTLED] === true && real.isRateLimited(err),
   // The contract refuses to finalize a proposal whose proposer has lost its authority, which
   // the world says with `proposerDead` on the pending entry.
   finalizeScore: async (didHash) => {
@@ -282,6 +285,9 @@ const chain = {
       throw new Error('stub: execution reverted: ProposerNotAuthorized');
     }
     const mode = world().finalize ?? 'ok';
+    if (mode === 'throttled') throw Object.assign(new Error('429 too many requests'), { code: 'SERVER_ERROR', [THROTTLED]: true });
+    if (mode === 'unconfirmed') throw new real.TxUnconfirmedError(fakeHash('f2'), 60_000);
+    if (mode === 'window_active') throw new Error('stub: execution reverted: ChallengeWindowActive');
     if (mode === 'raced') {
       finalizedByOther.add(didHash);
       throw new Error('stub: execution reverted: NoScorePending');

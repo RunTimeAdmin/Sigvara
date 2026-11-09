@@ -1057,6 +1057,22 @@ function cutTooOld(nowMs, cutMs) {
 }
 
 /**
+ * What a failed write was, one of: 'slot_taken' (a proposal landed first), 'throttled' (by the provider),
+ * 'fee_cap' (this oracle would not sign it), 'unconfirmed' (sent and not seen mined), 'stranded' (the
+ * pending proposal's proposer lost its authority), 'other'. Asked before the slot is read again: a write
+ * that was throttled, unsigned or unconfirmed leaves the slot as it was, and the re-read took that for a
+ * refusal, so one failure was counted twice.
+ */
+function classifyWrite(err) {
+  if (chain.isSlotTaken(err)) return 'slot_taken';
+  if (chain.isRateLimited(err)) return 'throttled';
+  if (chain.isFeeCap(err)) return 'fee_cap';
+  if (chain.isTxUnconfirmed(err)) return 'unconfirmed';
+  if (chain.isProposerNotAuthorized(err)) return 'stranded';
+  return 'other';
+}
+
+/**
  * The cut-off for the agent about to be scored, with a payment chain on (ADR 0009), and the clock it
  * was read at: a whole minute before the chain's clock, brought down to where every scan of this
  * operator has reached, so that the evidence holds everything that counted by it and nothing an
@@ -1189,6 +1205,21 @@ async function runEpochInner() {
   // payment chain on: everything sent after it queues behind it, so a proposal could land after the half
   // hour a checker searches.
   let proposalsStopped = stuck > 0;
+  // A finalize the provider throttled, that this oracle would not sign, or that was sent and not seen
+  // mined: said and counted once, as the propose path counts the same three. False for any other failure.
+  const countedFinalizeFailure = (failure, didHash, err) => {
+    if (failure === 'throttled') {
+      console.warn(`[oracle]   ${didHash.slice(0, 10)}… RPC throttled the finalize; retrying next epoch`);
+      metrics.inc('finalizeThrottled');
+    } else if (failure === 'fee_cap' || failure === 'unconfirmed') {
+      console.error(`[oracle]   ${didHash.slice(0, 10)}… ${err.message}`);
+      metrics.inc(failure === 'fee_cap' ? 'txCapped' : 'txUnconfirmed');
+      if (failure === 'unconfirmed') proposalsStopped = true;
+    } else {
+      return false;
+    }
+    return true;
+  };
   // Agents left unscored because this operator's scans fell behind while the epoch ran.
   let agentsHeld = 0;
   let finalized = 0;
@@ -1417,7 +1448,13 @@ async function runEpochInner() {
             finalized++;
             metrics.inc('finalizeSuccesses');
           } catch (finalizeErr) {
-            if (chain.isProposerNotAuthorized(finalizeErr)) {
+            // Named before the slot is read again, as the checker's finalize is: a throttled send never
+            // reached the chain, so the slot still reads as held, and this used to count a finalize error
+            // and then, in the catch below, a throttled proposal as well. The slot is held either way, so
+            // nothing is proposed over it this epoch.
+            const failure = classifyWrite(finalizeErr);
+            if (countedFinalizeFailure(failure, didHash, finalizeErr)) continue;
+            if (failure === 'stranded') {
               // The proposer of the pending proposal has lost its authority: its operator was
               // removed, its signer cleared, or its role revoked. Nobody can finalize that
               // proposal, so it is not a failure of this epoch, and the proposal made below
@@ -1428,11 +1465,12 @@ async function runEpochInner() {
               // finalizeReputation is permissionless, so another party can front-run
               // us. If the pending proposal is gone, that's exactly what happened —
               // the score is live, carry on and propose fresh. Anything else is a
-              // real failure and should skip this agent via the outer catch.
+              // real failure, counted here once, and this agent is skipped.
               const still = await chain.getPendingScore(didHash);
               if (still.exists) {
+                console.error(`[oracle]   ${didHash.slice(0, 10)}… finalize failed: ${finalizeErr.message}`);
                 metrics.inc('finalizeErrors');
-                throw finalizeErr;
+                continue;
               }
               console.log(`[oracle]   ${didHash.slice(0, 10)}… already finalized by another party`);
               metrics.inc('finalizeSuccesses');
@@ -1688,23 +1726,22 @@ async function runEpochInner() {
               // Same distinction as the propose path, and checked before the pending
               // re-read: a throttled send never reached the chain, so the slot is still
               // occupied and the code below would otherwise read that as a failure to
-              // finalize and rethrow, inflating both counters for one throttle.
-              if (chain.isRateLimited(finalizeErr)) {
-                console.warn(
-                  `[oracle]   ${didHash.slice(0, 10)}… RPC throttled the finalize; retrying next epoch`,
-                );
-                metrics.inc('finalizeThrottled');
-                continue;
-              }
+              // finalize, counting one throttle twice.
+              const failure = classifyWrite(finalizeErr);
+              if (countedFinalizeFailure(failure, didHash, finalizeErr)) continue;
               // The proposer lost its authority between the probe above and this call. The next
               // epoch's probe sees it and covers for it.
-              if (chain.isProposerNotAuthorized(finalizeErr)) {
+              if (failure === 'stranded') {
                 console.log(`[oracle]   ${didHash.slice(0, 10)}… the proposer is no longer authorized; covering for it next epoch`);
                 metrics.inc('proposalsStranded');
                 continue;
               }
               const still = await chain.getPendingScore(didHash);
-              if (still.exists) { metrics.inc('finalizeErrors'); throw finalizeErr; }
+              if (still.exists) {
+                console.error(`[oracle]   ${didHash.slice(0, 10)}… finalize failed: ${finalizeErr.message}`);
+                metrics.inc('finalizeErrors');
+                continue;
+              }
               // The slot is empty, and not by a committee rejection: this checker finalizes only once the
               // deadline is a grace past, and the committee can reject only before it. So someone else
               // finalized it, which the contract records by dating the live score to the proposal and
@@ -1830,7 +1867,8 @@ async function runEpochInner() {
         // a silent primary and the primary came back first, which is the outcome anyone
         // would want. Counting it as a failure would make a healthy handover look like
         // an incident, and would bury real propose errors in the same number.
-        if (chain.isSlotTaken(err)) {
+        const failure = classifyWrite(err);
+        if (failure === 'slot_taken') {
           console.log(`[oracle]   ${didHash.slice(0, 10)}… primary proposed first, standing down`);
           metrics.inc('proposeSlotTaken');
           continue;
@@ -1840,7 +1878,7 @@ async function runEpochInner() {
         // keeps meaning that, and logged as a sentence rather than the JSON-RPC payload
         // ethers wraps it in. The epoch will try again; nothing is resent now, because a
         // write that may already be in the mempool must not be repeated.
-        if (chain.isRateLimited(err)) {
+        if (failure === 'throttled') {
           console.warn(
             `[oracle]   ${didHash.slice(0, 10)}… RPC throttled the proposal; retrying next epoch`,
           );
@@ -1850,12 +1888,12 @@ async function runEpochInner() {
         // A transaction the oracle would not sign, or one that was sent and never seen mined.
         // Each has its own counter, because neither is the contract refusing and neither is
         // the provider throttling, and a fee cap that trips is a reason to look at the RPC.
-        if (chain.isFeeCap(err)) {
+        if (failure === 'fee_cap') {
           console.error(`[oracle]   ${didHash.slice(0, 10)}… ${err.message}`);
           metrics.inc('txCapped');
           continue;
         }
-        if (chain.isTxUnconfirmed(err)) {
+        if (failure === 'unconfirmed') {
           console.error(`[oracle]   ${didHash.slice(0, 10)}… ${err.message}`);
           metrics.inc('txUnconfirmed');
           proposalsStopped = true;
