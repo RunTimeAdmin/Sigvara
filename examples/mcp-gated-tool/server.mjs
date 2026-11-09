@@ -104,6 +104,17 @@ function refusal(r) {
   return { refused: true, reason: r.reason, score: r.score ?? null, threshold: r.threshold, detail: why };
 }
 
+/**
+ * An error as the caller may see it: the short message, without URLs. A failed read's full message
+ * carries the RPC URL, and most providers put the API key in it. The SDK's MCP server does the same.
+ */
+function describeError(e) {
+  const text = typeof e?.shortMessage === 'string' ? e.shortMessage
+    : typeof e?.message === 'string' ? e.message.split('\n')[0]
+    : String(e);
+  return text.replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>)]+/gi, '<url>').slice(0, 200);
+}
+
 async function handle(req) {
   const { id, method, params } = req;
   const ok = (result) => ({ jsonrpc: '2.0', id, result });
@@ -141,7 +152,18 @@ async function handle(req) {
             detail: 'No outstanding challenge for that DID matches. Call sigvara_challenge first.' },
           null, 2) }], isError: true });
       }
-      const verdict = await gate.admit(args.did, issued, args.signature);
+      let verdict;
+      try {
+        verdict = await gate.admit(args.did, issued, args.signature);
+      } catch (e) {
+        // admit spends the nonce before it reads the agent, so a read that fails after that leaves the
+        // challenge used. Kept, the next try would be refused as a replay.
+        outstanding.delete(args.challenge);
+        return ok({ content: [{ type: 'text', text: JSON.stringify(
+          { refused: true, reason: 'read_failed', threshold: THRESHOLD,
+            detail: `Reading the chain failed (${describeError(e)}). Call sigvara_challenge again.` },
+          null, 2) }], isError: true });
+      }
       // Only once it is proven, or a bad signature from anyone would cancel the real agent's challenge.
       if (verdict.reason !== 'bad_proof') outstanding.delete(args.challenge);
       if (!verdict.ok) {
@@ -172,7 +194,7 @@ rl.on('line', async (line) => {
     if (res) process.stdout.write(JSON.stringify(res) + '\n');
   } catch (e) {
     process.stdout.write(JSON.stringify({
-      jsonrpc: '2.0', id: req.id, error: { code: -32000, message: e.message },
+      jsonrpc: '2.0', id: req.id, error: { code: -32000, message: describeError(e) },
     }) + '\n');
   }
 });

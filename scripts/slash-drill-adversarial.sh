@@ -16,7 +16,9 @@
 #   anyone-day21     expire C once it has lapsed, guards around it (any funded key)
 #
 # A guard is a call that must revert. It runs with `cast call --from` the account named, costs
-# nothing, and prints the error the contract gave, or GUARD DID NOT FIRE.
+# nothing, and prints the error the contract gave, or GUARD DID NOT FIRE, or GUARD INCONCLUSIVE
+# when the call failed without reverting. A read that fails shows as READ_FAILED, never as a state.
+# operator-setup and admin-day0 can be run again after a stop: a step already done is skipped.
 set -euo pipefail
 
 RPC=${RPC:-https://rpc.testnet.arc.io}
@@ -56,7 +58,9 @@ die() { echo "slash-drill: $*" >&2; exit 1; }
 guard() {  # guard <what> <from> <contract> <signature> [args...]: must revert; prints which error
   local what=$1 from=$2 out data name=unknown e; shift 2
   if out=$(cast call --from "$from" "$@" --rpc-url "$RPC" 2>&1); then echo "GUARD DID NOT FIRE: $what"; return; fi
-  data=$(echo "$out" | grep -o '0x[0-9a-fA-F]\{8,\}' | head -1)
+  # A call refused by the RPC, timed out or not sent says nothing about the guard either way.
+  if ! echo "$out" | grep -qi revert; then echo "GUARD INCONCLUSIVE: $what: $(echo "$out" | tail -1)"; return; fi
+  data=$(echo "$out" | grep -o '0x[0-9a-fA-F]\{8,\}' | head -1 || true)
   for e in $ERRORS; do [ "${data:0:10}" = "$(cast sig "$e")" ] && name=${e%%(*}; done
   echo "guard: $what -> $name"
 }
@@ -77,15 +81,32 @@ tx() {  # tx <label> <key> <to> <sig> [args...]: send, wait for the receipt, pri
   echo "$out" | grep -q '"status":"0x1"' || die "$label: $hash did not succeed"
   echo "$label: $hash"
 }
+# These run inside $(...), where set -e does not hold, so a failed read would index the names with an
+# empty string and read as None or Active. Each says READ_FAILED instead.
 slash_state() {  # the proposal's state, by name
-  local t; t=$(cast call "$STAKING" "getSlashProposal(bytes32)((bytes32,address,address,uint256,uint8,bytes,uint256,uint256))" "$1" --rpc-url "$RPC")
-  echo "${STATE_NAMES[$(echo "$t" | tr -d '()' | cut -d, -f5 | tr -d ' ')]}"
+  local t i; t=$(cast call "$STAKING" "getSlashProposal(bytes32)((bytes32,address,address,uint256,uint8,bytes,uint256,uint256))" "$1" --rpc-url "$RPC") || { echo READ_FAILED; return; }
+  i=$(echo "$t" | tr -d '()' | cut -d, -f5 | tr -d ' ')
+  if [[ "$i" =~ ^[0-4]$ ]]; then echo "${STATE_NAMES[$i]}"; else echo READ_FAILED; fi
 }
 agent_status() {  # an unregistered didHash reads as all zeros, and status 0 is Active, so check registeredAt
-  local t; t=$(cast call "$IDENTITY" "identities(bytes32)(address,address,bytes32,uint8,uint256)" "$1" --rpc-url "$RPC")
-  if [ "$(echo "$t" | sed -n 5p | cut -d' ' -f1)" = 0 ]; then echo Unregistered; else echo "${STATUS_NAMES[$(echo "$t" | sed -n 4p)]}"; fi
+  local t s; t=$(cast call "$IDENTITY" "identities(bytes32)(address,address,bytes32,uint8,uint256)" "$1" --rpc-url "$RPC") || { echo READ_FAILED; return; }
+  s=$(echo "$t" | sed -n 4p)
+  if [ "$(echo "$t" | sed -n 5p | cut -d' ' -f1)" = 0 ]; then echo Unregistered
+  elif [[ "$s" =~ ^[0-3]$ ]]; then echo "${STATUS_NAMES[$s]}"; else echo READ_FAILED; fi
 }
-stake() { cast call "$STAKING" "getStake(bytes32)(uint256)" "$1" --rpc-url "$RPC" | cut -d' ' -f1; }
+uint_call() {  # uint_call <contract> <signature> [args...]: the number, or READ_FAILED
+  local t; t=$(cast call "$@" --rpc-url "$RPC") || { echo READ_FAILED; return; }
+  t=${t%% *}
+  if [[ "$t" =~ ^[0-9]+$ ]]; then echo "$t"; else echo READ_FAILED; fi
+}
+stake() { uint_call "$STAKING" "getStake(bytes32)(uint256)" "$1"; }
+at_least() {  # at_least <a> <b>: a >= b, for decimal integers too large for shell arithmetic; dies on READ_FAILED
+  local a=$1 b=$2
+  [[ "$a" =~ ^[0-9]+$ && "$b" =~ ^[0-9]+$ ]] || die "a read failed (READ_FAILED), so nothing was sent"
+  while [ ${#a} -lt ${#b} ]; do a=0$a; done
+  while [ ${#b} -lt ${#a} ]; do b=0$b; done
+  [[ ! "$a" < "$b" ]]
+}
 expect_state() { [ "$(slash_state "$1")" = "$2" ] || die "$3: proposal is $(slash_state "$1"), expected $2"; }
 
 [ "$(cast chain-id --rpc-url "$RPC")" = "$CHAIN_ID" ] || die "the RPC is not Arc testnet"
@@ -99,20 +120,33 @@ case "${1:-}" in
     ;;
 
   operator-setup)
+    # What is already on chain is skipped, so a run that stopped part way can be run again. An agent
+    # already registered is not asked for its key.
+    left=0
+    for n in A B C; do at_least "$(stake "${!n}")" "$BOND" || left=$((left + 1)); done
+    [ "$left" -gt 0 ] || { echo "operator-setup: A, B and C are already bonded"; exit 0; }
+    need=$(cast to-wei "$((left * 1000))")   # BOND, 1,000 SVR, for each agent not yet bonded
     OK=$(read_key "operator")
     [ "$(cast wallet address --private-key "$OK")" = "$OPERATOR" ] || die "that key is not the drill operator"
-    tx "faucet" "$OK" "$SVR" "faucet(uint256)" 3000000000000000000000
-    tx "approve" "$OK" "$SVR" "approve(address,uint256)" "$STAKING" 3000000000000000000000
+    if at_least "$(uint_call "$SVR" "balanceOf(address)(uint256)" "$OPERATOR")" "$need"; then echo "faucet: skipped, the operator holds enough SVR"
+    else tx "faucet" "$OK" "$SVR" "faucet(uint256)" 3000000000000000000000; fi
+    if at_least "$(uint_call "$SVR" "allowance(address,address)(uint256)" "$OPERATOR" "$STAKING")" "$need"; then echo "approve: skipped, enough is approved"
+    else tx "approve" "$OK" "$SVR" "approve(address,uint256)" "$STAKING" 3000000000000000000000; fi
     for n in A B C; do
-      AK=$(read_key "agent $n"); agent_var=AGENT_$n
-      [ "$(cast wallet address --private-key "$AK")" = "${!agent_var}" ] || die "that key is not agent $n"
-      PUB=$(cast keccak "ed25519 placeholder for drill agent $n")
-      DIGEST=$(cast call "$IDENTITY" "registrationDigest(address,address,bytes32)(bytes32)" "${!agent_var}" "$OPERATOR" "$PUB" --rpc-url "$RPC")
-      # Bare form: hex-decoded and given the Ethereum Signed Message prefix, as verifyRegistration
-      # expects (see "Step 0" above in the drill doc).
-      SIG=$(cast wallet sign "$DIGEST" --private-key "$AK"); unset AK
-      tx "register $n" "$OK" "$IDENTITY" "registerAgent(address,bytes32,bytes)" "${!agent_var}" "$PUB" "$SIG"
-      tx "bond $n" "$OK" "$STAKING" "depositStake(bytes32,uint256)" "${!n}" "$BOND"
+      agent_var=AGENT_$n; st=$(agent_status "${!n}")
+      [ "$st" != READ_FAILED ] || die "agent $n: READ_FAILED"
+      if [ "$st" = Unregistered ]; then
+        AK=$(read_key "agent $n")
+        [ "$(cast wallet address --private-key "$AK")" = "${!agent_var}" ] || die "that key is not agent $n"
+        PUB=$(cast keccak "ed25519 placeholder for drill agent $n")
+        DIGEST=$(cast call "$IDENTITY" "registrationDigest(address,address,bytes32)(bytes32)" "${!agent_var}" "$OPERATOR" "$PUB" --rpc-url "$RPC")
+        # Bare form: hex-decoded and given the Ethereum Signed Message prefix, as verifyRegistration
+        # expects (see "Step 0" above in the drill doc).
+        SIG=$(cast wallet sign "$DIGEST" --private-key "$AK"); unset AK
+        tx "register $n" "$OK" "$IDENTITY" "registerAgent(address,bytes32,bytes)" "${!agent_var}" "$PUB" "$SIG"
+      else echo "register $n: skipped, already registered"; fi
+      if at_least "$(stake "${!n}")" "$BOND"; then echo "bond $n: skipped, already bonded"
+      else tx "bond $n" "$OK" "$STAKING" "depositStake(bytes32,uint256)" "${!n}" "$BOND"; fi
       [ "$(agent_status "${!n}")" = Active ] || die "agent $n is not Active after bonding"
     done
     ;;
@@ -155,13 +189,19 @@ case "${1:-}" in
     ;;
 
   admin-day0)
-    expect_state "$B" Pending B
+    # Run again after a stop, a step already done (B vetoed, A dropped: each then Cancelled) is skipped.
+    sb=$(slash_state "$B"); sa=$(slash_state "$A")
+    [ "$sb" = Pending ] || [ "$sb" = Cancelled ] || die "B: proposal is $sb, expected Pending (or Cancelled once vetoed)"
+    [ "$sa" = Pending ] || [ "$sa" = Disputed ] || [ "$sa" = Cancelled ] || die "A: proposal is $sa, expected Pending, Disputed or Cancelled"
+    [ "$sb" != Cancelled ] || [ "$sa" != Cancelled ] || { echo "admin-day0: B is vetoed and A dropped already"; exit 0; }
     K=$(read_key "admin")
-    tx "veto B" "$K" "$STAKING" "vetoSlash(bytes32)" "$B"
-    # A is dropped only once its operator has disputed it, so the ruling is on a real dispute.
-    for _ in $(seq 1 180); do [ "$(slash_state "$A")" = Disputed ] && break; echo "waiting for A's dispute..." >&2; sleep 10; done
-    expect_state "$A" Disputed A
-    tx "drop A (resolveDispute false)" "$K" "$STAKING" "resolveDispute(bytes32,bool)" "$A" false
+    if [ "$sb" = Cancelled ]; then echo "veto B: skipped, already vetoed"; else tx "veto B" "$K" "$STAKING" "vetoSlash(bytes32)" "$B"; fi
+    if [ "$sa" = Cancelled ]; then echo "drop A: skipped, already dropped"; else
+      # A is dropped only once its operator has disputed it, so the ruling is on a real dispute.
+      for _ in $(seq 1 180); do [ "$(slash_state "$A")" = Disputed ] && break; echo "waiting for A's dispute..." >&2; sleep 10; done
+      expect_state "$A" Disputed A
+      tx "drop A (resolveDispute false)" "$K" "$STAKING" "resolveDispute(bytes32,bool)" "$A" false
+    fi
     ;;
 
   committee-day7)

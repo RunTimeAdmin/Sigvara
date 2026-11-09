@@ -524,6 +524,22 @@ test('a payment made before the agent registered is skipped, so the scan time ca
   assert.equal(out.reasons.before_registration, 1);
 });
 
+test("a scan stops before the registry scan's reach, so a payment to an agent registered since is credited later", async () => {
+  const known = agent();
+  const late = agent();
+  const payer = ethers.Wallet.createRandom().address;
+  // A chain that finalizes at its head, and a registry scan that has read up to block 1700's time.
+  const provider = fakeChain({ finalized: 2000, head: 2000, logs: [transferLog({ from: payer, to: late.agentAddress, amount: 1_000_000n, block: 1800 })] });
+  const reachMs = (1_700_000_000 + 1700) * 1000;
+  const first = deps({ provider, agents: [known], reachMs });
+  const out = await pc.scanChain(config().chains[0], first.deps);
+  assert.equal(out.state.lastBlock, 1699, 'the cursor stops before the first block at the reach');
+  // The next run, once the registry scan has found the agent and read past the payment.
+  const { deps: d, credited } = deps({ provider, agents: [known, late], state: out.state, reachMs: (1_700_000_000 + 2001) * 1000 });
+  await pc.scanChain(config().chains[0], d);
+  assert.deepEqual(credited.map((c) => c.didHash), [late.didHash], 'credited once the registry scan has found the agent');
+});
+
 test('a catch-up scan covers at most MAX_BLOCKS and moves its cursor that far', async () => {
   const provider = fakeChain({ finalized: 9000 });
   const capped = config({ [`PAYMENT_CHAIN_${BASE_SEPOLIA}_MAX_BLOCKS`]: '500' }).chains[0];

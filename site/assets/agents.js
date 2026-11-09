@@ -73,6 +73,8 @@ function groupOf(a) {
   if (KNOWN_AGENTS[a.didHash]) return { key: "own", kind: "demo", label: KNOWN_AGENTS[a.didHash] };
   if (X.same(a.operator, X.DEPLOYER)) return { key: "own", kind: "own", label: "Sigvara's own" };
   if (X.same(a.operator, X.DRILL_OPERATOR)) return { key: "own", kind: "drill", label: "Sigvara's slash drill" };
+  // Without the simulation's list, any other agent may be one of its, so none is called outside.
+  if (X.simUnknown()) return { key: "outside", kind: "outside", label: "Outside or simulated" };
   return { key: "outside", kind: "outside", label: "Outside" };
 }
 // What the lobby draws an agent from. Its score stays out of this on purpose (lobby.js).
@@ -103,6 +105,7 @@ function renderAgents(history = lastHistory) {
   let html = `<p><b>${plural(agents.length, "agent")}</b> registered on this deployment, ${active} active.`
     + (n.sim ? ` <b>${n.sim}</b> of them are Sigvara's <a href="simulation">testnet simulation</a>, which runs a simulated economy so the protocol can be watched working.` : "")
     + ` Both oracle operators are run by the Sigvara team (see <a href="operators">Operators</a>), so read these scores as the protocol working, not as outside demand.</p>`;
+  if (X.simUnknown()) html += '<p class="pill-warn">The list of the testnet simulation\'s agents could not be read, so this page cannot tell its agents from outside ones. Reload to try again.</p>';
   const choices = [["all", "All"], ["outside", "Outside"], ["sim", "Simulated"], ["own", "Sigvara's own"]].filter(([k]) => k === "all" || n[k]);
   html += `<div class="ex-filter" role="group" aria-label="Show agents">${choices.map(([k, label]) =>
     `<button type="button" data-filter="${k}" aria-pressed="${filter === k}">${X.esc(label)} (${n[k]})</button>`).join("")}</div>`;
@@ -244,9 +247,12 @@ async function renderCheck(a, evidence, pendingRead) {
   if (pendingHtml) rows.push(["Pending proposal", pendingHtml]);
   rows.push(["Contract check", confirmJob ? '<span class="netnote">Asking the reputation contract…</span>' : "nothing to confirm"]);
 
+  // The card is drawn once. The contract's answer then fills in its own row only, so the result of a
+  // payments check started meanwhile, in #chainCheck, stays.
+  const contractRow = (html) => { const dd = $("contractCheck"); if (dd) dd.innerHTML = html; };
   const render = (contractHtml) => {
     rows[rows.length - 1] = ["Contract check", contractHtml];
-    setCard("checkCard", head + `<dl class="kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd class="prose">${v}</dd>`).join("")}</dl>`
+    setCard("checkCard", head + `<dl class="kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd class="prose"${k === "Contract check" ? ' id="contractCheck"' : ""}>${v}</dd>`).join("")}</dl>`
       + (list.length ? `<p><button class="btn btn-secondary btn-sm" type="button" id="chainCheckBtn">Check the payments against the chain</button></p><div id="chainCheck"></div>` : "")
       + '<p class="netnote">The leaf is <code>keccak256(keccak256(abi.encode(txHash, payer, amount, settledAt, outcome)))</code>, with <code>chainId</code> first for a payment that settled on another chain, the tree hashes sorted pairs, and an odd node is promoted, as in <a href="https://github.com/RunTimeAdmin/Sigvara/blob/main/oracle/merkle.js" target="_blank" rel="noopener">oracle/merkle.js</a>. A test holds this page to it.</p>');
     const btn = $("chainCheckBtn");
@@ -263,11 +269,11 @@ async function renderCheck(a, evidence, pendingRead) {
       })));
       if (seq !== checkSeq) return;
       const yes = answers.filter((r) => BigInt(X.word(r, 0)) === 1n).length;
-      render(yes === answers.length
+      contractRow(yes === answers.length
         ? `<span class="pill-ok">confirmed</span> <code>verifyEvidence</code> returns true for all ${plural(yes, "payment")} against the root the contract holds`
         : `<span class="pill-err">${yes} of ${answers.length} confirmed</span> by <code>verifyEvidence</code>`);
     } catch (e) {
-      if (seq === checkSeq) render(X.failed("the contract's answer", e));
+      if (seq === checkSeq) contractRow(X.failed("the contract's answer", e));
     }
   }
 }

@@ -133,9 +133,11 @@ This ADR records what was decided about each, and what was left as a stated trus
    slash worth executing is worth a fortnight, since the victim and the reporter are paid from it. A
    lapsed proposal is dropped like any other, so the agent is reinstated and the committee waits one
    challenge period before it can file again. The cooldown stays shorter than the unbonding period on
-   purpose: a withdrawal queued after a drop stays slashable until it is claimed, so a cancelled slash
-   cannot become a way to exit before the committee can re-file. What bounds a freeze is the lapse, not
-   a longer cooldown.
+   purpose, and the two setters refuse any other order: a withdrawal queued after a drop is still queued
+   when the committee can re-file, so a cancelled slash cannot become a way to exit first. A withdrawal
+   queued before the slash keeps the claim time it was given, so cancelling releases it if that time falls
+   inside the cooldown. A committee that means to re-file lets the proposal run to execution or dispute
+   instead of cancelling. What bounds a freeze is the lapse, not a longer cooldown.
 8. **Roles that move funds or change an agent's standing are granted through the timelock.**
    `SLASHER_ROLE` on the bond registry, `SLASHING_COMMITTEE_ROLE` on staking and reputation, and
    `STAKING_CORE_ROLE` on identity and reputation are administered by `UPGRADER_ROLE`, as the upgrader

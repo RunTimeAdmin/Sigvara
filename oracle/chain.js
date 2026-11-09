@@ -977,9 +977,9 @@ async function getPendingScore(didHash) {
   };
 }
 
-// The live, finalized score. Used by checker mode to tell a proposal that was finalized
-// by someone else from one the slashing committee rejected: both leave pendingScores
-// empty, and only one of them means the number went live.
+// The live, finalized score, as it has matured: what a badge shows. It lags a score that
+// rose, so it cannot say whether a given proposal was the one finalized; getReputationData
+// can, by its lastUpdated.
 async function getTotalScore(didHash) {
   return Number(await readWithBackoff('getTotalScore', () => reputationContract.getTotalScore(didHash)));
 }
@@ -992,8 +992,10 @@ async function getChallengeWindow() {
 // The contract compares against block.timestamp, so epoch decisions should use
 // the chain's clock rather than the oracle host's (local skew ahead of the chain
 // would trigger premature finalize attempts that just revert and waste gas).
+// Retried like every other read: an epoch reads this before anything else, so one throttled
+// answer used to cost the whole epoch.
 async function getLatestBlockTimestamp() {
-  const block = await provider.getBlock('latest');
+  const block = await readWithBackoff('latest block', () => provider.getBlock('latest'));
   return Number(block.timestamp);
 }
 

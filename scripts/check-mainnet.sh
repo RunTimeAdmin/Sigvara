@@ -169,7 +169,7 @@ check_bond_and_fees() {
   expect "oracleBond: SLASHER is granted by UPGRADER"          "$UPGRADER_ROLE" "$(val $BOND 'getRoleAdmin(bytes32)(bytes32)' $SLASHER_ROLE)"
   expect "oracleBond: inflows are open"       false               "$(val $BOND 'inflowsPaused()(bool)')"
   if [ -n "$FEES" ]; then
-    expect "epochFees: initialized once (1)"     1              "$(initialized $FEES)"
+    expect "epochFees: initializeV2 has run (2)" 2              "$(initialized $FEES)"
     expect "epochFees.svr is SVR"           "$SVR"              "$(val $FEES 'svr()(address)')"
     expect "epochFees.identityRegistry"     "$IDENTITY"         "$(val $FEES 'identityRegistry()(address)')"
     expect "epochFees.epochFee is 0"        0                   "$(val $FEES 'epochFee()(uint256)')"
