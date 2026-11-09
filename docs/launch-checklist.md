@@ -29,7 +29,7 @@ As of 6 November 2026. Everything runs on Arc testnet, and nothing is on mainnet
 - Design partners, the first users from outside the team.
 - The challenge process for negative outcomes. Mainnet launches with payer outcomes positive only
   ([ADR 0006](adr/0006-payer-signed-outcomes.md)), and non-delivery cannot be used as a ground for a slash until
-  it exists ([ADR 0010](adr/0010-what-can-be-slashed.md)). The ADR on who rules comes first.
+  it exists ([ADR 0010](adr/0010-what-can-be-slashed.md)). [ADR 0011](adr/0011-who-rules-negative-outcomes.md) decides who rules; building it is next.
 - The reward distributor stays a draft until mainnet.
 - Moving the testnet compose files to the mainnet pattern (a file secret, read-only, non-root).
 - A way to notice a dead watcher. It alerts on changes only, so a watcher that has stopped looks like one with

@@ -128,6 +128,6 @@ filed, as the drill's log was.
 
 - It enforces nothing on chain. The contract still takes any bytes, and the committee and the admin remain
   the check on them.
-- It does not build the challenge process, or say who rules on contested facts. That needs its own ADR,
-  which also decides whether anything goes to an outside arbiter.
+- It does not build the challenge process, or say who rules on contested facts. [ADR 0011](0011-who-rules-negative-outcomes.md)
+  does: a refund is the only answer for the score, and A3 goes through the committee and the admin Safe.
 - It does not set how much an integrator should trust an agent for, or how large a job a bond should back.

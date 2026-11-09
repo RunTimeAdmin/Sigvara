@@ -348,7 +348,7 @@ are.
    not a follow-up. The Agent Bureau has recorded a provisional baseline: an active file keeps an
    outcome at most 24 months from the Bureau's `received_at`, a chosen product policy rather than a
    legal safe harbor, and it accepts no outside outcome until counsel has checked its obligations.
-6. `both` only once a challenge process exists, with negatives presented as payer-reported.
+6. `both` only once a challenge process exists, with negatives presented as payer-reported ([ADR 0011](0011-who-rules-negative-outcomes.md) decides it).
 
 ## Decisions on the open questions
 
