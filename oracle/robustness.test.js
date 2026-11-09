@@ -996,6 +996,18 @@ test('a finalize not seen mined, or refused inside its window, is counted once a
   }
 });
 
+test('the active agents gauge counts the agents an epoch scored, not the proposals it made', async () => {
+  const agreed = await computedScores();
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  world.setFor('pending', agent.didHash, pendingProposal(world, { data: agreed }));
+
+  await inEpoch({ world, env: CHECKER_ENV }, ({ text, calls }) => {
+    assert.deepEqual(names(calls), ['canPropose'], 'it agreed, and sent nothing');
+    assert.equal(counter(text, 'sigvara_oracle_active_agents'), 1);
+  });
+});
+
 test("a checker weighs this operator's flags at the proposal's time, not at its own", async () => {
   const agreed = await computedScores();
   const world = new World();

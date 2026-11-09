@@ -1199,6 +1199,8 @@ async function runEpochInner() {
     }
   }
   let proposed = 0;
+  // Agents this epoch computed a score for, proposed or not (the activeAgents gauge).
+  let scored = 0;
   // Agents whose empty-slot memory a checker consulted this epoch (checkerSlots). The rest are forgotten.
   const slotsJudged = new Set();
   // Set when a transaction from this wallet was sent and not seen mined, this epoch or before it, with a
@@ -1537,6 +1539,7 @@ async function runEpochInner() {
         const { score: externalScore } = await externalScoreOf(didHash, { operator, agentAddress }, scoringNowMs, held);
         const inputs = { registeredAt, att, flagWeight, externalScore };
         const { measured, scores } = await scoreAt(didHash, inputs, scoringNowMs, held);
+        scored++;
 
         // Checker mode: compare rather than compete. This oracle holds ORACLE_ROLE and a
         // bond like any other, so it *could* overwrite the primary's proposal — and must
@@ -1954,7 +1957,7 @@ async function runEpochInner() {
   );
   metrics.inc('epochsSucceeded');
   metrics.set('lastSuccessfulEpochMs', Date.now());
-  metrics.set('activeAgents', proposed);
+  metrics.set('activeAgents', scored);
 
   pruneExpiredCooldowns();
 }
