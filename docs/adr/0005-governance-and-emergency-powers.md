@@ -199,7 +199,8 @@ This ADR records what was decided about each, and what was left as a stated trus
     timelock, a delay under 48 hours, and one the deployer can propose to or administer.
     `check_treasury` and `check_treasury_queue` in `scripts/check-mainnet.sh` check the Safe's side and
     every scheduled payment after the deploy. It was rehearsed on Arc testnet from 8 November 2026, with a
-    throwaway 2-of-3 Safe: [treasury-rehearsal.md](../treasury-rehearsal.md).
+    throwaway 2-of-3 Safe: [treasury-rehearsal.md](../treasury-rehearsal.md). On Arc mainnet the treasury is
+    `0xBc6acE041434368dBD20a092425F6008bCFe50d4`, driven by the 2-of-3 admin Safe `0x6ba985D721925357DBf0Fa1E45037CFC3C245983`, since 9 November 2026.
 
 ## What stays on the admin Safe, and why
 

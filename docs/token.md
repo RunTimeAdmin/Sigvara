@@ -41,7 +41,8 @@ a plain `IERC20`.
 | Role | Address |
 |---|---|
 | Deployer / creator | `0x8857A7C392d1Bb1A68647c64Ce18D9AA1Fd023b0` |
-| Treasury | A timelock the admin Safe drives, with a 48-hour delay. Its address goes here when it is deployed, before the registries |
+| Treasury | [`0xBc6acE041434368dBD20a092425F6008bCFe50d4`](https://explorer.arc.io/address/0xBc6acE041434368dBD20a092425F6008bCFe50d4), a 48-hour timelock the admin Safe drives, deployed by the deployer on 9 November 2026 in [`0x8650c34f…faaa`](https://explorer.arc.io/tx/0x8650c34f048aad8c26a16e39db293615d53d3105b01194ba59af825d65b8faaa) |
+| Admin Safe | [`0x6ba985D721925357DBf0Fa1E45037CFC3C245983`](https://explorer.arc.io/address/0x6ba985D721925357DBf0Fa1E45037CFC3C245983), 2 of 3, created through Safe's factory on 9 November 2026 in [`0xb5653334…f37b`](https://explorer.arc.io/tx/0xb565333498495839fccc24be4654f5aeb8237e30d2f82eb50cc91cbb8564f37b). The deployer is not an owner |
 
 The SVR launch transaction was sent from the deployer address above, and the Arc
 **mainnet** registry deployment will be too. A token or mainnet contract attributed to Sigvara
@@ -80,7 +81,7 @@ disclosed as it is bought.
 | Lock | [`0xE246eaF919a39d7E0ff656320f7132Ee8AfBB8FB`](https://explorer.arc.io/address/0xE246eaF919a39d7E0ff656320f7132Ee8AfBB8FB), OpenZeppelin's `VestingWallet` with a duration of zero, deployed by the deployer with [`script/LockTreasurySvr.s.sol`](../script/LockTreasurySvr.s.sol) in [`0xa62b579e…3aa5`](https://explorer.arc.io/tx/0xa62b579e9310d03dca13c7cf062c525824b17f371b60c7ec0bf4a6b862a93aa5) |
 | Holds | 17,283,004.212403886 SVR, the treasury share of the first buy, sent on 9 November 2026 in [`0x3db63954…3230`](https://explorer.arc.io/tx/0x3db63954f4c8503f1f0679dca5d48c30b37f414ed29ae602ce6b12d466563230) |
 | Releases | Nothing before 9 May 2027 00:00 UTC, by anyone, the deployer included. From then all of it, to the lock's owner |
-| Owner | The deployer. Ownership will be handed to the treasury timelock once it is deployed; it decides where the SVR goes, never when |
+| Owner | The treasury timelock, since 9 November 2026 ([`0xef44f709…f7a0`](https://explorer.arc.io/tx/0xef44f70918c7f79e2e8d83b09774325bd665a40ce1d78c6ebef5e1b5a7bbf7a0)), so the release goes to the treasury. Ownership decides where the SVR goes, never when, and changing it now takes the admin Safe and 48 hours' notice |
 
 The other 5,000,000 SVR of the first buy is not locked. It is for the two oracle operator bonds, the primary's
 and the checker's, at the 2,500,000 SVR that `SigvaraOracleBond` requires of each operator on mainnet (see Mainnet
