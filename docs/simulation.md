@@ -145,7 +145,7 @@ shadow scans reported that as the one payment they would credit, which is how sh
 since it came before `FROM_BLOCK` it counts for nothing.
 
 Not tested by these: a Wallet MCP x402 payment, which rollout step 4 names, since both were plain USDC
-transfers; an outcome carried through CounterAudit (CounterAudit#97 is merged and not deployed); and any
+transfers; an outcome carried through CounterAudit (CounterAudit#97, live since 9 November 2026, has carried none yet); and any
 volume.
 
 The explorer's evidence check reads these payments: at 03:13 UTC it rebuilt all 61 leaves and matched the
