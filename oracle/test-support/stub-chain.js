@@ -85,6 +85,7 @@
 //     totalScore:      { "<didhash>": the matured score getTotalScore serves }  (default 0)
 //     agents[didHash].slashedFromRead: the read of the agent (at no block) from which it reads slashed,
 //                      counting from 1, for an agent slashed between an epoch's batch read and its guard read
+//     jobs.networkFails: the job registry's node cannot say which chain it is on
 //   }
 //
 // Every write the oracle attempts is appended to the file named by STUB_CALLS, one JSON line
@@ -391,7 +392,10 @@ for (const [file, fake] of [['chain.js', chain], ['external.js', external]]) {
 // decodes and turns logs into evidence for GET /jobs/:address.
 const jobs = require(path.join(oracleDir, 'jobs.js'));
 jobs.makeProvider = (cfg) => (jobs.enabled(cfg) ? {
-  getNetwork: async () => ({ chainId: BigInt(world().chainId ?? 5042) }),
+  getNetwork: async () => {
+    if (world().jobs?.networkFails) throw Object.assign(new Error('stub: the job registry\'s node did not answer'), { code: 'NETWORK_ERROR' });
+    return { chainId: BigInt(world().chainId ?? 5042) };
+  },
   getBlockNumber: async () => world().jobs?.head ?? world().head,
   getLogs: async () => world().jobs?.logs ?? [],
   getBlock: async (n) => ({ number: n, timestamp: world().nowSec }),

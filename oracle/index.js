@@ -1974,8 +1974,10 @@ const badgeCache = badge.createBadgeCache({ ttlMs: 60_000, maxEntries: 500 });
  */
 async function jobsProviderOrNull() {
   if (!jobs.enabled(jobsCfg)) return null;
-  if (!jobsProvider) {
-    jobsProvider = jobs.makeProvider(jobsCfg);
+  if (!jobsProvider) jobsProvider = jobs.makeProvider(jobsCfg);
+  // Asked again until the node answers. Asked only once, one failed read left it unknown for the life of
+  // the process.
+  if (jobsChainId === null) {
     try {
       jobsChainId = Number((await jobsProvider.getNetwork()).chainId);
     } catch {
