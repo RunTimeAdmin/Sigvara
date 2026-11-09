@@ -33,7 +33,7 @@ require('./config').requireValidNumericConfig('keeper');
 
 const { ethers } = require('ethers');
 const { fileState } = require('./publisher');
-const { webhookPayload } = require('./watcher-policy');
+const { webhookPayload, trackPollOutcome } = require('./watcher-policy');
 const { redact } = require('./event-index');
 const { wordsOf } = require('./log-spans');
 const { readWithBackoff } = require('./read-retry');
@@ -64,6 +64,11 @@ const FAILED_RUNS_ALERT = 6;
 // Between log reads. Arc's public RPCs refuse a burst of them within a handful of calls (measured 5
 // November 2026), and a first run has dozens to make. As the payment scan does.
 const SCAN_PACE_MS = 500;
+// How long a slash may wait behind a transaction of the keeper's own before a person hears of it.
+const BLOCKED_ALERT_SECONDS = 30 * 60;
+// The alerts raised about one agent's slash, keyed `<kind>:<didHash>` (refused adds `:<error>`). They
+// end with the slash: one left behind would silence the same alert about the next filing.
+const AGENT_ALERTS = Object.freeze(['disputed', 'dispute-unruled', 'lapsed', 'refused', 'failed']);
 
 const DID_HASH = /^0x[0-9a-f]{64}$/;
 
@@ -107,14 +112,22 @@ function decide(didHash, proposal, nowSec, cfg) {
  *   notify  (level, title, lines) -> delivered to a person; failure is its own problem
  */
 function createKeeper({ cfg, reads, sender, state, notify = async () => {}, log = console.log, pause = () => new Promise((r) => setTimeout(r, SCAN_PACE_MS)) }) {
-  let failedRuns = 0;
-  const load = () => ({ scanBlock: cfg.fromBlock, open: {}, alerted: {}, executed: {}, ...(state.get() ?? {}) });
+  // Failed runs in a row, and whether a person has been told (trackPollOutcome).
+  let runHealth = { failures: 0, alerted: false };
+  const load =() => ({ scanBlock: cfg.fromBlock, open: {}, alerted: {}, executed: {}, ...(state.get() ?? {}) });
 
   // Once per problem, and again a day later if it is still there.
   async function raise(s, nowSec, key, level, title, lines) {
     if (nowSec - (s.alerted[key] ?? -Infinity) < ALERT_AGAIN_SECONDS) return;
     s.alerted[key] = nowSec;
     await notify(level, title, lines);
+  }
+
+  function forgetAlerts(s, didHash) {
+    for (const key of Object.keys(s.alerted)) {
+      const [kind, d] = key.split(':');
+      if (d === didHash && AGENT_ALERTS.includes(kind)) delete s.alerted[key];
+    }
   }
 
   async function runOnce() {
@@ -152,6 +165,7 @@ function createKeeper({ cfg, reads, sender, state, notify = async () => {}, log 
           if (d.state === CANCELLED) await notify('ok', 'A slash the keeper was watching was dropped', [`agent ${didHash}`, 'Cancelled, vetoed, ruled for the agent, or expired.']);
         }
         delete s.executed[didHash];
+        forgetAlerts(s, didHash);
         continue;
       }
       s.open[didHash] = true;
@@ -192,10 +206,20 @@ function createKeeper({ cfg, reads, sender, state, notify = async () => {}, log 
         await raise(s, nowSec, 'balance', 'warn', 'The slash keeper is low on gas', [`it holds ${ethers.formatEther(balance)}; top it up above ${ethers.formatEther(cfg.minBalance)}`]);
       }
     }
+    // Blocked only while a run finds itself blocked, so the next spell gets its own half hour.
+    if (!r.blocked.length) {
+      delete s.blockedSince;
+      delete s.alerted.blocked;
+    }
     s.lastRunAt = nowSec;
+    // This host's clock, for the container's healthcheck. lastRunAt is chain time, and the scan rewrites
+    // the file early in every run, so neither the field nor the file's age said that a run finished.
+    s.lastRunWallMs = Date.now();
     state.set(s);
     state.persist();
-    failedRuns = 0;
+    const next = trackPollOutcome(runHealth, true, FAILED_RUNS_ALERT);
+    runHealth = next.state;
+    if (next.action === 'recovered') await notify('ok', 'The slash keeper is running again', ['A run finished after the failures reported earlier.']);
     return { ...r, open: Object.keys(s.open).length, head, nowSec };
   }
 
@@ -219,27 +243,41 @@ function createKeeper({ cfg, reads, sender, state, notify = async () => {}, log 
     // A transaction still in flight has this nonce. Sending another could only race it.
     if (await reads.pendingTxs() > 0) {
       r.blocked.push({ didHash, reason: 'a transaction of ours is still pending' });
+      s.blockedSince ??= nowSec;
+      if (nowSec - s.blockedSince >= BLOCKED_ALERT_SECONDS) {
+        await raise(s, nowSec, 'blocked', 'warn', 'The slash keeper is stuck behind a transaction of its own', [
+          `agent ${didHash} is due, and the keeper has found itself blocked since ${new Date(s.blockedSince * 1000).toISOString()}.`,
+          'It sends again once its pending transaction lands or is replaced. The other keeper may execute it meanwhile.',
+        ]);
+      }
       return;
     }
     try {
       const hash = await sender.send(didHash);
       s.executed[didHash] = hash;
+      // Saved now, not at the end of the run: a run that fails after this would lose it, and the
+      // slash would later be reported as settled by someone else.
+      state.set(s);
+      state.persist();
       r.executed.push({ didHash, hash });
       await notify('ok', 'The slash keeper executed a slash', [`agent ${didHash}`, `tx ${hash}`]);
     } catch (err) {
       const reason = said(err, cfg);
       r.failed.push({ didHash, reason });
-      await raise(s, nowSec, `failed:${didHash}`, 'alert', 'The slash keeper did not confirm an execution', [`agent ${didHash}`, reason.slice(0, 300), 'It looks again every run, and the other keeper tries too.']);
+      const title = err.notSent ? 'The slash keeper did not send an execution' : 'The slash keeper did not confirm an execution';
+      await raise(s, nowSec, `failed:${didHash}`, 'alert', title, [`agent ${didHash}`, reason.slice(0, 300), 'It looks again every run, and the other keeper tries too.']);
     }
   }
 
-  // A run that keeps failing is the one thing the loop has to report for itself.
+  // A run that keeps failing is the one thing the loop has to report for itself, and the run that
+  // ends it says so.
   async function runFailed(err) {
-    failedRuns += 1;
-    if (failedRuns === FAILED_RUNS_ALERT) {
-      await notify('alert', `The slash keeper has failed ${failedRuns} runs in a row`, [said(err, cfg).slice(0, 300)]);
+    const next = trackPollOutcome(runHealth, false, FAILED_RUNS_ALERT);
+    runHealth = next.state;
+    if (next.action === 'alert') {
+      await notify('alert', `The slash keeper has failed ${runHealth.failures} runs in a row`, [said(err, cfg).slice(0, 300)]);
     }
-    return failedRuns;
+    return runHealth.failures;
   }
 
   return { runOnce, runFailed };
@@ -256,13 +294,16 @@ function localSender({ wallet, staking, maxFeeWei, maxGas, waitMs = 120_000, pol
   const provider = wallet.provider;
   return {
     async send(didHash) {
-      const fee = await provider.getFeeData();
+      // Nothing is broadcast before executeSlash is called, and a failure until then says so, so the
+      // alert does not send a person looking for a transaction that does not exist.
+      const notSent = (err) => { throw Object.assign(err, { notSent: true }); };
+      const fee = await provider.getFeeData().catch(notSent);
       const maxFeePerGas = fee.maxFeePerGas ?? fee.gasPrice;
-      if (maxFeePerGas > maxFeeWei) throw new Error(`fee ${ethers.formatUnits(maxFeePerGas, 'gwei')} gwei is above KEEPER_MAX_FEE_GWEI ${ethers.formatUnits(maxFeeWei, 'gwei')}`);
+      if (maxFeePerGas > maxFeeWei) notSent(new Error(`fee ${ethers.formatUnits(maxFeePerGas, 'gwei')} gwei is above KEEPER_MAX_FEE_GWEI ${ethers.formatUnits(maxFeeWei, 'gwei')}`));
       const tip = fee.maxPriorityFeePerGas ?? maxFeePerGas;
-      const estimate = await staking.executeSlash.estimateGas(didHash);
+      const estimate = await staking.executeSlash.estimateGas(didHash).catch(notSent);
       const gasLimit = estimate * 12n / 10n;
-      if (gasLimit > maxGas) throw new Error(`gas ${gasLimit} is above KEEPER_MAX_GAS ${maxGas}`);
+      if (gasLimit > maxGas) notSent(new Error(`gas ${gasLimit} is above KEEPER_MAX_GAS ${maxGas}`));
       const sent = await staking.connect(wallet).executeSlash(didHash, {
         gasLimit, maxFeePerGas, maxPriorityFeePerGas: tip < maxFeePerGas ? tip : maxFeePerGas,
       });

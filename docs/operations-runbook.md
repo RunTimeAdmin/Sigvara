@@ -458,7 +458,7 @@ below are done is `the registration's agentWallet is 0x18CB...4811, not the publ
    - Reach it only through SSH. The signer listens on `127.0.0.1:28600` and answers only `127.0.0.1` (`SIGNER_HOST`, `SIGNER_ALLOW_FROM`), so it opens no port of its own: the publisher's `signer-tunnel` service forwards to it over SSH, encrypted and to a pinned host key. On `packrai-vps`, make a user with no shell (`useradd --system --create-home --shell /usr/sbin/nologin sigvara-tunnel`) whose `~/.ssh/authorized_keys` (owned by root, mode 0644, so the account cannot change it) holds the publisher's tunnel key, usable only from the publisher's host and only for that forward:
      `from="72.62.41.138",restrict,port-forwarding,permitopen="127.0.0.1:28600",command="/bin/false" ssh-ed25519 AAAA... sigvara-publisher-tunnel`. Those options alone re-enable remote forwarding (`-R`), which would let the key listen on the host's loopback ports, so also append `oracle/sshd_config.signer-tunnel` to the end of `/etc/ssh/sshd_config`, check it as that file says, and confirm a `-R` from the key is refused. On the publisher's host, `secrets/tunnel/` (owned by root, 0700) holds `id_ed25519` (`ssh-keygen -t ed25519 -N '' -C sigvara-publisher-tunnel -f secrets/tunnel/id_ed25519`, 0400) and `known_hosts`, one line `76.13.101.31 ssh-ed25519 AAAA...` built from `/etc/ssh/ssh_host_ed25519_key.pub` on `packrai-vps` (a new host key there stops the tunnel until this is updated). No firewall rule for 28600 is needed, in ufw or in the provider's firewall (Hostinger's VPS firewall, hPanel, Security, Firewall): remove any (`ufw delete allow from 72.62.41.138 to any port 28600 proto tcp`, and the hPanel rule) once the tunnel works.
    - Start it, and check its log names that address and `127.0.0.1` as the only caller. It
-     signs nothing in its first minute.
+     signs nothing in its first two minutes.
    - On the publisher's host, set `PUBLISHER_ADDRESS` to that address, `SIGNER_SSH` to
      `sigvara-tunnel@76.13.101.31` (the compose file points `PUBLISH_SIGNER_URL` at the tunnel), and `PUBLISH_SIGNER_SECRET` to the same secret. Keep
      `PUBLISH_MODE=shadow` until step 3.
@@ -678,9 +678,9 @@ nothing. If its transaction was already in flight, it reverts, and all that cost
   `deployments/5042002.json` is under its floor. This shares nothing with the keepers, so it is what
   notices when both are down.
 - **From each keeper, by webhook.** `WEBHOOK_URL`, as the watcher uses, hears about every execution,
-  a slash that is refused, a send that did not confirm, a dispute, a lapse, low gas, and six failed
-  runs in a row.
-- **On the host.** `docker ps` shows the container unhealthy when its state file has not been written
+  a slash that is refused, a send that did not go out or did not confirm, a dispute, a lapse, low gas, half an hour stuck behind
+  its own pending transaction, and six failed runs in a row (then the run that ends them).
+- **On the host.** `docker ps` shows the container unhealthy when no run has finished
   for an hour.
 
 A stopped keeper is not noticed until a slash falls due. That is the gap this design accepts: with

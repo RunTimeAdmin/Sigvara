@@ -230,6 +230,45 @@ test('triage: carries how long is left, because that is the decision', () => {
   assert.equal(res.alerts[0].secondsLeft, 900);
 });
 
+// The checker recorded a dispute once per epoch it saw it, so one proposal can be listed several times,
+// and a newer checker keeps one record per proposal with a firstAt. Either way it is one dispute and one page.
+test('triage: several records of one proposal in one list raise one alert', () => {
+  const t = 1_000_000;
+  const again = { ...div(t), at: (t + 3600) * 1000 };
+  const kept = { ...div(t), firstAt: t * 1000, at: (t + 7200) * 1000 };
+  const res = triage({
+    divergences: [kept, again, div(t)],
+    pendingByDid: { [DID]: { exists: true, proposedAt: t } },
+    challengeWindowSec: WINDOW, nowSec: t + 60, seen: new Set(),
+  });
+  assert.equal(res.alerts.length, 1);
+  assert.equal(res.counts.actionable, 1);
+  assert.equal(res.counts.suppressed, 2);
+});
+
+test('nextAlert: a first page, a last call inside the final window, and forgetting once it is over', () => {
+  const { nextAlert } = require('./watcher-policy');
+  const FINAL = 3600;
+  const cases = [
+    // [level sent, state, seconds left] -> [action, level to keep]
+    [undefined, 'actionable', 5 * 3600, 'first', 0],
+    [undefined, 'actionable', 1800, 'first', 1], // first seen in the final window: one page, which is the last call too
+    [0, 'actionable', 5 * 3600, null, 0],
+    [0, 'actionable', FINAL, 'last', 1],
+    [0, 'actionable', 60, 'last', 1],
+    [1, 'actionable', 60, null, 1],
+    [undefined, 'expired', 0, null, null],
+    [undefined, 'closed', 0, null, null],
+    [0, 'closed', 0, 'forget', null],
+    [1, 'closed', 0, 'forget', null], // a last call sent is forgotten too, so the map does not grow for ever
+    [0, 'superseded', 0, 'forget', null],
+    [1, 'expired', 0, 'forget', null],
+  ];
+  for (const [level, state, left, action, keep] of cases) {
+    assert.deepEqual(nextAlert(level, state, left, FINAL), { action, level: keep }, `${level} ${state} ${left}`);
+  }
+});
+
 test('triage: nothing recorded is not an error', () => {
   const res = triage({ divergences: [], pendingByDid: {}, challengeWindowSec: WINDOW, nowSec: 1, seen: new Set() });
   assert.deepEqual(res.alerts, []);

@@ -1040,16 +1040,27 @@ function setPaymentChainScanState(key, state) { paymentChainScanState = { ...pay
 function getLinkScanState() { return linkScanState; }
 function setLinkScanState(state) { linkScanState = state; }
 
-function isStatePathWritable() {
+// The last probe, so a caller that asks often (/health, public and unmetered) can reuse a recent one.
+let lastProbe = { at: -Infinity, ok: false };
+
+/**
+ * Whether a small file can be written beside the state file. The probe is a synchronous mkdir,
+ * write and unlink; with `maxAgeMs`, a probe younger than that is answered from instead.
+ */
+function isStatePathWritable(maxAgeMs = 0, now = Date.now()) {
+  if (maxAgeMs > 0 && now - lastProbe.at < maxAgeMs) return lastProbe.ok;
+  let ok;
   try {
     fs.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
     const testPath = `${STATE_PATH}.writable-test`;
     fs.writeFileSync(testPath, 'ok');
     fs.unlinkSync(testPath);
-    return true;
+    ok = true;
   } catch {
-    return false;
+    ok = false;
   }
+  lastProbe = { at: now, ok };
+  return ok;
 }
 
 function getStatePath() {

@@ -10,7 +10,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const { decide, createKeeper, localSender, readConfig, revertName, STAKING_ABI } = require('./keeper');
 
 const DAY = 86_400;
@@ -72,12 +72,13 @@ test('grace never carries it past the lapse', () => {
 function harness({ mode = 'live', proposals = {}, events = [], simulate = () => null, send, over = {}, balance = 10n ** 18n, pendingTxs = 0, initial = null } = {}) {
   let saved = initial;
   let head = 1000;
+  let now = NOW;
   const alerts = [];
   const sent = [];
   const scanned = [];
   const reads = {
     head: async () => head,
-    blockTime: async () => NOW,
+    blockTime: async () => now,
     slashInitiated: async (from, to) => {
       scanned.push([from, to]);
       return events.filter((e) => e.block >= from && e.block <= to).map((e) => e.didHash);
@@ -95,7 +96,10 @@ function harness({ mode = 'live', proposals = {}, events = [], simulate = () => 
     state: { get: () => saved && JSON.parse(JSON.stringify(saved)), set: (s) => { saved = JSON.parse(JSON.stringify(s)); }, persist: () => {} },
     notify: async (level, title, lines) => { alerts.push({ level, title, lines }); },
   });
-  return { keeper, alerts, sent, scanned, state: () => saved, setHead: (n) => { head = n; } };
+  return {
+    keeper, alerts, sent, scanned, state: () => saved,
+    setHead: (n) => { head = n; }, setNow: (t) => { now = t; }, setPending: (n) => { pendingTxs = n; },
+  };
 }
 
 test('it finds a filed slash from its event and executes it when it is due', async () => {
@@ -256,6 +260,69 @@ test('a transaction still pending blocks another', async () => {
   assert.equal(r.blocked[0].didHash, A);
 });
 
+// The admin rules for the agent, the slash is dropped, and the committee files it again with new
+// evidence. A second dispute of that filing needs a ruling as much as the first did, and its alert
+// used to be held back by the first one's, so the admin heard nothing until the ruling window closed.
+test('a slash disputed, dropped, filed again and disputed again needs a ruling twice', async () => {
+  const proposals = { [A]: { state: DISPUTED, challengeDeadline: NOW, disputedAt: NOW - DAY } };
+  const events = [{ block: 500, didHash: A }];
+  const h = harness({ proposals, events });
+  await h.keeper.runOnce();
+  proposals[A] = { state: CANCELLED, challengeDeadline: 0 }; // ruled for the agent
+  await h.keeper.runOnce();
+  assert.match(h.alerts.at(-1).title, /was dropped/);
+  events.push({ block: 1050, didHash: A });
+  proposals[A] = { state: DISPUTED, challengeDeadline: NOW + 3 * DAY, disputedAt: NOW - 60 };
+  h.setHead(1100);
+  await h.keeper.runOnce();
+  const rulings = h.alerts.filter((a) => /needs a ruling/.test(a.title));
+  assert.equal(rulings.length, 2, 'the second dispute is raised too');
+});
+
+test('a keeper stuck behind its own transaction says so once, after half an hour, and again on a new spell', async () => {
+  const h = harness({ events: [{ block: 500, didHash: A }], proposals: { [A]: pending(1) }, pendingTxs: 1 });
+  const stuck = () => h.alerts.filter((a) => /stuck behind a transaction/.test(a.title));
+  await h.keeper.runOnce();
+  h.setNow(NOW + 29 * 60);
+  await h.keeper.runOnce();
+  assert.equal(stuck().length, 0, 'a pending transaction is routine for a while');
+  h.setNow(NOW + 30 * 60);
+  await h.keeper.runOnce();
+  h.setNow(NOW + 35 * 60);
+  await h.keeper.runOnce();
+  assert.equal(stuck().length, 1, 'once, not every run');
+  h.setPending(0);
+  h.setNow(NOW + 40 * 60);
+  await h.keeper.runOnce(); // unblocked: it sends
+  assert.equal(h.state().blockedSince, undefined);
+  h.setPending(1);
+  for (const t of [41, 70]) { h.setNow(NOW + t * 60); await h.keeper.runOnce(); }
+  assert.equal(stuck().length, 1, 'a new spell starts its own half hour');
+  h.setNow(NOW + 71 * 60);
+  await h.keeper.runOnce();
+  assert.equal(stuck().length, 2);
+});
+
+test('an execution is saved when it confirms, so a run that fails after it does not lose it', async () => {
+  let saved = null;
+  const keeper = createKeeper({
+    cfg: { mode: 'live', name: 'test', fromBlock: 100, chunkSize: 1000, minBalance: 0n, ...policy() },
+    reads: {
+      head: async () => 1000,
+      blockTime: async () => NOW,
+      slashInitiated: async () => [A],
+      proposal: async () => pending(1),
+      simulate: async () => null,
+      pendingTxs: async () => 0,
+      balance: async () => { throw new Error('rate limit exceeded'); },
+    },
+    sender: { send: async () => '0xtx1' },
+    state: { get: () => saved, set: (s) => { saved = JSON.parse(JSON.stringify(s)); }, persist: () => {} },
+  });
+  await assert.rejects(keeper.runOnce(), /rate limit exceeded/);
+  assert.equal(saved.executed[A], '0xtx1');
+});
+
 test('a failed send is reported, stays open and is tried again', async () => {
   const h = harness({
     events: [{ block: 500, didHash: A }],
@@ -266,6 +333,19 @@ test('a failed send is reported, stays open and is tried again', async () => {
   assert.equal(r.failed.length, 1);
   assert.equal(h.alerts[0].level, 'alert');
   assert.equal(h.state().open[A], true);
+});
+
+// A fee or gas above its cap stops the send before anything is broadcast. The alert said the execution was
+// not confirmed, which sends a person looking for a transaction that does not exist.
+test('a send stopped by its fee or gas cap is reported as not sent, and one that went out as not confirmed', async () => {
+  const dear = senderHarness({ fee: { maxFeePerGas: 200n * 10n ** 9n } });
+  const capped = harness({ events: [{ block: 500, didHash: A }], proposals: { [A]: pending(1) }, send: (d) => dear.sender.send(d) });
+  await capped.keeper.runOnce();
+  assert.match(capped.alerts[0].title, /did not send an execution/);
+  const slow = senderHarness({ receipts: [null], waitMs: 20 });
+  const unconfirmed = harness({ events: [{ block: 500, didHash: A }], proposals: { [A]: pending(1) }, send: (d) => slow.sender.send(d) });
+  await unconfirmed.keeper.runOnce();
+  assert.match(unconfirmed.alerts[0].title, /did not confirm an execution/);
 });
 
 test('one proposal failing to send does not stop the next', async () => {
@@ -298,8 +378,64 @@ test('one failed run is routine, and the sixth in a row is reported once', async
   await h.keeper.runFailed(err);
   assert.equal(h.alerts.length, 1, 'not again on the seventh');
   await h.keeper.runOnce();
+  assert.equal(h.alerts.length, 2, 'the good run says it is running again');
   await h.keeper.runFailed(err);
-  assert.equal(h.alerts.length, 1, 'a good run starts the count over');
+  assert.equal(h.alerts.length, 2, 'a good run starts the count over');
+});
+
+test('a good run after the failure alert says the keeper is running again, once', async () => {
+  const h = harness();
+  const err = new Error('rate limit exceeded');
+  for (let i = 1; i <= 6; i++) await h.keeper.runFailed(err);
+  await h.keeper.runOnce();
+  await h.keeper.runOnce();
+  assert.deepEqual(h.alerts.map((a) => a.level), ['alert', 'ok']);
+  assert.match(h.alerts[1].title, /running again/);
+});
+
+// The container's healthcheck (docker-compose.keeper.vps.yml), run against state files. The scan rewrites
+// the file early in every run, so its age said nothing about a run finishing: a keeper whose every run
+// failed after the scan stayed healthy.
+test('the keeper healthcheck reads when a run last finished, not when the file was last written', () => {
+  const compose = fs.readFileSync(path.join(__dirname, '..', 'docker-compose.keeper.vps.yml'), 'utf8');
+  const script = JSON.parse(`"${compose.match(/\["CMD", "node", "-e", "(.+)"\]/)[1]}"`);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sigvara-keeper-health-'));
+  try {
+    const file = path.join(dir, 'keeper-state.json');
+    const healthy = (state) => {
+      fs.writeFileSync(file, JSON.stringify(state));
+      const run = spawnSync(process.execPath, ['-e', script.replaceAll('/data/keeper-state.json', file.replaceAll('\\', '/'))]);
+      return run.status === 0;
+    };
+    assert.equal(healthy({ scanBlock: 5, lastRunWallMs: Date.now() - 60_000 }), true, 'a run finished a minute ago');
+    assert.equal(healthy({ scanBlock: 5, lastRunWallMs: Date.now() - 2 * 3600_000 }), false, 'the file is new, the last finished run is not');
+    assert.equal(healthy({ scanBlock: 5 }), true, 'a state file from before the field: the file\'s own age, until a run writes it');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('only a run that finishes stamps the time the healthcheck reads', async () => {
+  let saved = null;
+  let failing = true;
+  const keeper = createKeeper({
+    cfg: { mode: 'shadow', name: 'test', fromBlock: 100, chunkSize: 400, minBalance: 0n, ...policy() },
+    reads: {
+      head: async () => 1000,
+      blockTime: async () => NOW,
+      slashInitiated: async () => [A],
+      proposal: async () => { if (failing) throw new Error('rate limit exceeded'); return pending(1); },
+      simulate: async () => null,
+    },
+    state: { get: () => saved, set: (s) => { saved = JSON.parse(JSON.stringify(s)); }, persist: () => {} },
+  });
+  await assert.rejects(keeper.runOnce());
+  assert.equal(saved.scanBlock, 981, 'the scan saved its progress');
+  assert.equal(saved.lastRunWallMs, undefined);
+  failing = false;
+  const before = Date.now();
+  await keeper.runOnce();
+  assert.ok(saved.lastRunWallMs >= before && saved.lastRunWallMs <= Date.now());
 });
 
 test('progress survives a read failing part way through', async () => {

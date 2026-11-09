@@ -288,6 +288,9 @@ external.init(cfg);
 // and a feed pointed at a dead host is visible from the first request rather than the
 // first time somebody thinks to check.
 external.refreshChainId().catch(() => {});
+// How old the feed's last check may be before /health asks again. Asked only while unreachable, a
+// feed reached once read as configured for as long as the process ran, whatever became of it.
+const EXTERNAL_RECHECK_MS = 5 * 60_000;
 
 // Most recent divergences returned by the collection route. Bounded so an anonymous
 // caller cannot make the oracle serialise its whole history on every request.
@@ -738,8 +741,11 @@ async function scoreAt(didHash, { registeredAt, att, flagWeight, externalScore }
 // nonces from the shared oracle wallet.
 let epochRunning = false;
 
-// The chain the RPC was last seen on, once it has been checked. Reported by /health.
+// The chain the RPC was last verified on, once both checks pass. What the code relies on.
 let verifiedChainId = null;
+// The chain the RPC was last seen on, verified or not, which is what /health reports: after a failover
+// to another chain every epoch aborts, and the last verified chain said all was well.
+let seenChainId = null;
 let warnedNoExpectedChain = false;
 
 /**
@@ -753,7 +759,14 @@ let warnedNoExpectedChain = false;
  * the answer comes from the node each time, because ethers remembers its first.
  */
 async function ensureChain() {
-  const actual = await chain.assertChainId(cfg.expectedChainId);
+  let actual;
+  try {
+    actual = await chain.assertChainId(cfg.expectedChainId);
+  } catch (err) {
+    if (err instanceof chain.ChainMismatchError) seenChainId = err.actual;
+    throw err;
+  }
+  seenChainId = actual;
   const stored = getStateChainId();
   if (stored != null && stored !== actual) throw new chain.ChainMismatchError(stored, actual, 'state');
   if (stored == null) {
@@ -2742,14 +2755,47 @@ const overLimit = (req, res, bucket) => {
 /**
  * The reply to a flag, a resolve or a link: a change that is answered on the strength of having been recorded.
  * 200 when the state file has it. 202 with `durable: false` when the save failed, because a restart before the
- * next good save loses what the caller was told, which is what /attest says too. A flag or a resolve must not be
- * resent: a flag sent twice is two flags, and a resolve sent twice clears another one. A link sets the same
- * value again, so it can be.
+ * next good save loses what the caller was told, which is what /attest says too. A flag or a resolve is resent
+ * safely only with the requestId it was first sent with (see rememberReply): without one, a flag sent twice is
+ * two flags, and a resolve sent twice clears another one. A link sets the same value again, so it can be.
  */
 const savedReply = (res, durable, body) => {
   if (!durable) metrics.inc('writesNotDurable');
   return json(res, durable ? 200 : 202, durable ? body : { ...body, durable: false });
 };
+
+/*
+ * The replies to /flag and /flag/resolve sent with a requestId, by credential, so a request sent again after
+ * its reply was lost is answered with that reply and changes nothing. Neither is idempotent: a second flag
+ * costs the agent two more points, and a second resolve clears another flag. In memory, so a restart forgets
+ * them; kept a day, and at most REPLY_MEMORY_SIZE per credential, the oldest going first.
+ */
+const REPLY_MEMORY_MS = 24 * 3600_000;
+const REPLY_MEMORY_SIZE = 1000;
+const repliesByCaller = new Map();
+
+/** A requestId as given: undefined when there is none, false when it is not 1 to 128 characters of text. */
+const parseRequestId = (v) => (v === undefined || v === null ? undefined
+  : typeof v === 'string' && v.length >= 1 && v.length <= 128 ? v : false);
+
+function rememberedReply(caller, key, now = Date.now()) {
+  const hit = repliesByCaller.get(caller)?.get(key);
+  return hit && now - hit.at < REPLY_MEMORY_MS ? hit.body : null;
+}
+
+function rememberReply(caller, key, body, now = Date.now()) {
+  let mine = repliesByCaller.get(caller);
+  if (!mine) repliesByCaller.set(caller, (mine = new Map()));
+  // Oldest first: drop what has expired, and make room.
+  for (const [k, v] of mine) {
+    if (mine.size < REPLY_MEMORY_SIZE && now - v.at < REPLY_MEMORY_MS) break;
+    mine.delete(k);
+  }
+  mine.set(key, { at: now, body });
+}
+
+/** The first reply again, marked as such. Durable as the last save was, which came after the change. */
+const replayReply = (res, body) => savedReply(res, getLastPersist().ok, { ...body, replayed: true });
 
 async function handleRequest(req, res) {
   metrics.inc('httpRequests');
@@ -2780,10 +2826,12 @@ async function handleRequest(req, res) {
     // Never awaited. /health has to answer while the thing it reports on is broken,
     // which is exactly when an unreachable RPC would make it hang.
     const externalState = external.chainState();
-    if (externalState.status === 'unreachable') external.refreshChainId().catch(() => {});
+    external.refreshChainId(EXTERNAL_RECHECK_MS).catch(() => {});
     const lastEpoch = metrics.get('lastSuccessfulEpochMs');
     const timeSinceLastEpoch = lastEpoch ? Date.now() - lastEpoch : null;
-    const storeWritable = isStatePathWritable();
+    // A probe up to five seconds old: this route is public and unmetered, and each probe is a
+    // synchronous mkdir, write and unlink.
+    const storeWritable = isStatePathWritable(5_000);
     // What the last write actually did, beside whether the path looks writable. The
     // probe writes a handful of bytes and deletes them, so it passes while a real state
     // file fails to land for want of space. Unhealthy on a failed persist because the
@@ -2810,7 +2858,7 @@ async function handleRequest(req, res) {
       stateSource: getLoadReport().source,
       // The chain the RPC was last seen on, and the one this oracle was configured for. Null
       // until the first check, and the expected one is null when EXPECTED_CHAIN_ID is unset.
-      chainId: verifiedChainId,
+      chainId: seenChainId,
       expectedChainId: cfg.expectedChainId,
       attestCooldownMs: ATTEST_COOLDOWN_MS,
       epochRunning,
@@ -3341,14 +3389,21 @@ async function handleRequest(req, res) {
       // value at all, an object included, broke every later save of the state file until
       // the process was restarted, and a flag filed under a mixed-case spelling was one
       // no score ever read.
-      const didHash = parseDidHash((await readBody(req)).didHash);
+      const body = await readBody(req);
+      const didHash = parseDidHash(body.didHash);
       if (!didHash) return json(res, 400, { error: 'didHash must be a 32-byte hex string' });
+      const requestId = parseRequestId(body.requestId);
+      if (requestId === false) return json(res, 400, { error: 'requestId must be a string of 1 to 128 characters' });
+      const replyKey = requestId && `/flag\n${didHash}\n${requestId}`;
+      const earlier = replyKey && rememberedReply(caller, replyKey);
+      if (earlier) return replayReply(res, earlier);
       const raised = addFlag(didHash);
       const durable = persistState();
       metrics.inc('flagsReceived');
       // Attributed. "Someone with the token flagged this agent" stops being an answer
       // once several services hold tokens, and a flag costs an agent real points.
       console.log(`[oracle] flag raised on ${didHash} by ${caller} (now ${raised})`);
+      if (replyKey) rememberReply(caller, replyKey, { didHash, flags: raised });
       return savedReply(res, durable, { didHash, flags: raised });
     } catch (err) {
       return json(res, bodyErrorStatus(err), { error: err.message });
@@ -3364,6 +3419,11 @@ async function handleRequest(req, res) {
   //
   // Token-gated like /flag, and for a stronger reason: this one raises a score. It
   // stays off the public proxy entirely.
+  //
+  // Flags carry no owner, so this clears the newest flags on the agent whoever raised
+  // them: with two or more flag credentials, one can clear another's. Recording who
+  // raised each flag changes the state file's format, which an older build would
+  // misread, so it waits for a format change of its own.
   if (req.method === 'POST' && pathname === '/flag/resolve') {
     if (overLimit(req, res, 'write')) return;
     const caller = identifyCaller(req.headers, cfg.credentials);
@@ -3374,6 +3434,11 @@ async function handleRequest(req, res) {
       const didHash = parseDidHash(body.didHash);
       const { count } = body;
       if (!didHash) return json(res, 400, { error: 'didHash must be a 32-byte hex string' });
+      const requestId = parseRequestId(body.requestId);
+      if (requestId === false) return json(res, 400, { error: 'requestId must be a string of 1 to 128 characters' });
+      const replyKey = requestId && `/flag/resolve\n${didHash}\n${requestId}`;
+      const earlier = replyKey && rememberedReply(caller, replyKey);
+      if (earlier) return replayReply(res, earlier);
 
       const result = resolveFlags(didHash, count ?? 1);
       // Persist only on a real change, so a no-op call does not rewrite the state file.
@@ -3383,6 +3448,7 @@ async function handleRequest(req, res) {
         metrics.inc('flagsResolved', result.resolved);
         console.log(`[oracle] ${result.resolved} flag(s) cleared on ${didHash} by ${caller}`);
       }
+      if (replyKey) rememberReply(caller, replyKey, { didHash, ...result });
       return savedReply(res, durable, { didHash, ...result });
     } catch (err) {
       return json(res, bodyErrorStatus(err), { error: err.message });
@@ -3412,6 +3478,11 @@ async function handleRequest(req, res) {
       } catch (err) {
         console.warn(`[oracle] /link chain read failed for ${didHash}: ${err.message}`);
         return json(res, 502, { error: 'could not read the chain', code: 'rpc_error' });
+      }
+      // A didHash nobody registered reads with no operator. The ownership check below then failed
+      // for that reason alone, and the refusal blamed the 8004 agent's owner.
+      if (/^0x0{40}$/i.test(String(operator))) {
+        return json(res, 403, { error: 'didHash is not a registered Sigvara agent; refusing to link' });
       }
       let owns;
       try {

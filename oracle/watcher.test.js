@@ -38,11 +38,16 @@ async function until(check, ms = 15000) {
   }
 }
 
-async function withWatcher({ divergence, refusal = null, rpc = null }, run) {
+const healthy = (res) => json(res, { ok: true, timeSinceLastEpochMs: 1000 });
+
+async function withWatcher({ divergence, refusal = null, rpc = null, health = healthy, webhookDelayMs = 0 }, run) {
   const alerts = [];
-  const webhook = await listen((_req, res, body) => { alerts.push(body); res.writeHead(204); res.end(); });
+  const webhook = await listen((_req, res, body) => {
+    alerts.push(body);
+    setTimeout(() => { res.writeHead(204); res.end(); }, webhookDelayMs);
+  });
   const checker = await listen((req, res) => {
-    if (req.url === '/health') return json(res, { ok: true, timeSinceLastEpochMs: 1000 });
+    if (req.url === '/health') return health(res);
     return divergence(res);
   });
   // Answers who it is, and fails everything else, as a node having a bad day does.
@@ -96,7 +101,8 @@ const allDisputed = (dids) => (res) => json(res, {
 
 // A node as dRPC answered on 6 November 2026: a whole batch over 10 calls gets a 400, and anything
 // smaller is read. Every agent has an open proposal, except that one in `reverting` cannot be read.
-const pickyNode = (reverting = new Set()) => (_req, res, body) => {
+// `deadline()` is when the open proposal becomes finalizable; moving it closer stands in for the hours passing.
+const pickyNode = (reverting = new Set(), { deadline = () => PROPOSED_AT + 21600 } = {}) => (_req, res, body) => {
   const j = JSON.parse(body);
   if (Array.isArray(j) && j.length > 10) {
     return json(res, j.map((c) => ({ jsonrpc: '2.0', id: c.id, error: { code: 31, message: 'Batch of more than 10 requests are not allowed' } })), 400);
@@ -110,7 +116,7 @@ const pickyNode = (reverting = new Set()) => (_req, res, body) => {
     if (reverting.has(call.args[0])) {
       return { jsonrpc: '2.0', id: c.id, error: { code: 3, message: 'execution reverted', data: '0x08c379a0' } };
     }
-    const pending = [[0, 0, 0, 0, 0, 0, 0], PROPOSED_AT, true, ethers.ZeroHash, ethers.ZeroAddress, PROPOSED_AT + 21600];
+    const pending = [[0, 0, 0, 0, 0, 0, 0], PROPOSED_AT, true, ethers.ZeroHash, ethers.ZeroAddress, deadline()];
     return { jsonrpc: '2.0', id: c.id, result: REPUTATION_ABI.encodeFunctionResult(call.name, [pending]) };
   };
   return json(res, Array.isArray(j) ? j.map(reply) : reply(j));
@@ -170,5 +176,94 @@ test('watcher: what the checker sent instead of JSON is not repeated in the aler
       assert.equal(said.includes('planted'), false);
       assert.equal(said.includes('<html'), false);
     }
+  });
+});
+
+// A checker whose last save failed, or whose scoring is stale, answers /health with 503 and a body saying so,
+// and goes on auditing. Read as unreachable, it stopped every dispute reaching the committee exactly when the
+// checker was degraded.
+test('watcher: a checker answering /health with 503 still has its disputes relayed, and the reason is the true one', async () => {
+  const [did] = agents(1);
+  const health = (res) => json(res, { ok: false, statePersisted: false, timeSinceLastEpochMs: 1000 }, 503);
+  await withWatcher({ health, divergence: allDisputed([did]), rpc: pickyNode() }, async ({ alerts }) => {
+    await until(() => alerts.some((a) => a.includes('checker disputes a score') && a.includes(did)));
+    const down = alerts.filter((a) => a.includes('the checker is not checking'));
+    assert.equal(down.length, 1);
+    assert.match(down[0], /checker reports not ok/);
+  });
+});
+
+test('watcher: a new reason while the checker is not ok is a new alert, and the same reason is not', async () => {
+  let polls = 0;
+  // Not ok at first, then ok but refusing its divergence list: two causes, two pages.
+  const health = (res) => {
+    polls += 1;
+    return polls <= 3 ? json(res, { ok: false, timeSinceLastEpochMs: 1000 }, 503) : healthy(res);
+  };
+  const divergence = (res) => (polls <= 3 ? disputed(res) : json(res, { error: 'Rate limited' }, 429));
+  await withWatcher({ health, divergence, rpc: pickyNode() }, async ({ alerts }) => {
+    await until(() => alerts.filter((a) => a.includes('the checker is not checking')).length >= 2 && polls > 6);
+    const down = alerts.filter((a) => a.includes('the checker is not checking'));
+    assert.equal(down.length, 2);
+    assert.match(down[0], /checker reports not ok/);
+    assert.match(down[1], /divergence list could not be read/);
+  });
+});
+
+// ---- each dispute is paged once, and its last call goes out whatever the checker does --------------
+
+const count = (alerts, words) => alerts.filter((a) => a.includes(words)).length;
+const settle = (ms) => new Promise((r) => setTimeout(r, ms));
+
+test('watcher: LAST CALL goes out while the checker is unreachable', async () => {
+  const [did] = agents(1);
+  let refused = 0;
+  let down = false;
+  const health = (res) => {
+    if (!down) return healthy(res);
+    refused += 1;
+    res.writeHead(500);
+    return res.end();
+  };
+  // Inside the final hour once the checker has gone, as if the hours had passed while it was down.
+  const deadline = () => (refused >= 2 ? Math.floor(Date.now() / 1000) + 1800 : PROPOSED_AT + 21600);
+  await withWatcher({ health, divergence: allDisputed([did]), rpc: pickyNode(new Set(), { deadline }) }, async ({ alerts }) => {
+    await until(() => count(alerts, 'checker disputes a score') === 1);
+    down = true;
+    await until(() => count(alerts, 'LAST CALL') === 1);
+    assert.ok(alerts.find((a) => a.includes('LAST CALL')).includes(did));
+    assert.match(alerts.find((a) => a.includes('the checker is not checking')), /checker unreachable/);
+  });
+});
+
+test('watcher: a dispute first seen inside the final window is paged once', async () => {
+  const [did] = agents(1);
+  const deadline = () => Math.floor(Date.now() / 1000) + 1800;
+  await withWatcher({ divergence: allDisputed([did]), rpc: pickyNode(new Set(), { deadline }) }, async ({ alerts }) => {
+    await until(() => count(alerts, did) >= 1);
+    await settle(1000);
+    assert.equal(count(alerts, did), 1);
+    assert.equal(count(alerts, 'LAST CALL'), 0, 'its one page already says how little time is left');
+  });
+});
+
+// A poll can outlast the interval: a node backing off, or a webhook slow to answer. Two polls at once each
+// took the dispute the other was about to page for unseen.
+test('watcher: one poll at a time, so a slow webhook does not page a dispute twice', async () => {
+  const dids = agents(2);
+  await withWatcher({ divergence: allDisputed(dids), rpc: pickyNode(), webhookDelayMs: 300 }, async ({ alerts }) => {
+    await until(() => dids.every((did) => count(alerts, did) >= 1));
+    await settle(1000);
+    for (const did of dids) assert.equal(count(alerts, did), 1, did);
+  });
+});
+
+test('watcher: a divergence list cut short is paged once, with the number of records behind it', async () => {
+  const divergence = (res) => json(res, { mode: 'checker', seesProposals: true, total: 250, truncated: true, divergences: [] });
+  await withWatcher({ divergence }, async ({ alerts }) => {
+    await until(() => count(alerts, 'more disputes than its list shows') === 1);
+    await settle(500);
+    assert.equal(count(alerts, 'more disputes than its list shows'), 1);
+    assert.match(alerts.find((a) => a.includes('more disputes than its list shows')), /recorded 250/);
   });
 });

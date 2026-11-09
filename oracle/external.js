@@ -113,7 +113,9 @@ let provider, idContract, repContract, enabled = false;
 // path, and /health is public.
 let chainId = null;
 let chainIdError = null;
-let resolving = false;
+// The check in flight, which every caller shares, and when the last one finished (ms).
+let checking = null;
+let checkedAt = 0;
 
 
 // deps lets tests inject fake contracts. Production (index.js) calls init(cfg).
@@ -135,10 +137,20 @@ function init(cfg, deps = {}) {
  * Returns the id, or null when the feed is disabled or the chain could not be read.
  * Never throws: a health endpoint that fails because the thing it reports on is broken
  * tells you less than one that says so.
+ *
+ * A caller arriving while a check is in flight waits for it rather than reading the cache.
+ * A cached id younger than `maxAgeMs` is returned without asking; the default asks every
+ * time. An id that cannot be read again is dropped, so a failed re-check reads as unreachable.
  */
-async function refreshChainId() {
-  if (!enabled || resolving) return chainId;
-  resolving = true;
+async function refreshChainId(maxAgeMs = 0, nowMs = Date.now()) {
+  if (!enabled) return chainId;
+  if (!checking && (chainId === null || nowMs - checkedAt >= maxAgeMs)) {
+    checking = checkChainId().finally(() => { checkedAt = Date.now(); checking = null; });
+  }
+  return checking ?? chainId;
+}
+
+async function checkChainId() {
   try {
     const net = await withTimeout(provider.getNetwork());
     chainId = Number(net.chainId);
@@ -146,8 +158,6 @@ async function refreshChainId() {
   } catch (err) {
     chainId = null;
     chainIdError = String((err && err.message) || err).slice(0, 120);
-  } finally {
-    resolving = false;
   }
   return chainId;
 }

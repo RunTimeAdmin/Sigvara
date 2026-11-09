@@ -122,7 +122,7 @@ Returns 503 when:
 - No successful epoch for two epoch intervals (stale scoring). After a success the two intervals are counted from it. Before the first success they are counted from process start, so a primary that has never completed an epoch reports 503 once it has been up that long, rather than staying green
 
 `storeWritable` and `statePersisted` are not the same check and both are reported.
-The first writes a few bytes to a test file and deletes them, so it answers whether the
+The first writes a few bytes to a test file and deletes them (at most once every five seconds), so it answers whether the
 path looks usable. The second is what the last real write actually did, which can fail
 while the probe passes: a multi-megabyte state file needs space the probe does not.
 It matters because `/attest` answers on the strength of having recorded something, so
@@ -134,8 +134,8 @@ attested outcomes are on chain nowhere, so those do not come back.
 `/flag`, `/flag/resolve` and `/link` say the same thing for the same reason: 202 with
 `"durable": false` while a save is failing, counted in
 `sigvara_oracle_writes_not_durable_total`. The change is held in memory and written by the
-next save that works, so check that `/health` is 200 again before treating it as kept. Do not
-resend a flag or a resolve: a flag sent twice is two flags, and a resolve sent twice clears
+next save that works, so check that `/health` is 200 again before treating it as kept. Resend
+a flag or a resolve only with the `requestId` it was first sent with: without one, a flag sent twice is two flags, and a resolve sent twice clears
 another one. A link sets the same value again, so it can be sent once `/health` is 200.
 
 `stateSource` is `file`, `fresh` (there was no state file) or `backup`. `backup` means the
@@ -165,7 +165,7 @@ agent is not linked to an ERC-8004 id, or no reviewer of it passes `reviewers.js
 recognized tag (the epoch log says which). Those need different responses and the score cannot tell them apart.
 
 `externalChainId` is the chain the feed actually reached, read from the provider rather
-than parsed out of the URL, and `null` when it could not be reached.
+than parsed out of the URL, and `null` when it could not be reached. `/health` has it checked again once the last check is five minutes old.
 
 Both fields exist because the earlier version of this one could not fail. It was a
 truthiness check on three environment strings, so it reported `configured` for a
@@ -376,11 +376,11 @@ agent permanently. Set `FLAG_HALF_LIFE_DAYS=0` to disable decay.
 
 **Request:**
 ```json
-{ "didHash": "0x..." }
+{ "didHash": "0x...", "requestId": "ticket-4711" }
 ```
 
 Answers 200 with the count of flags once the flag is saved, or 202 with `"durable": false` if
-the state file could not be written (see `/health`). Do not resend a 202: it would be a second
+the state file could not be written (see `/health`). `requestId` is optional, 1 to 128 characters: sent again by the same credential for the same agent within a day, the request is answered with its first reply and `"replayed": true`, and raises nothing. The oracle remembers it in memory only, so not across a restart. Do not resend a 202 without one: it would be a second
 flag.
 
 ### `POST /flag/resolve` (auth required)
@@ -392,7 +392,7 @@ service produces them.
 
 **Request:** `count` defaults to 1.
 ```json
-{ "didHash": "0x...", "count": 2 }
+{ "didHash": "0x...", "count": 2, "requestId": "ticket-4712" }
 ```
 
 **Response (200):**
@@ -413,7 +413,7 @@ a mistake is asking about the flags they raised, not what the score currently ch
 them.
 
 A 202 with `"durable": false` means the state file could not be written, as for `/flag`. Do
-not resend it: the flags are already cleared in memory, and a second call would clear another.
+not resend it without its `requestId`, which works as for `/flag`: the flags are already cleared in memory, and a second call would clear another. Flags record no owner, so a resolve clears the newest flags whichever credential raised them.
 
 ### `POST /link` (auth required)
 
@@ -913,7 +913,7 @@ alerts, which is the failure this path exists to prevent.
 second says you are about to lose the ability to act.
 
 **A silent checker is an alert, not quiet.** This is the property that makes the
-component worth running. The watcher raises an alarm when the checker is unreachable,
+component worth running. The watcher raises an alarm when the checker is unreachable or says it is not ok (and still relays the disputes it lists),
 when it is up but has not completed an epoch within `MAX_SILENCE_MINUTES` (counted from the moment it
 started, if it has never completed one), when the URL
 turns out to be a primary rather than a checker, or when the checker reports

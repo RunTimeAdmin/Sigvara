@@ -159,7 +159,7 @@ function fakeProvider(s) {
     getTransactionCount: async () => s.state.pendingNonce,
     // Each transaction that lands moves the account's nonce on, as the chain does.
     broadcastTransaction: async (raw) => { broadcast.push(raw); s.state.pendingNonce += 1; return { hash: ethers.Transaction.from(raw).hash }; },
-    waitForTransaction: async () => ({ status: 1 }),
+    getTransactionReceipt: async () => ({ status: 1 }),
   };
 }
 
@@ -225,6 +225,28 @@ test('it signs nothing in its first minute, since the record of used requests st
     await assert.rejects(client(s, fakeProvider(s)).send('revoke', 7, [7, 1]), /starting; signing from 60 s after start/);
   } finally {
     await s.close();
+  }
+});
+
+// A request is accepted while its time is within MAX_SKEW_SECONDS of this clock, either side, so one sent
+// just before a restart, stamped ahead of this clock, can be sent again until twice that after the restart.
+// The record of requests used does not survive the restart, so the default warmup covers the whole of it.
+test('by default it signs nothing until twice the allowed clock skew has passed since it started', async () => {
+  const { MAX_SKEW_SECONDS } = require('./signer-auth');
+  let clock = NOW;
+  const allowFrom = new Set(['127.0.0.1']);
+  const server = createServer(createSigner({
+    wallet: KEY, policy, secret: SECRET, allowFrom, maxPerHour: 60, chainId: CHAIN, record: signedRecord(null), log: () => {},
+    now: () => clock, chain: async () => ({ pendingNonce: 4, time: clock }),
+  }), allowFrom);
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  try {
+    clock = NOW + 2 * MAX_SKEW_SECONDS - 1;
+    const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_signTransaction', params: [{}] });
+    const res = await fetch(`http://127.0.0.1:${server.address().port}`, { method: 'POST', body, headers: { [HEADER]: authHeader(SECRET, body, clock) } });
+    assert.match((await res.json()).error.message, new RegExp(`starting; signing from ${2 * MAX_SKEW_SECONDS} s after start`));
+  } finally {
+    await new Promise((r) => server.close(r));
   }
 });
 

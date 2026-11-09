@@ -329,6 +329,39 @@ const slash = (w, block) => {
   w.events.push({ kind: 'zeroed', didHash: did(1), block, logIndex: 0, txHash: null });
 };
 
+// A live run with a gate failing (the signer tunnel down, a pending transaction, a low balance) sends
+// nothing and keeps what it owes. It kept a linked agent's update, but dropped an unlinked agent's
+// cleanup, so the old 8004 agent kept the score until the next day, and a slashed one then got a revoke
+// instead of the 0 it is owed.
+test('live mode: a blocked run keeps an unlinked agent\'s cleanup, and revokes once the gate passes', async () => {
+  const { w, publisher } = setup({ mode: 'live' });
+  await publisher.runOnce();
+  delete w.links[did(1)];
+  nextDay(w, 160);
+  w.agentWallet = DEPLOYER;
+  await publisher.runOnce(); // blocked: the revoke is planned, not sent
+  assert.deepEqual(kinds(w), ['post']);
+  w.agentWallet = PUBLISHER;
+  w.head = 170;
+  await publisher.runOnce();
+  assert.deepEqual(kinds(w), ['post', 'revoke']);
+  assert.deepEqual(liveValues(w, '7'), []);
+});
+
+test('live mode: a blocked run keeps an unlinked, slashed agent\'s zero, and posts it once the gate passes', async () => {
+  const { w, publisher } = setup({ mode: 'live' });
+  await publisher.runOnce();
+  delete w.links[did(1)];
+  slash(w, 135);
+  w.agentWallet = DEPLOYER;
+  await publisher.runOnce(); // blocked
+  assert.deepEqual(kinds(w), ['post']);
+  w.agentWallet = PUBLISHER;
+  await publisher.runOnce();
+  assert.deepEqual(kinds(w), ['post', 'revoke', 'post']);
+  assert.deepEqual(liveValues(w, '7'), [0n]);
+});
+
 test('live mode: a post that timed out and landed is cleaned up after an unlink and a slash', async () => {
   // The run after it finds the score live and unchanged, and used to record nothing, so the cleanup
   // never knew where to go: the old 8004 agent kept the last positive score of a slashed agent.
@@ -631,9 +664,77 @@ function fakeProvider({ maxFeePerGas = 20n * 10n ** 9n } = {}) {
     estimateGas: async () => 150_000n,
     getTransactionCount: async () => 4,
     broadcastTransaction: async (raw) => { broadcast.push(raw); return { hash: ethers.Transaction.from(raw).hash }; },
-    waitForTransaction: async () => ({ status: 1 }),
+    getTransactionReceipt: async () => ({ status: 1 }),
   };
 }
+
+// waitForTransaction counts a confirmation only once it has seen a block after the transaction's, so a post
+// that had landed, read before the next block, timed out and was reported as not confirmed. The keeper polls
+// for the receipt for that reason, and the publisher now does the same.
+test('remoteSigner: a receipt is enough, without waiting for a block after it', async () => {
+  const s = await fakeSigner();
+  try {
+    let reads = 0;
+    const provider = {
+      ...fakeProvider(),
+      waitForTransaction: async () => { throw new Error('timeout'); },
+      // Not there on the first read, and a read that fails says nothing either way.
+      getTransactionReceipt: async () => {
+        reads += 1;
+        if (reads === 1) return null;
+        if (reads === 2) throw new Error('rate limit exceeded');
+        return { status: 1 };
+      },
+    };
+    const signer = remoteSigner({ url: s.url, secret: SECRET, publisher: s.address, provider, chainId: 5042002, to: REGISTRY, maxFeeWei: 50n * 10n ** 9n, maxGas: 400_000n, pollMs: 1 });
+    const hash = await signer.send('revoke', 7, [7, 1]);
+    assert.equal(hash, ethers.Transaction.from(provider.broadcast[0]).hash);
+    assert.equal(reads, 3);
+  } finally {
+    await s.close();
+  }
+});
+
+test('remoteSigner: a reverted post, and one with no receipt in time, name the transaction', async () => {
+  const s = await fakeSigner();
+  try {
+    for (const [receipt, words] of [[{ status: 0 }, /revoke 0x[0-9a-f]{64} reverted/], [null, /revoke 0x[0-9a-f]{64} was sent, with no receipt.*Check it before assuming it failed/]]) {
+      const provider = { ...fakeProvider(), getTransactionReceipt: async () => receipt };
+      const signer = remoteSigner({ url: s.url, secret: SECRET, publisher: s.address, provider, chainId: 5042002, to: REGISTRY, maxFeeWei: 50n * 10n ** 9n, maxGas: 400_000n, waitMs: 20, pollMs: 1 });
+      await assert.rejects(signer.send('revoke', 7, [7, 1]), words);
+    }
+  } finally {
+    await s.close();
+  }
+});
+
+// fs.writeSync may write less than it is given, and the state file was written with one call.
+test('fileState: a write the system takes in pieces still lands whole', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { fileState } = require('./publisher');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sigvara-filestate-'));
+  const real = fs.writeSync;
+  // At most 7 bytes a call.
+  fs.writeSync = (fd, data, ...rest) => {
+    if (typeof data === 'string') return real(fd, data.slice(0, 7));
+    const [offset = 0, length = data.length - offset] = rest;
+    return real(fd, data, offset, Math.min(length, 7));
+  };
+  try {
+    const file = path.join(dir, 'state.json');
+    const value = { scanBlock: 12_345, open: { [did(1)]: true }, note: 'é'.repeat(40) };
+    const s = fileState(file);
+    s.set(value);
+    s.persist();
+    fs.writeSync = real;
+    assert.deepEqual(fileState(file).get(), value);
+  } finally {
+    fs.writeSync = real;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test('remoteSigner: signs through the remote signer, checks what came back, and broadcasts it', async () => {
   const s = await fakeSigner();

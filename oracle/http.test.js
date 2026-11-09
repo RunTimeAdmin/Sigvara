@@ -75,6 +75,43 @@ test('/health before the first epoch says so: no last epoch, a null gap, and an 
   assert.equal(typeof health.uptimeSeconds, 'number');
 });
 
+// A failover lands the RPC on another chain. Every epoch aborts from then on, and /health kept naming the
+// chain it had last verified, the expected one, so nothing outside could tell until scoring went stale.
+test('/health names the chain the node is on now, even one every epoch refuses', async () => {
+  const w = new World();
+  const o = await startOracle({ world: w, env: { ...ENV, EXPECTED_CHAIN_ID: '5042' } });
+  const health = async () => (await o.call('GET', '/health')).body;
+  try {
+    while ((await health()).chainId !== 5042) await new Promise((r) => setTimeout(r, 50));
+    w.set('chainId', 1);
+    while ((await o.call('POST', '/epoch', undefined, ADMIN)).status !== 202) await new Promise((r) => setTimeout(r, 50));
+    await o.waitForLog(/epoch aborted: EXPECTED_CHAIN_ID is 5042 but the RPC reports chain 1/);
+    const h = await health();
+    assert.equal(h.chainId, 1);
+    assert.equal(h.expectedChainId, 5042);
+  } finally {
+    await o.stop();
+  }
+});
+
+// /health asked the ERC-8004 feed to check its chain only while it read as unreachable, so after one good
+// check it said `configured` for as long as the process ran, whatever became of the feed.
+test('/health has a configured ERC-8004 feed checked again once its last check is five minutes old', async () => {
+  world.set('externalChainId', 5042);
+  world.set('recordExternalRefresh', true);
+  try {
+    const health = (await oracle.call('GET', '/health')).body;
+    assert.equal(health.externalFeed, 'configured');
+    assert.ok(
+      oracle.calls().some((c) => c.name === 'externalRefresh' && c.args[0] === 5 * 60_000),
+      JSON.stringify(oracle.calls().filter((c) => c.name === 'externalRefresh')),
+    );
+  } finally {
+    world.set('recordExternalRefresh', false);
+    world.set('externalChainId', undefined);
+  }
+});
+
 test('an ordinary request is still answered', async () => {
   assert.match(await oracle.raw('GET /health HTTP/1.1'), / 200 /);
   assert.match(await oracle.raw(`GET /evidence/${DID} HTTP/1.1`), / 200 /);
@@ -201,6 +238,37 @@ test('/flag files the flag under the one stored spelling of the hash', async () 
   assert.equal(s.body.flags, 1, 'a score reads the flag, which a mixed-case key would hide');
 });
 
+// A flag or a resolve whose reply was lost cannot be told apart from one that never arrived, and sending it
+// again raised a second flag or cleared another one. Sent with a requestId, the second one is answered with
+// the first one's reply and changes nothing.
+test('/flag and /flag/resolve sent again with the same requestId are answered once and applied once', async () => {
+  const did = `0x${'7e'.repeat(32)}`;
+  const flag = (requestId, token = FLAGGER) => oracle.call('POST', '/flag', { didHash: did, requestId }, token);
+  const first = await flag('lost-reply-1');
+  const again = await flag('lost-reply-1');
+  assert.equal(first.body.flags, 1);
+  assert.equal(again.status, 200, again.text);
+  assert.equal(again.body.flags, 1, 'not a second flag');
+  assert.equal(again.body.replayed, true);
+  assert.equal((await flag('lost-reply-2')).body.flags, 2, 'a new requestId is a new flag');
+  assert.equal((await flag('lost-reply-1', ADMIN)).body.flags, 3, 'another credential\'s requestId is its own');
+
+  const resolve = () => oracle.call('POST', '/flag/resolve', { didHash: did, requestId: 'lost-reply-3' }, FLAGGER);
+  assert.equal((await resolve()).body.after, 2);
+  const resolvedAgain = await resolve();
+  assert.equal(resolvedAgain.body.after, 2, 'not another flag cleared');
+  assert.equal(resolvedAgain.body.replayed, true);
+  assert.equal((await oracle.call('GET', `/score/${did}`)).body.flags, 2);
+});
+
+test('/flag refuses a requestId that is not a short string', async () => {
+  for (const requestId of [7, '', 'x'.repeat(129), { a: 1 }]) {
+    const r = await oracle.call('POST', '/flag', { didHash: `0x${'7f'.repeat(32)}`, requestId }, FLAGGER);
+    assert.equal(r.status, 400, JSON.stringify(requestId));
+  }
+  assert.equal((await oracle.call('GET', `/score/0x${'7f'.repeat(32)}`)).body.flags, 0);
+});
+
 test('/score reads the stored spelling whatever case the caller writes the hash in', async () => {
   const lower = `0x${'9e'.repeat(32)}`;
   assert.equal((await oracle.call('POST', '/flag', { didHash: lower }, ADMIN)).status, 200);
@@ -255,6 +323,19 @@ test('/flag/resolve and /link refuse a didHash that is not a 32-byte hash', asyn
     const r = await oracle.call('POST', path, body, ADMIN);
     assert.equal(r.status, 400, `${path} ${JSON.stringify(body)}`);
     assert.match(r.body.error, /32-byte/);
+  }
+});
+
+// A didHash nobody registered reads with no operator, so the ownership check compared the 8004 agent's owner
+// with the zero address and the refusal blamed ownership, sending the caller to look at the wrong thing.
+test('/link on a didHash that is not a registered agent says so', async () => {
+  world.set('externalOwns', false);
+  try {
+    const r = await oracle.call('POST', '/link', { didHash: `0x${'5a'.repeat(32)}`, agentId: 7 }, ADMIN);
+    assert.equal(r.status, 403);
+    assert.match(r.body.error, /not a registered Sigvara agent/);
+  } finally {
+    world.set('externalOwns', undefined);
   }
 });
 
