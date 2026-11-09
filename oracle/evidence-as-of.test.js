@@ -64,28 +64,17 @@ test('refuses a time that is not one', () => {
   assert.throws(() => evidenceAsOf([], undefined, null), /atMs/);
 });
 
-test('a proposal over the order its proposer stored is found through `stored`, an outcome signed since read as it saw it', () => {
+test('only the fixed order is read: a root over the same payments in another order does not match', () => {
   const unjudged = ev(1, AT - 60_000, { success: null });
   const signed = Object.freeze({ ...unjudged, success: true, payerOutcome: Object.freeze({ outcome: 1, acceptedAt: AT + 3_600_000 }) });
   const a = ev(2, AT - 86_400_000);
   const b = ev(3, AT - 3_600_000);
-  const stored = [signed, a, b];
   const fixed = [a, b, signed];
   const root = rootFor([unjudged, a, b]);
   assert.notEqual(rootFor([a, b, unjudged]), root, 'the order changes this root');
 
-  const without = evidenceAsOf(fixed, AT, root);
-  assert.equal(without.matchedRoot, false);
-  assert.equal(without.events[2].success, true, 'the outcome counts against a proposer who could not have seen it');
-
-  const got = evidenceAsOf(fixed, AT, root, { stored });
-  assert.equal(got.matchedRoot, true);
-  assert.equal(got.events[0].success, null);
-  assert.equal(rootFor(got.events), root);
-
-  // The fixed order is tried first, and nothing about what it falls back to changes.
-  assert.equal(evidenceAsOf(fixed, AT, rootFor(fixed), { stored }).events[0], a);
-  const none = evidenceAsOf(fixed, AT, `0x${'ab'.repeat(32)}`, { stored });
-  assert.equal(none.matchedRoot, false);
-  assert.deepEqual(none.events, fixed);
+  const got = evidenceAsOf(fixed, AT, root);
+  assert.equal(got.matchedRoot, false);
+  assert.deepEqual(got.events, fixed, 'what had settled by then, in the fixed order');
+  assert.equal(got.events[2].success, true);
 });
