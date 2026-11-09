@@ -346,7 +346,9 @@ were run against a test seller and the real chain for this release. A seller wit
 with `X402SellerRefused`, whose `refused` lists each verdict, and the client never gets anything to sign. Anything else, including a 402 whose sellers all pass, comes back
 exactly as it arrived. Every address offered must pass, because the client chooses among them. It reads the v2
 `PAYMENT-REQUIRED` header and the v1 JSON body, and a server sending both is held to both. A 402 it cannot read
-is refused, since a client that can read it would then pay unchecked.
+is refused, since a client that can read it would then pay unchecked. So is one whose header or body is larger
+than `X402_MAX_BYTES` (64 KiB), or that makes more than `X402_MAX_OFFERS` (16) offers. Sellers are checked four
+at a time, and one address spelled in two cases is checked once.
 
 A seller has to be paid at the agent's registered address for this to find it. One paid at another address, or
 on a chain with its own addresses, reads as having no standing, and is refused. This is a check on who is paid.

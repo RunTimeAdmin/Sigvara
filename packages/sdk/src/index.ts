@@ -4,7 +4,7 @@ export { depositStake } from './stake';
 export { SigvaraGate, atomicNonceStore } from './gate';
 export { SigvaraTrustCheck, standingDecision } from './standing';
 export type { TrustCheckConfig, TrustVerdict, TrustReason, StandingReason } from './standing';
-export { sigvaraX402Fetch, x402OffersFrom, X402SellerRefused } from './x402';
+export { sigvaraX402Fetch, x402OffersFrom, X402SellerRefused, X402_MAX_BYTES, X402_MAX_OFFERS } from './x402';
 export type { X402Offer } from './x402';
 export { sigvaraTrustTool, requireTrustedAgent, UntrustedAgentError, TRUST_TOOL_SCHEMA } from './tools';
 export {

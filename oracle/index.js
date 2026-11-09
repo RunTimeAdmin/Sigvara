@@ -212,7 +212,7 @@ const lastPaymentChainScans = new Map();
 let lastEpochHold = null;
 // Why an epoch left agents unscored: a scan behind where the evidence must be cut, or a payer's negative that is due
 // and not read, or starts to count before a proposal could land (negative-hold.js).
-const HOLD = Object.freeze({ SCAN_BEHIND: 'scan_behind', PAYER_NEGATIVE: 'payer_negative' });
+const HOLD = Object.freeze({ SCAN_BEHIND: 'scan_behind', PAYER_NEGATIVE: 'payer_negative', LEDGER_FULL: 'ledger_full' });
 // The cut-off the scans were last run again for (evidenceCutFor).
 let lastRescanForMs = null;
 // How long one epoch spends catching a payment chain up, in steps of MAX_BLOCKS, before it leaves the
@@ -333,6 +333,8 @@ const {
   isCredited,
   getLastPersist,
   getPaymentEvents,
+  atEventCap,
+  ledgerStatus,
   allPaymentEvents,
   prunePaymentEvents,
   pruneExpiredCooldowns,
@@ -1294,6 +1296,8 @@ async function runEpochInner() {
   // negative (HOLD).
   let agentsHeld = 0;
   let agentsHeldByNegative = 0;
+  // Agents whose ledger is at its cap (store.js MAX_EVENTS_PER_AGENT).
+  let agentsHeldByLedger = 0;
   let finalized = 0;
   let diverged = 0;
 
@@ -1583,6 +1587,13 @@ async function runEpochInner() {
           }
           scoringNowMs = cut.nowMs;
           evidenceCutMs = cut.cutMs;
+        }
+        // A ledger at its cap stopped taking payments at whichever payment reached it, which need not be the same one
+        // on every operator. Held until pruning by age makes room, rather than scored on evidence that may differ.
+        if (atEventCap(didHash)) {
+          console.warn(`[oracle]   ${didHash.slice(0, 10)}… its payment ledger is full, skipping`);
+          agentsHeldByLedger++;
+          continue;
         }
         // A payer's negative that should count by now, whose refunds this operator has not finished reading
         // (negative-hold.js): read differently from the other operator's, it would be a disagreement that is not one.
@@ -2033,11 +2044,25 @@ async function runEpochInner() {
     console.warn(`[oracle] ${agentsHeldByNegative} agent(s) left unscored for a payer's negative: due with its refunds not read, or counting before a proposal could land`);
     metrics.inc('agentsHeldByPayerNegative', agentsHeldByNegative);
   }
-  if (agentsHeld || agentsHeldByNegative) {
+  if (agentsHeldByLedger) {
+    console.error(`[oracle] ${agentsHeldByLedger} agent(s) left unscored: payment ledger full`);
+    metrics.inc('agentsHeldByLedgerCap', agentsHeldByLedger);
+  }
+  {
+    const ledger = ledgerStatus();
+    if (ledger.events >= ledger.maxTotal * 0.8) {
+      console.error(`[oracle] payment ledger at ${ledger.events} of ${ledger.maxTotal} events; ${ledger.refused} payment(s) refused`);
+    }
+  }
+  if (agentsHeld || agentsHeldByNegative || agentsHeldByLedger) {
     lastEpochHold = {
       at: new Date().toISOString(),
-      agents: agentsHeld + agentsHeldByNegative,
-      reasons: [...(agentsHeld ? [HOLD.SCAN_BEHIND] : []), ...(agentsHeldByNegative ? [HOLD.PAYER_NEGATIVE] : [])],
+      agents: agentsHeld + agentsHeldByNegative + agentsHeldByLedger,
+      reasons: [
+        ...(agentsHeld ? [HOLD.SCAN_BEHIND] : []),
+        ...(agentsHeldByNegative ? [HOLD.PAYER_NEGATIVE] : []),
+        ...(agentsHeldByLedger ? [HOLD.LEDGER_FULL] : []),
+      ],
     };
   }
 
@@ -2047,7 +2072,7 @@ async function runEpochInner() {
     ` in ${Date.now() - start}ms`,
   );
   // One that held every agent it would have scored did no more than one held at its start, and counts the same.
-  if (candidates.length && agentsHeld + agentsHeldByNegative === candidates.length) {
+  if (candidates.length && agentsHeld + agentsHeldByNegative + agentsHeldByLedger === candidates.length) {
     metrics.inc('epochsFailed');
   } else {
     metrics.inc('epochsSucceeded');
@@ -2856,6 +2881,8 @@ async function handleRequest(req, res) {
       // 'file', 'fresh', or 'backup' when the state file was unusable and the previous save
       // was used instead, which is a recovery somebody should hear about.
       stateSource: getLoadReport().source,
+      // Payment events held against the caps in store.js, and payments the caps refused since start.
+      paymentLedger: ledgerStatus(),
       // The chain the RPC was last seen on, and the one this oracle was configured for. Null
       // until the first check, and the expected one is null when EXPECTED_CHAIN_ID is unset.
       chainId: seenChainId,

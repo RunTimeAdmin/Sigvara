@@ -38,6 +38,37 @@ export class X402SellerRefused extends Error {
   }
 }
 
+/** The most of a 402's body or `PAYMENT-REQUIRED` header this reads. A seller controls both. */
+export const X402_MAX_BYTES = 64 * 1024;
+/** The most offers one 402 may make. One with more is refused, not partly checked. */
+export const X402_MAX_OFFERS = 16;
+/** How many sellers are checked at once, so one 402 cannot start an unbounded burst of chain reads. */
+const CHECKS_AT_ONCE = 4;
+
+/** The body as text, or null when it is larger than `X402_MAX_BYTES`. Stops reading at the limit. */
+async function boundedText(res: Response): Promise<string | null> {
+  if (!res.body) return '';
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > X402_MAX_BYTES) {
+      // Not awaited: a clone's stream is one branch of a tee, and cancelling one branch settles only once the
+      // other is cancelled too, which is the caller's to do.
+      reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+  }
+  const all = new Uint8Array(size);
+  let at = 0;
+  for (const c of chunks) { all.set(c, at); at += c.byteLength; }
+  return new TextDecoder().decode(all);
+}
+
 function decodeHeader(value: string): unknown {
   const base64 = value.trim().replace(/-/g, '+').replace(/_/g, '/');
   const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
@@ -50,19 +81,24 @@ const offersIn = (required: unknown): X402Offer[] | null => {
 };
 
 /**
- * Every offer a 402 makes, from its header and its body, or null when neither can be read. Reads a clone,
- * so the response can still be read by whoever gets it next.
+ * Every offer a 402 makes, from its header and its body, or null when neither can be read, or when either is
+ * larger than `X402_MAX_BYTES`: an oversized part is refused rather than skipped, since a client may act on it.
+ * Reads a clone, so the response can still be read by whoever gets it next.
  */
 export async function x402OffersFrom(res: Response): Promise<X402Offer[] | null> {
   const found: X402Offer[] = [];
   const header = res.headers.get('payment-required');
   if (header) {
+    // Base64 is four characters for three bytes.
+    if (header.length > Math.ceil(X402_MAX_BYTES / 3) * 4) return null;
     try {
       found.push(...(offersIn(decodeHeader(header)) ?? []));
     } catch { /* a header that does not decode offers nothing */ }
   }
+  const text = await boundedText(res.clone());
+  if (text === null) return null;
   try {
-    found.push(...(offersIn(await res.clone().json()) ?? []));
+    found.push(...(offersIn(JSON.parse(text)) ?? []));
   } catch { /* a v2 response can have any body, or none */ }
   return found.length > 0 ? found : null;
 }
@@ -81,8 +117,20 @@ export function sigvaraX402Fetch(
     if (res.status !== 402) return res;
     const offers = await x402OffersFrom(res);
     if (!offers) throw new X402SellerRefused('This 402 names no offer that can be read, so its seller cannot be checked.', []);
-    const payees = [...new Set(offers.map((o) => String(o.payTo ?? '')))];
-    const verdicts = await Promise.all(payees.map((p) => trust.check(p)));
+    if (offers.length > X402_MAX_OFFERS) {
+      throw new X402SellerRefused(`This 402 makes ${offers.length} offers, more than the ${X402_MAX_OFFERS} checked.`, []);
+    }
+    // Addresses compare without case, so one payee spelled two ways is checked once.
+    const byKey = new Map<string, string>();
+    for (const o of offers) {
+      const p = String(o.payTo ?? '');
+      if (!byKey.has(p.toLowerCase())) byKey.set(p.toLowerCase(), p);
+    }
+    const payees = [...byKey.values()];
+    const verdicts: TrustVerdict[] = [];
+    for (let i = 0; i < payees.length; i += CHECKS_AT_ONCE) {
+      verdicts.push(...await Promise.all(payees.slice(i, i + CHECKS_AT_ONCE).map((p) => trust.check(p))));
+    }
     const refused = verdicts.filter((v) => !v.ok);
     if (refused.length > 0) {
       const named = refused.map((v) => `${v.agent || '(no payTo)'}: ${v.reason}`).join('; ');

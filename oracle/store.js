@@ -45,6 +45,15 @@ const DEFAULT_FLAG_HALF_LIFE_DAYS = 30;
 const FLAG_HALF_LIFE_MS =
   numberSetting(process.env.FLAG_HALF_LIFE_DAYS, DEFAULT_FLAG_HALF_LIFE_DAYS) * 86_400_000;
 
+// Bounded so a stream of small payments, to one agent or across all of them, cannot grow the ledger until a
+// save no longer fits in memory: state-serialize.js measured about 280 MB at 200,000 events against the 768 MB
+// the mainnet compose file allows. A payment past a cap is not credited and not marked used. An agent at its own
+// cap is held by the epoch loop (atEventCap) rather than scored, since an operator that reached the cap at a
+// different payment would score it differently. Pruning by age makes room again.
+const MAX_EVENTS_PER_AGENT = numberSetting(process.env.PAYMENT_MAX_EVENTS_PER_AGENT, 25_000);
+const MAX_EVENTS_TOTAL = numberSetting(process.env.PAYMENT_MAX_EVENTS_TOTAL, 150_000);
+let ledgerRefusals = 0;
+
 // didHash → ERC-8004 agentId (string) this agent is linked to (ownership-verified at link time)
 const links = new Map();
 // "attester:didHash" → timestamp (ms) of last attestation — dedupe/cooldown guard
@@ -666,6 +675,10 @@ function creditPayment(
   // would ever read it.
   const did = String(didHash).toLowerCase();
   if (isCredited(key, did, payer, chainId)) return false;
+  if ((paymentEvents.get(did)?.length ?? 0) >= MAX_EVENTS_PER_AGENT || paymentEventTotal() >= MAX_EVENTS_TOTAL) {
+    ledgerRefusals += 1;
+    return false;
+  }
   usedPaymentTxs.add(creditKey(key, did, payer, chainId));
   const list = paymentEvents.get(did) ?? [];
   // The settlement hash is kept, not just used for dedupe: it is what lets a third
@@ -942,6 +955,21 @@ function paymentVolume(didHash) {
 /// not grow without bound. At a 90-day half-life and the default floor this keeps
 /// roughly the last three years, by which point an event contributes under a
 /// thousandth of its original value and cannot move an integer score.
+/** How many payment events this oracle holds, across every agent. */
+function paymentEventTotal() {
+  let n = 0;
+  for (const list of paymentEvents.values()) n += list.length;
+  return n;
+}
+
+/** Whether this agent's ledger is at MAX_EVENTS_PER_AGENT, so further payments to it are not credited. */
+const atEventCap = (didHash) => (paymentEvents.get(String(didHash).toLowerCase())?.length ?? 0) >= MAX_EVENTS_PER_AGENT;
+
+/** The ledger's size against its caps, and how many payments the caps refused since this process started. */
+const ledgerStatus = () => ({
+  events: paymentEventTotal(), maxTotal: MAX_EVENTS_TOTAL, maxPerAgent: MAX_EVENTS_PER_AGENT, refused: ledgerRefusals,
+});
+
 function prunePaymentEvents(halfLifeMs, minWeight = 0.001, now = Date.now()) {
   if (!halfLifeMs || halfLifeMs <= 0) return 0;
   const cutoff = now - halfLifeMs * (Math.log2(1 / minWeight));
@@ -1068,6 +1096,10 @@ function getStatePath() {
 }
 
 module.exports = {
+  atEventCap,
+  ledgerStatus,
+  MAX_EVENTS_PER_AGENT,
+  MAX_EVENTS_TOTAL,
   attestations,
   flags,
   addFlag,
