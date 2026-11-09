@@ -2,8 +2,8 @@
 
 **Status:** Accepted · 2026-11-03, with David's decisions below. Rollout step 1 is built, off by default
 (`oracle/payment-chains.js`): sections 1 to 8, with section 7 since 6 November 2026. Step 2, shadow on both operators, ran from about 00:40 UTC on 7 November 2026, and step 3 followed the same day: `on` from block 55462500, the checker at 01:54:45 UTC and the primary at 01:55:18 UTC. Step 4 has begun: two plain transfers, one from a test wallet with an outcome signed by its key and one from a Base Account with an outcome checked through ERC-1271, are held alike by both operators and are in proposals the checker has audited, and the first is in a finalized root ([simulation.md](../simulation.md)). A Wallet MCP x402 payment is still to do.
-CounterAudit's forwarder takes the field from CounterAudit#97, which is not deployed yet, so an outcome for a payment chain's payment goes
-straight to an operator's `POST /attest` for now.
+CounterAudit's forwarder takes the field from CounterAudit#97, live on api.counteraudit.io since 9 November 2026 with a Base Sepolia RPC,
+so an outcome for a payment chain's payment can go through CounterAudit or straight to an operator's `POST /attest`.
 
 ## Context
 
