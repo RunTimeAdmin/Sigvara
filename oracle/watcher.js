@@ -84,13 +84,15 @@ const said = (err) => redact(wordsOf(err), [cfg.rpcUrl, cfg.webhookUrl]);
 // direction. Losing the record of an alert nobody acted on is not a loss.
 const sent = new Map();
 let checkerWasOk = true;
+// Which of checkerStatus's kinds was last paged, so a new cause while not ok is paged too.
+let checkerKind = null;
 
 // redirect: 'error'. The checker is somebody else's server, and following a redirect it
 // chooses would let it point this watcher at an address it could not reach itself, such as
 // the cloud metadata service on this host.
-async function getJson(path) {
+async function getJson(path, { acceptStatus = [] } = {}) {
   const res = await fetch(`${cfg.checkerUrl}${path}`, { signal: AbortSignal.timeout(20_000), redirect: 'error' });
-  if (!res.ok) throw new Error(`${path} returned ${res.status}`);
+  if (!res.ok && !acceptStatus.includes(res.status)) throw new Error(`${path} returned ${res.status}`);
   const body = await res.text();
   // Not the parser's message, which quotes the body: what this server sends is not ours to repeat.
   try { return JSON.parse(body); } catch { throw new Error(`${path} did not return JSON`); }
@@ -138,7 +140,9 @@ async function poll() {
   // that was refused left no trace anywhere and the poll carried on as if all were well.
   let health = null, payload = null, payloadError = null;
   try {
-    health = await getJson('/health');
+    // A 503 is the checker saying it is not ok, with a body that says so: a save failed, or its
+    // scoring is stale. It may still be auditing, so it is read like a 200 and not as unreachable.
+    health = await getJson('/health', { acceptStatus: [503] });
   } catch (err) {
     console.error(`[watcher] checker fetch failed: ${said(err)}`);
   }
@@ -153,8 +157,9 @@ async function poll() {
 
   const status = checkerStatus(health, payload, Date.now(), cfg.maxSilenceMs, payloadError);
   if (!status.ok) {
-    // Only on the transition, so an outage is one page rather than one per poll.
-    if (checkerWasOk) {
+    // On the transition, and when the cause changes, so an outage is one page per cause rather
+    // than one per poll.
+    if (checkerWasOk || status.kind !== checkerKind) {
       await notify('alert', 'the checker is not checking', [
         status.reason,
         `checker: ${cfg.checkerUrl}`,
@@ -162,13 +167,17 @@ async function poll() {
       ]);
     }
     checkerWasOk = false;
-    return;
-  }
-  if (!checkerWasOk) {
+    checkerKind = status.kind;
+  } else if (!checkerWasOk) {
     await notify('ok', 'checker is back', [`checker: ${cfg.checkerUrl}`]);
     checkerWasOk = true;
+    checkerKind = null;
   }
 
+  // What a checker that is not ok still found is relayed all the same: its disputes are the
+  // committee's only signal, and triage re-reads the chain, so a degraded checker cannot raise a
+  // false one. Only a list that is missing, or not a checker's, has nothing to relay.
+  if (!payload || payload.mode !== 'checker') return;
   const divergences = payload.divergences ?? [];
   if (divergences.length === 0) return;
 

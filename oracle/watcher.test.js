@@ -38,11 +38,13 @@ async function until(check, ms = 15000) {
   }
 }
 
-async function withWatcher({ divergence, refusal = null, rpc = null }, run) {
+const healthy = (res) => json(res, { ok: true, timeSinceLastEpochMs: 1000 });
+
+async function withWatcher({ divergence, refusal = null, rpc = null, health = healthy }, run) {
   const alerts = [];
   const webhook = await listen((_req, res, body) => { alerts.push(body); res.writeHead(204); res.end(); });
   const checker = await listen((req, res) => {
-    if (req.url === '/health') return json(res, { ok: true, timeSinceLastEpochMs: 1000 });
+    if (req.url === '/health') return health(res);
     return divergence(res);
   });
   // Answers who it is, and fails everything else, as a node having a bad day does.
@@ -170,5 +172,36 @@ test('watcher: what the checker sent instead of JSON is not repeated in the aler
       assert.equal(said.includes('planted'), false);
       assert.equal(said.includes('<html'), false);
     }
+  });
+});
+
+// A checker whose last save failed, or whose scoring is stale, answers /health with 503 and a body saying so,
+// and goes on auditing. Read as unreachable, it stopped every dispute reaching the committee exactly when the
+// checker was degraded.
+test('watcher: a checker answering /health with 503 still has its disputes relayed, and the reason is the true one', async () => {
+  const [did] = agents(1);
+  const health = (res) => json(res, { ok: false, statePersisted: false, timeSinceLastEpochMs: 1000 }, 503);
+  await withWatcher({ health, divergence: allDisputed([did]), rpc: pickyNode() }, async ({ alerts }) => {
+    await until(() => alerts.some((a) => a.includes('checker disputes a score') && a.includes(did)));
+    const down = alerts.filter((a) => a.includes('the checker is not checking'));
+    assert.equal(down.length, 1);
+    assert.match(down[0], /checker reports not ok/);
+  });
+});
+
+test('watcher: a new reason while the checker is not ok is a new alert, and the same reason is not', async () => {
+  let polls = 0;
+  // Not ok at first, then ok but refusing its divergence list: two causes, two pages.
+  const health = (res) => {
+    polls += 1;
+    return polls <= 3 ? json(res, { ok: false, timeSinceLastEpochMs: 1000 }, 503) : healthy(res);
+  };
+  const divergence = (res) => (polls <= 3 ? disputed(res) : json(res, { error: 'Rate limited' }, 429));
+  await withWatcher({ health, divergence, rpc: pickyNode() }, async ({ alerts }) => {
+    await until(() => alerts.filter((a) => a.includes('the checker is not checking')).length >= 2 && polls > 6);
+    const down = alerts.filter((a) => a.includes('the checker is not checking'));
+    assert.equal(down.length, 2);
+    assert.match(down[0], /checker reports not ok/);
+    assert.match(down[1], /divergence list could not be read/);
   });
 });

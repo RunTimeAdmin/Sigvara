@@ -77,16 +77,19 @@ function silenceMs(health) {
 /**
  * Whether the checker itself is in a state where its silence means anything.
  *
- * Returns { ok, reason }. `ok: false` is itself an alert: the committee is relying on
+ * Returns { ok, reason, kind }. `ok: false` is itself an alert: the committee is relying on
  * this checker, and a checker that is down, stalled, or running on a cadence too slow
  * to see proposals before they expire is providing false assurance rather than none.
+ * `kind` names the cause (unreachable, not ok, silent, unreadable, not a checker, too slow),
+ * or is null when ok: the reason's words carry minutes and error text that change from poll
+ * to poll, so a change of cause is told by the kind.
  */
 function checkerStatus(health, divergencePayload, nowMs, maxSilenceMs, payloadError = null) {
   if (!health) {
-    return { ok: false, reason: 'checker unreachable' };
+    return { ok: false, reason: 'checker unreachable', kind: 'unreachable' };
   }
   if (health.ok !== true) {
-    return { ok: false, reason: 'checker reports not ok' };
+    return { ok: false, reason: 'checker reports not ok', kind: 'not ok' };
   }
   // An epoch that has not completed in a long time means the checker is running but not
   // checking, which looks identical to "nothing to report" from outside.
@@ -98,6 +101,7 @@ function checkerStatus(health, divergencePayload, nowMs, maxSilenceMs, payloadEr
       reason: health.timeSinceLastEpochMs == null
         ? `checker has not completed an epoch since it started ${minutes} minutes ago`
         : `checker has not completed an epoch in ${minutes} minutes`,
+      kind: 'silent',
     };
   }
   // Up but not readable. /health answers whatever the rate limiter is doing, while
@@ -107,17 +111,17 @@ function checkerStatus(health, divergencePayload, nowMs, maxSilenceMs, payloadEr
   // client filling the shared rate-limit bucket silenced every alert.
   if (!divergencePayload) {
     const why = payloadError ? ` (${String(payloadError).slice(0, 120)})` : '';
-    return { ok: false, reason: `the checker is up but its divergence list could not be read${why}` };
+    return { ok: false, reason: `the checker is up but its divergence list could not be read${why}`, kind: 'unreadable' };
   }
   if (divergencePayload.mode !== 'checker') {
-    return { ok: false, reason: 'endpoint is not a checker' };
+    return { ok: false, reason: 'endpoint is not a checker', kind: 'not a checker' };
   }
   // The checker publishes whether its own cadence is short enough to see proposals
   // before their window closes. false means an empty divergence list proves nothing.
   if (divergencePayload.seesProposals === false) {
-    return { ok: false, reason: 'checker epoch is too long to see proposals before they expire' };
+    return { ok: false, reason: 'checker epoch is too long to see proposals before they expire', kind: 'too slow' };
   }
-  return { ok: true, reason: null };
+  return { ok: true, reason: null, kind: null };
 }
 
 /**
