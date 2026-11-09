@@ -134,8 +134,8 @@ attested outcomes are on chain nowhere, so those do not come back.
 `/flag`, `/flag/resolve` and `/link` say the same thing for the same reason: 202 with
 `"durable": false` while a save is failing, counted in
 `sigvara_oracle_writes_not_durable_total`. The change is held in memory and written by the
-next save that works, so check that `/health` is 200 again before treating it as kept. Do not
-resend a flag or a resolve: a flag sent twice is two flags, and a resolve sent twice clears
+next save that works, so check that `/health` is 200 again before treating it as kept. Resend
+a flag or a resolve only with the `requestId` it was first sent with: without one, a flag sent twice is two flags, and a resolve sent twice clears
 another one. A link sets the same value again, so it can be sent once `/health` is 200.
 
 `stateSource` is `file`, `fresh` (there was no state file) or `backup`. `backup` means the
@@ -376,11 +376,11 @@ agent permanently. Set `FLAG_HALF_LIFE_DAYS=0` to disable decay.
 
 **Request:**
 ```json
-{ "didHash": "0x..." }
+{ "didHash": "0x...", "requestId": "ticket-4711" }
 ```
 
 Answers 200 with the count of flags once the flag is saved, or 202 with `"durable": false` if
-the state file could not be written (see `/health`). Do not resend a 202: it would be a second
+the state file could not be written (see `/health`). `requestId` is optional, 1 to 128 characters: sent again by the same credential for the same agent within a day, the request is answered with its first reply and `"replayed": true`, and raises nothing. The oracle remembers it in memory only, so not across a restart. Do not resend a 202 without one: it would be a second
 flag.
 
 ### `POST /flag/resolve` (auth required)
@@ -392,7 +392,7 @@ service produces them.
 
 **Request:** `count` defaults to 1.
 ```json
-{ "didHash": "0x...", "count": 2 }
+{ "didHash": "0x...", "count": 2, "requestId": "ticket-4712" }
 ```
 
 **Response (200):**
@@ -413,7 +413,7 @@ a mistake is asking about the flags they raised, not what the score currently ch
 them.
 
 A 202 with `"durable": false` means the state file could not be written, as for `/flag`. Do
-not resend it: the flags are already cleared in memory, and a second call would clear another.
+not resend it without its `requestId`, which works as for `/flag`: the flags are already cleared in memory, and a second call would clear another. Flags record no owner, so a resolve clears the newest flags whichever credential raised them.
 
 ### `POST /link` (auth required)
 

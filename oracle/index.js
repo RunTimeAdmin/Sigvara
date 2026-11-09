@@ -2510,14 +2510,47 @@ const overLimit = (req, res, bucket) => {
 /**
  * The reply to a flag, a resolve or a link: a change that is answered on the strength of having been recorded.
  * 200 when the state file has it. 202 with `durable: false` when the save failed, because a restart before the
- * next good save loses what the caller was told, which is what /attest says too. A flag or a resolve must not be
- * resent: a flag sent twice is two flags, and a resolve sent twice clears another one. A link sets the same
- * value again, so it can be.
+ * next good save loses what the caller was told, which is what /attest says too. A flag or a resolve is resent
+ * safely only with the requestId it was first sent with (see rememberReply): without one, a flag sent twice is
+ * two flags, and a resolve sent twice clears another one. A link sets the same value again, so it can be.
  */
 const savedReply = (res, durable, body) => {
   if (!durable) metrics.inc('writesNotDurable');
   return json(res, durable ? 200 : 202, durable ? body : { ...body, durable: false });
 };
+
+/*
+ * The replies to /flag and /flag/resolve sent with a requestId, by credential, so a request sent again after
+ * its reply was lost is answered with that reply and changes nothing. Neither is idempotent: a second flag
+ * costs the agent two more points, and a second resolve clears another flag. In memory, so a restart forgets
+ * them; kept a day, and at most REPLY_MEMORY_SIZE per credential, the oldest going first.
+ */
+const REPLY_MEMORY_MS = 24 * 3600_000;
+const REPLY_MEMORY_SIZE = 1000;
+const repliesByCaller = new Map();
+
+/** A requestId as given: undefined when there is none, false when it is not 1 to 128 characters of text. */
+const parseRequestId = (v) => (v === undefined || v === null ? undefined
+  : typeof v === 'string' && v.length >= 1 && v.length <= 128 ? v : false);
+
+function rememberedReply(caller, key, now = Date.now()) {
+  const hit = repliesByCaller.get(caller)?.get(key);
+  return hit && now - hit.at < REPLY_MEMORY_MS ? hit.body : null;
+}
+
+function rememberReply(caller, key, body, now = Date.now()) {
+  let mine = repliesByCaller.get(caller);
+  if (!mine) repliesByCaller.set(caller, (mine = new Map()));
+  // Oldest first: drop what has expired, and make room.
+  for (const [k, v] of mine) {
+    if (mine.size < REPLY_MEMORY_SIZE && now - v.at < REPLY_MEMORY_MS) break;
+    mine.delete(k);
+  }
+  mine.set(key, { at: now, body });
+}
+
+/** The first reply again, marked as such. Durable as the last save was, which came after the change. */
+const replayReply = (res, body) => savedReply(res, getLastPersist().ok, { ...body, replayed: true });
 
 async function handleRequest(req, res) {
   metrics.inc('httpRequests');
@@ -3101,14 +3134,21 @@ async function handleRequest(req, res) {
       // value at all, an object included, broke every later save of the state file until
       // the process was restarted, and a flag filed under a mixed-case spelling was one
       // no score ever read.
-      const didHash = parseDidHash((await readBody(req)).didHash);
+      const body = await readBody(req);
+      const didHash = parseDidHash(body.didHash);
       if (!didHash) return json(res, 400, { error: 'didHash must be a 32-byte hex string' });
+      const requestId = parseRequestId(body.requestId);
+      if (requestId === false) return json(res, 400, { error: 'requestId must be a string of 1 to 128 characters' });
+      const replyKey = requestId && `/flag\n${didHash}\n${requestId}`;
+      const earlier = replyKey && rememberedReply(caller, replyKey);
+      if (earlier) return replayReply(res, earlier);
       const raised = addFlag(didHash);
       const durable = persistState();
       metrics.inc('flagsReceived');
       // Attributed. "Someone with the token flagged this agent" stops being an answer
       // once several services hold tokens, and a flag costs an agent real points.
       console.log(`[oracle] flag raised on ${didHash} by ${caller} (now ${raised})`);
+      if (replyKey) rememberReply(caller, replyKey, { didHash, flags: raised });
       return savedReply(res, durable, { didHash, flags: raised });
     } catch (err) {
       return json(res, bodyErrorStatus(err), { error: err.message });
@@ -3124,6 +3164,11 @@ async function handleRequest(req, res) {
   //
   // Token-gated like /flag, and for a stronger reason: this one raises a score. It
   // stays off the public proxy entirely.
+  //
+  // Flags carry no owner, so this clears the newest flags on the agent whoever raised
+  // them: with two or more flag credentials, one can clear another's. Recording who
+  // raised each flag changes the state file's format, which an older build would
+  // misread, so it waits for a format change of its own.
   if (req.method === 'POST' && pathname === '/flag/resolve') {
     if (overLimit(req, res, 'write')) return;
     const caller = identifyCaller(req.headers, cfg.credentials);
@@ -3134,6 +3179,11 @@ async function handleRequest(req, res) {
       const didHash = parseDidHash(body.didHash);
       const { count } = body;
       if (!didHash) return json(res, 400, { error: 'didHash must be a 32-byte hex string' });
+      const requestId = parseRequestId(body.requestId);
+      if (requestId === false) return json(res, 400, { error: 'requestId must be a string of 1 to 128 characters' });
+      const replyKey = requestId && `/flag/resolve\n${didHash}\n${requestId}`;
+      const earlier = replyKey && rememberedReply(caller, replyKey);
+      if (earlier) return replayReply(res, earlier);
 
       const result = resolveFlags(didHash, count ?? 1);
       // Persist only on a real change, so a no-op call does not rewrite the state file.
@@ -3143,6 +3193,7 @@ async function handleRequest(req, res) {
         metrics.inc('flagsResolved', result.resolved);
         console.log(`[oracle] ${result.resolved} flag(s) cleared on ${didHash} by ${caller}`);
       }
+      if (replyKey) rememberReply(caller, replyKey, { didHash, ...result });
       return savedReply(res, durable, { didHash, ...result });
     } catch (err) {
       return json(res, bodyErrorStatus(err), { error: err.message });

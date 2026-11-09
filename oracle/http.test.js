@@ -238,6 +238,37 @@ test('/flag files the flag under the one stored spelling of the hash', async () 
   assert.equal(s.body.flags, 1, 'a score reads the flag, which a mixed-case key would hide');
 });
 
+// A flag or a resolve whose reply was lost cannot be told apart from one that never arrived, and sending it
+// again raised a second flag or cleared another one. Sent with a requestId, the second one is answered with
+// the first one's reply and changes nothing.
+test('/flag and /flag/resolve sent again with the same requestId are answered once and applied once', async () => {
+  const did = `0x${'7e'.repeat(32)}`;
+  const flag = (requestId, token = FLAGGER) => oracle.call('POST', '/flag', { didHash: did, requestId }, token);
+  const first = await flag('lost-reply-1');
+  const again = await flag('lost-reply-1');
+  assert.equal(first.body.flags, 1);
+  assert.equal(again.status, 200, again.text);
+  assert.equal(again.body.flags, 1, 'not a second flag');
+  assert.equal(again.body.replayed, true);
+  assert.equal((await flag('lost-reply-2')).body.flags, 2, 'a new requestId is a new flag');
+  assert.equal((await flag('lost-reply-1', ADMIN)).body.flags, 3, 'another credential\'s requestId is its own');
+
+  const resolve = () => oracle.call('POST', '/flag/resolve', { didHash: did, requestId: 'lost-reply-3' }, FLAGGER);
+  assert.equal((await resolve()).body.after, 2);
+  const resolvedAgain = await resolve();
+  assert.equal(resolvedAgain.body.after, 2, 'not another flag cleared');
+  assert.equal(resolvedAgain.body.replayed, true);
+  assert.equal((await oracle.call('GET', `/score/${did}`)).body.flags, 2);
+});
+
+test('/flag refuses a requestId that is not a short string', async () => {
+  for (const requestId of [7, '', 'x'.repeat(129), { a: 1 }]) {
+    const r = await oracle.call('POST', '/flag', { didHash: `0x${'7f'.repeat(32)}`, requestId }, FLAGGER);
+    assert.equal(r.status, 400, JSON.stringify(requestId));
+  }
+  assert.equal((await oracle.call('GET', `/score/0x${'7f'.repeat(32)}`)).body.flags, 0);
+});
+
 test('/score reads the stored spelling whatever case the caller writes the hash in', async () => {
   const lower = `0x${'9e'.repeat(32)}`;
   assert.equal((await oracle.call('POST', '/flag', { didHash: lower }, ADMIN)).status, 200);
