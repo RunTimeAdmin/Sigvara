@@ -64,6 +64,8 @@ import "./interfaces/IOperatorSet.sol";
  *   could make it: it holds ORACLE_ROLE and, with an operator set, is still active in it.
  *   So removing an operator, clearing its signer or revoking the role also ends whatever
  *   that key has pending, without the committee having to reject each proposal in time.
+ *   Such a proposal stays in its slot until it is replaced or discarded
+ *   (discardStrandedScore), and would finalize again if its proposer were authorized again.
  *
  * Maturity:
  *   A score is earned immediately but becomes spendable only over time. Reads return
@@ -232,6 +234,8 @@ contract SigvaraReputation is Initializable, TimelockedGrants, UUPSUpgradeable, 
     event IdentityRegistrySet(address indexed identityRegistry);
     event MaturityRateUpdated(uint256 pointsPerDay);
     event OperatorBondSet(address indexed operatorBond);
+    /// A pending proposal whose proposer is no longer authorized was deleted by `by`.
+    event StrandedScoreDiscarded(bytes32 indexed didHash, address indexed proposer, address by);
 
     // -------------------------------------------------------------------------
     // Errors
@@ -239,7 +243,8 @@ contract SigvaraReputation is Initializable, TimelockedGrants, UUPSUpgradeable, 
 
     error ScoreOutOfRange(string factor, uint8 value, uint8 max);
     error NoScorePending(bytes32 didHash);
-    /// proposeIfEmpty found the slot occupied. Carries proposedAt so the loser of the
+    /// proposeIfEmpty found the slot occupied, or discardStrandedScore found a proposal whose
+    /// proposer is still authorized. Carries proposedAt so the loser of the
     /// race can tell whose proposal beat it without a second call.
     error ScoreAlreadyPending(bytes32 didHash, uint256 proposedAt);
     error ChallengeWindowActive(bytes32 didHash, uint256 finalizableAt);
@@ -526,6 +531,27 @@ contract SigvaraReputation is Initializable, TimelockedGrants, UUPSUpgradeable, 
         emit ScoreRejected(didHash, msg.sender);
     }
 
+    /**
+     * @notice Delete a pending proposal whose proposer could no longer make it.
+     * @dev    Permissionless, like SigvaraStaking.expireSlash. finalizeReputation refuses a
+     *         proposal whose proposer has lost ORACLE_ROLE or is no longer an active operator,
+     *         but the proposal stays in the slot with no end. If its proposer is authorized
+     *         again, by re-admission after a demotion for example, it finalizes, long after the
+     *         committee's window to reject it has closed. Discarding it ends it for good. A
+     *         proposal whose proposer is still authorized, or one written before proposers were
+     *         recorded, is not stranded and is refused. The agent's finalized score is untouched.
+     */
+    function discardStrandedScore(bytes32 didHash) external {
+        PendingScore storage pending = pendingScores[didHash];
+        if (!pending.exists) revert NoScorePending(didHash);
+        address proposer = pending.proposer;
+        if (_proposerStillAuthorized(proposer)) revert ScoreAlreadyPending(didHash, pending.proposedAt);
+
+        delete pendingScores[didHash];
+
+        emit StrandedScoreDiscarded(didHash, proposer, msg.sender);
+    }
+
     /// @dev The end of a proposal's review window: the one it was made under, and not the one now in
     ///      force. Reading the live window let an admin move the end of every proposal already
     ///      pending, shortening the time the committee had to reject a score or letting it finalize
@@ -584,18 +610,6 @@ contract SigvaraReputation is Initializable, TimelockedGrants, UUPSUpgradeable, 
     // Internal
     // -------------------------------------------------------------------------
 
-    /// @dev Rejects writes for a didHash that was never registered, for one whose agent
-    ///      has been slashed, and for one that is not bonded. Suspended agents stay
-    ///      scorable while they remain bonded: suspension is a normal, reversible
-    ///      operator state used during withdrawal, not a verdict.
-    ///
-    ///      The bond is read through the identity registry's stake view rather than a
-    ///      reference of this contract's own, so there is a single wiring point and the
-    ///      two registries cannot disagree about what counts as bonded.
-    ///
-    ///      Queued withdrawals do not count. They remain slashable until claimed, but an
-    ///      agent on its way out should stop accruing reputation rather than keep
-    ///      earning while it unwinds.
     /// @dev Checked on the caller when proposing. Finalization stays permissionless, so it
     ///      asks nothing of its caller; it asks about the proposer instead, in
     ///      _proposerStillAuthorized. That strands a departing operator's pending scores
@@ -621,6 +635,18 @@ contract SigvaraReputation is Initializable, TimelockedGrants, UUPSUpgradeable, 
         return address(set) == address(0) || set.isActiveOperator(proposer);
     }
 
+    /// @dev Rejects writes for a didHash that was never registered, for one whose agent
+    ///      has been slashed, and for one that is not bonded. Suspended agents stay
+    ///      scorable while they remain bonded: suspension is a normal, reversible
+    ///      operator state used during withdrawal, not a verdict.
+    ///
+    ///      The bond is read through the identity registry's stake view rather than a
+    ///      reference of this contract's own, so there is a single wiring point and the
+    ///      two registries cannot disagree about what counts as bonded.
+    ///
+    ///      Queued withdrawals do not count. They remain slashable until claimed, but an
+    ///      agent on its way out should stop accruing reputation rather than keep
+    ///      earning while it unwinds.
     function _requireScorable(bytes32 didHash) internal view {
         SigvaraIdentity registry = identityRegistry;
         if (address(registry) == address(0)) revert IdentityRegistryNotSet();
