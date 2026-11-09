@@ -122,7 +122,7 @@ Returns 503 when:
 - No successful epoch for two epoch intervals (stale scoring). After a success the two intervals are counted from it. Before the first success they are counted from process start, so a primary that has never completed an epoch reports 503 once it has been up that long, rather than staying green
 
 `storeWritable` and `statePersisted` are not the same check and both are reported.
-The first writes a few bytes to a test file and deletes them, so it answers whether the
+The first writes a few bytes to a test file and deletes them (at most once every five seconds), so it answers whether the
 path looks usable. The second is what the last real write actually did, which can fail
 while the probe passes: a multi-megabyte state file needs space the probe does not.
 It matters because `/attest` answers on the strength of having recorded something, so

@@ -1059,3 +1059,21 @@ test('load: the payment events it restores are frozen as well', () => {
   `);
   assert.deepEqual(JSON.parse(out.trim().split('\n').pop()), { n: 1, array: true, events: true });
 });
+
+// /health is public and unmetered, and the writability probe is a synchronous mkdir, write and unlink on the
+// state file's directory. Asked with a maximum age, it answers from the last probe while that is younger.
+test('isStatePathWritable: with a maximum age, a recent probe is reused rather than written again', () => {
+  const out = inChildWithState(null, `
+    const fs = require('fs');
+    let probes = 0;
+    const write = fs.writeFileSync;
+    fs.writeFileSync = (file, ...rest) => { if (String(file).endsWith('.writable-test')) probes += 1; return write(file, ...rest); };
+    const s = require('./store');
+    const t = Date.now();
+    const answers = [s.isStatePathWritable(5000, t), s.isStatePathWritable(5000, t + 4999)];
+    const reused = probes;
+    answers.push(s.isStatePathWritable(5000, t + 5000), s.isStatePathWritable());
+    console.log(JSON.stringify({ answers, reused, probes }));
+  `);
+  assert.deepEqual(JSON.parse(out.trim().split('\n').pop()), { answers: [true, true, true, true], reused: 1, probes: 3 });
+});

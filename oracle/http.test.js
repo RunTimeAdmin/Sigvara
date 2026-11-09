@@ -310,6 +310,19 @@ test('/flag/resolve and /link refuse a didHash that is not a 32-byte hash', asyn
   }
 });
 
+// A didHash nobody registered reads with no operator, so the ownership check compared the 8004 agent's owner
+// with the zero address and the refusal blamed ownership, sending the caller to look at the wrong thing.
+test('/link on a didHash that is not a registered agent says so', async () => {
+  world.set('externalOwns', false);
+  try {
+    const r = await oracle.call('POST', '/link', { didHash: `0x${'5a'.repeat(32)}`, agentId: 7 }, ADMIN);
+    assert.equal(r.status, 403);
+    assert.match(r.body.error, /not a registered Sigvara agent/);
+  } finally {
+    world.set('externalOwns', undefined);
+  }
+});
+
 // ---- request bodies --------------------------------------------------------------------
 
 const MAX_BODY = 1024 * 1024;

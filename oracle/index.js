@@ -2584,7 +2584,9 @@ async function handleRequest(req, res) {
     external.refreshChainId(EXTERNAL_RECHECK_MS).catch(() => {});
     const lastEpoch = metrics.get('lastSuccessfulEpochMs');
     const timeSinceLastEpoch = lastEpoch ? Date.now() - lastEpoch : null;
-    const storeWritable = isStatePathWritable();
+    // A probe up to five seconds old: this route is public and unmetered, and each probe is a
+    // synchronous mkdir, write and unlink.
+    const storeWritable = isStatePathWritable(5_000);
     // What the last write actually did, beside whether the path looks writable. The
     // probe writes a handful of bytes and deletes them, so it passes while a real state
     // file fails to land for want of space. Unhealthy on a failed persist because the
@@ -3223,6 +3225,11 @@ async function handleRequest(req, res) {
       } catch (err) {
         console.warn(`[oracle] /link chain read failed for ${didHash}: ${err.message}`);
         return json(res, 502, { error: 'could not read the chain', code: 'rpc_error' });
+      }
+      // A didHash nobody registered reads with no operator. The ownership check below then failed
+      // for that reason alone, and the refusal blamed the 8004 agent's owner.
+      if (/^0x0{40}$/i.test(String(operator))) {
+        return json(res, 403, { error: 'didHash is not a registered Sigvara agent; refusing to link' });
       }
       let owns;
       try {
