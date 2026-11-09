@@ -635,7 +635,7 @@ apply to a fresh deployment, not to the testnet.
 
 **Test coverage**, as of 9 November 2026: 782 contract tests across 36 Foundry test files
 including fuzz and invariant tests (the two slash drill suites fork Arc testnet themselves, and
-the twelve in `SplitAuthorityFork` skip without `--fork-url`), 1340 oracle tests and 371 in the SDK (9 skip
+the twelve in `SplitAuthorityFork` skip without `--fork-url`), 1369 oracle tests and 371 in the SDK (9 skip
 outside CI and without a live deployment; every test that runs passes). CI runs Foundry, the oracle and
 SDK suites, and Slither static analysis on every push, plus a documentation check that
 fails when the site states something the contracts do not.
