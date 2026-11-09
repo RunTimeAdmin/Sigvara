@@ -46,6 +46,9 @@ const FEEDBACK_ABI = [
 ];
 const WALLET_ABI = ['function getAgentWallet(uint256 agentId) view returns (address)'];
 const ZERO = /^0x0{40}$/i;
+// What a run does: works out and records what live mode would post (shadow), posts it (live), or,
+// in live mode with a gate failing, reads and records nothing so it loses nothing it owes (blocked).
+const RUN = Object.freeze({ SHADOW: 'shadow', LIVE: 'live', BLOCKED: 'blocked' });
 
 /**
  * The publisher's cycle, over injected reads and an injected sender so it can be tested without a
@@ -140,12 +143,13 @@ function createPublisher({ cfg, chain, scanner, reads, signer, state, log = cons
       out.blocked = gates;
       log(`[publisher] ${cfg.mode === 'live' ? 'posting blocked' : 'live mode would be blocked'}: ${gates.join('; ')}`);
     }
-    const sending = cfg.mode === 'live' && gates.length === 0;
+    const run = cfg.mode === 'shadow' ? RUN.SHADOW : gates.length ? RUN.BLOCKED : RUN.LIVE;
     // In shadow mode, what live mode would have posted is kept apart from what was really posted,
     // so the shadow log follows the same daily limit and unchanged rule live mode would. A live run
     // that is blocked reads the real records and writes none, so it loses no pending update.
-    const simulating = cfg.mode === 'shadow';
-    const recording = sending || simulating;
+    const sending = run === RUN.LIVE;
+    const simulating = run === RUN.SHADOW;
+    const recording = run !== RUN.BLOCKED;
     const posted = simulating ? s.shadowPosted : s.posted;
     const postedBy = simulating ? s.shadowPostedBy : s.postedBy;
 
@@ -207,8 +211,10 @@ function createPublisher({ cfg, chain, scanner, reads, signer, state, log = cons
 
     const order = Object.entries(s.pending).sort(([, a], [, b]) => (a.block ?? Infinity) - (b.block ?? Infinity));
     for (const [didHash, why] of order) {
-      const skip = (reason) => { out.skipped.push({ didHash, reason }); delete s.pending[didHash]; };
+      // One rule for letting go of an agent: only a run that records. A blocked run keeps the entry,
+      // or an unlinked agent's cleanup, or a slashed one's zero, would be lost with it.
       const done = () => { if (recording) delete s.pending[didHash]; };
+      const skip = (reason) => { out.skipped.push({ didHash, reason }); done(); };
       try {
         const zeroed = why.kind === 'zeroed';
         const { operator } = await chain.getAgentInfo(didHash, head);

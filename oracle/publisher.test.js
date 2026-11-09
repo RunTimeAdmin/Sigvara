@@ -329,6 +329,39 @@ const slash = (w, block) => {
   w.events.push({ kind: 'zeroed', didHash: did(1), block, logIndex: 0, txHash: null });
 };
 
+// A live run with a gate failing (the signer tunnel down, a pending transaction, a low balance) sends
+// nothing and keeps what it owes. It kept a linked agent's update, but dropped an unlinked agent's
+// cleanup, so the old 8004 agent kept the score until the next day, and a slashed one then got a revoke
+// instead of the 0 it is owed.
+test('live mode: a blocked run keeps an unlinked agent\'s cleanup, and revokes once the gate passes', async () => {
+  const { w, publisher } = setup({ mode: 'live' });
+  await publisher.runOnce();
+  delete w.links[did(1)];
+  nextDay(w, 160);
+  w.agentWallet = DEPLOYER;
+  await publisher.runOnce(); // blocked: the revoke is planned, not sent
+  assert.deepEqual(kinds(w), ['post']);
+  w.agentWallet = PUBLISHER;
+  w.head = 170;
+  await publisher.runOnce();
+  assert.deepEqual(kinds(w), ['post', 'revoke']);
+  assert.deepEqual(liveValues(w, '7'), []);
+});
+
+test('live mode: a blocked run keeps an unlinked, slashed agent\'s zero, and posts it once the gate passes', async () => {
+  const { w, publisher } = setup({ mode: 'live' });
+  await publisher.runOnce();
+  delete w.links[did(1)];
+  slash(w, 135);
+  w.agentWallet = DEPLOYER;
+  await publisher.runOnce(); // blocked
+  assert.deepEqual(kinds(w), ['post']);
+  w.agentWallet = PUBLISHER;
+  await publisher.runOnce();
+  assert.deepEqual(kinds(w), ['post', 'revoke', 'post']);
+  assert.deepEqual(liveValues(w, '7'), [0n]);
+});
+
 test('live mode: a post that timed out and landed is cleaned up after an unlink and a slash', async () => {
   // The run after it finds the score live and unchanged, and used to record nothing, so the cleanup
   // never knew where to go: the old 8004 agent kept the last positive score of a slashed agent.
