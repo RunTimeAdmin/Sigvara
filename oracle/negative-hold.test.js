@@ -48,8 +48,10 @@ const transfer = ({ from = AGENT, to = PAYER, amount = 1000000n, block, asset = 
   address: asset, topics: [TRANSFER_TOPIC, pad(from), pad(to)], data: ethers.toBeHex(amount, 32),
   blockNumber: block, transactionHash: tx, index: 0,
 });
+// The payment itself is on the node too: a read settles "not refunded" only from a node whose filter finds it.
+const paid = (e) => transfer({ from: e.payer, to: AGENT, amount: BigInt(e.amount), block: Number(e.blockNumber), tx: e.txHash });
 const read = (e, logs, headBlock, extra = {}) => {
-  const n = node(logs);
+  const n = node([paid(e), ...logs]);
   return hold.readRefund(e, cfg, { getLogs: n.getLogs, blockMs, asset: ASSET, agent: AGENT, headBlock, chunk: 100_000, ...extra })
     .then((check) => ({ check, calls: n.calls }));
 };
@@ -144,4 +146,76 @@ test('with no payer negative the events pass through untouched', () => {
   const events = [positive, Object.freeze({ ...positive, txHash: '0x' + '03'.repeat(32), success: null })];
   assert.equal(hold.present(events, Date.now(), cfg), events);
   assert.equal(hold.toRead(events).length, 0);
+});
+
+test('a refund in the block after the payment cures it, though both carry the same second', async () => {
+  // Five blocks a second, as on Base Sepolia: the payment in block 100 and the refund in 101 share a time.
+  const sameSecond = async (n) => T0 + Math.floor(n / 5) * 1000;
+  const e = negative({ ts: await sameSecond(PAID_BLOCK) });
+  const { check } = await read(e, [transfer({ block: PAID_BLOCK + 1 })], 1000, { blockMs: sameSecond });
+  assert.deepEqual([check.final, check.refunded, check.blockNumber], [true, true, PAID_BLOCK + 1], 'a refund in a later block is after the payment');
+});
+
+test('a settled negative keeps the hold it was read against when the hold length changes', async () => {
+  const { check } = await read(negative(), [], blockAt(END) + 10);
+  const e = settled(negative(), { ...check, holdEndMs: hold.holdEndMs(negative(), cfg) });
+  const shorter = hold.readConfig({ PAYER_NEGATIVE_HOLD_DAYS: '3' });
+  assert.equal(hold.countsFromMs(e, shorter), COUNTS, 'still the seven days its refunds were read for');
+  assert.equal(hold.present([e], CHECKED_MS + 3 * DAY + hold.MARGIN_MS, shorter)[0].success, null);
+});
+
+test('present gives the same array back for the same stored events, so the caches hit', () => {
+  const events = Object.freeze([positive, negative()]);
+  const first = hold.present(events, CHECKED_MS, cfg);
+  assert.equal(first[1].success, null);
+  assert.equal(hold.present(events, CHECKED_MS + DAY, cfg), first, 'the same negatives count, so the same array');
+  assert.ok(Object.isFrozen(first));
+});
+
+test('a read that fails keeps what it read before the failure', async () => {
+  let calls = 0;
+  const failing = async (filter) => {
+    calls += 1;
+    if (calls === 3) throw new Error('429 too many requests');
+    return node([]).getLogs(filter);
+  };
+  const check = await hold.readRefund(negative(), cfg, { getLogs: failing, blockMs, asset: ASSET, agent: AGENT, headBlock: 1000, chunk: 100 });
+  assert.equal(check.final, false);
+  assert.equal(check.readThroughBlock, PAID_BLOCK + 199, 'through the second chunk, so the next read goes on from there');
+  assert.match(check.error.message, /429/);
+});
+
+test('on Base Sepolia\'s 0.2 s blocks, 200 a read, the read reaches the hold\'s end by the time it counts', async () => {
+  const BLOCK_MS = 200;
+  const baseMs = async (n) => T0 + n * BLOCK_MS;
+  const paidAt = 1_000_000;
+  const e0 = negative({ blockNumber: paidAt, ts: T0 + paidAt * BLOCK_MS, payerOutcome: Object.freeze({ outcome: 2, checkedAtBlock: paidAt + 50, checkedAtMs: T0 + (paidAt + 50) * BLOCK_MS }) });
+  const n = node([paid(e0)]);
+  const countsFrom = hold.countsFromMs(e0, cfg);
+  let e = e0;
+  // Hourly epochs, each reading up to the block at its own time, up to the first at which the negative counts.
+  for (let epoch = T0 + (paidAt + 60) * BLOCK_MS; e.refundCheck?.final !== true && epoch <= countsFrom + 3_600_000; epoch += 3_600_000) {
+    if (epoch >= countsFrom) assert.fail(`not settled by ${new Date(countsFrom).toISOString()}, when it counts: read through block ${e.refundCheck?.readThroughBlock} of ${Math.ceil((hold.holdEndMs(e0, cfg) - T0) / BLOCK_MS)}`);
+    const headBlock = Math.floor((epoch - T0) / BLOCK_MS);
+    const check = await hold.readRefund(e, cfg, { getLogs: n.getLogs, blockMs: baseMs, asset: ASSET, agent: AGENT, headBlock, chunk: 200, epochMs: 3_600_000 });
+    e = settled(e0, check);
+  }
+  assert.deepEqual([e.refundCheck.final, e.refundCheck.refunded], [true, false]);
+});
+
+test('a node whose filter finds nothing, not even the payment, does not settle a negative as not refunded', async () => {
+  const blind = { getLogs: async () => [] };
+  const check = await hold.readRefund(negative(), cfg, { getLogs: blind.getLogs, blockMs, asset: ASSET, agent: AGENT, headBlock: blockAt(END) + 10, chunk: 100_000 });
+  assert.equal(check.final, false, 'its empty answers prove nothing');
+  assert.equal(check.readThroughBlock, PAID_BLOCK - 1, 'and it is read again');
+  assert.match(check.error.message, /did not find the payment itself/);
+});
+
+test('a hold never starts before the payer signed, whatever block it was checked at', () => {
+  // Checked at a block an hour before the signature, as a peer may name one.
+  const signedAt = Math.floor(CHECKED_MS / 1000) + 3600;
+  const early = negative({ payerOutcome: Object.freeze({ outcome: 2, signedAt, checkedAtBlock: 200, checkedAtMs: CHECKED_MS }) });
+  assert.equal(hold.holdEndMs(early, cfg), signedAt * 1000 + 7 * DAY);
+  assert.equal(hold.holdEndMs(negative({ payerOutcome: Object.freeze({ outcome: 2, signedAt: Math.floor(CHECKED_MS / 1000) - 60, checkedAtBlock: 200, checkedAtMs: CHECKED_MS }) }), cfg), END,
+    'from the checked block when that is later');
 });

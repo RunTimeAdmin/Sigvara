@@ -978,9 +978,10 @@ test('persist: writes the format version and the chain, and load reads the chain
     console.log(JSON.stringify({ version: written.schemaVersion, chainId: written.chainId, back: s.getStateChainId(), current: s.STATE_SCHEMA_VERSION }));
   `);
   const r = lastJson(out);
-  // Version 2 only once a payment chain's data is held (ADR 0009); see payment-chains.test.js.
+  // Version 2 only once a payment chain's data is held (ADR 0009), see payment-chains.test.js; 3 once a payer's
+  // negative is (ADR 0011), below.
   assert.equal(r.version, 1);
-  assert.equal(r.current, 2);
+  assert.equal(r.current, 3);
   assert.equal(r.chainId, 5042);
   assert.equal(r.back, 5042);
 });
@@ -1058,4 +1059,45 @@ test('load: the payment events it restores are frozen as well', () => {
     console.log(JSON.stringify({ n: list.length, array: Object.isFrozen(list), events: list.every((e) => Object.isFrozen(e)) }));
   `);
   assert.deepEqual(JSON.parse(out.trim().split('\n').pop()), { n: 1, array: true, events: true });
+});
+
+// ---- a payer's held "not delivered" (ADR 0011) ------------------------------------------------------------
+
+const NEGATIVE_SETUP = `
+  const s = require('./store');
+  const did = '0x' + 'aa'.repeat(32), tx = '0x' + 'cc'.repeat(32), payer = '0x' + '11'.repeat(20);
+  const signed = { outcome: 2, signedAt: 1, deadline: 9, signature: '0x', signer: 'eoa', checkedAtBlock: 40, checkedAtMs: 4000 };
+`;
+
+test('a state file holding a payer negative is written as format 3, so a build from before the hold refuses it', () => {
+  const out = inChildWithState(null, `${NEGATIVE_SETUP}
+    const fs = require('fs');
+    const written = () => { s.persist(); return JSON.parse(fs.readFileSync(process.env.ORACLE_STATE_PATH, 'utf8')).schemaVersion; };
+    s.creditPayment(did, tx, '5', payer, null, 1, null, 3);
+    const before = written();
+    s.recordPayerOutcome(did, tx, payer, false, signed, { windowMs: 1 });
+    console.log(JSON.stringify({ before, held: written() }));
+  `);
+  assert.deepEqual(JSON.parse(out.trim().split('\n').at(-1)), { before: 1, held: 3 });
+});
+
+test('a payer outcome on a payment credited without its block keeps the block it was verified at', () => {
+  const out = inChildWithState(null, `${NEGATIVE_SETUP}
+    s.creditPayment(did, tx, '5', payer, null, 1);
+    s.recordPayerOutcome(did, tx, payer, false, signed, { windowMs: 1, blockNumber: 37 });
+    console.log(JSON.stringify(s.getPaymentEvents(did)[0].blockNumber ?? null));
+  `);
+  assert.equal(JSON.parse(out.trim().split('\n').at(-1)), 37, 'a refund read starts at the payment\'s block');
+});
+
+test('a final refund read keeps the end of the hold it was read against', () => {
+  const out = inChildWithState(null, `${NEGATIVE_SETUP}
+    s.creditPayment(did, tx, '5', payer, null, 1, null, 3);
+    s.recordPayerOutcome(did, tx, payer, false, signed, { windowMs: 1 });
+    s.setRefundCheck(did, tx, payer, null, { final: false, refunded: null, readThroughBlock: 50, holdEndMs: 7 });
+    const partial = s.getPaymentEvents(did)[0].refundCheck.holdEndMs ?? null;
+    s.setRefundCheck(did, tx, payer, null, { final: true, refunded: false, readThroughBlock: 90, holdEndMs: 7 });
+    console.log(JSON.stringify({ partial, final: s.getPaymentEvents(did)[0].refundCheck.holdEndMs ?? null }));
+  `);
+  assert.deepEqual(JSON.parse(out.trim().split('\n').at(-1)), { partial: null, final: 7 });
 });
