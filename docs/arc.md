@@ -756,7 +756,7 @@ set is joined by vote and nobody buys their way in. What the bond buys is someth
 committee can take, and `slash()` caps only at the bond itself, so the whole amount is at
 risk rather than some fraction of it.
 
-**The treasury has to be able to buy these.** Bonds are funded from buybacks off 64% of a
+**The treasury has to be able to buy these.** Bonds would be funded from buybacks off 64% of a
 1% buy-side pool fee, which is 0.64% of buy volume, so every $1 of bond needs roughly
 $156 of cumulative buy volume before the treasury can seat an operator. At 1% of supply
 per operator that is about $15.6M of volume each at a $10M FDV, which in practice means

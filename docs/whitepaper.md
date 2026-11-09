@@ -550,8 +550,8 @@ owner, no mint, no pause, no blacklist and no transfer tax. Its one deviation is
 The whole supply enters the liquidity pool at launch. Every position the team holds is
 bought on the open market and published with its amount, transaction and purpose.
 
-**The treasury** is funded by buybacks from the creator share of pool fees and by
-disclosed open-market purchases. Treasury SVR is spent only on oracle bonds, operator
+**The treasury** keeps the creator share of pool fees as USDC, claimed monthly, until a buyback
+schedule is published, and holds SVR from disclosed open-market purchases. Treasury SVR is spent only on oracle bonds, operator
 incentives, slashing-committee costs, staking rewards and repaying a wrongful slash.
 
 **Staking rewards** are not live and cannot pay out before the mainnet registries exist.

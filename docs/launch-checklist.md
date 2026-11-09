@@ -57,7 +57,7 @@ Launched 9 November 2026 at 01:20:37 UTC: [`0xc79298521Ae84e7a43d20E71A2B2A1BB54
 - [x] **Publish the token address** on `docs/token.md` and sigvara.xyz *before* any social announcement. Never announce on social first.
 - [x] **Anti-snipe cap** (3% of supply per wallet, first 300 seconds) is the only deviation from vanilla ERC-20. After 300 seconds it is a plain token — exactly what the bond contracts require.
 - [x] **Team position**: whatever is bought on the open market at the opening price, disclosed same-day. No split buys to work around the cap.
-- [ ] **Treasury buybacks** run on a published schedule from the 64% creator share of buy-side fees (paid in USDC via the fee locker), not in response to price. No fee revenue paid to the team; no treasury SVR sold.
+- [ ] **Treasury fees**: the 64% creator share of buy-side fees (paid in USDC via the fee locker) is claimed on the 1st of each month and held in the treasury as USDC, disclosed the same day. Buybacks wait for a published schedule and never respond to price. No fee revenue paid to the team; no treasury SVR sold.
 
 ## Phase 4 — Mainnet registry deployment (gated on Phase 2)
 

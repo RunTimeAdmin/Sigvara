@@ -150,7 +150,7 @@
         <p>The other 5,000,000 SVR of the first buy is <strong>not locked</strong>. It is for the two oracle operator bonds, the primary's and the checker's, at the 2,500,000 SVR that <code>SigvaraOracleBond</code> requires of each operator on mainnet (see Mainnet parameters). It stays with the deployer until the mainnet registries deploy and the bonds are posted, and that transfer is published here. Anyone can read the deployer's balance, and the lock's <code>start()</code>, <code>end()</code>, <code>owner()</code> and <code>releasable(SVR)</code>, on chain.</p>
 
         <h3>Treasury policy</h3>
-        <p>The creator share of pool trading fees (64% of the 1% buy-side pool fee, paid in USDC and credited by Tolly's fee locker) is used to buy SVR on the open market. The treasury is also funded by direct open-market purchases. Both are disclosed.</p>
+        <p>The creator share of pool trading fees (64% of the 1% buy-side pool fee, paid in USDC and credited by Tolly's fee locker) is claimed once a month, on the 1st, and sent to the treasury timelock as USDC. It is held there and not spent until a buyback schedule is published on this page. The treasury is also funded by direct open-market purchases. Every claim and purchase is disclosed the same day.</p>
 
         <p>Treasury SVR is spent only on:</p>
         <ol>
@@ -161,7 +161,7 @@
           <li><b>Repaying a wrongful slash.</b> Returning what a slash took to the operator who lost it, once the admin has published a finding that the slash was wrong (<a href="https://github.com/RunTimeAdmin/Sigvara/blob/main/docs/adr/0010-what-can-be-slashed.md">ADR 0010</a>). Never more than the slash took, only from SVR the treasury already holds, and never to a team-operated agent or oracle operator, because the finding is a judgment and this cannot be a payment the team directs to itself. It is not owed, and it is disclosed like every other treasury movement.</li>
         </ol>
 
-        <p>Buybacks run on a published schedule, not in response to price. No fee revenue is paid out to the team, and no treasury SVR is sold.</p>
+        <p>No buyback runs until its schedule is published here, and then it runs on that schedule, not in response to price. No fee revenue is paid out to the team, and no treasury SVR is sold.</p>
 
         <h3>Staking rewards</h3>
         <p><span class="tag tag-amber">not live</span> Nothing here can pay out before the mainnet registries exist. The rules are written first so that inventory bought for the programme is inventory for a published programme rather than a discretionary bag.</p>
