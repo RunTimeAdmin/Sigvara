@@ -1702,23 +1702,24 @@ async function runEpochInner() {
                 metrics.inc('proposalsStranded');
                 continue;
               }
-              // An empty slot after a failed finalize has two very different causes, and
-              // counting both as success hides the one that matters most: the slashing
-              // committee rejecting a proposal deletes it too. That is the committee
-              // acting on this checker's alert, the entire point of running one, and it
-              // must not be indistinguishable from a routine finalize in the metrics.
               const still = await chain.getPendingScore(didHash);
               if (still.exists) { metrics.inc('finalizeErrors'); throw finalizeErr; }
-              const live = await chain.getTotalScore(didHash);
-              if (live > 0 && live === auditScores.total) {
+              // The slot is empty, and not by a committee rejection: this checker finalizes only once the
+              // deadline is a grace past, and the committee can reject only before it. So someone else
+              // finalized it, which the contract records by dating the live score to the proposal and
+              // copying its factors. getTotalScore is no test of that: it serves the matured score, which
+              // lags a rising one by design. Anything else (a slash zeroes the score and clears the slot) is
+              // said, and not counted as a finalize or as a rejection.
+              const rep = await chain.getReputationData(didHash);
+              const live = scoreDivergence(freshPending.data, rep);
+              if (rep.lastUpdated === freshPending.proposedAt && live.comparable && Object.keys(live.factors).length === 0) {
                 console.log(`[oracle]   ${didHash.slice(0, 10)}… already finalized by another party`);
                 metrics.inc('finalizeSuccesses');
               } else {
                 console.warn(
-                  `[oracle]   ${didHash.slice(0, 10)}… pending proposal vanished without becoming live ` +
-                  `(live=${live}, ours=${auditScores.total}) — most likely a committee rejection`,
+                  `[oracle]   ${didHash.slice(0, 10)}… the pending proposal is gone, and the live score is not the one it proposed ` +
+                  `(live total ${live.ownTotal}, last updated ${rep.lastUpdated}; proposed ${live.pendingTotal} at ${freshPending.proposedAt})`,
                 );
-                metrics.inc('proposalsRejected');
               }
             }
             continue;

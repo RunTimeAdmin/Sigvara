@@ -80,6 +80,9 @@
 //                      the compare-and-swap entry point refuses a slot held by a live proposer)
 //     charge:          "ok" | "fail" | "already_charged" | "unconfirmed"
 //     propose:         "ok" | "revert" | "fee_cap" | "unconfirmed"
+//     finalize:        "ok", or "raced": another party finalized first, so the send reverts NoScorePending
+//                      and the slot reads empty after
+//     totalScore:      { "<didhash>": the matured score getTotalScore serves }  (default 0)
 //   }
 //
 // Every write the oracle attempts is appended to the file named by STUB_CALLS, one JSON line
@@ -156,6 +159,9 @@ const provider = {
   },
 };
 
+// Slots another party finalized just before this oracle tried to (world.finalize "raced").
+const finalizedByOther = new Set();
+
 const chain = {
   // What index.js hands the chain module, so a test can see its settings arrive.
   init(cfg) {
@@ -231,8 +237,10 @@ const chain = {
   getEpochFee: async () => BigInt(world().epochFee ?? 0),
   getPendingScore: async (didHash) => {
     if (world().recordEpochReads) record('epochRead', hostNow());
+    if (finalizedByOther.has(didHash)) return { exists: false };
     return world().pending?.[didHash] ?? { exists: false };
   },
+  getTotalScore: async (didHash) => world().totalScore?.[didHash] ?? 0,
   // The finalized score; lastUpdated is 0 until one is finalized, as on chain.
   getReputationData: async (didHash) => {
     if (world().reputation?.[didHash] === 'throw') throw new Error('stub: reputation read failed');
@@ -263,6 +271,11 @@ const chain = {
     record('finalizeScore', didHash);
     if (world().pending?.[didHash]?.proposerDead) {
       throw new Error('stub: execution reverted: ProposerNotAuthorized');
+    }
+    const mode = world().finalize ?? 'ok';
+    if (mode === 'raced') {
+      finalizedByOther.add(didHash);
+      throw new Error('stub: execution reverted: NoScorePending');
     }
     return fakeHash('f1');
   },

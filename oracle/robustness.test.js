@@ -890,6 +890,38 @@ test('a checker counts the grace afresh for an agent it stopped looking at while
   });
 });
 
+test('a checker that loses a finalize to another party says so, and never calls it a committee rejection', async () => {
+  // The checker's finalize reverts NoScorePending and the slot is empty. getTotalScore serves the matured
+  // score, lower than the one just finalized, so compared against it a finalize read as a rejection. A
+  // rejection is not possible here at all: the checker finalizes only past the deadline, and the committee
+  // can reject only before it.
+  const agreed = await computedScores();
+  for (const finalizedAsProposed of [true, false]) {
+    const world = new World();
+    const agent = world.addRegisteredAgent();
+    const pending = pendingProposal(world, { agedPastGrace: true, data: agreed });
+    world.setFor('pending', agent.didHash, pending);
+    world.setFor('reputation', agent.didHash, finalizedAsProposed
+      ? { ...agreed, lastUpdated: pending.proposedAt }
+      : { ...agreed, lastUpdated: pending.proposedAt - 86_400 });
+    world.setFor('totalScore', agent.didHash, 1);
+    world.set('finalize', 'raced');
+
+    await inEpoch({ world, env: CHECKER_ENV }, ({ text, calls, logs }) => {
+      assert.deepEqual(names(calls), ['canPropose', 'finalizeScore']);
+      assert.doesNotMatch(logs, /committee rejection/);
+      assert.equal(counter(text, 'sigvara_oracle_proposals_rejected_total'), 0, 'no rejection is counted');
+      if (finalizedAsProposed) {
+        assert.match(logs, /already finalized by another party/);
+        assert.equal(counter(text, 'sigvara_oracle_finalize_total{result="success"}'), 1);
+      } else {
+        assert.match(logs, /the pending proposal is gone, and the live score is not the one it proposed/);
+        assert.equal(counter(text, 'sigvara_oracle_finalize_total{result="success"}'), 0);
+      }
+    });
+  }
+});
+
 test('a grace shorter than the checker\'s own epoch stops it at startup', async () => {
   for (const [grace, why] of [['30', /shorter than this checker's epoch of 1440 minutes/], ['-5', /CHECKER_GRACE_MINUTES="-5" is below the minimum of 0/]]) {
     const { code, log } = await runToExit({ world: new World(), env: { ...CHECKER_ENV, CHECKER_GRACE_MINUTES: grace } });
