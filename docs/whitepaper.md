@@ -746,7 +746,7 @@ cast call $REP "challengeWindow()(uint256)"  --rpc-url $ARC   # 21600 (6h)
 cast call $STK "minimumStake()(uint256)"     --rpc-url $ARC
 cast call $STK "unbondingPeriod()(uint256)"  --rpc-url $ARC   # 1814400 (21d)
 cast call $BOND "bondAmount()(uint256)"      --rpc-url $ARC
-cast call $BOND "activeCount()(uint256)"     --rpc-url $ARC   # operators bonded today
+cast call $BOND "activeCount()(uint256)"     --rpc-url $ARC   # operators with Active status (counts status, not bond)
 ```
 
 Pick any agent and check the whole chain of reasoning behind its score:

@@ -92,6 +92,9 @@ contract SigvaraOracleBond is
     uint256 public bondAmount;          // slot 1 — minimum bond to be admitted
     uint256 public unbondingPeriod;     // slot 2 — cooldown before withdrawal
     address public slashBeneficiary;    // slot 3 — destination for slashed bond
+    /// @notice Operators whose status is Active. It counts status, not bond: after setBondAmount
+    ///         raises the requirement it still counts an Active operator whose bond is now below it,
+    ///         which isActiveOperator refuses.
     uint256 public activeCount;         // slot 4 — number of Active operators
     mapping(address => Operator) public operators; // slot 5
 
@@ -253,6 +256,10 @@ contract SigvaraOracleBond is
         uint256 balanceBefore = svr.balanceOf(address(this));
         svr.safeTransferFrom(msg.sender, address(this), amount);
         uint256 received = svr.balanceOf(address(this)) - balanceBefore;
+        // A deposit that credits nothing would still move a fresh address to Bonded with no bond,
+        // and once it started to leave, nothing could move it again: withdrawBond and slash need a
+        // bond, and removeOperator and depositBond refuse an Exiting record.
+        if (received == 0) revert ZeroAmount();
 
         op.bond += received;
         if (op.status == Status.None) op.status = Status.Bonded;
