@@ -1,6 +1,6 @@
 import { computeHmac, hexlify, id, randomBytes, toUtf8Bytes } from 'ethers';
 import { SigvaraVerifier } from './verifier';
-import { generateChallenge, parseChallengePayload } from './challenge';
+import { MAX_FUTURE_SKEW_SECONDS, generateChallenge, parseChallengePayload } from './challenge';
 import { parseMinBond, standingDecision } from './standing';
 import type { StandingReason } from './standing';
 import type { Challenge, ContractAddresses } from './types';
@@ -389,7 +389,13 @@ export class SigvaraGate {
 
     // Expiry likewise comes from the signed timestamp plus this gate's own TTL, not from
     // a wrapper field a caller could set to the far future.
-    const expiresAt = signed.timestamp + this.ttl;
+    //
+    // The invariant: the spent mark outlives every window in which any gate accepts the payload.
+    // Acceptance is inclusive (age <= ttl), and a shared store such as Redis with EXAT expires the
+    // mark by its own clock, which may run ahead of a gate's. The margin covers a clock gap up to
+    // MAX_FUTURE_SKEW_SECONDS, the same allowance the freshness check already makes, plus the
+    // inclusive last second.
+    const expiresAt = signed.timestamp + this.ttl + MAX_FUTURE_SKEW_SECONDS + 1;
 
     // After the signature, not before: an invalid proof must not be able to burn a nonce
     // and lock out the legitimate holder of that challenge.

@@ -368,6 +368,13 @@ async function selfTest(writeFixture = false) {
     const { problems: found } = assessTimelockOperations({ operations, states, reviewed: rev });
     check(what, expected === null ? found.length === 0 : found.some((p) => p.includes(expected)), JSON.stringify(found));
   }
+  // The same id scheduled again after a cancel: the report shows its calls once, not once per schedule.
+  const again = assessTimelockOperations({
+    operations: operationsFromLogs([scheduled(4, upgrade), cancelled(4), scheduled(4, upgrade)]), states: st([[4, 1]]), reviewed: [],
+  });
+  check('an operation scheduled again after a cancel lists each call once',
+    again.pending.length === 1 && again.pending[0].calls.length === 1 && again.problems[0].split('upgradeToAndCall').length === 2,
+    JSON.stringify(again.problems));
   // The digest is over the ids in sorted order, whatever order the log gave them in, and changes with any state.
   const opsLogs = [scheduled(8, grant), scheduled(7, upgrade)];
   const d1 = operationsDigest(operationsFromLogs(opsLogs), st([[7, 1], [8, 3]]));

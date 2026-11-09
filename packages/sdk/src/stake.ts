@@ -8,8 +8,9 @@ export interface DepositStakeResult {
 
 // Operator deposits bond for an agent. Handles the ERC-20 approval that
 // SigvaraStaking.depositStake requires: reads the bond token from the staking
-// contract, checks the current allowance, approves the exact shortfall only
-// when needed, then deposits.
+// contract, checks the current allowance, approves `amount` only when the
+// allowance is below it (approve sets the allowance, it does not add to it),
+// then deposits.
 //
 // `amount` is in the token's smallest unit (wei for the 18-decimal SVR token).
 export async function depositStake(
