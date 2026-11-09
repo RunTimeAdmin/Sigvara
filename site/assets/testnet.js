@@ -105,7 +105,11 @@
     $("cardSvr").textContent = "—";
   }
 
-  async function check(addr) {
+  // Checks can overlap, and an older one can answer last. Each carries the number it started with,
+  // and after every read it stops if a newer one has started since.
+  var checkSeq = 0;
+
+  async function check(addr, seq) {
     var did = window.SigvaraDid.computeDidHash(addr, CHAIN_ID);
 
     var out = await rpcBatch([
@@ -118,6 +122,7 @@
       { to: REPUTATION, data: SEL.getTotalScore   + pad32(did) },
       { to: REPUTATION, data: SEL.getPendingScore + pad32(did) },
     ]);
+    if (seq !== checkSeq) return;
 
     var gasRaw = out[0];
     var svrRaw = out[1];
@@ -151,6 +156,7 @@
         { to: SVR, data: SEL.balanceOf     + pad32(funder) },
         { to: SVR, data: SEL.lastFaucetUse + pad32(funder) },
       ]);
+      if (seq !== checkSeq) return;
       gasRaw = more[0];
       svrRaw = more[1];
       lastFaucet = Number(BigInt(more[2]));
@@ -228,9 +234,11 @@
 
   function run() {
     var addr = $("addr").value.trim();
+    var seq = ++checkSeq;
     if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) { reset("that is not a 20-byte address"); return; }
     $("cardDid").textContent = "reading chain…";
-    check(addr).catch(function (e) {
+    check(addr, seq).catch(function (e) {
+      if (seq !== checkSeq) return;
       reset("");
       $("cardDid").textContent = "read failed: " + e.message;
     });

@@ -918,6 +918,11 @@ function prunePaymentEvents(halfLifeMs, minWeight = 0.001, now = Date.now()) {
  * "the score is wrong" is not actionable and "successScore says 25, we compute 7" is.
  * proposedAt is kept so a reader can tell whether the disputed proposal is still inside
  * its challenge window, which is the difference between a live alert and a post-mortem.
+ *
+ * One record per proposal. A checker audits a proposal at every epoch while it is pending,
+ * and appending each time filled the list, and the newest page of /divergence, with copies
+ * of one dispute. A later sighting replaces the record: `at` is the newest sighting and
+ * `firstAt` the first.
  */
 /**
  * `evidence` is what makes a record diagnosable by someone who was not there.
@@ -930,9 +935,13 @@ function prunePaymentEvents(halfLifeMs, minWeight = 0.001, now = Date.now()) {
  * using public endpoints alone.
  */
 function recordDivergence(didHash, divergence, proposedAt, now = Date.now(), evidence = null) {
-  const list = divergences.get(didHash) || [];
+  const all = divergences.get(didHash) || [];
+  const same = (e) => Number(e.proposedAt) === Number(proposedAt);
+  const firstAt = all.filter(same).reduce((first, e) => Math.min(first, e.firstAt ?? e.at ?? now), now);
+  const list = all.filter((e) => !same(e));
   list.push({
     at: now,
+    firstAt,
     proposedAt,
     pendingTotal: divergence.pendingTotal,
     ownTotal: divergence.ownTotal,

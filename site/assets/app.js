@@ -180,7 +180,25 @@ async function getChallengeWindow() {
   }
   return challengeWindowCache;
 }
+// The wallet's chain and account as they are now, not as they were at connect. A wallet can switch
+// either at any time, and the same calldata sent on another chain goes to whatever lives at these
+// addresses there, so every send and signature checks first.
+async function ensureArc() {
+  if (!wallet || !account) throw new Error("Connect a wallet first.");
+  const [chain, accounts] = await Promise.all([
+    wallet.request({ method: "eth_chainId" }),
+    wallet.request({ method: "eth_accounts" }),
+  ]);
+  if (String(chain).toLowerCase() !== CHAIN_HEX) {
+    throw new Error(`the wallet is on chain ${parseInt(chain, 16)}, not Arc testnet (${CHAIN_ID}). Switch it back to Arc testnet; nothing was sent.`);
+  }
+  if (!Array.isArray(accounts) || String(accounts[0]).toLowerCase() !== account.toLowerCase()) {
+    throw new Error("the wallet's account is not the one this page connected. Connect again; nothing was sent.");
+  }
+}
+
 async function sendTx(to, data) {
+  await ensureArc();
   const hash = await wallet.request({
     method: "eth_sendTransaction",
     params: [{ from: account, to, data }],
@@ -220,25 +238,73 @@ async function connect() {
   }
 }
 
+// The error a wallet gives for a chain it has not been told about: 4902, which MetaMask mobile wraps
+// in a -32603, or only a message.
+const unknownChain = (e) => e?.code === 4902 || e?.data?.originalError?.code === 4902
+  || /unrecognized chain|unknown chain/i.test(String(e?.message ?? ""));
+
+function showWallet(name, chain) {
+  $("walletStatus").innerHTML = String(chain).toLowerCase() === CHAIN_HEX
+    ? `<span class="pill-ok">${esc(name)}: ${account.slice(0, 6)}…${account.slice(-4)} on 5042002</span>`
+    : `<span class="pill-err">${esc(name)}: on chain ${parseInt(chain, 16)}, not Arc testnet. Switch back to use this page.</span>`;
+}
+
+// The wallet switched chain or account. The pill says where it is now, and the agent is read again
+// so the bond card's buttons are for the account now connected.
+async function walletChanged(name) {
+  try {
+    const [chain, accounts] = await Promise.all([
+      wallet.request({ method: "eth_chainId" }),
+      wallet.request({ method: "eth_accounts" }),
+    ]);
+    account = Array.isArray(accounts) && accounts[0] ? accounts[0] : null;
+    if (account) showWallet(name, chain);
+    else { wallet = null; $("walletStatus").textContent = "not connected"; }
+  } catch (e) {
+    logLine(`<span class="pill-err">${esc(name)}: ${esc(e.message)}</span>`);
+  }
+  refreshSvrBalance();
+  refreshProceeds();
+  if ($("agentAddr").value) lookup();
+}
+// Each provider is subscribed to once, however often it reconnects.
+const watched = new WeakSet();
+function watch(c) {
+  const p = c.provider;
+  if (watched.has(p) || typeof p.on !== "function") return;
+  watched.add(p);
+  const changed = () => { if (wallet === p) walletChanged(c.name); };
+  p.on("chainChanged", changed);
+  p.on("accountsChanged", changed);
+}
+
 async function connectWith(c) {
   try {
     wallet = c.provider;
     const accounts = await wallet.request({ method: "eth_requestAccounts" });
     account = accounts[0];
-    const chain = await wallet.request({ method: "eth_chainId" });
+    let chain = await wallet.request({ method: "eth_chainId" });
     if (chain !== CHAIN_HEX) {
       try {
         await wallet.request({ method: "wallet_switchEthereumChain", params: [{ chainId: CHAIN_HEX }] });
       } catch (e) {
+        // Only a wallet that does not know the chain is asked to add it. A refusal (4001) or any
+        // other error is the answer, not a reason for a second prompt.
+        if (!unknownChain(e)) throw e;
         await wallet.request({ method: "wallet_addEthereumChain", params: [{
           chainId: CHAIN_HEX, chainName: "Arc Testnet",
           nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
           rpcUrls: [RPC], blockExplorerUrls: [EXPLORER],
         }]});
       }
+      // Some wallets add a chain without switching to it, so what counts is where the wallet is now.
+      chain = await wallet.request({ method: "eth_chainId" });
+      if (String(chain).toLowerCase() !== CHAIN_HEX) throw new Error(`the wallet is still on chain ${parseInt(chain, 16)}, not Arc testnet`);
     }
-    $("walletStatus").innerHTML = `<span class="pill-ok">${esc(c.name)}: ${account.slice(0, 6)}…${account.slice(-4)} on 5042002</span>`;
+    watch(c);
+    showWallet(c.name, chain);
     // Deposits and withdrawals need a fee registry; the faucet does not.
+    buttonsSet++;
     (FEES_LIVE ? ["depositBtn", "withdrawBtn", "faucetBtn"] : ["faucetBtn"])
       .forEach(id => $(id).disabled = false);
     if (!$("agentAddr").value) $("agentAddr").value = account;
@@ -246,7 +312,10 @@ async function connectWith(c) {
     refreshProceeds();
     lookup();
   } catch (e) {
+    // Nothing from the attempt stays: an account without its wallet would read as connected.
     wallet = null;
+    account = null;
+    $("walletStatus").textContent = "not connected";
     logLine(`<span class="pill-err">${esc(c.name)}: ${esc(e.message)} — this chain needs a wallet that supports custom networks (MetaMask does; Phantom does not).</span>`);
   }
 }
@@ -258,17 +327,20 @@ async function refreshSvrBalance() {
 }
 
 // ---- lookup ----
+// Lookups can overlap, and an older one can answer last. Only the newest may paint the card, and
+// the agent the buttons act on (currentAgent, currentDidHash, stakeCtx) changes only together with
+// the card, so the buttons always act on the agent on screen.
+let lookupSeq = 0;
 async function lookup() {
   const addr = $("agentAddr").value.trim();
   if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) { logLine('<span class="pill-err">Enter a valid 0x address.</span>'); return; }
-  currentAgent = addr;
+  const seq = ++lookupSeq;
   try {
     // No round trip: didHash is a pure function of the chain id and the address, which
     // is exactly why SigvaraIdentity derives it on chain at registration. This used to
     // be an eth_call for arithmetic the page could already do, and did.js now carries
     // the keccak256 that demo.js always had.
     const didHash = SigvaraDid.computeDidHash(addr, CHAIN_ID);
-    currentDidHash = didHash;
 
     // Everything below depends only on didHash, so it goes in one request rather than
     // five sequential ones. Fee reads are appended only when the registry is live, so
@@ -313,22 +385,26 @@ async function lookup() {
     const statusStr = ["Active", "Suspended", "Slashed", "awaiting bond"][statusNum] ?? "?";
     const bal = FEES_LIVE ? BigInt(balRaw) : 0n;
     const covered = FEES_LIVE && BigInt(coveredRaw) === 1n;
+    // A proposed score sits in a separate slot until its challenge window closes.
+    // Showing only the finalized value reads as "no reputation" for any agent
+    // whose first score is still open to challenge. Read before the render, which has no await.
+    const pending = registeredAt !== 0n ? await pendingNote(pendingRaw) : "";
+    if (seq !== lookupSeq) return; // a newer lookup owns the card
+    currentAgent = addr;
+    currentDidHash = didHash;
     $("didStr").textContent = `did:sigvara:${CHAIN_ID}:${addr}`;
     $("didHash").textContent = didHash;
     if (registeredAt !== 0n) {
       const score = BigInt(scoreRaw);
       $("regStatus").innerHTML = `<span class="pill-ok">yes — ${esc(statusStr)}</span>`;
-      // A proposed score sits in a separate slot until its challenge window closes.
-      // Showing only the finalized value reads as "no reputation" for any agent
-      // whose first score is still open to challenge.
-      $("score").innerHTML = `${score} / 100` + await pendingNote(pendingRaw);
+      $("score").innerHTML = `${score} / 100` + pending;
       $("breakdown").innerHTML = FACTORS
         .map(([name, i, max]) => `${name} ${Number(BigInt(word(rep, i)))}/${max}`)
         .join(" &nbsp;·&nbsp; ")
         + ' &nbsp; <a href="docs/reputation">what is this?</a>';
     } else if (account) {
       $("regStatus").innerHTML = '<span class="pill-warn">not registered</span> <button id="regBtn" class="btn btn-secondary btn-inline-sm">Register this agent</button>';
-      $("regBtn").onclick = registerAgentFlow;
+      $("regBtn").onclick = busy("regBtn", registerAgentFlow);
       const regPausedUntil = pausedUntilOf(extra[3]);
       if (regPausedUntil > Math.floor(Date.now() / 1000)) {
         $("regBtn").disabled = true;
@@ -348,11 +424,13 @@ async function lookup() {
     renderStake({ ident, stakeRaw, minStakeRaw, pendWRaw, slashRaw, unbondRaw, extra });
     $("agentInfo").classList.remove("u-hidden");
   } catch (e) {
+    if (seq !== lookupSeq) return; // a newer lookup owns the card, and this failure is not about it
     logLine(`<span class="pill-err">lookup failed: ${esc(e.message)}</span>`);
     // The Bond card still shows the previous agent and its buttons were enabled for that
     // agent, not for the address now in the box. Leave nothing live until a lookup succeeds.
     currentDidHash = null;
     stakeCtx = null;
+    buttonsSet++;
     for (const id of ["bondBtn", "unbondBtn", "claimBtn", "disputeBtn", "suspendBtn", "reactivateBtn"]) $(id).disabled = true;
     $("stakeNote").textContent = "The lookup failed, so the card may still show the previous agent. Look up again.";
   }
@@ -437,6 +515,7 @@ function renderStake({ ident, stakeRaw, minStakeRaw, pendWRaw, slashRaw, unbondR
   const paused           = stakePausedUntil > now;
 
   stakeCtx = { staked, minStake, pendAmt, claimAt, isOperator, frozen, statusNum, registered };
+  buttonsSet++;
 
   $("stakeAmt").innerHTML = !registered ? "&mdash;"
     : `${formatUnits(staked)} ${esc(tokenSymbol)} ` + (staked >= minStake
@@ -457,13 +536,16 @@ function renderStake({ ident, stakeRaw, minStakeRaw, pendWRaw, slashRaw, unbondR
 
   // Status in words. A Suspended agent is suspended either by its operator, who can undo it,
   // or by a slash proposal, which only the proposal's outcome undoes. The two look the same
-  // in `identities` and mean opposite things to the person holding the bond.
+  // in `identities` and mean opposite things to the person holding the bond. Once a proposal is
+  // dropped the lock lifts, but an agent whose stake was below the minimum stays Suspended, and
+  // the chain does not tell that apart from the operator's own suspension.
   if (!registered) {
     $("stakeStatus").innerHTML = "&mdash;";
   } else if (statusNum === 1) {
+    const back = staked >= minStake ? "reactivate it" : "bond it back to the minimum and reactivate it";
     $("stakeStatus").innerHTML = suspendedBySlash
       ? '<span class="pill-warn">Suspended by a slash proposal</span>: reinstated only if the proposal is dropped'
-      : `<span class="pill-warn">Suspended by its operator</span>: ${isOperator ? "you can reactivate it" : "only the operator can reactivate it"}`;
+      : `<span class="pill-warn">Suspended</span> by its operator, or left suspended after a slash proposal was dropped: ${isOperator ? `you can ${back}` : `only the operator can ${back}`}`;
   } else {
     $("stakeStatus").innerHTML = ['<span class="pill-ok">Active</span>', "", '<span class="pill-err">Slashed</span>', '<span class="pill-warn">Awaiting bond</span>'][statusNum] ?? "?";
   }
@@ -480,8 +562,8 @@ function renderStake({ ident, stakeRaw, minStakeRaw, pendWRaw, slashRaw, unbondR
   else if (!account)          { note = "Connect a wallet to bond."; why = "no wallet"; }
   else if (!isOperator)       { note = `Only the operator wallet <code>${esc(operator.slice(0, 10))}…</code> can bond or withdraw for this agent.`; why = "not operator"; }
   else if (frozen)            { note = `A slash proposal is <b>${esc(SLASH_STATES[slashState])}</b>. The bond is frozen until it resolves &mdash; withdrawing is blocked, topping up is not.`; }
-  else if (statusNum === 1 && staked >= minStake) { note = "Suspended by its operator. It is still scored, but anyone who checks status will refuse it until you reactivate it."; }
-  else if (staked < minStake) { note = `Bond at least ${formatUnits(minStake - staked)} more ${esc(tokenSymbol)} to make this agent scoreable.`; }
+  else if (statusNum === 1 && staked >= minStake) { note = "Suspended. It is still scored, but anyone who checks status will refuse it until you reactivate it."; }
+  else if (staked < minStake) { note = `Bond at least ${formatUnits(minStake - staked)} more ${esc(tokenSymbol)} to make this agent scoreable${statusNum === 1 ? ", then reactivate it: a Suspended agent does not reactivate by itself" : ""}.`; }
   else                        { note = "Bonded and scoreable."; }
   $("stakeNote").innerHTML = frozen ? `<span class="pill-err">${note}</span>` : note;
 
@@ -574,6 +656,7 @@ async function refreshProceeds() {
   try {
     const owed = BigInt(await rpcRead(STAKING, SEL.claimable + encAddr(account)));
     $("proceeds").textContent = `${formatUnits(owed)} ${tokenSymbol}`;
+    buttonsSet++;
     $("proceedsBtn").disabled = owed === 0n;
   } catch (e) { $("proceeds").textContent = "unavailable"; }
 }
@@ -667,6 +750,7 @@ async function registerAgentFlow() {
       SEL.registrationDigest + encAddr(currentAgent) + encAddr(account) + pubHex
     );
     // personal_sign applies the EIP-191 prefix, which is the one the contract expects.
+    await ensureArc();
     const signature = await wallet.request({
       method: "personal_sign",
       params: [digest, account],
@@ -715,6 +799,26 @@ async function faucet() {
   } catch (e) { logLine(`<span class="pill-err">${esc(e.message)} (testnet faucet only, has a cooldown)</span>`); }
 }
 
+// One run of each write flow at a time. A second click while the first waited on the wallet started
+// a second approve and deposit. The button is off while its flow runs; afterwards it stays as the
+// flow's own refresh set it (buttonsSet counts those), or comes back on when nothing refreshed it.
+let buttonsSet = 0;
+const inFlight = new Set();
+function busy(id, flow) {
+  return async () => {
+    if (inFlight.has(id)) return;
+    inFlight.add(id);
+    const seen = buttonsSet;
+    $(id).disabled = true;
+    try {
+      await flow();
+    } finally {
+      inFlight.delete(id);
+      if (buttonsSet === seen) $(id).disabled = false;
+    }
+  };
+}
+
 // ---- init ----
 (async function init() {
   if (FEES_LIVE) {
@@ -725,16 +829,16 @@ async function faucet() {
   }
   $("connectBtn").onclick = connect;
   $("lookupBtn").onclick = lookup;
-  $("depositBtn").onclick = deposit;
-  $("withdrawBtn").onclick = withdrawFees;
-  $("faucetBtn").onclick = faucet;
-  $("bondBtn").onclick = bondStake;
-  $("unbondBtn").onclick = beginUnbond;
-  $("claimBtn").onclick = claimUnbond;
-  $("disputeBtn").onclick = disputeSlash;
-  $("suspendBtn").onclick = () => setStatus(1, "suspending");
-  $("reactivateBtn").onclick = () => setStatus(0, "reactivating");
-  $("proceedsBtn").onclick = claimProceeds;
+  $("depositBtn").onclick = busy("depositBtn", deposit);
+  $("withdrawBtn").onclick = busy("withdrawBtn", withdrawFees);
+  $("faucetBtn").onclick = busy("faucetBtn", faucet);
+  $("bondBtn").onclick = busy("bondBtn", bondStake);
+  $("unbondBtn").onclick = busy("unbondBtn", beginUnbond);
+  $("claimBtn").onclick = busy("claimBtn", claimUnbond);
+  $("disputeBtn").onclick = busy("disputeBtn", disputeSlash);
+  $("suspendBtn").onclick = busy("suspendBtn", () => setStatus(1, "suspending"));
+  $("reactivateBtn").onclick = busy("reactivateBtn", () => setStatus(0, "reactivating"));
+  $("proceedsBtn").onclick = busy("proceedsBtn", claimProceeds);
   try {
     // fee token metadata comes from the chain: SVR faucet token on testnet,
     // USDC/WETH at mainnet — nothing on this page assumes a native token

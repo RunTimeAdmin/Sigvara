@@ -759,7 +759,7 @@ nothing" rather than "this oracle does not check".
   "total": 1,
   "truncated": false,
   "divergences": [
-    { "didHash": "0x8414ce0b…", "at": 1789852600000, "proposedAt": 1789852503,
+    { "didHash": "0x8414ce0b…", "at": 1789852600000, "firstAt": 1789852600000, "proposedAt": 1789852503,
       "pendingTotal": 12, "ownTotal": 21,
       "factors": { "successScore": { "pending": 3, "own": 12, "delta": 9 } },
       "evidence": {
@@ -771,8 +771,8 @@ nothing" rather than "this oracle does not check".
 }
 ```
 
-The list holds the 100 most recent divergences, newest first, because a committee acts on what
-is still inside its challenge window. `total` and `truncated` say whether more exist.
+The list holds the 100 most recent divergences, one per disputed proposal and newest first, because a committee acts on what
+is still inside its challenge window. `total` and `truncated` say whether more exist. `at` is the latest epoch to find the disagreement and `firstAt` the first.
 `/divergence/:didHash` returns `{ mode, tolerance, didHash, divergences }` for one agent.
 
 `proposedAt` is the disputed proposal's timestamp, so a reader can work out whether it
@@ -867,7 +867,7 @@ Setup, step by step with the exact transactions, is in
    primary's fee path would debit the agent a second time for one scoring epoch; a current
    one would refuse the second charge, and the two operators would still be racing for it.
    Startup refuses `ORACLE_MODE=checker` together with a fee registry. A checker's
-   failover proposals are unbilled.
+   failover proposals are unbilled, and it cannot see coverage: with fee gating on, a checker's failover can score an agent the primary dropped as uncovered, once the slot has been empty for the grace.
 6. **`EPOCH_HOURS` below half the challenge window** (so under 3 on Arc testnet, where
    the window is 6h). A proposal is only auditable while it sits in `pendingScores`; a
    checker on a longer cadence misses proposals entirely and its empty `/divergence`

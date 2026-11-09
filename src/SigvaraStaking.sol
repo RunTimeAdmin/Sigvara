@@ -645,10 +645,16 @@ contract SigvaraStaking is
     }
 
     /**
-     * @notice Committee withdraws a pending proposal before the window closes.
+     * @notice Committee withdraws a proposal that is still Pending. There is no time limit: the
+     *         challenge deadline does not close it.
      * @dev    Without this, a proposal filed and then abandoned left the agent
      *         Suspended and its stake frozen permanently: after the window, dispute
      *         reverts and nothing else could clear the state.
+     *
+     *         Cancelling lifts the freeze, so it releases any queued withdrawal whose claim time
+     *         falls before now plus challengePeriod, which is when the committee may file again. A
+     *         withdrawal queued before the slash keeps the claim time it was given. To keep it in
+     *         reach, let the proposal run to execution or dispute instead of cancelling to re-file.
      */
     function cancelSlash(bytes32 didHash) external nonReentrant onlyRole(SLASHING_COMMITTEE_ROLE) {
         SlashProposal storage proposal = slashProposals[didHash];
@@ -699,7 +705,13 @@ contract SigvaraStaking is
         // stake may sit below minimumStake, and reinstating would hand back Active
         // status with nothing slashable behind it. Leaving it Suspended keeps the
         // operator in control: deposit back over the minimum and reactivate.
-        if (stakes[didHash].amount >= minimumStake) {
+        //
+        // Asked through the identity registry's stake view, the check updateStatus makes before
+        // it lets an agent back to Active. Under the default wiring that view is this contract,
+        // so the answer is the same. Read from this contract's stakes, a view repointed elsewhere
+        // could refuse the reinstatement and make every drop revert, freezing the bond.
+        IStakeView bondView = identityRegistry.stakeView();
+        if (address(bondView) != address(0) && bondView.hasMinimumStake(didHash)) {
             identityRegistry.updateStatus(didHash, SigvaraIdentity.AgentStatus.Active);
         } else {
             identityRegistry.clearSlashSuspension(didHash);
@@ -830,9 +842,15 @@ contract SigvaraStaking is
     ///         for good.
     uint256 public constant EXECUTION_PERIOD = 14 days;
 
+    /// @notice The challenge period stays shorter than the unbonding period, and setUnbondingPeriod
+    ///         holds the same order from the other side. The refile cooldown is one challenge period,
+    ///         and a withdrawal queued after a drop stays slashable only because it waits longer than
+    ///         that. Otherwise a committee's cancel let an operator suspend, queue the whole bond and
+    ///         claim it before the committee could file again.
     function setChallengePeriod(uint256 newPeriod) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (newPeriod < MIN_CHALLENGE_PERIOD) revert PeriodTooShort(newPeriod, MIN_CHALLENGE_PERIOD);
         if (newPeriod > MAX_CHALLENGE_PERIOD) revert PeriodTooLong(newPeriod, MAX_CHALLENGE_PERIOD);
+        if (newPeriod >= unbondingPeriod) revert PeriodTooLong(newPeriod, unbondingPeriod - 1);
         challengePeriod = newPeriod;
         emit ChallengePeriodUpdated(newPeriod);
     }
@@ -840,6 +858,7 @@ contract SigvaraStaking is
     function setUnbondingPeriod(uint256 newPeriod) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (newPeriod < MIN_UNBONDING_PERIOD) revert PeriodTooShort(newPeriod, MIN_UNBONDING_PERIOD);
         if (newPeriod > MAX_UNBONDING_PERIOD) revert PeriodTooLong(newPeriod, MAX_UNBONDING_PERIOD);
+        if (newPeriod <= challengePeriod) revert PeriodTooShort(newPeriod, challengePeriod + 1);
         unbondingPeriod = newPeriod;
         emit UnbondingPeriodUpdated(newPeriod);
     }

@@ -80,6 +80,12 @@
 //                      the compare-and-swap entry point refuses a slot held by a live proposer)
 //     charge:          "ok" | "fail" | "already_charged" | "unconfirmed"
 //     propose:         "ok" | "revert" | "fee_cap" | "unconfirmed"
+//     finalize:        "ok" | "throttled" | "unconfirmed" | "window_active", or "raced": another party
+//                      finalized first, so the send reverts NoScorePending and the slot reads empty after
+//     totalScore:      { "<didhash>": the matured score getTotalScore serves }  (default 0)
+//     agents[didHash].slashedFromRead: the read of the agent (at no block) from which it reads slashed,
+//                      counting from 1, for an agent slashed between an epoch's batch read and its guard read
+//     jobs.networkFails: the job registry's node cannot say which chain it is on
 //   }
 //
 // Every write the oracle attempts is appended to the file named by STUB_CALLS, one JSON line
@@ -156,6 +162,14 @@ const provider = {
   },
 };
 
+// Slots another party finalized just before this oracle tried to (world.finalize "raced").
+const finalizedByOther = new Set();
+// How many times each agent has been read at no block (agents[didHash].slashedFromRead).
+const infoReads = new Map();
+// A write the world throttles (world.finalize "throttled"). Only these read as throttled, by the real
+// predicate; a read that fails reaches the oracle as any other error, as it always has here.
+const THROTTLED = Symbol('throttled write');
+
 const chain = {
   // What index.js hands the chain module, so a test can see its settings arrive.
   init(cfg) {
@@ -173,6 +187,11 @@ const chain = {
       return { operator: ZERO, agentAddress: ZERO, registeredAt: 0, status: 0 };
     }
     const changed = agent.operators && asOf(agent.operators, blockTag);
+    if (blockTag === undefined && agent.slashedFromRead) {
+      const n = (infoReads.get(didHash) ?? 0) + 1;
+      infoReads.set(didHash, n);
+      if (n >= agent.slashedFromRead) return { ...agent, status: 2 };
+    }
     return changed ? { ...agent, operator: changed.operator } : agent;
   },
   getRegisteredAgents: async () => {
@@ -231,8 +250,10 @@ const chain = {
   getEpochFee: async () => BigInt(world().epochFee ?? 0),
   getPendingScore: async (didHash) => {
     if (world().recordEpochReads) record('epochRead', hostNow());
+    if (finalizedByOther.has(didHash)) return { exists: false };
     return world().pending?.[didHash] ?? { exists: false };
   },
+  getTotalScore: async (didHash) => world().totalScore?.[didHash] ?? 0,
   // The finalized score; lastUpdated is 0 until one is finalized, as on chain.
   getReputationData: async (didHash) => {
     if (world().reputation?.[didHash] === 'throw') throw new Error('stub: reputation read failed');
@@ -256,13 +277,21 @@ const chain = {
   blockAtOrBefore: async () => world().snapshotBlock ?? world().head ?? 1,
   pruneAgent() {},
   isSlotTaken: () => false,
-  isRateLimited: () => false,
+  isRateLimited: (err) => err?.[THROTTLED] === true && real.isRateLimited(err),
   // The contract refuses to finalize a proposal whose proposer has lost its authority, which
   // the world says with `proposerDead` on the pending entry.
   finalizeScore: async (didHash) => {
     record('finalizeScore', didHash);
     if (world().pending?.[didHash]?.proposerDead) {
       throw new Error('stub: execution reverted: ProposerNotAuthorized');
+    }
+    const mode = world().finalize ?? 'ok';
+    if (mode === 'throttled') throw Object.assign(new Error('429 too many requests'), { code: 'SERVER_ERROR', [THROTTLED]: true });
+    if (mode === 'unconfirmed') throw new real.TxUnconfirmedError(fakeHash('f2'), 60_000);
+    if (mode === 'window_active') throw new Error('stub: execution reverted: ChallengeWindowActive');
+    if (mode === 'raced') {
+      finalizedByOther.add(didHash);
+      throw new Error('stub: execution reverted: NoScorePending');
     }
     return fakeHash('f1');
   },
@@ -363,7 +392,10 @@ for (const [file, fake] of [['chain.js', chain], ['external.js', external]]) {
 // decodes and turns logs into evidence for GET /jobs/:address.
 const jobs = require(path.join(oracleDir, 'jobs.js'));
 jobs.makeProvider = (cfg) => (jobs.enabled(cfg) ? {
-  getNetwork: async () => ({ chainId: BigInt(world().chainId ?? 5042) }),
+  getNetwork: async () => {
+    if (world().jobs?.networkFails) throw Object.assign(new Error('stub: the job registry\'s node did not answer'), { code: 'NETWORK_ERROR' });
+    return { chainId: BigInt(world().chainId ?? 5042) };
+  },
   getBlockNumber: async () => world().jobs?.head ?? world().head,
   getLogs: async () => world().jobs?.logs ?? [],
   getBlock: async (n) => ({ number: n, timestamp: world().nowSec }),
