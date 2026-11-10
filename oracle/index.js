@@ -24,7 +24,10 @@ const {
   decideAction, decideCheckerAction, checkerGraceMs, finalizableAtOf, scoreDivergence,
   epochIntervalError, divergenceToleranceError, DEFAULT_DIVERGENCE_TOLERANCE,
   mapChunked, chunkForReads, READ_PACE_MS, clockSkewError, scoringIsStale,
+  scoreRefreshSeconds, writeDueAt, writeOrder, DEFAULT_MAX_WRITES_PER_EPOCH,
 } = require('./epoch-policy');
+const { createBondWatch } = require('./bond-watch');
+const { numberSetting } = require('./config');
 const {
   json, readBody, bodyErrorStatus, readCredentials, identifyCaller, mayAttestUnauthenticated, parseScorePath, parseDidHash,
   rateLimited, clientKey, adminTokenPolicyError, runningCommit,
@@ -134,6 +137,11 @@ const cfg = {
   // How long a checker leaves a finalizable proposal or an empty slot to the primary
   // (checkerGraceMs in epoch-policy.js). Checked at startup in checker mode.
   checkerGrace:       checkerGraceMs(process.env.CHECKER_GRACE_MINUTES, Number(process.env.EPOCH_HOURS || 24) * 3_600_000),
+  // How old an unchanged score's last write may get before it is proposed again (writeDueAt), and the most proposals
+  // one epoch sends. Both operators must run the same values: a checker reads an empty slot as nothing due by the first,
+  // and its own failover is held by the second. Checked at startup.
+  scoreRefresh:       scoreRefreshSeconds(process.env.SCORE_REFRESH_HOURS, Number(process.env.EPOCH_HOURS || 24) * 3_600_000),
+  maxWritesPerEpoch:  numberSetting(process.env.MAX_WRITES_PER_EPOCH, DEFAULT_MAX_WRITES_PER_EPOCH),
   divergenceTolerance: Number(process.env.DIVERGENCE_TOLERANCE || DEFAULT_DIVERGENCE_TOLERANCE),
   // Named in divergence records so a reader is told where the other side's evidence
   // lives, rather than having to already know the deployment's endpoint layout.
@@ -211,8 +219,13 @@ const lastPaymentChainScans = new Map();
 // were left unscored when the scans fell behind while it ran, and why (HOLD). Null when it was not held.
 let lastEpochHold = null;
 // Why an epoch left agents unscored: a scan behind where the evidence must be cut, or a payer's negative that is due
-// and not read, or starts to count before a proposal could land (negative-hold.js).
-const HOLD = Object.freeze({ SCAN_BEHIND: 'scan_behind', PAYER_NEGATIVE: 'payer_negative', LEDGER_FULL: 'ledger_full' });
+// and not read, or starts to count before a proposal could land (negative-hold.js), a ledger at its cap, or the epoch's
+// proposals (MAX_WRITES_PER_EPOCH) spent.
+const HOLD = Object.freeze({
+  SCAN_BEHIND: 'scan_behind', PAYER_NEGATIVE: 'payer_negative', LEDGER_FULL: 'ledger_full', WRITE_BUDGET: 'write_budget',
+});
+// Agents with no bond, left out of the epoch's reads until a log says that may have changed (bond-watch.js).
+const bondWatch = createBondWatch();
 // The cut-off the scans were last run again for (evidenceCutFor).
 let lastRescanForMs = null;
 // How long one epoch spends catching a payment chain up, in steps of MAX_BLOCKS, before it leaves the
@@ -230,6 +243,14 @@ if (epochErr) {
   console.error(`[oracle] ${epochErr}`);
   process.exit(1);
 }
+if (cfg.scoreRefresh.error) {
+  console.error(`[oracle] ${cfg.scoreRefresh.error}`);
+  process.exit(1);
+}
+console.log(
+  `[oracle] an unchanged score is proposed again once its last write is ${cfg.scoreRefresh.seconds / 3600} hours old; ` +
+  `at most ${cfg.maxWritesPerEpoch} proposals an epoch`,
+);
 
 // Same reasoning as the interval, and the same failure shape. An unparseable tolerance
 // does not make the checker noisy, it makes it agree with everything: every comparison
@@ -1330,6 +1351,12 @@ async function runEpochInner() {
   let agentsHeldByNegative = 0;
   // Agents whose ledger is at its cap (store.js MAX_EVENTS_PER_AGENT).
   let agentsHeldByLedger = 0;
+  // Proposals sent this epoch against MAX_WRITES_PER_EPOCH, and the agents left for the next one once it was spent.
+  // A finalize is not counted: each makes live a proposal some epoch already counted.
+  let proposalsSent = 0;
+  let agentsHeldByBudget = 0;
+  // Agents whose score is the one on chain, written recently enough that nothing is due (writeDueAt).
+  let unchanged = 0;
   let finalized = 0;
   let diverged = 0;
 
@@ -1440,24 +1467,37 @@ async function runEpochInner() {
   //
   // Sized in calls, so one chunk is one batched round trip within what a node accepts
   // (chunkForReads), and paced (READ_PACE_MS). See mapChunked for what chunking costs. It preserves input order, so
-  // agentInfos stays aligned with agents exactly as the single Promise.all left it and
-  // candidate ordering downstream is unchanged.
-  const PHASE_ONE_CHUNK = chunkForReads(gatingActive ? 3 : 2);
-  const agentInfos = await mapChunked(agents, PHASE_ONE_CHUNK, async ({ didHash }) => {
+  // agentInfos stays aligned with the agents read; writeOrder sets the order the writes take below.
+  //
+  // Agents with no bond are not read, until a stake, status or minimum-stake log says that may have changed, and all
+  // are read once a day (bond-watch.js). The payment scans above read every agent's payments all the same.
+  const bondCheck = await bondWatch.refresh({
+    readHead: () => chain.readWithBackoff('bond head', () => chain.getProvider().getBlockNumber()),
+    readChanges: (from, to) => chain.readBondChanges(from, to),
+    nowMs: Date.now(),
+  });
+  if (bondCheck.error) console.warn(`[oracle] could not read what changed agents' bonds, so every agent is read this epoch: ${bondCheck.error.message}`);
+  const notRead = agents.filter((a) => bondWatch.excluded(a.didHash));
+  const PHASE_ONE_CHUNK = chunkForReads(gatingActive ? 4 : 3);
+  const agentInfos = await mapChunked(notRead.length ? agents.filter((a) => !bondWatch.excluded(a.didHash)) : agents, PHASE_ONE_CHUNK, async ({ didHash }) => {
     try {
-      const [info, pending, covered] = await Promise.all([
+      const [info, pending, reputation, covered] = await Promise.all([
         chain.getAgentInfo(didHash),
         chain.getPendingScore(didHash),
+        // The score on chain, for the order the writes take and whether one is due (writeDueAt). Unread, the agent is
+        // written as it always was.
+        chain.getReputationData(didHash).catch(() => null),
         gatingActive ? chain.isCovered(didHash) : Promise.resolve(true),
       ]);
-      return { didHash, ...info, pending, covered, error: null };
+      return { didHash, ...info, pending, reputation, covered, error: null };
     } catch (err) {
-      return { didHash, registeredAt: 0, status: -1, pending: null, covered: false, error: err };
+      return { didHash, registeredAt: 0, status: -1, pending: null, reputation: null, covered: false, error: err };
     }
   }, READ_PACE_MS);
 
-  // Refund reads for payers' held negatives, before any agent's evidence is chosen (ADR 0011).
-  await settleNegatives(agentInfos);
+  // Refund reads for payers' held negatives, before any agent's evidence is chosen (ADR 0011). Also for an agent not
+  // read for want of a bond, so that a negative is settled on the same reads whether or not its agent is bonded.
+  await settleNegatives([...agentInfos, ...notRead.map((a) => ({ didHash: a.didHash, agentAddress: a.agentAddress, error: null }))]);
 
   // Agents worth writing for, filtered from the phase-1 batch before any further reads.
   const candidates = [];
@@ -1493,11 +1533,13 @@ async function runEpochInner() {
   const GUARD_CHUNK = chunkForReads(2);
   // Logged once for the epoch, not a line each: registering takes no stake, so their number has no bound.
   const unbonded = [];
+  // The oldest scores on chain first, so the write budget goes to them (writeOrder).
+  const queue = writeOrder(candidates);
 
-  for (let c = 0; c < candidates.length; c += GUARD_CHUNK) {
+  for (let c = 0; c < queue.length; c += GUARD_CHUNK) {
     // The first of these follows the last chunk of phase 1, so it waits too.
     await new Promise((r) => setTimeout(r, READ_PACE_MS));
-    const chunk = candidates.slice(c, c + GUARD_CHUNK);
+    const chunk = queue.slice(c, c + GUARD_CHUNK);
     // One batch for the whole chunk: ethers folds calls issued in the same tick into a
     // single JSON-RPC request, so this is one round trip rather than 2 x chunk.
     const guards = await Promise.all(chunk.map(async a => {
@@ -1513,8 +1555,10 @@ async function runEpochInner() {
     }));
 
     for (let k = 0; k < chunk.length; k++) {
-      const { didHash, operator, agentAddress, registeredAt, pending } = chunk[k];
+      const { didHash, operator, agentAddress, registeredAt, pending, reputation } = chunk[k];
       const { fresh, bonded, guardError } = guards[k];
+      // The score on chain once this epoch's finalize, if any, has landed: what a new score is compared with (writeDueAt).
+      let onChain = reputation;
       if (guardError) {
         console.error(`[oracle]   ${didHash.slice(0, 10)}… error: ${guardError.message}`);
         continue;
@@ -1529,6 +1573,7 @@ async function runEpochInner() {
 
         if (!bonded) {
           unbonded.push(didHash);
+          bondWatch.add(didHash);
           metrics.inc('skippedUnbonded');
           continue;
         }
@@ -1557,6 +1602,8 @@ async function runEpochInner() {
             console.log(`[oracle]   ${didHash.slice(0, 10)}… finalized tx=${finalizeTx.slice(0, 10)}…`);
             finalized++;
             metrics.inc('finalizeSuccesses');
+            // The contract dates a finalized score by its proposal.
+            onChain = { ...pending.data, lastUpdated: pending.proposedAt };
           } catch (finalizeErr) {
             // Named before the slot is read again, as the checker's finalize is: a throttled send never
             // reached the chain, so the slot still reads as held, and this used to count a finalize error
@@ -1571,6 +1618,8 @@ async function runEpochInner() {
               // replaces it.
               console.log(`[oracle]   ${didHash.slice(0, 10)}… the pending proposal's proposer is no longer authorized; replacing it`);
               metrics.inc('proposalsStranded');
+              // Replaced whatever the score: a slot held by a proposal nobody can finalize is not one left empty.
+              onChain = null;
             } else {
               // finalizeReputation is permissionless, so another party can front-run
               // us. If the pending proposal is gone, that's exactly what happened —
@@ -1584,6 +1633,7 @@ async function runEpochInner() {
               }
               console.log(`[oracle]   ${didHash.slice(0, 10)}… already finalized by another party`);
               metrics.inc('finalizeSuccesses');
+              onChain = { ...pending.data, lastUpdated: pending.proposedAt };
             }
           }
         }
@@ -1783,19 +1833,33 @@ async function runEpochInner() {
           // uncovered; counted from lastUpdated, either looked like a primary days late.
           // A slot held by a stranded proposer counts as empty at once, and so does one this
           // checker emptied itself by finalizing for a primary that was already a grace late.
+          // Neither is due while the score on chain is this checker's own and was written recently
+          // enough (writeDueAt): the primary skips that slot on purpose. The first epoch is then the
+          // first to find it due, not the first to find it empty.
           let emptySince = 0;
+          let notDueUntil = 0;
           slotsJudged.add(didHash);
           if (freshPending.exists) {
             checkerSlots.occupied(didHash);
-          } else if (!coveringStranded && !coveringLate.has(didHash)) {
-            if (!emptySeenAt.has(didHash)) emptySeenAt.set(didHash, chainNow);
+          } else if (!coveringStranded) {
             const rep = await chain.getReputationData(didHash);
-            emptySince = Math.max(Number(registeredAt) || 0, Number(rep.lastUpdated) || 0, emptySeenAt.get(didHash));
+            notDueUntil = writeDueAt(rep, scores, cfg.scoreRefresh.seconds);
+            if (chainNow < notDueUntil) {
+              emptySeenAt.delete(didHash);
+            } else if (!coveringLate.has(didHash)) {
+              if (!emptySeenAt.has(didHash)) emptySeenAt.set(didHash, chainNow);
+              emptySince = Math.max(Number(registeredAt) || 0, Number(rep.lastUpdated) || 0, emptySeenAt.get(didHash));
+            }
           }
           const graceSeconds = cfg.checkerGrace.ms / 1000;
           const decision = decideCheckerAction(
-            freshPending, auditScores, challengeWindow, chainNow, cfg.divergenceTolerance, { graceSeconds, emptySince },
+            freshPending, auditScores, challengeWindow, chainNow, cfg.divergenceTolerance, { graceSeconds, emptySince, notDueUntil },
           );
+
+          if (decision === 'not-due') {
+            unchanged++;
+            continue;
+          }
 
           if (decision === 'diverged') {
             const d = scoreDivergence(freshPending.data, auditScores);
@@ -1918,6 +1982,13 @@ async function runEpochInner() {
           // this operator covers for it. That is the failover half of running a second.
         }
 
+        // The score already on chain, written recently enough, is not proposed again (writeDueAt). A checker has decided
+        // this above, as 'not-due'.
+        if (!cfg.checkerMode && chainNow < writeDueAt(onChain, scores, cfg.scoreRefresh.seconds)) {
+          unchanged++;
+          continue;
+        }
+
         // Commit to the evidence alongside the score. Without it the only record of
         // which payments produced this number is the oracle's own state file, and a
         // third party checking the arithmetic would have to take that on trust.
@@ -1951,6 +2022,13 @@ async function runEpochInner() {
             console.log(`[oracle]   ${didHash.slice(0, 10)}… its evidence was chosen too long ago to propose; proposing next epoch`);
             continue;
           }
+        }
+
+        // The epoch's proposals are spent (MAX_WRITES_PER_EPOCH), in the order writeOrder set; the rest wait for the next
+        // epoch, before any fee is taken for them.
+        if (proposalsSent >= cfg.maxWritesPerEpoch) {
+          agentsHeldByBudget++;
+          continue;
         }
 
         if (gatingActive && !cfg.checkerMode) {
@@ -1998,6 +2076,7 @@ async function runEpochInner() {
           }
         }
 
+        proposalsSent++;
         metrics.inc('proposeAttempts');
         // Checker mode uses the compare-and-swap entry point. It decided to propose by
         // reading the slot and finding it empty, and the primary can land a proposal in
@@ -2061,6 +2140,13 @@ async function runEpochInner() {
     const more = unbonded.length > 10 ? `, and ${unbonded.length - 10} more` : '';
     console.log(`[oracle] ${unbonded.length} agent(s) below minimum stake, skipped: ${named}${more}`);
   }
+  if (notRead.length) {
+    console.log(`[oracle] ${notRead.length} agent(s) with no bond not read this epoch: no stake, status or minimum-stake log has named them since`);
+  }
+  if (unchanged) {
+    console.log(`[oracle] ${unchanged} agent(s) unchanged since their last write, less than SCORE_REFRESH_HOURS ago: not proposed`);
+    metrics.inc('proposalsSkippedUnchanged', unchanged);
+  }
   if (cfg.checkerMode) checkerSlots.forgetAllBut(slotsJudged);
 
   // Once an event's weight is negligible it cannot move an integer score, so
@@ -2094,20 +2180,25 @@ async function runEpochInner() {
     console.error(`[oracle] ${agentsHeldByLedger} agent(s) left unscored: payment ledger full`);
     metrics.inc('agentsHeldByLedgerCap', agentsHeldByLedger);
   }
+  if (agentsHeldByBudget) {
+    console.error(`[oracle] ${agentsHeldByBudget} agent(s) left unscored: this epoch's ${cfg.maxWritesPerEpoch} proposal(s) (MAX_WRITES_PER_EPOCH) were spent`);
+    metrics.inc('agentsHeldByWriteBudget', agentsHeldByBudget);
+  }
   {
     const ledger = ledgerStatus();
     if (ledger.events >= ledger.maxTotal * 0.8) {
       console.error(`[oracle] payment ledger at ${ledger.events} of ${ledger.maxTotal} events; ${ledger.refused} payment(s) refused`);
     }
   }
-  if (agentsHeld || agentsHeldByNegative || agentsHeldByLedger) {
+  if (agentsHeld || agentsHeldByNegative || agentsHeldByLedger || agentsHeldByBudget) {
     lastEpochHold = {
       at: new Date().toISOString(),
-      agents: agentsHeld + agentsHeldByNegative + agentsHeldByLedger,
+      agents: agentsHeld + agentsHeldByNegative + agentsHeldByLedger + agentsHeldByBudget,
       reasons: [
         ...(agentsHeld ? [HOLD.SCAN_BEHIND] : []),
         ...(agentsHeldByNegative ? [HOLD.PAYER_NEGATIVE] : []),
         ...(agentsHeldByLedger ? [HOLD.LEDGER_FULL] : []),
+        ...(agentsHeldByBudget ? [HOLD.WRITE_BUDGET] : []),
       ],
     };
   }
@@ -2976,6 +3067,9 @@ async function handleRequest(req, res) {
       jobsFeed: jobs.enabled(jobsCfg) ? 'configured' : 'disabled',
       jobsRegistry: jobsCfg.registry || null,
       jobsChainId,
+      // When an unchanged score is proposed again (SCORE_REFRESH_HOURS) and how many proposals an epoch may send
+      // (MAX_WRITES_PER_EPOCH), which both operators must share.
+      writePolicy: { scoreRefreshHours: cfg.scoreRefresh.seconds / 3600, maxWritesPerEpoch: cfg.maxWritesPerEpoch },
     });
   }
 

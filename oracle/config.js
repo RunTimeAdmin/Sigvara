@@ -57,6 +57,8 @@ const NUMERIC = [
   ['MAX_TX_COST', 'num', 0.000001],
   ['MAX_CLOCK_SKEW_SECONDS', 'num', 1],
   ['CHECKER_GRACE_MINUTES', 'num', 0],
+  ['SCORE_REFRESH_HOURS', 'num', 0, 12],
+  ['MAX_WRITES_PER_EPOCH', 'int', 1],
   // The watcher's. POLL_SECONDS is also checked there, with its own message.
   ['POLL_SECONDS', 'num', 30],
   ['MAX_SILENCE_MINUTES', 'num', 1],

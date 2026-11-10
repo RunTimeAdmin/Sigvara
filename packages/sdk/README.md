@@ -165,7 +165,7 @@ and it carries the score so you can say how short they were.
 **A score nobody has refreshed.** Nothing on chain ages a score, so one left over from an
 oracle outage keeps passing a threshold. Set `maxScoreAgeSeconds` to refuse a score written
 longer ago than that, or never, with `stale_score`. A healthy score gets to about two of your
-oracle's proposals apart before the next one lands (15 hours on Arc testnet, two days on a daily
+oracle's proposals apart before the next one lands (about 20 hours on Arc testnet, where an unchanged score is proposed again every 12 hours, two days on a daily
 epoch), so choose more than that. It is measured against your host's clock. Unset, a score is trusted however old it is.
 It costs one more read per admission. The same check exists on chain as
 `SigvaraReader.isTrustedFresh`, on Arc testnet at `0x2921b4eE879CdF5793FA273BbDc4E7dF01ABcef8`.

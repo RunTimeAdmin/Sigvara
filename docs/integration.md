@@ -102,7 +102,7 @@ the current number and use events to learn when to look again.
 
 ## How old the score is
 
-Nothing on chain ages a score. The oracle writes one each epoch; if it stops, or proposals are
+Nothing on chain ages a score. The oracle writes one each epoch it changes, and an unchanged one again once its last write is 12 hours old; if it stops, or proposals are
 paused (ADR 0005), the last score stays as it was and `isTrusted` keeps answering from it. For a
 gate that is the difference between "this agent is in good standing" and "this agent was in good
 standing the last time anyone looked". `trust(agent).scoreUpdatedAt` is when the oracle proposed the
@@ -118,8 +118,8 @@ mainnet the primary proposes once a day and a proposal finalizes after the 6 hou
 window, so that is about two days, and older when an epoch runs late. Three days tolerates one late
 epoch; a shorter limit shows a missed one sooner and turns a late one into refusals; a much longer
 one is the stale read this replaces. On Arc testnet the oracle runs hourly and the window is also 6
-hours, so proposals land 6.4 to 7.4 hours apart (measured 5 November 2026), a score reaches about 15
-hours old, and a day is a sensible limit. If you read `trust()` and apply your
+hours, so a score that keeps changing is proposed 6.4 to 7.4 hours apart (measured 5 November 2026) and reaches about 15
+hours old, and one that does not is proposed again once its last write is 12 hours old (`SCORE_REFRESH_HOURS`, half a day) and reaches about 20. A day is a sensible limit. If you read `trust()` and apply your
 own limit, compare `scoreUpdatedAt` with `block.timestamp`. A score that is current still moves
 with maturity, so freshness answers when it was proposed, not whether it is still rising.
 

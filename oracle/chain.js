@@ -519,6 +519,47 @@ async function resolveStakeView() {
   return stakeViewContract;
 }
 
+// What can carry an agent across the minimum stake (bond-watch.js): its stake going in or out, a slash, and a status
+// change in the identity registry, each naming the agent in its first topic; and a new minimum, which moves everyone.
+const BOND_TOPICS = [
+  'StakeDeposited(bytes32,address,uint256)',
+  'WithdrawalInitiated(bytes32,address,uint256,uint256)',
+  'WithdrawalClaimed(bytes32,address,uint256)',
+  'SlashExecuted(bytes32,uint256,uint256)',
+].map((s) => ethers.id(s));
+const MINIMUM_STAKE_TOPIC = ethers.id('MinimumStakeUpdated(uint256)');
+const STATUS_TOPIC = ethers.id('AgentStatusUpdated(bytes32,uint8)');
+
+/**
+ * The agents whose bond may have changed in blocks [from, to], as { agents: Set of lowercased didHashes,
+ * minimumChanged }, from the stake view's logs (the staking contract) and the identity registry's. Read LOG_CHUNK_SIZE
+ * blocks at a time, halving a span the node refuses. With no stake view isBonded passes everyone, so nothing is read.
+ */
+async function readBondChanges(from, to) {
+  const out = { agents: new Set(), minimumChanged: false };
+  const view = await readWithBackoff('stake view', resolveStakeView);
+  if (!view) return out;
+  const filters = [
+    { address: cfg_.identityAddress, topics: [[STATUS_TOPIC]] },
+    { address: await view.getAddress(), topics: [[...BOND_TOPICS, MINIMUM_STAKE_TOPIC]] },
+  ];
+  for (let start = from; start <= to; start += cfg_.logChunkSize) {
+    const end = Math.min(start + cfg_.logChunkSize - 1, to);
+    for (const filter of filters) {
+      const logs = await readSplitting(
+        (a, b) => readWithBackoff('bond logs', () => provider.getLogs({ ...filter, fromBlock: a, toBlock: b })),
+        start, end, { pause: () => sleep(400) },
+      );
+      for (const log of logs) {
+        if (log.topics[0] === MINIMUM_STAKE_TOPIC) out.minimumChanged = true;
+        else if (log.topics[1]) out.agents.add(log.topics[1].toLowerCase());
+      }
+    }
+    if (end < to) await sleep(400);
+  }
+  return out;
+}
+
 // ---- ERC-8004 reviewers (reviewers.js) ------------------------------------------
 //
 // Every read here takes a block, the snapshot's (reviewers.snapshotOf), so that two operators
@@ -1049,6 +1090,7 @@ module.exports = {
   getAgentInfo,
   getProvider,
   isBonded,
+  readBondChanges,
   getReviewerStanding,
   firstFunder,
   readFunders,

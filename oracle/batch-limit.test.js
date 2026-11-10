@@ -105,7 +105,7 @@ test('an epoch reads in bursts a node accepts, with a wait between each', async 
   const oracle = await startOracle({ world, env: { ORACLE_ADMIN_TOKEN: 'a'.repeat(64) } });
   t.after(() => oracle.stop());
 
-  const wanted = 12 * 4; // two reads each ahead of the writes, and two guards each
+  const wanted = 12 * 5; // three reads each ahead of the writes, and two guards each
   const deadline = Date.now() + 30_000;
   const times = () => oracle.calls().filter((c) => c.name === 'epochRead').map((c) => c.args[0]);
   while (times().length < wanted) {
@@ -120,8 +120,8 @@ test('an epoch reads in bursts a node accepts, with a wait between each', async 
     bursts[bursts.length - 1].reads += 1;
     last = at;
   }
-  // Ten agents and then two, at each of the two steps.
-  assert.deepEqual(bursts.map((b) => b.reads), [20, 4, 20, 4]);
+  // Six agents and six ahead of the writes, then ten and two at the guards.
+  assert.deepEqual(bursts.map((b) => b.reads), [18, 18, 20, 4]);
   for (let i = 1; i < bursts.length; i += 1) {
     assert.ok(bursts[i].first - bursts[i - 1].first >= READ_PACE_MS - 50, `burst ${i} came too soon`);
   }
