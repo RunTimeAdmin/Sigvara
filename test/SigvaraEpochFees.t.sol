@@ -283,6 +283,47 @@ contract SigvaraEpochFeesTest is Test, RegistrationHelper {
         fees.setRewardPool(address(0));
     }
 
+    /// After the handover the admin Safe holds DEFAULT_ADMIN_ROLE and the timelock UPGRADER_ROLE. The
+    /// Safe can still grant itself the oracle role at once, so where the fees go and who must be bonded
+    /// to charge them are the timelock's, or a compromised Safe could point the pool at itself.
+    function test_theft_aCompromisedAdminCannotRouteFeesToItself() public {
+        address timelock = makeAddr("timelock");
+        bytes32 upgrader = fees.UPGRADER_ROLE();
+        bytes32 oracleRole = fees.ORACLE_ROLE();
+        FeesOperatorSetMock set = new FeesOperatorSetMock();
+        set.set(oracle, true);
+        vm.startPrank(admin);
+        fees.setOperatorBond(address(set));
+        fees.grantRole(upgrader, timelock);
+        fees.renounceRole(upgrader, admin);
+
+        fees.grantRole(oracleRole, admin);
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControl.AccessControlUnauthorizedAccount.selector, admin, upgrader
+        ));
+        fees.setRewardPool(admin);
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControl.AccessControlUnauthorizedAccount.selector, admin, upgrader
+        ));
+        fees.setOperatorBond(address(0));
+        vm.stopPrank();
+
+        // The role alone charges nothing while the bond check stands.
+        _fund(1);
+        vm.warp(10 * EPOCH_LENGTH);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraEpochFees.OracleNotBonded.selector, admin));
+        vm.prank(admin);
+        fees.chargeEpoch(didHash);
+
+        vm.prank(oracle);
+        fees.chargeEpoch(didHash);
+        fees.distributeFees();
+        assertEq(svr.balanceOf(rewardPool), EPOCH_FEE, "the pool the timelock set");
+        assertEq(svr.balanceOf(admin), 0, "nothing to the admin");
+        assertEq(fees.rewardPool(), rewardPool);
+        assertEq(address(fees.operatorBond()), address(set));
+    }
+
     // -------------------------------------------------------------------------
     // One charge per agent per epoch
     // -------------------------------------------------------------------------
@@ -551,8 +592,9 @@ contract SigvaraEpochFeesTest is Test, RegistrationHelper {
         vm.prank(stranger);
         fees.setEpochLength(2 days);
 
+        bytes32 upgrader = fees.UPGRADER_ROLE();
         vm.expectRevert(abi.encodeWithSelector(
-            IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, bytes32(0)
+            IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, upgrader
         ));
         vm.prank(stranger);
         fees.setOperatorBond(address(1));

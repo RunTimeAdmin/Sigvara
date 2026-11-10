@@ -1466,6 +1466,8 @@ async function runEpochInner() {
   // hoisting the lot keeps the guards close to the writes they guard, so the window
   // stays bounded by the chunk instead of by the epoch.
   const GUARD_CHUNK = chunkForReads(2);
+  // Logged once for the epoch, not a line each: registering takes no stake, so their number has no bound.
+  const unbonded = [];
 
   for (let c = 0; c < candidates.length; c += GUARD_CHUNK) {
     // The first of these follows the last chunk of phase 1, so it waits too.
@@ -1501,7 +1503,7 @@ async function runEpochInner() {
         }
 
         if (!bonded) {
-          console.log(`[oracle]   ${didHash.slice(0, 10)}… below minimum stake, skipping`);
+          unbonded.push(didHash);
           metrics.inc('skippedUnbonded');
           continue;
         }
@@ -2021,6 +2023,11 @@ async function runEpochInner() {
         metrics.inc('proposeErrors');
       }
     }
+  }
+  if (unbonded.length) {
+    const named = unbonded.slice(0, 10).map((d) => `${d.slice(0, 10)}…`).join(', ');
+    const more = unbonded.length > 10 ? `, and ${unbonded.length - 10} more` : '';
+    console.log(`[oracle] ${unbonded.length} agent(s) below minimum stake, skipped: ${named}${more}`);
   }
   if (cfg.checkerMode) checkerSlots.forgetAllBut(slotsJudged);
 
