@@ -31,7 +31,7 @@ node examples/mcp-gated-tool/server.mjs
 
 `SigvaraGate` ships in `@sigvara/protocol-sdk` from 1.0.0-alpha.9. Earlier versions do
 not contain it, so an older install fails on the import rather than at runtime. Use
-1.0.0-alpha.12 or later (current: 1.0.0-alpha.18).
+1.0.0-alpha.12 or later (current: 1.0.0-alpha.19).
 
 From a checkout of this repo the install is optional: the import falls back to
 `packages/sdk/dist` when the package is not present, so `npm run build` in
