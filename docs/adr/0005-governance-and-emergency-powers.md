@@ -130,7 +130,7 @@ This ADR records what was decided about each, and what was left as a stated trus
    Pending proposal that nobody executed or cancelled used to stay Pending for good, with the agent
    suspended and its withdrawals blocked. `expireSlash(didHash)` now lets anyone drop it 14 days after its
    deadline, the counterpart of `expireDispute`. Until then it can still be executed by anyone, and a
-   slash worth executing is worth a fortnight, since the victim and the reporter are paid from it. A
+   slash worth executing is worth a fortnight, since the victim is paid from it. A
    lapsed proposal is dropped like any other, so the agent is reinstated and the committee waits one
    challenge period before it can file again. The cooldown stays shorter than the unbonding period on
    purpose, and the two setters refuse any other order: a withdrawal queued after a drop is still queued
