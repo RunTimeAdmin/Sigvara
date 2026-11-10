@@ -22,9 +22,6 @@ As of 10 November 2026. The SVR token is on Arc mainnet; the registries and the 
 - The handover: moving testnet roles to a Safe and a timelock, after the drill, since `executeSlash` needs
   the reporter still on the committee.
 - A review of retention by counsel, before public outcome retrieval and peer import on mainnet.
-- A rule for a payment-chain payment from an agent's former operator. ADR 0009 judges the operator as of the scan,
-  so a payment made before an ownership change can count as a customer's; it needs a stricter rule and a test across an
-  ownership change before payment-chain payments decide anything on mainnet.
 
 **Open, and not blocking mainnet.**
 - Design partners, the first users from outside the team.
