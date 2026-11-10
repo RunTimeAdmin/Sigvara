@@ -4,14 +4,13 @@ Sequenced by gate, not by date. The wider plan, adoption included, is the [roadm
 
 ## Where this stands
 
-As of 6 November 2026. Everything runs on Arc testnet, and nothing is on mainnet. What runs where is in the
+As of 10 November 2026. The SVR token is on Arc mainnet; the registries and the oracle run on Arc testnet only. What runs where is in the
 [runbook](operations-runbook.md). There has been no external audit, and nobody outside the team gates on a score yet.
 
 **In progress, with dates.**
-- The adversarial slash drill: day 7 from 10 November 03:46 UTC and day 21 from 24 November 03:45 UTC
-  ([slash-drill.md](slash-drill.md)).
-- The slash keepers went live on 5 November. C should read `held` from 10 November, and neither has yet
-  executed a real slash.
+- The adversarial slash drill: day 7 done on 10 November, day 21 from 24 November 03:45 UTC
+  ([slash-drill.md](slash-drill.md), [slash-drill-log.md](slash-drill-log.md)).
+- The slash keepers went live on 5 November. Both hold C, and neither has yet executed a real slash.
 - The publisher has not yet posted through the policy signer's new rule, which requires the feedback hash
   to match its file. Three earlier real posts all pass it.
 
@@ -23,7 +22,9 @@ As of 6 November 2026. Everything runs on Arc testnet, and nothing is on mainnet
 - The handover: moving testnet roles to a Safe and a timelock, after the drill, since `executeSlash` needs
   the reporter still on the committee.
 - A review of retention by counsel, before public outcome retrieval and peer import on mainnet.
-- The operators' spending as agents grow: a limit on total epoch spend, and the reads an unstaked registration adds.
+- A rule for a payment-chain payment from an agent's former operator. ADR 0009 judges the operator as of the scan,
+  so a payment made before an ownership change can count as a customer's; it needs a stricter rule and a test across an
+  ownership change before payment-chain payments decide anything on mainnet.
 
 **Open, and not blocking mainnet.**
 - Design partners, the first users from outside the team.
@@ -31,6 +32,8 @@ As of 6 November 2026. Everything runs on Arc testnet, and nothing is on mainnet
   ([ADR 0006](adr/0006-payer-signed-outcomes.md)), and non-delivery cannot be used as a ground for a slash until
   it exists ([ADR 0010](adr/0010-what-can-be-slashed.md)). [ADR 0011](adr/0011-who-rules-negative-outcomes.md) decides who rules; building it is next.
 - The reward distributor stays a draft until mainnet.
+- An oracle operator outside the team. Today the primary and the checker are run by the same party, so the
+  checker catches a fault, not a dishonest operator.
 - Moving the testnet compose files to the mainnet pattern (a file secret, read-only, non-root).
 - A way to notice a dead watcher. It alerts on changes only, so a watcher that has stopped looks like one with
   nothing to report.
@@ -44,7 +47,7 @@ As of 6 November 2026. Everything runs on Arc testnet, and nothing is on mainnet
 
 ## Phase 2 — External audit (weeks 2–6, overlaps Phase 1)
 
-- [ ] **Engage an external auditor** for the Sigvara registries (`SigvaraIdentity`, `SigvaraStaking`, `SigvaraReputation`, `SigvaraOracleBond`). `SigvaraEpochFees` is left out of launch and of this audit ([ADR 0005](adr/0005-governance-and-emergency-powers.md)). Audits and development are funded separately from the token — ecosystem grants and CounterAudit integration revenue, not SVR.
+- [ ] **Engage an external auditor** for the Sigvara registries (`SigvaraIdentity`, `SigvaraStaking`, `SigvaraReputation`, `SigvaraOracleBond`). `SigvaraEpochFees` is left out of launch and of this audit ([ADR 0005](adr/0005-governance-and-emergency-powers.md)). The scope should also take in the oracle: the primary and checker's agreement, payment finality and cursor recovery, state growth and replay after pruning, reviewer funding and its Sybil economics, operator changes across chains, payer signatures (EOA and ERC-1271) and peer import, the public API's limits, x402 response handling, state backup and restore, key isolation and RPC independence. It should also check the live deployment: bytecode, proxies, the Safe, the timelock, the treasury and the token pool. Re-run Slither on the audited commit and refresh the dispositions in [ADR 0002](adr/0002-analyzer-accepted-findings.md). Audits and development are funded separately from the token: ecosystem grants and CounterAudit integration revenue, not SVR.
 - [ ] **Fix findings, re-audit critical items** before any mainnet deployment transaction is signed.
 - [ ] **Publish the audit report** on sigvara.xyz and in the repo. A token with no audit and an oracle run by one party is exactly what a skeptic attacks first.
 
@@ -73,8 +76,8 @@ Launched 9 November 2026 at 01:20:37 UTC: [`0xc79298521Ae84e7a43d20E71A2B2A1BB54
   decision 7). It also races its own expiry: until `expireSlash` lands, execution is still allowed. Running
   on Arc testnet since 5 November 2026; mainnet needs its own pair, funded with their own keys.
 - [ ] **Initialize oracle bonds** for admitted operators. `admit()` takes the admin role, so nobody buys their way in; there is no on-chain vote. The bond is what a corrupt oracle can lose.
-- [ ] **Pin and rehearse the operator deployment.** Operators run a pinned commit (`SIGVARA_REF` in `docker-compose.mainnet.yml`), never a branch. Each `.env` is mode 600 and the key is a file secret. State is copied off the box nightly and the restore drill in [operations-runbook.md](operations-runbook.md) has been run once. The key-compromise sequence in [incident-operator-key.md](incident-operator-key.md) has been walked through with the Safe signers.
-- [ ] **Confirm Arc's finality on mainnet before one confirmation counts.** `PAYMENT_MIN_CONFIRMATIONS=1` in `oracle/.env.mainnet.example` assumes a block cannot be reorganized once it is served. That is Arc's documented design and not something this repository tests ([payment-backed-attestations.md](payment-backed-attestations.md#configuration)). Read a block's hash, read the same block number again ten blocks later, and repeat across a day: the hashes must match. If one ever differs, raise `PAYMENT_MIN_CONFIRMATIONS` and `PAYMENT_SCAN_CONFIRMATIONS` before a payment counts.
+- [ ] **Pin and rehearse the operator deployment.** Operators run a pinned commit (`SIGVARA_REF` in `docker-compose.mainnet.yml`), never a branch. Each `.env` is mode 600 and the key is a file secret. State is copied off the box nightly and the restore drill in [operations-runbook.md](operations-runbook.md) has been run once. The key-compromise sequence in [incident-operator-key.md](incident-operator-key.md) has been walked through with the Safe signers. Both operators have also been run through payment ingress up to the ledger caps (`PAYMENT_MAX_EVENTS_PER_AGENT`, `PAYMENT_MAX_EVENTS_TOTAL`), a full disk and an interrupted save, and shown to stop safely and recover.
+- [ ] **Confirm Arc's finality on mainnet before one confirmation counts.** `PAYMENT_MIN_CONFIRMATIONS=1` in `oracle/.env.mainnet.example` assumes a block cannot be reorganized once it is served. That is Arc's documented design and not something this repository tests ([payment-backed-attestations.md](payment-backed-attestations.md#configuration)). Read a block's hash, read the same block number again ten blocks later, and repeat across a day: the hashes must match. If one ever differs, raise `PAYMENT_MIN_CONFIRMATIONS` and `PAYMENT_SCAN_CONFIRMATIONS` before a payment counts. Decide too how a credit for a transaction that a reorganization removed would be taken back without changing roots already published: nothing removes one today.
 - [ ] **Verify impersonation guidance**: only the published address is genuine SVR. `countersig.network` redirects to sigvara.xyz and serves nothing.
 
 ## Phase 5 — Flip monetization on
