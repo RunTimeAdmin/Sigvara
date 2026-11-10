@@ -265,3 +265,37 @@ The cooldowns end one challenge period after each drop: A's at 2026-11-10 03:45:
   from the chain: the faucet and approval from the token's logs, and the rest from the event index.
 
 Nothing in the protocol differed.
+
+### Day 7, 10 November 2026: refile and withdraw A
+
+The guards ran first, from `scripts/slash-drill-adversarial.sh guards-day7`, as free calls. Each gave the
+error predicted.
+
+| Call | Predicted | Got |
+|---|---|---|
+| Committee refiles A with the evidence the admin dropped | `EvidenceAlreadyRejected` | `EvidenceAlreadyRejected` |
+| C's operator disputes after C's deadline | `ChallengePeriodExpired` | `ChallengePeriodExpired` |
+| Anyone expires C before it lapses | `ExecutionPeriodActive` | `ExecutionPeriodActive` |
+
+Then the committee (`0x045D6C1d8404297F13596061388f6598fA94a5b7`) refiled A with the day-7 evidence and
+withdrew it three seconds later, so no keeper could execute it:
+
+| Step | Block | Time (UTC) | Transaction | Event |
+|---|---|---|---|---|
+| `initiateSlash(A, operator, EVIDENCE_A2)` | 71722299 | 14:35:02 | `0xda82818b624dd2e780543b7a043b14871f5ace6cfee3f1e78f1a26a83daf7f4c` | `SlashInitiated` |
+| `cancelSlash(A)` | 71722304 | 14:35:05 | `0x96c95bfe1a734a04715bc83d77b0a931b593a598acd195ba1baba4629620398e` | `SlashCancelled` |
+
+Afterwards `status` reads A `Active` with its proposal `Cancelled`, B `Active` and `Cancelled`, and C
+`Suspended` with its proposal `Pending`. All three bonds are still 1,000 SVR. Both slash keepers log C as
+held by `KEEPER_SKIP_AGENTS`, so neither will execute it before day 21.
+
+### Day 7: what differed from the plan
+
+- **Signing.** As on day 0, the committee's two transactions were sent with `cast` in PowerShell rather than
+  `committee-day7`, with the evidence bytes built from the script's `EVIDENCE_A2` text.
+- **Staking ran other code for 397 blocks before day 7's steps.** The staking proxy was upgraded to the
+  `44ff8e8` build in block 71720600 along with the reputation and oracle bond proxies, by mistake, and
+  restored to the implementation the drill started on in block 71720997, about 25 minutes before the
+  guards ran. No drill call fell in that window, and every call above ran on the drill's own code.
+
+Nothing in the protocol differed.
