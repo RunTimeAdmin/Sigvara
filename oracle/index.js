@@ -343,6 +343,8 @@ const {
   ledgerStatus,
   allPaymentEvents,
   prunePaymentEvents,
+  setCreditAgeLimit,
+  tooOldToCredit,
   pruneExpiredCooldowns,
   isStatePathWritable,
   getStatePath,
@@ -358,6 +360,9 @@ const {
   setPayerOutcomeCheck,
   ATTEST_COOLDOWN_MS,
 } = require('./store');
+
+// No settlement older than pruning keeps is credited, by any path: the same half-life the epoch prunes by.
+setCreditAgeLimit(paymentCfg.halfLifeMs);
 
 /**
  * The payments a score made at `atMs` reads: every one on the scored chain, and a payment chain's
@@ -968,6 +973,8 @@ async function runPaymentScan(agents) {
       unresolved.push(c);
       continue;
     }
+    // Older than pruning keeps, so the store refuses it (creditPayment), and that is no disagreement.
+    if (tooOldToCredit(ts)) continue;
     if (creditPayment(c.didHash, c.txHash, c.amount, c.payer, null, ts, null, c.blockNumber)) {
       credited += 1;
     } else {
@@ -1484,6 +1491,8 @@ async function runEpochInner() {
   // hoisting the lot keeps the guards close to the writes they guard, so the window
   // stays bounded by the chunk instead of by the epoch.
   const GUARD_CHUNK = chunkForReads(2);
+  // Logged once for the epoch, not a line each: registering takes no stake, so their number has no bound.
+  const unbonded = [];
 
   for (let c = 0; c < candidates.length; c += GUARD_CHUNK) {
     // The first of these follows the last chunk of phase 1, so it waits too.
@@ -1519,7 +1528,7 @@ async function runEpochInner() {
         }
 
         if (!bonded) {
-          console.log(`[oracle]   ${didHash.slice(0, 10)}… below minimum stake, skipping`);
+          unbonded.push(didHash);
           metrics.inc('skippedUnbonded');
           continue;
         }
@@ -2047,6 +2056,11 @@ async function runEpochInner() {
       }
     }
   }
+  if (unbonded.length) {
+    const named = unbonded.slice(0, 10).map((d) => `${d.slice(0, 10)}…`).join(', ');
+    const more = unbonded.length > 10 ? `, and ${unbonded.length - 10} more` : '';
+    console.log(`[oracle] ${unbonded.length} agent(s) below minimum stake, skipped: ${named}${more}`);
+  }
   if (cfg.checkerMode) checkerSlots.forgetAllBut(slotsJudged);
 
   // Once an event's weight is negligible it cannot move an integer score, so
@@ -2238,6 +2252,9 @@ async function paymentOnChain(pc, didHash, info, txHash) {
 // of an hour, so these are the usual answers to an outcome posted just after paying.
 const NOT_YET = ['unconfirmed', 'not_found', 'agent_not_seen'];
 
+// The answer to a payment older than pruning keeps (store.tooOldToCredit), on POST /attest and for a payer's outcome.
+const SETTLEMENT_TOO_OLD = 'this payment is older than this oracle keeps payments for, so it cannot be credited';
+
 /**
  * Takes an outcome the payer signed, once its payment has been verified
  * (docs/adr/0006-payer-signed-outcomes.md, section 3): the signer's own leg, the timing, the
@@ -2280,6 +2297,11 @@ async function admitPayerOutcome({ didHash, credited, info, signed, packetId = n
   // The timing that needs no chain read, first.
   const early = payerOutcome.timingProblem(signed, credited.settledAt);
   if (early) return refuse(400, 'outcome_window', early, 'attestRejectedOther');
+  // Its payment is credited below, which the store refuses for one this old (creditPayment). Said here, for an
+  // import as well as a post.
+  if (tooOldToCredit(credited.settledAt)) {
+    return refuse(402, 'settlement_too_old', SETTLEMENT_TOO_OLD, 'attestRejectedPayment');
+  }
 
   // Before any chain read. Only a contract's bad signatures are ever noted, below, so this slows down
   // whoever keeps making a contract account's code run, and nobody else.
@@ -3160,6 +3182,12 @@ async function handleRequest(req, res) {
           // Not a refusal: a carrier should send it again (CounterAudit's outbox ends delivery on a 4xx).
           if (pc && NOT_YET.includes(err.code)) return json(res, 503, { error: err.message, code: err.code });
           return json(res, 402, { error: err.message, code: err.code || 'payment_invalid' });
+        }
+        // Older than pruning keeps. Its record, and the key that refused it a second time, may be gone, so it is
+        // refused for its age, before any outcome is filed on it.
+        if (tooOldToCredit(credited.settledAt)) {
+          metrics.inc('attestRejectedPayment');
+          return json(res, 402, { error: SETTLEMENT_TOO_OLD, code: 'settlement_too_old' });
         }
         // On a payment chain, today's operator, as the scan judges it: the chain's blocks are not the registry's.
         try {

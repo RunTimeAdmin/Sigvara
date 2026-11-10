@@ -979,9 +979,9 @@ test('persist: writes the format version and the chain, and load reads the chain
   `);
   const r = lastJson(out);
   // Version 2 only once a payment chain's data is held (ADR 0009), see payment-chains.test.js; 3 once a payer's
-  // negative is (ADR 0011), below.
+  // negative is (ADR 0011), below; 4 once a prune has dropped a replay key.
   assert.equal(r.version, 1);
-  assert.equal(r.current, 3);
+  assert.equal(r.current, 4);
   assert.equal(r.chainId, 5042);
   assert.equal(r.back, 5042);
 });
@@ -1002,6 +1002,53 @@ test('persist: keeps how far reviewer funding was read, in a file that stays at 
   // A build before it reads only the keys it knows, so it takes the file and drops this on its next save.
   assert.equal(r.version, 1);
   assert.deepEqual(r.back, funders);
+});
+
+test('attack: a pruned payment stays refused after the half-life is raised, decay is switched off, or the oracle restarts', () => {
+  const day = 86_400_000;
+  const did = '0x' + 'ab'.repeat(32), tx = '0x' + 'cd'.repeat(32), payer = '0x' + '12'.repeat(20);
+  const settled = Date.now() - 900 * day;
+  const main = {
+    schemaVersion: 1,
+    paymentEvents: { [did]: [{ txHash: tx, ts: settled, amount: '5', payer, success: true }] },
+    usedPaymentTxs: [`${tx}|${did}|${payer}`],
+  };
+  const out = inChildWithFiles({ main }, `
+    const fs = require('fs');
+    const s = require('./store');
+    const day = 86_400_000;
+    const again = () => s.creditPayment('${did}', '${tx}', '5', '${payer}', true, ${settled});
+    s.load();
+    s.setCreditAgeLimit(90 * day);
+    const r = { pruned: s.prunePaymentEvents(90 * day), keys: [...s.usedPaymentTxs], replay: again() };
+    s.setCreditAgeLimit(3650 * day);
+    r.longerHalfLife = again();
+    s.setCreditAgeLimit(0);
+    r.decayOff = again();
+    r.otherChain = s.creditPayment('${did}', '${tx}', '5', '${payer}', true, ${settled}, null, 7, 84532);
+    s.persist();
+    r.version = JSON.parse(fs.readFileSync(process.env.ORACLE_STATE_PATH, 'utf8')).schemaVersion;
+    s.load();
+    r.afterRestart = again();
+    r.events = s.getPaymentEvents('${did}').length;
+    console.log(JSON.stringify(r));
+  `);
+  assert.deepEqual(lastJson(out), {
+    pruned: 1, keys: [], replay: false, longerHalfLife: false, decayOff: false, otherChain: false,
+    version: 4, afterRestart: false, events: 0,
+  });
+});
+
+test('creditPayment: takes a settlement just inside what pruning keeps, and none past it', () => {
+  const out = inChildWithFiles({}, `
+    const s = require('./store');
+    const day = 86_400_000, now = Date.now();
+    const pay = (n, ts) => s.creditPayment('did-age', '0x' + n.repeat(64), '5', '0x' + '22'.repeat(20), null, ts);
+    const before = pay('1', now - 2000 * day);
+    s.setCreditAgeLimit(90 * day);
+    console.log(JSON.stringify({ before, inside: pay('2', now - 896 * day), past: pay('3', now - 898 * day) }));
+  `);
+  assert.deepEqual(lastJson(out), { before: true, inside: true, past: false }, 'no limit until the oracle sets one');
 });
 
 test('persist: keeps the previous save as a backup that a later load can use', () => {

@@ -351,7 +351,7 @@ This is fine for local testing and worthless as a trust signal in public.
 | 200 | Accepted and saved |
 | 202 | Accepted, but the state file could not be written, so a restart before the next good save loses it. The body has `"durable": false`. Do not resend: it is recorded here, and a resend is refused (409 for a settlement already credited, 429 inside the cooldown). A payer-signed outcome sent again gets a 409 with `sameOutcome: true`, and `durable: false` until a save works. `/health` is 503 until a save works |
 | 400 | Malformed body, unknown agent, or a `success` that is not a boolean |
-| 402 | The payment did not check out; `code` says why (`self_payment`, `no_transfer`, `below_minimum`, `before_registration`) |
+| 402 | The payment did not check out; `code` says why (`self_payment`, `no_transfer`, `below_minimum`, `before_registration`, or `settlement_too_old` for one older than pruning keeps, about 897 days at the default half-life) |
 | 409 | `replayed`: this settlement was already credited. `outcome_recorded`: it already has an outcome, which is final. For a payer-signed outcome both also carry `sameOutcome`, and `outcome_recorded` the held outcome's `heldOutcomeHash` when the payer signed the outcome held (a token holder's held outcome gives only `sameOutcome: false`) |
 | 413 | The body is over 1 MB. `/flag`, `/flag/resolve` and `/link` answer the same way |
 | 429 | Cooldown active for this (attester, didHash) — `remainingSeconds` says how long. Applies to callers without a token; a token holder reporting on a verified payment is not throttled |
@@ -1181,7 +1181,7 @@ An outcome a payer signs for a payment chain's payment names it as `payment.chai
 
 A state file that holds anything from a payment chain is written as format version 2, which a build
 from before this refuses to load; without payment chains it stays version 1, so a rollback is still
-possible until a chain is used. Turning a chain back on keeps its old cursor and credits. A file that holds a payer's "not delivered" is written as version 3 ([ADR 0011](../docs/adr/0011-who-rules-negative-outcomes.md)), since a build from before the hold would count it at once.
+possible until a chain is used. Turning a chain back on keeps its old cursor and credits. A file that holds a payer's "not delivered" is written as version 3 ([ADR 0011](../docs/adr/0011-who-rules-negative-outcomes.md)), since a build from before the hold would count it at once. Once pruning has dropped a payment's replay key the file is version 4, since a build from before the age limit on credits would credit that payment again.
 
 `/health` reports each chain's mode, asset, `FROM_BLOCK`, fee unit, minimum, delay, cursor and last scan under `paymentChains`, so two operators can compare what they must share.
 
@@ -1262,7 +1262,7 @@ The oracle persists the following to `ORACLE_STATE_PATH`:
 - **links**: Agent-to-ERC-8004 identity links made with `POST /link`. Links made on chain are in **linkScanState**, with that scan's checkpoint, and come back from the chain if lost
 - **attestCooldowns**: Per-(attester, didHash) last-attestation timestamps
 - **paymentEvents**: Per-agent verified payments, one record each (`txHash`, settlement time, amount, payer, outcome, and `blockNumber` for anything credited since 3 Oct 2026). Stored individually rather than as a running total, because a total cannot be decayed. Records whose weight falls below a thousandth are pruned once per epoch
-- **usedPaymentTxs**: Settlements already credited, as `txHash|didHash|payer`, so the same receipt cannot be counted twice for the same agent from the same sender. Keyed by all three because one transaction can pay several agents and can carry several senders, and collapsing either loses what the per-payer cap and the distinct counterparty count read. Shorter keys from before each change are still honoured and block everything below them, since what they omit is not recoverable: pruning drops old payment records and deliberately leaves this list alone
+- **usedPaymentTxs**: Settlements already credited, as `txHash|didHash|payer`, so the same receipt cannot be counted twice for the same agent from the same sender. Keyed by all three because one transaction can pay several agents and can carry several senders, and collapsing either loses what the per-payer cap and the distinct counterparty count read. Shorter keys from before each change are still honoured and block everything below them, since what they omit is not recoverable, so pruning leaves them. Pruning a record drops its full key, and **prunedBefore** keeps the latest cutoff that happened at: no settlement older than pruning keeps, or than that cutoff, is credited by any path
 - **scanState**: The `AgentRegistered` log scan cursor, checkpointed per chunk so a rate-limited scan resumes instead of restarting from `FROM_BLOCK`
 - **paymentScanState**: The payment scan checkpoint. `PAYMENT_SCAN_FROM_BLOCK` applies only while there is none
 - **divergences**: In checker mode, the disagreements with the primary that `GET /divergence` serves, capped per agent and pruned by age
@@ -1308,7 +1308,7 @@ cd oracle
 node --test
 ```
 
-1429 tests (as of 9 November 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
+1420 tests (as of 9 November 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
 the trust weighting, Merkle evidence trees, HTTP helpers, store persistence and recovery,
 the streamed state file, chain access with backoff, scan checkpointing, fee caps and transaction replacement,
 metrics, and cooldown logic. Several of the files run the real `index.js` and `watcher.js`

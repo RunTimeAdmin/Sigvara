@@ -69,8 +69,14 @@ const paymentEvents = new Map();
 // Settlements already credited, as `txHash|didHash`, so a receipt cannot be presented
 // twice for the same agent. Keyed by the pair rather than the hash alone because one
 // transaction can pay several agents: a batch payout, a multicall, a router settling a
-// few providers at once. See creditKey.
+// few providers at once. See creditKey. A key goes when prunePaymentEvents drops its event, and from
+// then on the settlement is older than creditPayment takes (creditCutoff), which refuses it instead.
 const usedPaymentTxs = new Set();
+// The latest cutoff at which prunePaymentEvents dropped an event and its key, in ms, or null before any.
+// Kept so that a longer half-life later, or decay switched off, cannot make a pruned settlement creditable again.
+let prunedBefore = null;
+// The half-life creditPayment measures a settlement's age by (setCreditAgeLimit), or null when no limit is set.
+let creditHalfLifeMs = null;
 // The latest acceptedAt given to a payer-signed outcome. Each is later than the one before, so
 // GET /outcomes?since can page by it without losing or repeating one that shares a millisecond.
 let lastAcceptedAt = 0;
@@ -202,7 +208,11 @@ function pruneFlags(minWeight = 0.001, now = Date.now(), halfLifeMs = FLAG_HALF_
 // Version 3 is a file holding a payer's "not delivered" (ADR 0011). A build before the hold would score its stored
 // `success: false` at once, under any PAYER_OUTCOMES, refunded or not, so it must refuse the file too. Without one
 // the file stays version 2 or 1.
-const STATE_SCHEMA_VERSION = 3;
+//
+// Version 4 is a file whose replay set has lost the keys of pruned payments (prunedBefore). A build before it has no
+// age limit on credits, so it would credit those settlements a second time. Until a prune drops one the file stays
+// at 3 or below.
+const STATE_SCHEMA_VERSION = 4;
 
 function holdsPaymentChainData() {
   if (Object.keys(paymentChainScanState).some((key) => !key.endsWith('/shadow'))) return true;
@@ -212,6 +222,7 @@ function holdsPaymentChainData() {
 
 /** The oldest format that can hold this state (STATE_SCHEMA_VERSION). */
 function schemaVersionFor() {
+  if (prunedBefore !== null) return 4;
   for (const list of paymentEvents.values()) if (list.some((e) => e.payerOutcome?.outcome === 2)) return 3;
   return holdsPaymentChainData() ? 2 : 1;
 }
@@ -273,6 +284,9 @@ function parseState(parsed) {
   if (parsed.usedPaymentTxs !== undefined && !Array.isArray(parsed.usedPaymentTxs)) {
     throw new Error('usedPaymentTxs is not a list');
   }
+  if (parsed.prunedBefore !== undefined && parsed.prunedBefore !== null && !Number.isFinite(parsed.prunedBefore)) {
+    throw new Error(`prunedBefore ${JSON.stringify(parsed.prunedBefore)} is not a time`);
+  }
   if (parsed.chainId !== undefined && parsed.chainId !== null && !Number.isInteger(parsed.chainId)) {
     throw new Error(`chainId ${JSON.stringify(parsed.chainId)} is not a whole number`);
   }
@@ -284,6 +298,7 @@ function parseState(parsed) {
     attestCooldowns: new Map(),
     paymentEvents: new Map(),
     usedPaymentTxs: new Set(),
+    prunedBefore: parsed.prunedBefore ?? null,
     divergences: new Map(),
     scanState: parsed.scanState || null,
     paymentScanState: parsed.paymentScanState || null,
@@ -384,6 +399,7 @@ function applyState(next) {
   lastAcceptedAt = acceptedOrder.length ? acceptedOrder[acceptedOrder.length - 1].acceptedAt : 0;
   usedPaymentTxs.clear();
   for (const h of next.usedPaymentTxs) usedPaymentTxs.add(h);
+  prunedBefore = next.prunedBefore;
   divergences.clear();
   for (const [k, v] of next.divergences) divergences.set(k, v);
   scanState = next.scanState;
@@ -567,6 +583,7 @@ function persist() {
         attestCooldowns: Object.fromEntries(attestCooldowns),
         paymentEvents: Object.fromEntries(paymentEvents),
         usedPaymentTxs: [...usedPaymentTxs],
+        prunedBefore,
         divergences: Object.fromEntries(divergences),
         scanState,
         paymentScanState,
@@ -652,7 +669,7 @@ function creditKey(txHash, didHash, payer, chainId = null) {
  *
  * A bare hash is an entry written before the key carried a recipient. It blocks every
  * agent, because which one it belonged to is not recoverable: prunePaymentEvents drops
- * old events and deliberately leaves this set alone, so the event may be long gone.
+ * old events and leaves keys this short alone, so the event may be long gone.
  * Refusing is the safe direction, and it only affects transactions credited before this
  * change.
  */
@@ -662,7 +679,7 @@ function isCredited(txHash, didHash, payer, chainId = null) {
   if (chainId != null) return usedPaymentTxs.has(creditKey(tx, didHash, payer, chainId));
   // Three generations of key, oldest first. A shorter one blocks everything below it,
   // because what it omits is not recoverable: prunePaymentEvents drops old records and
-  // deliberately leaves this set alone, so the record naming the agent or the sender may
+  // leaves the shorter keys alone, so the record naming the agent or the sender may
   // be long gone. Refusing is the safe direction and only affects settlements credited
   // before each change.
   return usedPaymentTxs.has(tx)
@@ -681,6 +698,9 @@ function creditPayment(
   // the receipt used in lowercase let a mixed-case hash spend a payment where no score
   // would ever read it.
   const did = String(didHash).toLowerCase();
+  // Older than the ledger keeps: its key may have been pruned with it, so this is what stops it counting twice.
+  // Here rather than at each caller, so that no way in can credit one.
+  if (tooOldToCredit(now)) return false;
   if (isCredited(key, did, payer, chainId)) return false;
   if ((paymentEvents.get(did)?.length ?? 0) >= MAX_EVENTS_PER_AGENT || paymentEventTotal() >= MAX_EVENTS_TOTAL) {
     ledgerRefusals += 1;
@@ -977,16 +997,48 @@ const ledgerStatus = () => ({
   events: paymentEventTotal(), maxTotal: MAX_EVENTS_TOTAL, maxPerAgent: MAX_EVENTS_PER_AGENT, refused: ledgerRefusals,
 });
 
-function prunePaymentEvents(halfLifeMs, minWeight = 0.001, now = Date.now()) {
+const PRUNE_MIN_WEIGHT = 0.001;
+
+/** The settlement time before which prunePaymentEvents drops an event, or -Infinity with decay off. */
+function pruneCutoff(halfLifeMs, minWeight = PRUNE_MIN_WEIGHT, now = Date.now()) {
+  if (!halfLifeMs || halfLifeMs <= 0) return -Infinity;
+  return now - halfLifeMs * (Math.log2(1 / minWeight));
+}
+
+/**
+ * Sets the payment half-life creditPayment measures a settlement's age by: the oracle passes PAYMENT_HALF_LIFE_DAYS's
+ * at boot, as it passes it to prunePaymentEvents. Until it is set nothing is refused for its age.
+ */
+function setCreditAgeLimit(halfLifeMs) { creditHalfLifeMs = halfLifeMs; }
+
+/**
+ * The oldest settlement time creditPayment takes: where prunePaymentEvents would drop it now, and never before a
+ * cutoff a prune has dropped keys at, whatever the half-life is now. -Infinity while no limit is set.
+ */
+function creditCutoff(now = Date.now()) {
+  if (creditHalfLifeMs === null) return -Infinity;
+  return Math.max(pruneCutoff(creditHalfLifeMs, PRUNE_MIN_WEIGHT, now), prunedBefore ?? -Infinity);
+}
+
+/** Whether a settlement made at `settledAt` (ms) is too old to credit. */
+function tooOldToCredit(settledAt, now = Date.now()) {
+  return !(Number(settledAt) >= creditCutoff(now));
+}
+
+function prunePaymentEvents(halfLifeMs, minWeight = PRUNE_MIN_WEIGHT, now = Date.now()) {
   if (!halfLifeMs || halfLifeMs <= 0) return 0;
-  const cutoff = now - halfLifeMs * (Math.log2(1 / minWeight));
+  const cutoff = pruneCutoff(halfLifeMs, minWeight, now);
   let dropped = 0;
   for (const [did, list] of paymentEvents.entries()) {
     const kept = list.filter(e => e.ts >= cutoff);
     dropped += list.length - kept.length;
+    // The replay key goes with the event, under the spelling creditPayment filed it by. Older spellings, the bare
+    // hash and `tx|did`, name no sender and are left: which event they belonged to cannot be told.
+    for (const e of list) if (!(e.ts >= cutoff)) usedPaymentTxs.delete(creditKey(e.txHash, did, e.payer, e.chainId ?? null));
     if (kept.length === 0) paymentEvents.delete(did);
     else if (kept.length !== list.length) paymentEvents.set(did, Object.freeze(kept));
   }
+  if (dropped) prunedBefore = Math.max(prunedBefore ?? -Infinity, cutoff);
   return dropped;
 }
 
@@ -1157,6 +1209,8 @@ module.exports = {
   allPaymentEvents,
   paymentVolume,
   prunePaymentEvents,
+  setCreditAgeLimit,
+  tooOldToCredit,
   load,
   persist,
   StateLoadError,
