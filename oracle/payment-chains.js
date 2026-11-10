@@ -21,6 +21,10 @@
  *     `before_registration`, as on the scored chain, though by the block's time and not its number,
  *     since a payment chain's blocks are not the scored chain's. Otherwise whether it counted would
  *     depend on whether an operator happened to scan its block before or after the registration.
+ *   - The agent's own money. Nor can a payment be judged by the operator of its block. A payer named the
+ *     agent's operator, at registration or by OperatorTransferred, by the payment's time is skipped as
+ *     `self_payment`, and one named later stops counting from the time it was named (eventsAt). Both
+ *     depend only on the scored chain's changes up to a time every operator's registry scan has passed.
  *   - Units. Each chain names its own asset and fee unit, and amounts are converted into the
  *     scored chain's fee units before evidence from different chains is added up (forScoring).
  *   - Timing. A payment chain's evidence enters a score only once it is older than the chain's
@@ -301,8 +305,11 @@ function evidenceOrder(a, b) {
 
 // The last answer for each stored array, per config. For one array the set that counts only grows
 // with the cut-off, so an answer of the same size is the same answer, and handing back the same
-// frozen array lets the evidence cache and the Merkle root cache hit.
+// frozen array lets the evidence cache and the Merkle root cache hit. Not so once a payment is left
+// out for its payer, from a time on: such an answer is kept apart, and handed back only when the
+// list is the same.
 const memo = new WeakMap();
+const leftOut = new WeakMap();
 
 /**
  * The evidence that counts by the cut-off `atMs`, in milliseconds, in the order the root is built over.
@@ -312,31 +319,39 @@ const memo = new WeakMap();
  * payment chains' payments at least their delay old by `atMs`. Each in a fixed order (evidenceOrder),
  * and the very same array when that is what is stored. Nothing from a chain this oracle no longer
  * reads, or reads in shadow: there is no fee unit to convert it with, and an operator that dropped a
- * chain must not keep scoring from it. What counts, and its order, depends only on the cut-off, never
- * on what an operator holds beyond it or when it credited it.
+ * chain must not keep scoring from it. Nor a payment chain's payment from a payer named the agent's
+ * operator by `atMs`: `namedAt(payer)` says when (paymentScan.operatorsNamedAt), from the scored chain's
+ * changes up to `atMs`, which every operator scoring at that cut-off has read. What counts, and its
+ * order, depends only on the cut-off, never on what an operator holds beyond it or when it credited it.
  */
-function eventsAt(events, atMs, cfg) {
+function eventsAt(events, atMs, cfg, namedAt = () => undefined) {
   const on = active(cfg);
   const scored = [];
   const fromChains = [];
+  let left = 0;
   for (const e of events) {
     if (e.chainId == null) {
       if (!on || Number(e.ts) <= atMs) scored.push(e);
     } else if (eligibleAtMs(e, cfg) <= atMs) {
-      fromChains.push(e);
+      if (namedAt(e.payer) <= atMs) left += 1;
+      else fromChains.push(e);
     }
   }
   const size = scored.length + fromChains.length;
   const frozen = Object.isFrozen(events);
   let byArray = memo.get(cfg);
   if (!byArray) { byArray = new WeakMap(); memo.set(cfg, byArray); }
-  const hit = frozen ? byArray.get(events) : undefined;
+  const hit = frozen && !left ? byArray.get(events) : undefined;
   if (hit && hit.length === size) return hit;
   scored.sort(evidenceOrder);
   fromChains.sort(evidenceOrder);
   const unchanged = size === events.length && !fromChains.length && scored.every((e, i) => e === events[i]);
   const result = unchanged ? events : Object.freeze([...scored, ...fromChains]);
-  if (frozen) byArray.set(events, result);
+  if (!frozen) return result;
+  if (!left) { byArray.set(events, result); return result; }
+  const last = leftOut.get(events);
+  if (last && last.length === result.length && last.every((e, i) => e === result[i])) return last;
+  leftOut.set(events, result);
   return result;
 }
 
@@ -429,7 +444,7 @@ function scanEnd(credits, to, maxReads) {
  * @param {object} deps
  *   @param {object} deps.provider        the payment chain's: send, getBlock, getLogs, getCode
  *   @param {object} deps.scoredProvider  the scored chain's, for the recipient's code there
- *   @param {Array<{didHash, agentAddress, operator}>} deps.agents
+ *   @param {Array<{didHash, agentAddress, operator, operators?}>} deps.agents  as the registry scan holds them
  *   @param {object|null} deps.state      the last { lastBlock, lastBlockTs } for this chain
  *   @param {(txHash, didHash, payer) => boolean} deps.isCredited  already credited on THIS chain
  *   @param {(credit, tsMs) => boolean} deps.credit  credit one payment; not called in shadow mode
@@ -501,9 +516,9 @@ async function scanChain(chain, deps) {
   );
 
   const transfers = logs.map((log) => paymentScan.decodeTransfer(log, chain.asset));
+  // The agent's operators are judged once each payment's time is known, below.
   const planFor = (list) => paymentScan.planCredits(list, {
     didHashOf: (address) => byAddress.get(address.toLowerCase())?.didHash ?? null,
-    operatorOf: (didHash) => byDid.get(didHash)?.operator ?? null,
     isUsed: isCredited,
     minAmount: chain.minAmount,
   });
@@ -551,7 +566,11 @@ async function scanChain(chain, deps) {
     if (block) times.set(n, Number(block.timestamp) * 1000);
   }
   const registered = new Map();
-  for (const did of new Set(kept.map((c) => c.didHash))) registered.set(did, await registeredAtMs(did));
+  const named = new Map();
+  for (const did of new Set(kept.map((c) => c.didHash))) {
+    registered.set(did, await registeredAtMs(did));
+    named.set(did, paymentScan.operatorsNamedAt(byDid.get(did)));
+  }
 
   let credited = 0;
   let refused = 0;
@@ -561,6 +580,10 @@ async function scanChain(chain, deps) {
     if (ts === undefined) { unresolved.push(c); continue; }
     const since = registered.get(c.didHash);
     if (!Number.isFinite(since) || ts < since) { skip(c, 'before_registration'); continue; }
+    // Paid by an address named the agent's operator by then, at registration or since, and not by today's operator,
+    // which differs with how far each operator's registry scan has read. This scan stops before that reach, so
+    // every operator knows each change up to the payment. One named later stops counting then (eventsAt).
+    if (named.get(c.didHash).get(lower(c.payer)) <= ts) { skip(c, 'self_payment'); continue; }
     if (chain.mode !== 'on') { credited += 1; continue; }
     if (credit(c, ts)) credited += 1;
     else refused += 1;

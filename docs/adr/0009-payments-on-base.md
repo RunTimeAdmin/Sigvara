@@ -152,8 +152,16 @@ not before `FROM_BLOCK`, not before the agent registered, and not to a contract.
 and the outcome reaches a payment first credits it, once. The signature is checked at the chain's
 finalized block, which is recorded as `checkedAtBlock`, so another operator reads the same block. Until
 the payment is finalized the answer is a 503 rather than a refusal, since finality takes about a quarter
-of an hour and a carrier should send it again. A payment's operator is judged as the scan judges it, as
-of today, because the chain's blocks are not the registry's.
+of an hour and a carrier should send it again. A payer is judged as the scan judges it, and not by the
+operator of the payment's block, because the chain's blocks are not the registry's. Nor by today's
+operator, which depends on how far each operator's registry scan has read. An address that has been the
+agent's operator is its own: a payment from one named operator, at registration or by
+`OperatorTransferred`, by the payment's time is refused as `self_payment`, and a payment from one named
+later stops counting from that change's block time. A score's cut-off, and every cut-off a checker
+tries, is before the registry scan's reach on the operator that uses it, so both operators leave out the
+same payments, and a published root leaves out such a payment from the cut-off its payer was named by.
+A post is refused from today's operator too; an import is not, since that is not when the other
+operator took it.
 
 Nothing on chain checks outcomes today. A contract can only check an outcome whose domain names its
 own chain, so the parity that ADR 0006's Foundry test shows with OpenZeppelin's `EIP712` would not

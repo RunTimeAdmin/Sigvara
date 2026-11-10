@@ -245,15 +245,22 @@ function restoreScanState(state) {
   return true;
 }
 
-// An agent that has changed operator, as the payment scan needs it: who the operator was from which
-// block (paymentScan.operatorAt). The list starts here, so an agent that never changed has none. A
-// scan run again over the same blocks reads the registration first, which starts the list over.
-function noteOperatorChange(e) {
+// An agent that has changed operator, as the payment scans need it: who the operator was from which
+// block (paymentScan.operatorAt), and from what time, that block's (paymentScan.operatorsNamedAt). The
+// list starts here, so an agent that never changed has none. A scan run again over the same blocks
+// reads the registration first, which starts the list over.
+function noteOperatorChange(e, atMs) {
   const agent = knownAgents.get(e.args.didHash);
   if (!agent) return; // slashed and forgotten
   const operators = agent.operators ?? [{ fromBlock: agent.blockNumber, operator: agent.operator }];
-  agent.operators = [...operators, { fromBlock: e.blockNumber, operator: e.args.to }];
+  agent.operators = [...operators, { fromBlock: e.blockNumber, operator: e.args.to, atMs }];
   agent.operator = e.args.to;
+}
+
+async function blockMs(n) {
+  const block = await readWithBackoff('registry getBlock', () => provider.getBlock(n));
+  if (!block) throw new Error(`the scored chain did not return block ${n}`);
+  return Number(block.timestamp) * 1000;
 }
 
 async function getRegisteredAgents() {
@@ -262,13 +269,22 @@ async function getRegisteredAgents() {
   const filter = [[AGENT_REGISTERED_TOPIC, OPERATOR_TRANSFERRED_TOPIC]];
   const latest = await provider.getBlockNumber();
   const fromBlock = lastScannedBlock !== null ? lastScannedBlock + 1 : cfg_.fromBlock;
+  // A change held without its time, from a state an earlier build saved, is given it first.
+  for (const agent of knownAgents.values()) {
+    for (const o of (agent.operators ?? []).slice(1)) if (!Number.isFinite(o.atMs)) o.atMs = await blockMs(o.fromBlock);
+  }
 
   if (fromBlock <= latest) {
     for (let start = fromBlock; start <= latest; start += chunkSize) {
       const end = Math.min(start + chunkSize - 1, latest);
       const chunk = await readSplitting((a, b) => queryWithBackoff(filter, a, b), start, end, { pause: () => sleep(400) });
+      // Each change's time, read before any of the chunk is applied, so a read that fails leaves it to be read again whole.
+      const changedAt = new Map();
       for (const e of chunk) {
-        if (e.eventName === 'OperatorTransferred') { noteOperatorChange(e); continue; }
+        if (e.eventName === 'OperatorTransferred' && !changedAt.has(e.blockNumber)) changedAt.set(e.blockNumber, await blockMs(e.blockNumber));
+      }
+      for (const e of chunk) {
+        if (e.eventName === 'OperatorTransferred') { noteOperatorChange(e, changedAt.get(e.blockNumber)); continue; }
         knownAgents.set(e.args.didHash, {
           didHash: e.args.didHash,
           agentAddress: e.args.agentAddress,

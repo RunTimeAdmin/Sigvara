@@ -388,21 +388,45 @@ setCreditAgeLimit(paymentCfg.halfLifeMs);
 /**
  * The payments a score made at `atMs` reads: every one on the scored chain, and a payment chain's
  * once it is older than that chain's delay (payment-chains.eventsAt). The proposal, its evidence
- * root, the checker's audit and /score all choose evidence here, so they cannot drift apart.
+ * root, the checker's audit and /score all choose evidence here, so they cannot drift apart. Not a payment
+ * chain's from a payer named the agent's operator by `atMs` (operatorNamedAt).
  */
-function evidenceAt(didHash, atMs) {
+function evidenceAt(didHash, atMs, namedAt = operatorNamedAt(didHash)) {
   // A payer's "not delivered" reads as not reported until it counts (negative-hold.present), here, so the
   // score, the root and the audit all see it the same way.
-  return negativeHold.present(paymentChains.eventsAt(getPaymentEvents(didHash), atMs, paymentChainsCfg), atMs, negativeHoldCfg);
+  return negativeHold.present(paymentChains.eventsAt(getPaymentEvents(didHash), atMs, paymentChainsCfg, namedAt), atMs, negativeHoldCfg);
 }
+
+/**
+ * When an address was first named this agent's operator, in ms (paymentScan.operatorsNamedAt), from what the
+ * registry scan holds: a payment chain's payment from it stops counting then (ADR 0009, section 7). A score's
+ * cut-off is before the scored chain's payment scan's reach, which stops at the registry scan's, and a checker
+ * audits a proposal only once that scan has passed it, so each operator has read every change up to the time it
+ * asks about. The registry scan holds every agent registered since its FROM_BLOCK with its whole history, and
+ * no payment chain's payment is credited to any other; one it does not hold has every payer named from the start.
+ */
+function operatorNamedAt(didHash) {
+  const agent = chain.knownAgent(didHash);
+  if (!agent) return () => -Infinity;
+  const named = paymentScan.operatorsNamedAt(agent);
+  return (payer) => named.get(String(payer).toLowerCase());
+}
+
+// Nobody named: every payment that counts by its time, whoever paid it.
+const NOBODY_NAMED = () => undefined;
 
 /**
  * How the checker reads a proposal's evidence (evidence-as-of.js). With a payment chain on, at each
  * whole-minute cut-off in the half hour before it (payment-chains.auditCuts), since the proposer chose its
- * evidence at one of them and its transaction landed later.
+ * evidence at one of them and its transaction landed later. A payment chain's payment from a payer named the
+ * agent's operator (`namedAt`) stops counting at the cut-off it was named by, which may be after the proposer's.
  */
-const auditOptions = (atMs) => (paymentChains.active(paymentChainsCfg)
-  ? { eligibleAt: (e) => paymentChains.eligibleAtMs(e, paymentChainsCfg), cuts: paymentChains.auditCuts(atMs, paymentChainsCfg) }
+const auditOptions = (atMs, namedAt = NOBODY_NAMED) => (paymentChains.active(paymentChainsCfg)
+  ? {
+    eligibleAt: (e) => paymentChains.eligibleAtMs(e, paymentChainsCfg),
+    endsAt: (e) => (e.chainId == null ? Infinity : namedAt(e.payer) ?? Infinity),
+    cuts: paymentChains.auditCuts(atMs, paymentChainsCfg),
+  }
   : {});
 
 /** Every agent's payments that settled on `chainId`, or on the scored chain when it is null. */
@@ -1682,7 +1706,7 @@ async function runEpochInner() {
         // A payer's negative that should count by now, whose refunds this operator has not finished reading
         // (negative-hold.js): read differently from the other operator's, it would be a disagreement that is not one.
         // Only one in the evidence: one on a payment chain this operator no longer reads never counts, and is not read.
-        const chosen = paymentChains.eventsAt(getPaymentEvents(didHash), evidenceCutMs, paymentChainsCfg);
+        const chosen = paymentChains.eventsAt(getPaymentEvents(didHash), evidenceCutMs, paymentChainsCfg, operatorNamedAt(didHash));
         if (negativeHold.unresolvedAt(chosen, evidenceCutMs, negativeHoldCfg).length) {
           console.log(`[oracle]   ${didHash.slice(0, 10)}… a payer negative is due and its refunds are not read yet, skipping`);
           agentsHeldByNegative++;
@@ -1799,8 +1823,11 @@ async function runEpochInner() {
               console.log(`[oracle]   ${didHash.slice(0, 10)}… this operator's scans have not passed the pending proposal's time; checking it next epoch`);
               continue;
             }
+            // Whoever paid: a payer named the operator after the proposer's cut-off still counted for it, so each
+            // cut-off is judged on its own (auditOptions).
             asOf = payments.required(paymentCfg)
-              ? evidenceAsOf(evidenceAt(didHash, atProposalMs), atProposalMs, freshPending.evidenceRoot ?? null, auditOptions(atProposalMs))
+              ? evidenceAsOf(evidenceAt(didHash, atProposalMs, NOBODY_NAMED), atProposalMs, freshPending.evidenceRoot ?? null,
+                auditOptions(atProposalMs, operatorNamedAt(didHash)))
               : null;
             // The external factor too, as the primary would have read it at its proposal: same
             // snapshot, same evidence. Computed at this epoch's clock instead, a reviewer that
@@ -2362,7 +2389,10 @@ const SETTLEMENT_TOO_OLD = 'this payment is older than this oracle keeps payment
  *
  * `pc` is the payment chain the payment settled on (ADR 0009, section 7), or null for the scored
  * chain. The domain, the payer's code and ERC-1271 are then all that chain's, and its finalized block
- * takes the place of the confirmed head, so that another operator can read the same block.
+ * takes the place of the confirmed head, so that another operator can read the same block. Its own
+ * money is then judged as the scan judges it: the agent's address, or an address named its operator
+ * by the payment's time (operatorNamedAt). A post is refused from today's operator (`info`) as well;
+ * an import is not, since today is not when the other operator took it.
  *
  * @returns {Promise<{ status: number, body: object, metric: string }>} the reply, and the counter
  *   a POST counts it under
@@ -2373,11 +2403,16 @@ async function admitPayerOutcome({ didHash, credited, info, signed, packetId = n
   // Fit to log: on a payment chain the provider's message can carry the RPC URL, key and all.
   const said = (err) => (pc ? paymentChains.rpcError(err, pc.rpcUrl).message : err.message);
   const refuse = (status, code, error, metric) => ({ status, body: { error, code }, metric });
+  const namedAt = pc ? operatorNamedAt(didHash) : null;
+  const ownMoney = (payer) => (pc
+    ? payments.isSelfPayment(payer, { agentAddress: info.agentAddress, operator: fromPeer ? null : info.operator })
+      || namedAt(payer) <= credited.settledAt
+    : payments.isSelfPayment(payer, info));
   const leg = (credited.legs ?? []).find((l) => l.payer.toLowerCase() === signed.payer.toLowerCase());
   if (!leg) {
     return refuse(402, 'payer_mismatch', 'no payment from this payer to this agent in this transaction', 'attestRejectedPayment');
   }
-  if (payments.isSelfPayment(leg.payer, info)) {
+  if (ownMoney(leg.payer)) {
     return refuse(402, 'self_payment', 'an agent cannot attest itself: the payer is its own operator or agent address', 'attestRejectedPayment');
   }
   const delivered = signed.outcome === payerOutcome.DELIVERED;
@@ -2475,7 +2510,7 @@ async function admitPayerOutcome({ didHash, credited, info, signed, packetId = n
 
   // Every leg of the transaction is credited as a payment, as the credentialed path does; the
   // outcome goes on the signer's own leg only.
-  const paidLegs = (credited.legs ?? []).filter((l) => !payments.isSelfPayment(l.payer, info));
+  const paidLegs = (credited.legs ?? []).filter((l) => !ownMoney(l.payer));
   let credits = 0;
   for (const l of paidLegs) {
     if (creditPayment(didHash, credited.txHash, l.amount, l.payer, null, credited.settledAt, null, credited.blockNumber, chainId)) {
@@ -2625,7 +2660,8 @@ async function importOne({ didHash, txHash, chainId, checkedAtBlock, signed, pac
     if (['rpc_error', ...NOT_YET].includes(err.code)) return { kind: 'retry', code: err.code };
     return { kind: 'refused', code: err.code || 'payment_invalid' };
   }
-  // On a payment chain, today's operator, as the scan judges it: the chain's blocks are not the registry's.
+  // On a payment chain the agent today: its operators are judged as the scan judges them (admitPayerOutcome), since
+  // the chain's blocks are not the registry's.
   let atPayment = info;
   try {
     if (!pc) atPayment = await agentAtPayment(didHash, credited);
@@ -3283,7 +3319,8 @@ async function handleRequest(req, res) {
           metrics.inc('attestRejectedPayment');
           return json(res, 402, { error: SETTLEMENT_TOO_OLD, code: 'settlement_too_old' });
         }
-        // On a payment chain, today's operator, as the scan judges it: the chain's blocks are not the registry's.
+        // On a payment chain the agent today: its operators are judged as the scan judges them (admitPayerOutcome),
+        // since the chain's blocks are not the registry's.
         try {
           atPayment = pc ? info : await agentAtPayment(didHash, credited);
         } catch (err) {

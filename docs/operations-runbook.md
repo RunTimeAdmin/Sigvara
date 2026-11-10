@@ -589,6 +589,13 @@ agents and not of payments, so a hung endpoint or a flood of payments cannot hol
 the wallet at the block the other operator recorded, which needs a node that keeps state that far back. Until it
 answers, the import tries again at the next epoch, and after three runs it passes the outcome over until a restart.
 
+**Operator changes.** A payment from an address that has been the agent's operator does not count on a payment chain
+(ADR 0009, section 7), from the time of the scored chain's block that named it. The registry scan keeps that time
+for each `OperatorTransferred`, one block read each. A state saved by a build from before this has none, so the first
+registry read after the upgrade reads them; if one fails, that epoch fails as any registry read does, and the next
+reads it again. Until then such a change counts from the agent's registration, so for the few minutes before the first
+epoch `/evidence` can leave out a payment it will serve again afterwards.
+
 **Adding one in shadow.** One operator is enough, and the checker is the one to use: nothing needs the two to agree
 while a chain counts for nothing, and a bad endpoint then reaches only one of them. Both need the same values before a
 chain goes `on`. Elysium testnet's settings, in the checker's `.env`:

@@ -398,6 +398,23 @@ function operatorAt(agent, block) {
 }
 
 /**
+ * When each address was first named `agent`'s operator, in ms, by lowercased address: the operator it
+ * registered with from the start, since no payment from before the registration is held, and each later one
+ * from its OperatorTransferred block's time, or from the start while that time is not known. This is how a
+ * payment chain judges a payer (ADR 0009, section 7). Its blocks are not the scored chain's, so a payment
+ * there cannot be judged by the operator of its own block: an address that has been the operator stops
+ * counting as a customer from when it was named, whenever it paid.
+ */
+function operatorsNamedAt(agent) {
+  const named = new Map();
+  for (const [i, o] of (agent?.operators ?? [{ operator: agent?.operator }]).entries()) {
+    if (!o.operator || named.has(lower(o.operator))) continue;
+    named.set(lower(o.operator), i > 0 && Number.isFinite(o.atMs) ? o.atMs : -Infinity);
+  }
+  return named;
+}
+
+/**
  * Fetch Transfer logs to a set of recipients over a block range.
  *
  * `readLogs` is injected so the caller supplies its own backoff; this module does not
@@ -440,6 +457,7 @@ async function scanRange(
 
 module.exports = {
   operatorAt,
+  operatorsNamedAt,
   TRANSFER_TOPIC,
   MAX_RECIPIENTS_PER_CALL,
   readConfig,

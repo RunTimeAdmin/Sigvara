@@ -41,8 +41,9 @@
 //                the minimum stake, as readBondChanges finds them (default none)
 //     registryScannedTo: how far the registry scan has read (default: not reported, which reads as the head)
 //     snapshotBlock: the block the snapshot falls in (default `head`)
-//     agents[didHash].operators: [{ fromBlock, operator }] the agent's operator from each block on, for a
-//                read at a block (default: `operator`, at every block)
+//     agents[didHash].operators: [{ fromBlock, operator, atMs }] the agent's operator from each block on, for a
+//                read at a block, and from that block's time, as the registry scan keeps a change (default:
+//                `operator`, at every block)
 //     reviewers: { "<address>": { registered, operator, status, registeredAt, matured, bonded } } what the
 //                identity registry says of a reviewer (default not an agent); "throw" when the node cannot say
 //     funders:   { "<address>": "<address>" } who first funded an address (default none found); the
@@ -211,7 +212,10 @@ const chain = {
     const w = world();
     if (!w.registered?.includes(didHash)) return null;
     const a = w.agents[didHash];
-    return { didHash, agentAddress: a?.agentAddress ?? null, blockNumber: a?.registeredBlock ?? 1, operator: a?.operator ?? null };
+    return {
+      didHash, agentAddress: a?.agentAddress ?? null, blockNumber: a?.registeredBlock ?? 1, operator: a?.operator ?? null,
+      operators: a?.operators,
+    };
   },
   getScanState: () => (world().registryScannedTo === undefined ? null : { lastScannedBlock: world().registryScannedTo, agents: [] }),
   restoreScanState: () => false,

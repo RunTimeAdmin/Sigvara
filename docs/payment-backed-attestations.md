@@ -192,7 +192,11 @@ Three rules apply once a payment verifies.
 **Self-payments are refused.** If the payer is the agent's own operator or its
 agent address, the attestation is rejected with `self_payment`. The operator is the one at the
 payment's own block, on the scan and on `/attest` alike: a former operator's earlier payment was its
-own, and a new operator's earlier payment was a customer's. Paying yourself
+own, and a new operator's earlier payment was a customer's. A payment chain's blocks
+([ADR 0009](adr/0009-payments-on-base.md)) are not the registry's, so there an address that has
+been the operator is the agent's own: its payment is refused when it was named operator, at
+registration or by `OperatorTransferred`, by the payment's time, and one it made before then stops
+counting, in the score and its root, from that change's block time. Paying yourself
 costs only gas, because the money comes back, and the resulting attestation is
 otherwise indistinguishable from a customer's. This does not stop someone funding
 a second wallet, but it raises the floor from free to deliberate.
