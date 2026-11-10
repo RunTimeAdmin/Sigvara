@@ -77,6 +77,10 @@ const counters = {
   // count before a proposal could land. A run of them for one agent means its refund read cannot keep up.
   agentsHeldByPayerNegative: 0,
   agentsHeldByLedgerCap: 0,
+  // Agents left for the next epoch because this one's proposals (MAX_WRITES_PER_EPOCH) were spent, and agents not
+  // proposed because the score on chain is the same and recent enough (SCORE_REFRESH_HOURS). The first should be zero.
+  agentsHeldByWriteBudget: 0,
+  proposalsSkippedUnchanged: 0,
   // ADR 0006 peer import. Imported is outcomes another operator took that this one now holds
   // too. Refused is ones it served that fail this oracle's own checks: a few are expected (a
   // payment this node cannot find), many mean a peer serving what it should not. Errors are
@@ -375,6 +379,16 @@ function toPrometheusText(extra = {}) {
   lines.push('# HELP sigvara_oracle_agents_held_by_ledger_cap_total Agents left unscored because their payment ledger was at its cap');
   lines.push('# TYPE sigvara_oracle_agents_held_by_ledger_cap_total counter');
   lines.push(`sigvara_oracle_agents_held_by_ledger_cap_total ${counters.agentsHeldByLedgerCap}`);
+
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_agents_held_by_write_budget_total Agents left for the next epoch because this one had sent MAX_WRITES_PER_EPOCH proposals');
+  lines.push('# TYPE sigvara_oracle_agents_held_by_write_budget_total counter');
+  lines.push(`sigvara_oracle_agents_held_by_write_budget_total ${counters.agentsHeldByWriteBudget}`);
+
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_unchanged_not_proposed_total Agents not proposed because the score on chain was the same and written within SCORE_REFRESH_HOURS');
+  lines.push('# TYPE sigvara_oracle_unchanged_not_proposed_total counter');
+  lines.push(`sigvara_oracle_unchanged_not_proposed_total ${counters.proposalsSkippedUnchanged}`);
 
   lines.push('');
   lines.push('# HELP sigvara_oracle_propose_throttled_total Proposals the RPC provider throttled');

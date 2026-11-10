@@ -162,19 +162,25 @@ function divergenceToleranceError(tolerance) {
 // it the checker finalized whatever it reached first, which left the slot empty, and then
 // often proposed into that slot before the primary did: 35 of the first 262 proposals on Arc
 // testnet were the checker's, and nothing recomputes a checker's proposal, since a primary
-// never compares (docs/divergence-log.md, 2026-11-03). The primary finalizes and proposes
-// again in one epoch, so in normal running a slot is never empty for long. A slot empty for
-// the whole grace, or a proposal unfinalized that long past its window, means the primary is
-// late, and covering for it is what a second operator is for.
+// never compares (docs/divergence-log.md, 2026-11-03). The primary finalizes, and proposes
+// again in the same epoch when the score has changed, so a slot is empty for long only while
+// nothing is due (writeDueAt). A slot empty for the whole grace once something is due, or a
+// proposal unfinalized that long past its window, means the primary is late, and covering for
+// it is what a second operator is for.
+//
+//   nothing pending, the score on chain unchanged and written recently -> 'not-due'
 //
 // `emptySince` is when the slot became empty, in seconds: the last finalized score, or the
 // agent's registration if it was never scored. 0 means at once, which is how a slot held by a
 // proposer that lost its authority is treated: its primary was removed, not delayed.
+// `notDueUntil` is writeDueAt for this checker's own score: until then the primary skips the
+// slot on purpose, and an empty slot is nothing to cover.
 function decideCheckerAction(
   pending, own, challengeWindowSeconds, nowSeconds, tolerance = DEFAULT_DIVERGENCE_TOLERANCE,
-  { graceSeconds = 0, emptySince = 0 } = {},
+  { graceSeconds = 0, emptySince = 0, notDueUntil = 0 } = {},
 ) {
   if (!pending || !pending.exists) {
+    if (nowSeconds < notDueUntil) return 'not-due';
     return nowSeconds >= emptySince + graceSeconds ? 'propose' : 'defer-propose';
   }
 
@@ -219,6 +225,71 @@ function checkerGraceMs(raw, epochMs) {
     };
   }
   return { ms: minutes * 60_000 };
+}
+
+// How old an unchanged score's last write may get before it is written again, unset: half of the one-day limit that
+// docs/integration.md recommends for isTrustedFresh and the SDK gate's maxScoreAgeSeconds on Arc testnet.
+const DEFAULT_SCORE_REFRESH_HOURS = 12;
+
+/**
+ * How long an unchanged score may go unwritten, in seconds, or an error to stop on (SCORE_REFRESH_HOURS).
+ *
+ * A score due again is proposed at the next epoch and finalized a challenge window and up to an epoch later, so the most
+ * a stable score ages is this plus two epochs plus the window: 20 hours on Arc testnet's hourly epochs and six-hour
+ * window. Refused where, with a six-hour window, that could pass a day, which takes an epoch shorter than this and
+ * longer than three hours. An epoch at least this long never holds a write back: the score it finalizes is already an
+ * epoch old. 0 writes every epoch, as before.
+ */
+function scoreRefreshSeconds(raw, epochMs) {
+  if (raw === undefined || String(raw).trim() === '') return scoreRefreshSeconds(String(DEFAULT_SCORE_REFRESH_HOURS), epochMs);
+  const hours = Number(raw);
+  if (!Number.isFinite(hours) || hours < 0 || hours > DEFAULT_SCORE_REFRESH_HOURS) {
+    return { error: `SCORE_REFRESH_HOURS is ${raw}; it must be a number of hours from 0 to ${DEFAULT_SCORE_REFRESH_HOURS}, half the one-day limit a gate on a score's age is advised to use.` };
+  }
+  const epochHours = epochMs / 3_600_000;
+  if (hours > epochHours && hours + 2 * epochHours + 6 > 24) {
+    return {
+      error: `SCORE_REFRESH_HOURS is ${hours} with EPOCH_HOURS of ${epochHours}: an unchanged score could be a day old before ` +
+        `its next write is finalized. Set it to ${Math.max(18 - 2 * epochHours, epochHours)} or less.`,
+    };
+  }
+  return { seconds: hours * 3600 };
+}
+
+/**
+ * When a score is next due to be written, in chain seconds: at once (0) unless it is the score already on chain, and
+ * then once that score's last write is `refreshSeconds` old.
+ *
+ * `onChain` is what getReputation holds, whose lastUpdated is the time of the proposal it finalized; null, unread or
+ * never scored, is due at once. A factor that cannot be compared counts as a change, so a read that went wrong writes
+ * rather than lets a score age. The evidence root does not count: a payment that moves no factor is committed to at the
+ * next write, at the latest this long after the last one. Both operators judge by this, the primary to skip a proposal
+ * and a checker to tell a slot with nothing due from a primary that is late (decideCheckerAction).
+ */
+function writeDueAt(onChain, own, refreshSeconds) {
+  const last = Number(onChain?.lastUpdated);
+  if (!(last > 0)) return 0;
+  const d = scoreDivergence(onChain, own);
+  if (!d.comparable || Object.keys(d.factors).length) return 0;
+  return last + refreshSeconds;
+}
+
+// The most proposals one epoch sends, unset (MAX_WRITES_PER_EPOCH). Arc testnet has some 260 agents registered, fewer
+// bonded, and a stable one is proposed about twice a day; past this, something is asking for writes it should not.
+const DEFAULT_MAX_WRITES_PER_EPOCH = 1000;
+const STATUS_PENDING_BOND = 3;
+
+/**
+ * The order an epoch works through its agents, and so spends its write budget: agents with a score on chain first,
+ * the oldest first, then agents never scored, then agents still waiting for a bond, each group in registration order.
+ * Registering costs nothing, so a flood of registrations, or of bonded agents never scored, cannot take the writes an
+ * agent whose score is ageing needs. `reputation` is phase 1's read of getReputation; null when it failed, read as the
+ * oldest, since a score nobody could read is the one most likely to need writing.
+ */
+function writeOrder(infos) {
+  const group = (a) => (a.status === STATUS_PENDING_BOND ? 2 : a.reputation && !(Number(a.reputation.lastUpdated) > 0) ? 1 : 0);
+  const age = (a) => Number(a.reputation?.lastUpdated) || 0;
+  return [...infos].sort((a, b) => group(a) - group(b) || (group(a) === 0 ? age(a) - age(b) : 0));
 }
 
 /**
@@ -309,6 +380,7 @@ const READ_PACE_MS = 1_500;
 
 module.exports = {
   decideAction, decideCheckerAction, checkerGraceMs, finalizableAtOf, scoreDivergence, mapChunked, chunkForReads, READ_PACE_MS, scoringIsStale,
+  scoreRefreshSeconds, writeDueAt, writeOrder, DEFAULT_SCORE_REFRESH_HOURS, DEFAULT_MAX_WRITES_PER_EPOCH,
   epochIntervalError, divergenceToleranceError, clockSkewError, MAX_TIMER_MS, MIN_EPOCH_MS,
   SCORE_FACTORS, DEFAULT_DIVERGENCE_TOLERANCE, MAX_DIVERGENCE_TOLERANCE,
 };

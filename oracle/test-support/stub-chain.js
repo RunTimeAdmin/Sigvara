@@ -35,7 +35,10 @@
 //     externalReadFails: the node cannot answer for the registry, so ownership and feedback reads throw
 //     recordExternalReads: record each read of a linked agent's feedback as externalRead
 //     recordExternalRefresh: record each request to check the ERC-8004 registry's chain as externalRefresh
-//     recordEpochReads: record the epoch's batched reads as epochRead, with the time
+//     recordEpochReads: record the epoch's batched reads as epochRead, with the time and the agent read
+//     bondLogs:  [{ blockNumber, didHash }] the staking and identity logs that name an agent (a stake deposited
+//                or withdrawn, a slash, a status change), and { blockNumber, minimumStake: true } for a change to
+//                the minimum stake, as readBondChanges finds them (default none)
 //     registryScannedTo: how far the registry scan has read (default: not reported, which reads as the head)
 //     snapshotBlock: the block the snapshot falls in (default `head`)
 //     agents[didHash].operators: [{ fromBlock, operator }] the agent's operator from each block on, for a
@@ -182,7 +185,7 @@ const chain = {
   STATUS_SLASHED: 2,
   getProvider: () => provider,
   getAgentInfo: async (didHash, blockTag) => {
-    if (world().recordEpochReads && blockTag === undefined) record('epochRead', hostNow());
+    if (world().recordEpochReads && blockTag === undefined) record('epochRead', hostNow(), didHash);
     hostAhead += world().hostClockSteps?.getAgentInfo ?? 0;
     const agent = world().agents[String(didHash).toLowerCase()];
     if (!agent || (blockTag !== undefined && blockTag < (agent.registeredBlock ?? 1))) {
@@ -251,20 +254,28 @@ const chain = {
   feeGatingConfigured: () => !!world().feeGating,
   getEpochFee: async () => BigInt(world().epochFee ?? 0),
   getPendingScore: async (didHash) => {
-    if (world().recordEpochReads) record('epochRead', hostNow());
+    if (world().recordEpochReads) record('epochRead', hostNow(), didHash);
     if (finalizedByOther.has(didHash)) return { exists: false };
     return world().pending?.[didHash] ?? { exists: false };
   },
   getTotalScore: async (didHash) => world().totalScore?.[didHash] ?? 0,
   // The finalized score; lastUpdated is 0 until one is finalized, as on chain.
   getReputationData: async (didHash) => {
+    if (world().recordEpochReads) record('epochRead', hostNow(), didHash);
     if (world().reputation?.[didHash] === 'throw') throw new Error('stub: reputation read failed');
     return { lastUpdated: 0, ...(world().reputation?.[didHash] ?? {}) };
   },
   isCovered: async (didHash) => world().covered?.[didHash] ?? true,
   isBonded: async (didHash) => {
-    if (world().recordEpochReads) record('epochRead', hostNow());
+    if (world().recordEpochReads) record('epochRead', hostNow(), didHash);
     return world().bonded?.[didHash] ?? true;
+  },
+  readBondChanges: async (from, to) => {
+    const logs = (world().bondLogs ?? []).filter((l) => l.blockNumber >= from && l.blockNumber <= to);
+    return {
+      agents: new Set(logs.filter((l) => l.didHash).map((l) => l.didHash.toLowerCase())),
+      minimumChanged: logs.some((l) => l.minimumStake),
+    };
   },
   getReviewerStanding: async (address) => {
     const r = world().reviewers?.[address.toLowerCase()];

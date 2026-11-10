@@ -894,6 +894,8 @@ test('a checker counts the grace afresh for an agent it stopped looking at while
     text = await epochsFinished(oracle, 2);
     assert.equal(counter(text, 'sigvara_oracle_skipped_unbonded_total'), 1);
 
+    // Its deposit is logged, which is what lets an agent with no bond be read again (bond-watch.js).
+    world.set('bondLogs', [{ blockNumber: world.data.head, didHash: agent.didHash }]);
     world.setFor('bonded', agent.didHash, true);
     world.set('nowSec', world.data.nowSec + 600);
     assert.equal((await oracle.call('POST', '/epoch', {}, ADMIN)).status, 202);
