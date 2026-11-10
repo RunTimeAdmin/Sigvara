@@ -443,6 +443,19 @@ test('without epoch fees nothing is simulated or charged, and the proposal goes 
   });
 });
 
+test('agents below the minimum stake are logged in one line for the epoch, not one each', async () => {
+  const world = new World();
+  const shy = Array.from({ length: 12 }, () => world.addRegisteredAgent().didHash);
+  for (const didHash of shy) world.setFor('bonded', didHash, false);
+  world.addRegisteredAgent();
+  await inEpoch({ world, env: BASE_ENV }, ({ text, calls, logs }) => {
+    assert.deepEqual(names(calls), ['proposeScore'], 'the bonded agent is still proposed');
+    assert.equal(counter(text, 'sigvara_oracle_skipped_unbonded_total'), 12);
+    assert.equal((logs.match(/below minimum stake/g) || []).length, 1);
+    assert.match(logs, /12 agent\(s\) below minimum stake, skipped: (0x[0-9a-f]{8}…, ){9}0x[0-9a-f]{8}…, and 2 more/);
+  });
+});
+
 test('a transaction over the fee cap is counted on its own, and is not a contract refusal', async () => {
   const world = new World();
   world.addRegisteredAgent();
