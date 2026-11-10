@@ -134,7 +134,7 @@ contract SigvaraStaking is
     // Seconds a withdrawal sits queued (and still slashable) before it can be claimed.
     uint256 public unbondingPeriod;
 
-    /// @notice Slash proceeds owed to victims and reporters, withdrawn by them.
+    /// @notice Slash proceeds owed to victims, and to reporters credited before ADR 0007, withdrawn by them.
     /// @dev    Pull rather than push. Paying out inline meant the one function that
     ///         resolves a proposal was also the only function that could unlock the
     ///         stake, so a recipient that cannot receive the token (a blocklisting
@@ -630,7 +630,7 @@ contract SigvaraStaking is
      *         Permissionless, so a frozen bond never depends on the committee's liveness or its
      *         goodwill. Until it lapses it can still be executed by anyone while its reporter is
      *         on the committee, as an undisputed slash always could, and a slash worth executing
-     *         is worth a fortnight, since the victim and the reporter are paid from it. A lapsed
+     *         is worth a fortnight, since the victim is paid from it. A lapsed
      *         proposal is dropped like any other: the agent is reinstated and the committee waits
      *         one challenge period before it files again.
      */
@@ -757,7 +757,7 @@ contract SigvaraStaking is
         _settleSlash(didHash, proposal);
     }
 
-    /// @dev Shared settlement for an undisputed slash and for a dispute the committee
+    /// @dev Shared settlement for an undisputed slash and for a dispute the admin
     ///      upheld. Proceeds are credited, not sent: a recipient that cannot receive
     ///      the token must not be able to make settlement revert, because this is the
     ///      only path that clears the proposal and unfreezes the bond.

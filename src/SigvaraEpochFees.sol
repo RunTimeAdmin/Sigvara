@@ -354,7 +354,11 @@ contract SigvaraEpochFees is
         emit StageUpdated(newStage);
     }
 
-    function setRewardPool(address newRewardPool) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @notice Where the reward share of every later distribution goes. Held behind UPGRADER_ROLE, the
+    ///         timelock's role, as SigvaraOracleBond.setSlashBeneficiary is: it decides where value
+    ///         flows, and the admin can grant itself ORACLE_ROLE at once, so left to the admin a
+    ///         compromised Safe could point the pool at itself and charge every prepaid balance into it.
+    function setRewardPool(address newRewardPool) external onlyRole(UPGRADER_ROLE) {
         if (newRewardPool == address(0)) revert ZeroAddress();
         rewardPool = newRewardPool;
         emit RewardPoolUpdated(newRewardPool);
@@ -370,8 +374,10 @@ contract SigvaraEpochFees is
 
     /// @notice Point at the bonded operator registry, or pass address(0) to leave the role
     ///         alone governing. Turning it on stops every oracle that has not bonded and been
-    ///         admitted, so set it after the operators are in the registry.
-    function setOperatorBond(address operatorBond_) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    ///         admitted, so set it after the operators are in the registry. Held behind
+    ///         UPGRADER_ROLE, as SigvaraReputation.setOperatorBond is: passing zero lets any
+    ///         ORACLE_ROLE holder charge, including one the admin granted itself.
+    function setOperatorBond(address operatorBond_) external onlyRole(UPGRADER_ROLE) {
         operatorBond = IOperatorSet(operatorBond_);
         emit OperatorBondSet(operatorBond_);
     }
