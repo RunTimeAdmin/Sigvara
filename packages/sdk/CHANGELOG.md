@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.0.0-alpha.19
+
+### Fixed: a spent gate nonce could be accepted again at the edge of its window
+
+The gate marked a nonce spent until `timestamp + ttl`. A challenge is accepted up to and including that age, and a
+shared store such as Redis expires the mark by its own clock, which can run ahead of the gate's, so a response
+replayed at the end of its window could find the mark gone and pass. The mark now lasts the freshness check's clock
+allowance (`MAX_FUTURE_SKEW_SECONDS`) plus a second longer, so it outlives every window in which a gate accepts it.
+
+### Fixed: `registerAgent` returned an empty didHash
+
+When no `AgentRegistered` log decoded, `registerAgent` returned `didHash: ''` without a word, though the
+transaction had succeeded. It now derives the didHash from the agent address and the chain, which is what the
+contract computes.
+
+### Changed: `sigvaraX402Fetch` bounds what it reads from a seller
+
+A seller controls a 402's `PAYMENT-REQUIRED` header and body. The guard now refuses a 402 whose header or body is
+larger than `X402_MAX_BYTES` (64 KiB), stopping the read at the limit, or that makes more than `X402_MAX_OFFERS`
+(16) offers, before any check runs. It compares payees without case, so one address spelled two ways is checked
+once, and checks at most four at a time. Both limits are exported. A 402 within them is handled as before.
+
 ## 1.0.0-alpha.18
 
 ### Fixed: `sigvara_verify_evidence` on an agent with a long payment history

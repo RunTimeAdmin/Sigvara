@@ -496,7 +496,7 @@ the wrong instruction. The default nonce store is per process. In a deployment p
 and `maxScoreAgeSeconds` are set, and `instances: 'multiple'` needs a shared `NonceStore`
 with an atomic `consume()`, such as `atomicNonceStore` over a Redis `SET NX` (the
 [SDK README](packages/sdk/README.md) shows one). The gate exists from 1.0.0-alpha.9; use
-1.0.0-alpha.18. A worked example of the gate lives in
+1.0.0-alpha.19. A worked example of the gate lives in
 [examples/mcp-gated-tool](examples/mcp-gated-tool). The other direction, checking an agent before paying it from any MCP host, is `sigvara-mcp` (from 1.0.0-alpha.15, [SDK README](packages/sdk/README.md#trust-lookups-for-agents-sigvara-mcp)), or from your own code, `SigvaraTrustCheck` and `sigvaraX402Fetch` around an x402 client (from 1.0.0-alpha.16, [SDK README](packages/sdk/README.md#before-paying-or-hiring-sigvaratrustcheck)).
 
 ### Agent-to-Agent authentication
