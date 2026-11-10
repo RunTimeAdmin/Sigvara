@@ -35,19 +35,21 @@ const merkle = require('./merkle');
  * each after the proposal's time, and the first whose root matches is used. When none does, reading 1
  * is taken at the newest cut-off, since a proposer can have counted nothing later. `eligibleAt` says
  * when a payment started to count: its settlement, or on a payment chain its settlement plus the
- * chain's delay. Without `cuts` only the proposal's time is tried, as before.
+ * chain's delay. `endsAt` says when it stopped: on a payment chain, when its payer was named the
+ * agent's operator, so `events` must still hold one that stopped by the proposal's time. Without
+ * `cuts` only the proposal's time is tried, as before.
  *
  * Only the fixed order is read (payment-chains.eventsAt): it is the order every proposal commits to.
  *
  * @param {object[]} events   one agent's payment events, in the fixed order
  * @param {number} atMs       the proposal's time, in ms
  * @param {string|null} committedRoot the proposal's evidenceRoot, or null when it has none
- * @param {{ eligibleAt?: (e: object) => number, cuts?: number[] }} [options]
+ * @param {{ eligibleAt?: (e: object) => number, endsAt?: (e: object) => number, cuts?: number[] }} [options]
  * @returns {{ events: object[], matchedRoot: boolean }}
  */
-function evidenceAsOf(events, atMs, committedRoot, { eligibleAt = (e) => Number(e.ts), cuts = [] } = {}) {
+function evidenceAsOf(events, atMs, committedRoot, { eligibleAt = (e) => Number(e.ts), endsAt = () => Infinity, cuts = [] } = {}) {
   if (!Number.isFinite(atMs)) throw new TypeError('evidenceAsOf: atMs (ms) is required');
-  const countedBy = (list, cut) => list.filter((e) => eligibleAt(e) <= cut);
+  const countedBy = (list, cut) => list.filter((e) => eligibleAt(e) <= cut && endsAt(e) > cut);
   const committed = typeof committedRoot === 'string' ? committedRoot.toLowerCase() : null;
   if (committed) {
     for (const cut of [atMs, ...cuts.filter((c) => c < atMs)]) {

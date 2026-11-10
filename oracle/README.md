@@ -1136,7 +1136,7 @@ What differs from the scored chain's scan:
   answer does not depend on when an operator scanned.
 - **After registration, by time.** As on the scored chain, a payment made before the agent registered
   is skipped as `before_registration`, so whether it counts cannot depend on when an operator scanned
-  its block. Here that goes by the block's time, since the two chains' blocks are unrelated.
+  its block. Here that goes by the block's time, since the two chains' blocks are unrelated. For the same reason a payer is not judged by the operator of its block, nor by today's: a payment from an address the registry scan holds as named the agent's operator, at registration or by `OperatorTransferred`, by the payment's time is skipped as `self_payment`, and one from an address named later stops counting from that change's block time. A former operator's payment then never counts, however late it is scanned, and two operators leave out the same payments at any cut-off, since each has read the registry past it. `/evidence`, the root and a checker's audit (at each cut-off it tries) all apply this. An outcome on a payment the scan skips this way is refused as `self_payment` too, and a posted one from today's operator as well.
 - **A delay, and a hold.** A payment counts once it is `DELAY_SECONDS` old, so two operators
   hold the same evidence for any proposal time. An operator whose scan of a chain switched on
   has not passed that far scores nothing that epoch, finalizing nothing either. So does one whose scan
@@ -1308,7 +1308,7 @@ cd oracle
 node --test
 ```
 
-1444 tests (as of 10 November 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
+1450 tests (as of 10 November 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
 the trust weighting, Merkle evidence trees, HTTP helpers, store persistence and recovery,
 the streamed state file, chain access with backoff, scan checkpointing, fee caps and transaction replacement,
 metrics, and cooldown logic. Several of the files run the real `index.js` and `watcher.js`

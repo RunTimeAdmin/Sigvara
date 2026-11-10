@@ -409,10 +409,11 @@ test('getRegisteredAgents: follows an operator change, and an agent with none st
     changed(9, 190, '0xx', '0xy'), // an agent not known here, slashed and forgotten
   ];
   const fakeIdentity = { filters: {}, queryFilter: async (_f, a, b) => logs.filter((l) => l.blockNumber >= a && l.blockNumber <= b) };
+  const getBlock = async (n) => ({ number: n, timestamp: 1_000 + n });
   const start = (cfgFrom) => chain.init(
     { rpcUrl: 'x', privateKey: '0x' + '1'.repeat(64), identityAddress: '0x' + '1'.repeat(40),
       reputationAddress: '0x' + '2'.repeat(40), fromBlock: cfgFrom, logChunkSize: 1000 },
-    { provider: { getBlockNumber: async () => 199 }, wallet: {}, identityContract: fakeIdentity, reputationContract: {} },
+    { provider: { getBlockNumber: async () => 199, getBlock }, wallet: {}, identityContract: fakeIdentity, reputationContract: {} },
   );
   start(100);
   const agents = await chain.getRegisteredAgents();
@@ -420,7 +421,7 @@ test('getRegisteredAgents: follows an operator change, and an agent with none st
   const one = agents.find((a) => a.didHash === '0xdid1');
   assert.equal(one.operator, '0xd');
   assert.deepEqual(one.operators, [
-    { fromBlock: 110, operator: '0xa' }, { fromBlock: 150, operator: '0xc' }, { fromBlock: 180, operator: '0xd' },
+    { fromBlock: 110, operator: '0xa' }, { fromBlock: 150, operator: '0xc', atMs: 1_150_000 }, { fromBlock: 180, operator: '0xd', atMs: 1_180_000 },
   ]);
   const two = agents.find((a) => a.didHash === '0xdid2');
   assert.equal(two.operator, '0xb');
@@ -435,7 +436,7 @@ test('getRegisteredAgents: follows an operator change, and an agent with none st
   chain.reset();
   chain.restoreScanState(JSON.parse(JSON.stringify({ lastScannedBlock: 199, agents })));
   logs.push(changed(1, 210, '0xd', '0xe'));
-  const fakeProvider = { getBlockNumber: async () => 220 };
+  const fakeProvider = { getBlockNumber: async () => 220, getBlock };
   chain.init(
     { rpcUrl: 'x', privateKey: '0x' + '1'.repeat(64), identityAddress: '0x' + '1'.repeat(40),
       reputationAddress: '0x' + '2'.repeat(40), fromBlock: 100, logChunkSize: 1000 },
