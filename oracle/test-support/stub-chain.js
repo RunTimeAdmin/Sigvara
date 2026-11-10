@@ -43,7 +43,8 @@
 //     reviewers: { "<address>": { registered, operator, status, registeredAt, matured, bonded } } what the
 //                identity registry says of a reviewer (default not an agent); "throw" when the node cannot say
 //     funders:   { "<address>": "<address>" } who first funded an address (default none found); the
-//                snapshot block, the payment blocks and every funding block read as `head`
+//                snapshot block, the payment blocks and every funding block read as `head`. "unread" for one
+//                whose funding is not read yet, which no epoch's reading finishes
 //     chainId:   the chain id the fake node reports (default 5042)
 //     nonceGap:  how many of the wallet's transactions the node holds pending (default 0)
 //     operatorStanding: { enforced, allowed, operatorBond } what the boot check finds (default not enforced)
@@ -272,8 +273,12 @@ const chain = {
   },
   firstFunder: async (address) => {
     const funder = world().funders?.[address.toLowerCase()];
+    if (funder === 'unread') return 'unread';
     return funder === undefined ? null : { funder: funder.toLowerCase(), block: world().head ?? 1 };
   },
+  readFunders: async () => ({ reads: 0, left: 0, error: null }),
+  getFunderState: () => ({ wallets: {} }),
+  restoreFunderState() {},
   paymentBlock: async (event) => event.blockNumber ?? world().head ?? 1,
   blockAtOrBefore: async () => world().snapshotBlock ?? world().head ?? 1,
   pruneAgent() {},

@@ -13,9 +13,10 @@ const IDENTITY_ABI = [
 const STAKE_VIEW_ABI = ['function hasMinimumStake(bytes32 didHash) view returns (bool)'];
 
 const { SCORE_FACTORS } = require('./epoch-policy');
-const { readSplitting } = require('./log-spans');
+const { readSplitting, spanRefused } = require('./log-spans');
 const { isTransientReadError, readWithBackoff, MAX_BATCH_CALLS } = require('./read-retry');
 const reviewers = require('./reviewers');
+const { createFunderReader } = require('./funder-scan');
 
 const OPERATOR_SET_ABI = ['function isActiveOperator(address) view returns (bool)'];
 
@@ -583,40 +584,42 @@ async function readStandingAt(address, blockTag) {
 const NATIVE_TRANSFER_EMITTER = '0xfffffffffffffffffffffffffffffffffffffffe';
 const TRANSFER_TOPIC = ethers.id('Transfer(address,address,uint256)');
 
-// A funder found up to a given block does not change, so each search runs once per process.
-// The promise is kept, so concurrent callers share one search.
-const funderCache = new Map();
+// Who funded each wallet a reviewer's trace asks about (funder-scan.js). Retried on anything but a
+// span the node refuses for its size, which is halved instead.
+const funders = createFunderReader({
+  floor: reviewers.FUNDING_FLOOR,
+  readIn: (address, from, to) => readWithBackoff('funder logs', async () => {
+    const logs = await provider.getLogs({
+      address: NATIVE_TRANSFER_EMITTER,
+      fromBlock: from,
+      toBlock: to,
+      topics: [TRANSFER_TOPIC, null, ethers.zeroPadValue(address, 32)],
+    });
+    return logs.map((l) => ({
+      from: ethers.dataSlice(l.topics[1], 12).toLowerCase(),
+      value: BigInt(l.data),
+      blockNumber: Number(l.blockNumber),
+      logIndex: Number(l.index ?? l.logIndex ?? 0),
+    }));
+  }, RETRIES, (err) => !spanRefused(err)),
+});
 
 /**
- * Who first funded `address` by block `cap` (reviewers.findFirstFunder). It reads historical
- * state, so the RPC must serve it, which Arc testnet's public RPC does.
+ * Who first funded `address` by block `cap`: { funder, block }, null when no transfer in by then names
+ * one, or funder-scan's UNREAD while its transfers have not been read that far (readFunders reads them).
  */
 function firstFunder(address, cap) {
-  const key = `${String(address).toLowerCase()}@${cap}`;
-  if (!funderCache.has(key)) {
-    const search = reviewers.findFirstFunder({
-      touched: (block) => readWithBackoff('funder state', async () => {
-        const [balance, nonce] = await Promise.all([
-          provider.getBalance(address, block),
-          provider.getTransactionCount(address, block),
-        ]);
-        return balance >= reviewers.FUNDING_FLOOR || nonce > 0;
-      }, RETRIES, anyError),
-      inbound: (block) => readWithBackoff('funder logs', async () => {
-        const logs = await provider.getLogs({
-          address: NATIVE_TRANSFER_EMITTER,
-          fromBlock: block,
-          toBlock: block,
-          topics: [TRANSFER_TOPIC, null, ethers.zeroPadValue(address, 32)],
-        });
-        return logs.map((l) => ({ from: ethers.dataSlice(l.topics[1], 12), value: BigInt(l.data) }));
-      }, RETRIES, anyError),
-    }, address, cap);
-    funderCache.set(key, search);
-    search.catch(() => funderCache.delete(key));
-  }
-  return funderCache.get(key);
+  return funders.funderOf(address, cap);
 }
+
+/** Reads the funding firstFunder was asked about, within a budget (funder-scan.js readWanted). */
+function readFunders(budget) {
+  return funders.readWanted(budget);
+}
+
+/** How far each wallet's funding has been read, for the caller to persist, and taking it up again. */
+function getFunderState() { return funders.getState(); }
+function restoreFunderState(state) { funders.restore(state); }
 
 const paymentBlocks = new Map();
 
@@ -1048,6 +1051,9 @@ module.exports = {
   isBonded,
   getReviewerStanding,
   firstFunder,
+  readFunders,
+  getFunderState,
+  restoreFunderState,
   paymentBlock,
   blockAtOrBefore,
   getAgentScore,

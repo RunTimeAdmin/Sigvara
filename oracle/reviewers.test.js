@@ -6,11 +6,12 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  snapshotOf, parsePublicFunders, findFirstFunder, verdictFor, scoreReviews, scoreFeedback,
+  snapshotOf, parsePublicFunders, verdictFor, scoreReviews, scoreFeedback,
   payersByAmount, evidenceDigest,
   REVIEWER_MIN_TENURE_DAYS, REVIEWER_MIN_SCORE, FULL_WEIGHT_CLUSTERS, FUNDING_FLOOR,
 } = require('./reviewers');
 const { MAX_EXTERNAL_SCORE } = require('./external');
+const { createFunderReader, UNREAD } = require('./funder-scan');
 const { World, startOracle, runToExit, wallet } = require('./test-support/oracle-harness');
 
 const DAY_MS = 86_400_000;
@@ -168,6 +169,29 @@ test('a reviewer whose funder cannot be found is not counted; an operator\'s is 
   assert.equal((await verdictFor(clients[0], ctx, deps)).ok, true);
 });
 
+test('a reviewer whose funding is not read yet is not counted, at either hop or through its operator', async () => {
+  const first = world(1);
+  const asked = [];
+  first.deps.funderOf = async (a) => { asked.push(a); return UNREAD; };
+  assert.equal((await verdictFor(first.clients[0], first.ctx, first.deps)).reason, 'funder-unread');
+  assert.deepEqual(asked, [first.clients[0], addr(0x200)], "the operator's is asked for at once, so both are read together");
+  const r = await scoreFeedback(rated(first.clients), first.ctx, first.deps);
+  assert.equal(r.score, 0);
+  assert.deepEqual(r.excluded, { 'funder-unread': 1 });
+  // The reviewer's funder is known and that wallet's own is not. Taken for "no funder further back", the
+  // reviewer counted as independent of everyone.
+  const second = world(1);
+  second.deps.funderOf = async (a) => (a === addr(0x300) ? UNREAD : { funder: second.own(a), block: 10 });
+  assert.equal((await verdictFor(second.clients[0], second.ctx, second.deps)).reason, 'funder-unread');
+  const third = world(1);
+  third.deps.funderOf = async (a) => (a === addr(0x200) ? UNREAD : { funder: third.own(a), block: 10 });
+  assert.equal((await verdictFor(third.clients[0], third.ctx, third.deps)).reason, 'funder-unread');
+  // What already rules it out does not wait for the rest.
+  const known = world(1);
+  known.deps.funderOf = async (a) => (a === addr(0x200) ? { funder: AGENT.operator, block: 10 } : UNREAD);
+  assert.equal((await verdictFor(known.clients[0], known.ctx, known.deps)).reason, 'self-funded');
+});
+
 test('the reviewer\'s funding is searched up to its first payment, and an operator\'s up to the snapshot', async () => {
   const { clients, ctx, deps, own } = world(1);
   ctx.events.push({ payer: clients[0], ts: NOW_MS - 10 * DAY_MS, amount: '1', txHash: 'early' });
@@ -203,29 +227,32 @@ test('snapshotOf: the start of the UTC day', () => {
 
 // ---- the first funder -------------------------------------------------------------------
 
-test('findFirstFunder: the first funding block up to the cap, named by its largest transfer in', async () => {
-  let reads = 0;
-  const read = {
-    touched: async (b) => { reads++; return b >= 12_345_678; },
-    inbound: async (b) => (b === 12_345_678
-      ? [{ from: addr(9), value: 5n }, { from: '0xAbC0000000000000000000000000000000000001', value: 2n * FUNDING_FLOOR }]
-      : []),
+/**
+ * A node over `transfers` [{ from, to, value, block }], as Arc logs native transfers: Transfer from
+ * 0xffff…fffe for every one. Balances and nonces are answered too, so the old search can run on it.
+ */
+function arcNode(transfers) {
+  const word = (a) => `0x${'0'.repeat(24)}${a.slice(2)}`;
+  return {
+    getBalance: async (a, b) => transfers.filter((t) => t.block <= b)
+      .reduce((sum, t) => sum + (t.to === a ? t.value : 0n) - (t.from === a ? t.value : 0n), 0n),
+    getTransactionCount: async () => 0,
+    getLogs: async ({ address, fromBlock, toBlock, topics }) => {
+      assert.equal(address, '0xfffffffffffffffffffffffffffffffffffffffe');
+      return transfers
+        .map((t, i) => ({ ...t, i }))
+        .filter((t) => word(t.to) === topics[2] && t.block >= fromBlock && t.block <= toBlock)
+        .map((t) => ({ topics: [topics[0], word(t.from), word(t.to)], data: `0x${t.value.toString(16).padStart(64, '0')}`, blockNumber: t.block, index: t.i }));
+    },
   };
-  assert.deepEqual(await findFirstFunder(read, addr(1), 70_000_000),
-    { funder: '0xabc0000000000000000000000000000000000001', block: 12_345_678 });
-  assert.ok(reads <= 2 + Math.ceil(Math.log2(70_000_000)), `${reads} reads`);
-});
+}
 
-test('findFirstFunder: null when not funded by the cap; the block before when the payment spent it all', async () => {
-  const never = { touched: async () => false, inbound: async () => [] };
-  assert.equal(await findFirstFunder(never, addr(1), 100), null);
-  // Funded at 40, emptied by the payment at 90 with no transaction of its own (an EIP-3009 payer).
-  const spent = { touched: async (b) => b >= 40 && b < 90, inbound: async (b) => (b === 40 ? [{ from: addr(5), value: FUNDING_FLOOR }] : []) };
-  assert.deepEqual(await findFirstFunder(spent, addr(1), 90), { funder: addr(5), block: 40 });
-  // Touched by a transaction with nothing sent in: a gas-sponsored account.
-  const sponsored = { touched: async (b) => b >= 40, inbound: async () => [] };
-  assert.deepEqual(await findFirstFunder(sponsored, addr(1), 100), { funder: null, block: 40 });
-});
+function onNode(chain, transfers) {
+  const provider = arcNode(transfers);
+  chain.init({ rpcUrl: 'unused', identityAddress: addr(1), reputationAddress: addr(2) }, {
+    provider, wallet: provider, identityContract: {}, reputationContract: {},
+  });
+}
 
 test('chain.firstFunder: dust below the floor does not make its sender the funder', async () => {
   // A griefer seeds the reviewer with a fraction of a cent at block 100; the real funding,
@@ -235,44 +262,68 @@ test('chain.firstFunder: dust below the floor does not make its sender the funde
   const griefer = addr(0x66);
   const treasury = addr(0x77);
   const reviewer = addr(0x42);
-  const balanceAt = (b) => (b >= 200 ? 2n * FUNDING_FLOOR + 10n ** 15n : b >= 100 ? 10n ** 15n : 0n);
-  const provider = {
-    getBalance: async (a, b) => balanceAt(b),
-    getTransactionCount: async () => 0,
-    getLogs: async ({ fromBlock, topics }) => {
-      const from = fromBlock === 100 ? griefer : fromBlock === 200 ? treasury : null;
-      if (!from) return [];
-      const value = fromBlock === 100 ? 10n ** 15n : 2n * FUNDING_FLOOR;
-      return [{ topics: [topics[0], `0x${'0'.repeat(24)}${from.slice(2)}`, topics[2]], data: `0x${value.toString(16).padStart(64, '0')}` }];
-    },
-  };
-  chain.init({ rpcUrl: 'unused', identityAddress: addr(1), reputationAddress: addr(2) }, {
-    provider, wallet: provider, identityContract: {}, reputationContract: {},
-  });
+  onNode(chain, [
+    { from: griefer, to: reviewer, value: 10n ** 15n, block: 100 },
+    { from: treasury, to: reviewer, value: 2n * FUNDING_FLOOR, block: 200 },
+  ]);
+  assert.equal(await chain.firstFunder(reviewer, 1000), UNREAD, 'asking reads nothing');
+  await chain.readFunders();
   assert.deepEqual(await chain.firstFunder(reviewer, 1000), { funder: treasury, block: 200 });
 });
 
-test('findFirstFunder: a transfer too small to cross the floor by itself names nobody', async () => {
-  const at = (value) => ({ touched: async (b) => b >= 40, inbound: async () => [{ from: addr(5), value }] });
-  assert.deepEqual(await findFirstFunder(at(FUNDING_FLOOR - 1n), addr(1), 100), { funder: null, block: 40 });
-  assert.deepEqual(await findFirstFunder(at(FUNDING_FLOOR), addr(1), 100), { funder: addr(5), block: 40 });
-  // Two small ones in the block do not add up to a funder either.
-  const two = { touched: async (b) => b >= 40, inbound: async () => [{ from: addr(5), value: FUNDING_FLOOR / 2n }, { from: addr(6), value: FUNDING_FLOOR / 2n }] };
-  assert.equal((await findFirstFunder(two, addr(1), 100)).funder, null);
+test('chain.firstFunder: a wallet funded, emptied by a permit and funded again is named by its first funding', async () => {
+  // USDC is Arc's gas token and moves by EIP-3009, which spends a balance without a nonce. The agent's
+  // operator funds the reviewer at block 100, a permit the reviewer signed empties it at 150, and a
+  // faucet tops it up at 300. "Holds the floor or has sent a transaction" is true, false, true, and a
+  // binary search for where it turns true landed on the faucet.
+  const chain = require('./chain');
+  const reviewer = addr(0x43);
+  onNode(chain, [
+    { from: AGENT.operator, to: reviewer, value: 5n * FUNDING_FLOOR, block: 100 },
+    { from: reviewer, to: addr(0x99), value: 5n * FUNDING_FLOOR, block: 150 },
+    { from: FAUCET, to: reviewer, value: 20n * FUNDING_FLOOR, block: 300 },
+  ]);
+  let found = await chain.firstFunder(reviewer, 1000);
+  for (let i = 0; found === 'unread' && i < 5; i++) {
+    await chain.readFunders();
+    found = await chain.firstFunder(reviewer, 1000);
+  }
+  assert.deepEqual(found, { funder: AGENT.operator, block: 100 }, 'the funding the faucet came after');
+  // So the reviewer is the agent's own, where the faucet made it look independent.
+  const { ctx, deps } = world(1);
+  deps.standingOf = async () => goodStanding(addr(0x200));
+  deps.funderOf = chain.firstFunder;
+  assert.equal((await verdictFor(reviewer, { ...ctx, events: [{ ...ctx.events[0], payer: reviewer }] }, deps)).reason, 'self-funded');
 });
 
-/** Native transfers as Arc logs them, and funderOf reading them through the real search. */
+/** Native transfers as Arc logs them, and funderOf reading them through the real reader. */
 function ledger(transfers) {
-  const of = (a, b) => {
-    const mine = transfers.filter((t) => t.block <= b);
-    const balance = mine.reduce((sum, t) => sum + (t.to === a ? t.value : 0n) - (t.from === a ? t.value : 0n), 0n);
-    return { balance, sent: mine.some((t) => t.from === a) };
+  const reader = createFunderReader({
+    floor: FUNDING_FLOOR,
+    readIn: async (a, from, to) => transfers
+      .map((t, i) => ({ from: t.from, to: t.to, value: t.value, blockNumber: t.block, logIndex: i }))
+      .filter((t) => t.to === a && t.blockNumber >= from && t.blockNumber <= to),
+  });
+  return async (a, cap) => {
+    if ((await reader.funderOf(a, cap)) === UNREAD) await reader.readWanted();
+    return reader.funderOf(a, cap);
   };
-  return async (a, cap) => findFirstFunder({
-    touched: async (b) => { const s = of(a, b); return s.balance >= FUNDING_FLOOR || s.sent; },
-    inbound: async (b) => transfers.filter((t) => t.to === a && t.block === b),
-  }, a, cap);
 }
+
+test('a transfer too small to cross the floor by itself names nobody, and two in one block do not add up', async () => {
+  const funderOf = ledger([
+    { from: addr(5), to: addr(1), value: FUNDING_FLOOR - 1n, block: 40 },
+    { from: addr(6), to: addr(2), value: FUNDING_FLOOR / 2n, block: 40 },
+    { from: addr(7), to: addr(2), value: FUNDING_FLOOR / 2n, block: 40 },
+    { from: addr(8), to: addr(3), value: 3n, block: 40 },
+    { from: addr(9), to: addr(3), value: FUNDING_FLOOR, block: 40 },
+    { from: addr(4), to: addr(3), value: 2n * FUNDING_FLOOR, block: 41 },
+  ]);
+  assert.equal(await funderOf(addr(1), 100), null);
+  assert.equal(await funderOf(addr(2), 100), null);
+  assert.deepEqual(await funderOf(addr(3), 100), { funder: addr(9), block: 40 }, 'the first block with one, not the largest overall');
+});
+
 const CENT = FUNDING_FLOOR / 100n;
 
 test('one treasury topping its reviewers up through throwaway wallets is not five independent reviewers', async () => {
@@ -476,6 +527,43 @@ test('end to end: a reviewer the node cannot answer for skips the agent this epo
     await untilEpoch(oracle);
     assert.deepEqual(oracle.calls().filter((c) => c.name === 'proposeScore'), [], 'nothing proposed on a guess');
     assert.match(oracle.logs(), /reviewer read failed/);
+  } finally {
+    await oracle.stop();
+  }
+});
+
+test('end to end: a reviewer whose funding is not read yet is not counted, and its agent waits for the read', async () => {
+  // An operator that has read it may count it, so a proposal now would be disputed for a reading the
+  // other side had not finished. /score leaves it out meanwhile.
+  const { w, agent, reviewers, files } = linkedWorld(5);
+  w.set('funders', { ...w.data.funders, [reviewers[2]]: 'unread' });
+  const oracle = await startOracle({ world: w, env: { ORACLE_ADMIN_TOKEN: ADMIN }, files });
+  try {
+    await untilEpoch(oracle);
+    assert.deepEqual(oracle.calls().filter((c) => c.name === 'proposeScore'), [], 'nothing proposed while it is read');
+    assert.match(oracle.logs(), /not counted: funder-unread 1/);
+    assert.match(oracle.logs(), /1 reviewer\(s\) with funding not read yet, skipping/);
+    const served = await oracle.call('GET', `/score/${agent.didHash}`);
+    assert.equal(served.body.scores.externalScore, 4 * MAX_EXTERNAL_SCORE / FULL_WEIGHT_CLUSTERS);
+  } finally {
+    await oracle.stop();
+  }
+});
+
+test('end to end: a checker whose reading of a reviewer\'s funding is not finished checks the proposal later', async () => {
+  const { w, agent, reviewers, files } = linkedWorld(5);
+  const { scores } = await proposed(w, files);
+  w.file = null;
+  w.set('funders', { ...w.data.funders, [reviewers[0]]: 'unread' });
+  w.setFor('pending', agent.didHash, { exists: true, proposedAt: w.data.nowSec - 100, data: scores, evidenceRoot: null });
+  const oracle = await startOracle({
+    world: w, env: { ORACLE_ADMIN_TOKEN: ADMIN, ORACLE_MODE: 'checker', DIVERGENCE_TOLERANCE: '0' }, files,
+  });
+  try {
+    const text = await untilEpoch(oracle);
+    assert.equal(counter(text, 'sigvara_oracle_checker_comparisons_total{verdict="diverged"}'), 0, oracle.logs());
+    assert.equal(counter(text, 'sigvara_oracle_checker_comparisons_total{verdict="agreed"}'), 0);
+    assert.match(oracle.logs(), /with funding not read yet, skipping/);
   } finally {
     await oracle.stop();
   }

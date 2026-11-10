@@ -973,7 +973,7 @@ and then its silence means nothing. The slash keeper (`keeper.js`) has its own s
 | `FEE_REGISTRY_ADDRESS` | (empty) | SigvaraEpochFees address for fee-gated scoring |
 | `EXTERNAL_RPC` | (empty) | RPC for ERC-8004 external score lookups |
 | `EXTERNAL_IDENTITY_ADDRESS` | (empty) | ERC-8004 Identity contract. `EXTERNAL_LINK_FROM_BLOCK` (empty: off) is the block its scan for links made on chain, under the `sigvara` metadata key, starts from; every operator must set the same block, the registry must be on this chain, and the RPC must serve state at blocks back to it |
-| `EXTERNAL_REPUTATION_ADDRESS` | (empty) | ERC-8004 Reputation contract. Its feedback counts only from reviewers `reviewers.js` accepts; `EXTERNAL_PUBLIC_FUNDERS` lists wallets that fund everyone (a faucet, an exchange), which end a funding trace instead of joining every reviewer they funded |
+| `EXTERNAL_REPUTATION_ADDRESS` | (empty) | ERC-8004 Reputation contract. Its feedback counts only from reviewers `reviewers.js` accepts; `EXTERNAL_PUBLIC_FUNDERS` lists wallets that fund everyone (a faucet, an exchange), which end a funding trace instead of joining every reviewer they funded. Who funded a reviewer is read from block 0, up to 1,000 reads an epoch and kept in the state file; until it is read, the reviewer does not count and its agent is not proposed |
 
 ### Transactions and the clock
 

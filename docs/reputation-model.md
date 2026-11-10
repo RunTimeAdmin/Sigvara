@@ -165,10 +165,10 @@ all of it, and one fresh wallet posting `quality=100` would have carried a linke
 
 One rating per reviewer, however many reviews it posts. Reviewers count as one when they
 share an operator, or when their funding, or their operator's, traces to a shared wallet within
-two hops. A wallet's funder is the largest native transfer into it in the first block where it
-held 1 USDC or had sent a transaction, so dust from a stranger does not make the stranger its
-funder. That transfer has to be at least 1 USDC itself: a smaller one only topped the wallet up,
-and naming its sender would hide whoever sent the rest. A reviewer with no funder is not counted.
+two hops. A wallet's funder sent the first native transfer into it of at least 1 USDC (the largest,
+if one block holds several), read from block 0, so dust from a stranger does not make the stranger
+its funder, and a smaller transfer, which only topped the wallet up, does not hide whoever sent the
+rest. A reviewer with no funder is not counted, nor one whose funding is still being read.
 Wallets that fund everyone end a trace: the zero address a mint comes from always, and
 a faucet or an exchange when `EXTERNAL_PUBLIC_FUNDERS` lists it. The factor is the
 recency-weighted mean of those independent ratings, scaled down below five of them, so one

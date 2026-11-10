@@ -218,6 +218,10 @@ let lastRescanForMs = null;
 // How long one epoch spends catching a payment chain up, in steps of MAX_BLOCKS, before it leaves the
 // rest to the next epoch.
 const PAYMENT_CHAIN_SCAN_BUDGET_MS = 10 * 60_000;
+// How much of an epoch goes to reading who funded reviewers (chain.readFunders): at most this many reads,
+// paced as the payment scan is, and at most as long as a payment chain's catching up.
+const FUNDER_READS_PER_EPOCH = 1_000;
+const FUNDER_READ_BUDGET_MS = PAYMENT_CHAIN_SCAN_BUDGET_MS;
 
 // Checked before anything starts, because the failure is silent: a bad interval does
 // not throw, it just runs the epoch loop flat out against the RPC.
@@ -330,6 +334,8 @@ const {
   setPaymentChainScanState,
   getLinkScanState,
   setLinkScanState,
+  getFunderScanState,
+  setFunderScanState,
   isCredited,
   getLastPersist,
   getPaymentEvents,
@@ -578,7 +584,7 @@ async function payerScoresFor(didHash, events = getPaymentEvents(didHash)) {
 // change, so the epoch, the checker's audit and every GET /score can share one reading, and feedback
 // posted later waits for the next snapshot as it always did. A registry on another chain is read at
 // its latest block, so there it is kept for a few minutes. A failure is not kept: the next to ask
-// tries again.
+// tries again. Nor is a reading that left a reviewer's funding unread, which the next epoch may have read.
 const EXTERNAL_SCORES_KEPT = 1024;
 const EXTERNAL_LATEST_HELD_MS = 5 * 60_000;
 const externalScores = new Map();
@@ -588,7 +594,7 @@ function externalScoreOnce(key, read) {
     if (externalScores.size >= EXTERNAL_SCORES_KEPT) externalScores.delete(externalScores.keys().next().value);
     const reading = read();
     externalScores.set(key, reading);
-    reading.catch(() => externalScores.delete(key));
+    reading.then((r) => { if (r.unread) externalScores.delete(key); }, () => externalScores.delete(key));
   }
   return externalScores.get(key);
 }
@@ -607,7 +613,8 @@ function externalScoreOnce(key, read) {
  * exactly what its primary read. The feedback itself is read at that block only when the
  * ERC-8004 registry is on this chain; on another chain it is read at its latest block.
  *
- * Returns { score, agentId }: the factor, and the ERC-8004 agent it was read from (null when none).
+ * Returns { score, agentId, unread }: the factor, the ERC-8004 agent it was read from (null when none),
+ * and how many reviewers it left out because their funding is not read yet (funder-scan.js).
  */
 async function externalScoreOf(didHash, { operator, agentAddress }, nowMs, events = evidenceAt(didHash, nowMs)) {
   if (!external.configured() || !hasLink(didHash)) return { score: 0, agentId: null };
@@ -628,26 +635,31 @@ async function externalScoreOf(didHash, { operator, agentAddress }, nowMs, event
     sameChain ? snapshotBlock : `latest ${Math.floor(Date.now() / EXTERNAL_LATEST_HELD_MS)}`,
     reviewers.evidenceDigest(evidence),
   ].join('|');
-  const score = await externalScoreOnce(key, () => external.externalScoreFor(linkedId, snapshotOperator, async (rows) => {
-    const result = await reviewers.scoreFeedback(
-      rows,
-      {
-        agent: { operator: snapshotOperator, agentAddress },
-        events: evidence,
-        nowMs: snapshotSec * 1000,
-      },
-      {
-        standingOf: (address) => chain.getReviewerStanding(address, snapshotBlock),
-        funderOf: chain.firstFunder,
-        paymentBlock: chain.paymentBlock,
-        snapshotBlock,
-        publicFunders: cfg.publicFunders.set,
-      },
-    );
-    if (rows.length) console.log(`[oracle]   ${didHash.slice(0, 10)}… external: ${reviewers.describe(result)}`);
-    return result.score;
-  }, sameChain ? snapshotBlock : undefined, reviewers.payersByAmount(evidence)));
-  return { score, agentId: linkedId };
+  const reading = await externalScoreOnce(key, async () => {
+    let unread = 0;
+    const score = await external.externalScoreFor(linkedId, snapshotOperator, async (rows) => {
+      const result = await reviewers.scoreFeedback(
+        rows,
+        {
+          agent: { operator: snapshotOperator, agentAddress },
+          events: evidence,
+          nowMs: snapshotSec * 1000,
+        },
+        {
+          standingOf: (address) => chain.getReviewerStanding(address, snapshotBlock),
+          funderOf: chain.firstFunder,
+          paymentBlock: chain.paymentBlock,
+          snapshotBlock,
+          publicFunders: cfg.publicFunders.set,
+        },
+      );
+      if (rows.length) console.log(`[oracle]   ${didHash.slice(0, 10)}… external: ${reviewers.describe(result)}`);
+      unread = result.excluded['funder-unread'] ?? 0;
+      return result.score;
+    }, sameChain ? snapshotBlock : undefined, reviewers.payersByAmount(evidence));
+    return { score, unread };
+  });
+  return { score: reading.score, agentId: linkedId, unread: reading.unread };
 }
 
 // ---- Links made on chain (link-claims.js) ------------------------------------
@@ -1275,6 +1287,19 @@ async function runEpochInner() {
       console.error('[oracle] EXTERNAL_LINK_FROM_BLOCK is set, but the ERC-8004 registry is on another chain; links made on chain are read only from a registry on this one');
     }
   }
+  // Who funded the reviewers that scoring asked about and found unread (funder-scan.js), from block 0, a
+  // budget at a time. Before scoring, as the scans are, so what is read here counts this epoch. Saved
+  // when anything was read; a reviewer not read yet does not count, and its agent waits (below).
+  {
+    const read = await chain.readFunders({
+      maxReads: FUNDER_READS_PER_EPOCH, paceMs: paymentScanCfg.paceMs, deadline: Date.now() + FUNDER_READ_BUDGET_MS,
+    });
+    if (read.reads) {
+      persistState();
+      console.log(`[oracle] reviewer funding: ${read.reads} read(s), ${read.left} wallet(s) still to read`);
+    }
+    if (read.error) console.error(`[oracle] reviewer funding read failed: ${read.error.message}`);
+  }
   let proposed = 0;
   // Agents this epoch computed a score for, proposed or not (the activeAgents gauge).
   let scored = 0;
@@ -1637,7 +1662,13 @@ async function runEpochInner() {
         // externalScore: only for agents linked to an ERC-8004 identity they own, and only from
         // the reviewers reviewers.js accepts. Ownership is re-verified inside externalScoreFor;
         // a registry the node cannot read skips the agent.
-        const { score: externalScore } = await externalScoreOf(didHash, { operator, agentAddress }, scoringNowMs, held);
+        const { score: externalScore, unread } = await externalScoreOf(didHash, { operator, agentAddress }, scoringNowMs, held);
+        // A reviewer whose funding is not read yet does not count, and an operator that has read it may
+        // count it. Proposed or audited now, the two would disagree over a read one has not finished.
+        if (unread) {
+          console.log(`[oracle]   ${didHash.slice(0, 10)}… ${unread} reviewer(s) with funding not read yet, skipping`);
+          continue;
+        }
         const inputs = { registeredAt, att, flagWeight, externalScore };
         const { measured, scores } = await scoreAt(didHash, inputs, scoringNowMs, held);
         scored++;
@@ -1728,14 +1759,15 @@ async function runEpochInner() {
             // Weighed at this epoch's clock, a flag that passed a step of its decay in between moved
             // communityScore.
             const flagWeightThen = decayedFlagCount(didHash, atProposalMs);
-            const auditInputs = hasLink(didHash)
-              ? {
-                ...inputs,
-                flagWeight: flagWeightThen,
-                externalScore: (await externalScoreOf(
-                  didHash, { operator, agentAddress }, atProposalMs, asOf?.events ?? evidenceAt(didHash, atProposalMs),
-                )).score,
-              }
+            const externalThen = hasLink(didHash)
+              ? await externalScoreOf(didHash, { operator, agentAddress }, atProposalMs, asOf?.events ?? evidenceAt(didHash, atProposalMs))
+              : null;
+            if (externalThen?.unread) {
+              console.log(`[oracle]   ${didHash.slice(0, 10)}… the pending proposal's reviewers have funding not read yet; checking it next epoch`);
+              continue;
+            }
+            const auditInputs = externalThen
+              ? { ...inputs, flagWeight: flagWeightThen, externalScore: externalThen.score }
               : { ...inputs, flagWeight: flagWeightThen };
             auditScores = (await scoreAt(didHash, auditInputs, atProposalMs, asOf?.events)).scores;
           }
@@ -3810,6 +3842,10 @@ server.listen(cfg.port, cfg.host, () => {
   if (chain.restoreScanState(loadScanState())) {
     console.log(`[oracle] resuming log scan from block ${loadScanState().lastScannedBlock + 1}`);
   }
+  // And the reading of reviewers' funding, so a wallet part read is not read again from block 0. The store
+  // keeps the reader's own state from here on, so every save holds what has been read and asked for.
+  chain.restoreFunderState(getFunderScanState());
+  setFunderScanState(chain.getFunderState());
 
   // Which half of a two-operator setup this process is. Said at boot because the two
   // modes differ in what they will write to the chain, and running the wrong one is
