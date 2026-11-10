@@ -1090,6 +1090,19 @@ describe('importing payer-signed outcomes from other operators', () => {
     assert.equal((await evidence(b, old.agent.didHash))[0].success, false, 'the auditor\'s outcome stays');
   });
 
+  test('refuses an outcome on a payment older than the ledger keeps, posted or imported', async () => {
+    const payer = ethers.Wallet.createRandom();
+    const old = paidLongAgo(world, payer, 900);
+    const signed = await signOutcome(old.agent.didHash, old.txHash, payer);
+    const posted = await post(b, old.agent.didHash, old.txHash, signed);
+    assert.equal(posted.status, 402, posted.text);
+    assert.equal(posted.body.code, 'settlement_too_old');
+    c.serve([served(old.agent, old.txHash, signed, { acceptedAt: Date.now() + 1 })]);
+    await runImport();
+    assert.match(b.logs(), new RegExp(`refused ${old.txHash} from ${c.url}: settlement_too_old`));
+    assert.equal((await evidence(b, old.agent.didHash)).length, 0, 'not credited either way');
+  });
+
   test('passes over an outcome a peer dates in the future without moving its cursor past later ones', async () => {
     const payer = ethers.Wallet.createRandom();
     const forgedFor = paid(payer);

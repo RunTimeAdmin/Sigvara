@@ -459,3 +459,63 @@ test('a payment made before the agent registered is refused, however it is repor
   assert.equal(sameBlock.status, 200, sameBlock.text);
   assert.equal((await oracle.call('GET', `/evidence/${agent.didHash}`)).body.count, 1);
 });
+
+// ---- a settlement older than the ledger keeps -------------------------------------------
+
+const DAY_SEC = 86_400;
+// Past what pruning keeps at the default 90-day half-life: 90 x log2(1000), about 897 days.
+const PRUNED_AGE_DAYS = 900;
+
+/** A payment to `agent`, settled `days` before the chain's clock, in a block no other test uses. */
+let oldBlocks = 0;
+function paidDaysAgo(w, agent, payer, days) {
+  const block = w.data.head - 5_000 - ++oldBlocks;
+  w.set('blockTimes', { ...(w.data.blockTimes || {}), [block]: w.data.nowSec - days * DAY_SEC });
+  return { tx: w.addTx([{ from: payer, to: agent.agentAddress, value: 5n * USDC }], { blockNumber: block }), block };
+}
+
+test('a settlement older than the ledger keeps is refused, and nothing is credited', async () => {
+  const agent = world.addAgent({ registeredDaysAgo: 1_000 });
+  const { tx } = paidDaysAgo(world, agent, wallet(), PRUNED_AGE_DAYS);
+  for (const token of [undefined, AUDITOR]) {
+    const r = await attest(agent.didHash, tx, { success: true, token });
+    assert.equal(r.status, 402, r.text);
+    assert.equal(r.body.code, 'settlement_too_old');
+  }
+  assert.equal((await oracle.call('GET', `/evidence/${agent.didHash}`)).body.count, 0);
+  // A day younger than the cutoff is still taken.
+  const { tx: recent } = paidDaysAgo(world, agent, wallet(), PRUNED_AGE_DAYS - 4);
+  assert.equal((await attest(agent.didHash, recent, { success: true, token: AUDITOR })).status, 200);
+});
+
+test('attack: a payment pruned from the ledger cannot be credited again, though its replay key went with it', async () => {
+  // Pruning kept every key for good, so the replay set only grew. The key now goes with its payment, and what
+  // refuses the same settlement afterwards is its age.
+  const w = new World();
+  const agent = w.addRegisteredAgent({ registeredDaysAgo: 1_000 });
+  const payer = wallet();
+  const { tx, block } = paidDaysAgo(w, agent, payer, PRUNED_AGE_DAYS);
+  const key = `${tx}|${agent.didHash}|${payer}`.toLowerCase();
+  const credited = {
+    txHash: tx.toLowerCase(), ts: (w.data.nowSec - PRUNED_AGE_DAYS * DAY_SEC) * 1000, amount: String(5n * USDC),
+    payer, success: true, blockNumber: block,
+  };
+  const legacy = `0x${'ab'.repeat(32)}`;
+  const state = { schemaVersion: 1, paymentEvents: { [agent.didHash]: [credited] }, usedPaymentTxs: [key, legacy] };
+  const o = await startOracle({ world: w, env: REQUIRED_ENV, files: { 'state.json': JSON.stringify(state) } });
+  try {
+    await o.waitForLog(/epoch done/);
+    const saved = JSON.parse(o.files()['state.json']);
+    assert.equal(saved.paymentEvents[agent.didHash], undefined, 'the epoch pruned the payment');
+    assert.deepEqual(saved.usedPaymentTxs, [legacy], 'and its key with it, leaving a key that names no sender');
+    assert.equal(saved.schemaVersion, 4, 'which a build without the age limit refuses to load');
+    for (const token of [undefined, AUDITOR]) {
+      const r = await o.call('POST', '/attest', { didHash: agent.didHash, success: true, payment: { txHash: tx } }, token);
+      assert.equal(r.status, 402, r.text);
+      assert.equal(r.body.code, 'settlement_too_old');
+    }
+    assert.equal((await o.call('GET', `/evidence/${agent.didHash}`)).body.count, 0, 'not credited a second time');
+  } finally {
+    await o.stop();
+  }
+});
