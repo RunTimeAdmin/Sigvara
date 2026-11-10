@@ -212,9 +212,11 @@ therefore still grant itself the oracle or guardian role at once, and move a par
 and its ceiling. That is a stated trust assumption, not an oversight:
 
 - Delaying the oracle grant would mean a 48 hour wait before a replacement oracle key could be enabled
-  in an incident, which is the moment it is needed. Neither role takes funds: a score sits in a
+  in an incident, which is the moment it is needed. Neither role takes funds in what launches: a score sits in a
   challenge window the committee can reject and dies when its proposer loses its role, and a guardian
-  can only pause inflows, for three days at a time.
+  can only pause inflows, for three days at a time. `SigvaraEpochFees`, left out of launch (decision 6),
+  is the exception: there `chargeEpoch` lets `ORACLE_ROLE` move an agent's prepaid fee into `collected`
+  at the fee the admin sets, so this case is made again before that module returns.
 - Revocation is instant and must stay so.
 - The roles that can take funds or change an agent's standing are no longer on this list (decision 8).
   A compromised admin Safe cannot install a slasher or a committee member, or route slashed funds,

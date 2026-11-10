@@ -43,7 +43,7 @@ these:
 | `STAKING_CORE_ROLE` | identity, reputation | `UPGRADER_ROLE` | It changes an agent's standing |
 | `SLASHING_COMMITTEE_ROLE` | reputation, staking | `UPGRADER_ROLE` | It files slashes and rejects scores |
 | `SLASHER_ROLE` | oracle bond | `UPGRADER_ROLE` | It takes bonds at once; it can never be granted to `slashBeneficiary` |
-| `ORACLE_ROLE` | reputation, epoch fees | `DEFAULT_ADMIN_ROLE` | A replacement key may be needed in an incident, and the role takes no funds |
+| `ORACLE_ROLE` | reputation, epoch fees | `DEFAULT_ADMIN_ROLE` | A replacement key may be needed in an incident, and on reputation the role takes no funds. On epoch fees (not deployed) `chargeEpoch` moves an agent's prepaid fee into `collected` |
 | `GUARDIAN_ROLE` | identity, reputation, staking, oracle bond | `DEFAULT_ADMIN_ROLE` | It can pause inflows and do nothing else |
 
 `TimelockedGrants` adds the reverse path. The admin may revoke a role that `UPGRADER_ROLE` grants at
