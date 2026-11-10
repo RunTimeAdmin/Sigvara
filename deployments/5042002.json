@@ -8,11 +8,26 @@
   "oracleBond": "0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171",
   "reader": "0x2921b4eE879CdF5793FA273BbDc4E7dF01ABcef8",
   "wallets": {
-    "primary oracle": { "address": "0x6352B8FFBc3Bdd182512Ce59Ef69d1b155Fb3943", "minUsdc": 10 },
-    "checker": { "address": "0x989aabd69631f81A6B2c8Ce508C32aa219EC172D", "minUsdc": 1 },
-    "publisher": { "address": "0x787f30E64d212A1d90174A832a79489dca44FE92", "minUsdc": 2 },
-    "keeper primary": { "address": "0x8e1f90a2a5042652C1B9CAe99Ab3c2e02a30F2E4", "minUsdc": 1 },
-    "keeper backup": { "address": "0x8c85b61Ed08d66FeD2a613bA50D971b4dE6c5619", "minUsdc": 1 }
+    "primary oracle": {
+      "address": "0x6352B8FFBc3Bdd182512Ce59Ef69d1b155Fb3943",
+      "minUsdc": 10
+    },
+    "checker": {
+      "address": "0x989aabd69631f81A6B2c8Ce508C32aa219EC172D",
+      "minUsdc": 1
+    },
+    "publisher": {
+      "address": "0x787f30E64d212A1d90174A832a79489dca44FE92",
+      "minUsdc": 2
+    },
+    "keeper primary": {
+      "address": "0x8e1f90a2a5042652C1B9CAe99Ab3c2e02a30F2E4",
+      "minUsdc": 1
+    },
+    "keeper backup": {
+      "address": "0x8c85b61Ed08d66FeD2a613bA50D971b4dE6c5619",
+      "minUsdc": 1
+    }
   },
   "implementations": {
     "identity": {
@@ -28,7 +43,7 @@
       "reproducedAt": "53d3a89"
     },
     "reputation": {
-      "current": "0x4BBCB51Fa8Edac8ab3d3dc9757614b55cfFBA837",
+      "current": "0x937da57830bFF5f1341b8fd9F3f7D97F48B3bA16",
       "history": [
         {
           "implementation": "0x87492399E34e5247740d0280C329e7553403404c",
@@ -46,10 +61,16 @@
           "replacedAt": "2026-11-05T20:42:05.239Z",
           "reproducedAt": "f35cbc6",
           "note": "replaced by the upgrade to dcad617 (a score's age runs from its proposal, pull request 218): upgradeToAndCall in block 70916733, tx 0x945de5888c9e95e87961b64cd9705fe70fb42c1d2c48d320faa6d37506fccf69"
+        },
+        {
+          "implementation": "0x4BBCB51Fa8Edac8ab3d3dc9757614b55cfFBA837",
+          "replacedAt": "2026-11-10T14:21:43.061Z",
+          "reproducedAt": "dcad617",
+          "note": "replaced by the upgrade to 44ff8e8 (a stranded score can be discarded, pull request 255): upgradeToAndCall in block 71720583, tx 0x4a62f68aa4cf33506a4ad84e38b16426215ea103fc95a09bd9b166b212c5474a"
         }
       ],
-      "recordedAt": "2026-11-05T20:42:05.239Z",
-      "reproducedAt": "dcad617"
+      "recordedAt": "2026-11-10T14:21:43.061Z",
+      "reproducedAt": "44ff8e8"
     },
     "staking": {
       "current": "0x347D01d33bc07120c67BCaDB5C32fe0D8AF6C943",
@@ -73,13 +94,24 @@
           "implementation": "0x210ed3F7ef42F01EE94b9543F67b8291e27Aaa6b",
           "replacedAt": "2026-11-02T16:28:50.000Z",
           "note": "replaced by the upgrade of the staking proxy to 25c2d59 (no committee share of a slash, pull request 144): upgradeToAndCall in block 70377384, tx 0x1456bb5af6db20ed8181ad4742587b187e74b54a6286ceba534dc3ed48af794a"
+        },
+        {
+          "implementation": "0x347D01d33bc07120c67BCaDB5C32fe0D8AF6C943",
+          "replacedAt": "2026-11-10T14:21:43.061Z",
+          "reproducedAt": "53d3a89",
+          "note": "replaced in error by the 44ff8e8 build in block 71720600 (tx 0x0b0d580d7fc6158c2d4f9a96747116bc0908eedf8809a5f9718e4c3e67c47240), then restored in block 71720997, so it is current again: staking waits for the slash drill to end"
+        },
+        {
+          "implementation": "0x3073E91150Cad7A7AcF013CA0342C4901aB17d1d",
+          "replacedAt": "2026-11-10T14:25:06.396Z",
+          "note": "the 44ff8e8 staking build, live from block 71720600 until the rollback in block 71720997 (tx 0xfd2cc808ec6085dc165b9b0b6ee3e49364e0e8bda788c268f3a8f7889085704e). It refuses an admin as a slash victim, which the slash drill names, so staking takes this code only after the drill ends on 24 November"
         }
       ],
-      "recordedAt": "2026-11-02T16:30:20.634Z",
+      "recordedAt": "2026-11-10T14:25:06.396Z",
       "reproducedAt": "53d3a89"
     },
     "oracleBond": {
-      "current": "0x875e285Ab8c75be29739a25d25d8EAbFDa41F335",
+      "current": "0x19224cdf56203aeA1fe627100A46930bc2B39FbB",
       "history": [
         {
           "implementation": "0xf8464144726850d222a06b85a230c8030673b933",
@@ -108,16 +140,22 @@
           "replacedAt": "2026-11-05T20:42:05.239Z",
           "reproducedAt": "0483a3c",
           "note": "replaced by the upgrade to dcad617 (a named signer can step down, pull request 218): upgradeToAndCall in block 70916843, tx 0x5dd4afa882e8927481615e65f3b2b2debc6d40eb3c6c8fe4175300bcd24e7584"
+        },
+        {
+          "implementation": "0x875e285Ab8c75be29739a25d25d8EAbFDa41F335",
+          "replacedAt": "2026-11-10T14:21:43.061Z",
+          "reproducedAt": "dcad617",
+          "note": "replaced by the upgrade to 44ff8e8 (an empty bond deposit is refused, pull request 255): upgradeToAndCall in block 71720615, tx 0x216640acd3770420eb51f4159577e6bb9d8edfd16edae28ee8650d16d791a577"
         }
       ],
-      "recordedAt": "2026-11-05T20:42:05.239Z",
-      "reproducedAt": "dcad617"
+      "recordedAt": "2026-11-10T14:21:43.061Z",
+      "reproducedAt": "44ff8e8"
     }
   },
   "bytecode": {
-    "note": "Every contract here, each implementation, each proxy, the SVR token and the reader, is reproduced byte for byte (immutables aside) by building reproducedAt; scripts/check-bytecode.mjs checks it. The tag marks the commit that records this, whose contract sources are those of reproducedAt. All are verified on the Arc explorer.",
-    "reproducedAt": "dcad617",
-    "tag": "arc-testnet-2026-11-05",
-    "checkedAt": "2026-11-05"
+    "note": "Every contract here, each implementation, each proxy, the SVR token and the reader, is reproduced byte for byte (immutables aside) by building reproducedAt, or the implementation's own reproducedAt where it records one; scripts/check-bytecode.mjs checks it. The tag marks the commit that records this. All are verified on the Arc explorer.",
+    "reproducedAt": "44ff8e8",
+    "tag": "arc-testnet-2026-11-10",
+    "checkedAt": "2026-11-10"
   }
 }
