@@ -986,6 +986,24 @@ test('persist: writes the format version and the chain, and load reads the chain
   assert.equal(r.back, 5042);
 });
 
+test('persist: keeps how far reviewer funding was read, in a file that stays at version 1', () => {
+  const funders = { wallets: { [`0x${'4'.repeat(40)}`]: { through: 19_999, want: 70_000_000 } } };
+  const out = inChildWithFiles({}, `
+    const fs = require('fs');
+    const s = require('./store');
+    s.setFunderScanState(${JSON.stringify(funders)});
+    s.persist();
+    const written = JSON.parse(fs.readFileSync(process.env.ORACLE_STATE_PATH, 'utf8'));
+    s.setFunderScanState(null);
+    s.load();
+    console.log(JSON.stringify({ version: written.schemaVersion, back: s.getFunderScanState() }));
+  `);
+  const r = lastJson(out);
+  // A build before it reads only the keys it knows, so it takes the file and drops this on its next save.
+  assert.equal(r.version, 1);
+  assert.deepEqual(r.back, funders);
+});
+
 test('persist: keeps the previous save as a backup that a later load can use', () => {
   const out = inChildWithFiles({}, `
     const fs = require('fs');

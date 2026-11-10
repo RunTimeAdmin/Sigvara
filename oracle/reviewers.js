@@ -38,6 +38,7 @@
 
 const { createHash } = require('node:crypto');
 const { meanRating, MAX_EXTERNAL_SCORE } = require('./external');
+const { UNREAD } = require('./funder-scan');
 
 const REVIEWER_MIN_TENURE_DAYS = 30;
 const REVIEWER_MIN_SCORE = 40;
@@ -46,9 +47,10 @@ const FULL_WEIGHT_CLUSTERS = 5;
 const FUNDER_HOPS = 2;
 const SNAPSHOT_SECONDS = 86_400;
 
-// An address counts as funded once it holds this much native USDC (18 decimals on Arc), or has
-// sent a transaction. Dust below it does not make the sender a funder, so seeding new agent
-// addresses with fractions of a cent from one wallet cannot fold their reviews into one.
+// A transfer in names its sender as the funder only when it carries this much native USDC (18
+// decimals on Arc) by itself (funder-scan.js). Dust below it does not make the sender a funder, so
+// seeding new agent addresses with fractions of a cent from one wallet cannot fold their reviews
+// into one.
 const FUNDING_FLOOR = 10n ** 18n;
 
 // SigvaraIdentity.AgentStatus.Active.
@@ -99,50 +101,15 @@ function parsePublicFunders(raw) {
 }
 
 /**
- * Who first funded `address` by block `cap`, as { funder, block }, or null when it was not
- * funded by then. `funder` is lowercased, and null when the block that funded it shows no
- * transfer in, which a gas-sponsored account can do, or none that reaches the floor by itself.
- *
- * `read` answers two questions: touched(block), whether by the end of that block the address
- * held FUNDING_FLOOR or had sent a transaction, and inbound(block), the native transfers into
- * it in that block as [{ from, value }]. A binary search finds the first touched block, about
- * 2 x log2(cap) state reads, and the largest transfer in that block names the funder.
- *
- * The search runs over [0, cap] and never to the head, because the predicate can turn false
- * again (an account that holds no gas money and is emptied by permits it signed), and then
- * where the search lands depends on where it starts. Both operators pass the same cap, so they
- * land in the same place. If the address had dropped back below the floor by `cap`, the block
- * before it is tried, which is the case of a payer that spent everything in the payment.
- */
-async function findFirstFunder(read, address, cap) {
-  let hi = cap;
-  if (!(await read.touched(hi))) {
-    if (hi === 0 || !(await read.touched(hi - 1))) return null;
-    hi -= 1;
-  }
-  let lo = 0;
-  while (lo < hi) {
-    const mid = Math.floor((lo + hi) / 2);
-    if (await read.touched(mid)) hi = mid;
-    else lo = mid + 1;
-  }
-  let best = null;
-  for (const t of await read.inbound(lo)) {
-    if (!best || BigInt(t.value) > BigInt(best.value)) best = t;
-  }
-  // Only a transfer that could have crossed the floor by itself names a funder. A smaller one only
-  // topped the address up, and naming its sender would hide whoever sent the rest: 0.99 from a
-  // treasury and 0.02 from a throwaway wallet read as funded by the throwaway. A wallet with no funder
-  // of its own further back is not a sign of this, since Arc's faucets are like that.
-  const named = best && BigInt(best.value) >= FUNDING_FLOOR;
-  return { funder: named ? String(best.from).toLowerCase() : null, block: lo };
-}
-
-/**
  * The funding trace of `address`: the wallets behind it, up to FUNDER_HOPS, each searched up to
  * the block the wallet before it was funded in. Stops at a public funder. Returns the wallets,
- * 'self' when the scored agent's own side is among them, or null when `address` itself shows
- * no funder by `cap`.
+ * 'self' when the scored agent's own side is among them, null when `address` itself shows
+ * no funder by `cap`, or UNREAD when a wallet on the way has not been read that far yet.
+ *
+ * Only a transfer that could have crossed the floor by itself names a funder (funder-scan.js). A
+ * smaller one only topped the address up, and naming its sender would hide whoever sent the rest:
+ * 0.99 from a treasury and 0.02 from a throwaway wallet read as funded by the throwaway. A wallet
+ * with no funder of its own further back is not a sign of this, since Arc's faucets are like that.
  */
 async function traceFunding(address, cap, own, { funderOf, publicFunders }) {
   const keys = [];
@@ -150,6 +117,7 @@ async function traceFunding(address, cap, own, { funderOf, publicFunders }) {
   let before = cap;
   for (let hop = 0; hop < FUNDER_HOPS; hop++) {
     const found = await funderOf(at, before);
+    if (found === UNREAD) return UNREAD;
     if (!found || !found.funder) return hop === 0 ? null : keys;
     const f = found.funder;
     if (f === ZERO_ADDRESS || publicFunders.has(f)) return keys;
@@ -166,9 +134,10 @@ async function traceFunding(address, cap, own, { funderOf, publicFunders }) {
  * other reviewers. The rules that need no chain read come first, so most spam costs nothing.
  *
  * `ctx`: the scored agent's { operator, agentAddress }; its payment evidence up to the snapshot;
- * and `nowMs`, the snapshot. `deps`: standingOf(address) and funderOf(address, cap) read the
- * chain as of the snapshot and throw when the node cannot answer, which skips the agent for the
- * epoch rather than score it, since a reviewer that could not be checked says nothing either way;
+ * and `nowMs`, the snapshot. `deps`: standingOf(address) reads the chain as of the snapshot and
+ * throws when the node cannot answer, which skips the agent for the epoch rather than score it,
+ * since a reviewer that could not be checked says nothing either way; funderOf(address, cap) is
+ * who first funded an address by a block, or UNREAD while that has not been read (funder-scan.js);
  * paymentBlock(event) is the block a payment settled in; snapshotBlock is the snapshot's block.
  */
 async function verdictFor(client, { agent, events, nowMs }, deps) {
@@ -199,9 +168,12 @@ async function verdictFor(client, { agent, events, nowMs }, deps) {
   const mine = await traceFunding(c, await deps.paymentBlock(first), own, deps);
   if (mine === 'self') return { ok: false, reason: 'self-funded' };
   if (mine === null) return { ok: false, reason: 'unknown-funder' };
-  // And its operator's, since one treasury funding many operators is one party.
+  // And its operator's, since one treasury funding many operators is one party. Asked while the
+  // reviewer's own is still unread too, so that both are read in the same epochs.
   const theirs = await traceFunding(operator, deps.snapshotBlock, own, deps);
   if (theirs === 'self') return { ok: false, reason: 'self-funded' };
+  // A funding not read yet could still lead to the agent's own side, so it does not count until it is.
+  if (mine === UNREAD || theirs === UNREAD) return { ok: false, reason: 'funder-unread' };
 
   return { ok: true, lastPaidMs, keys: [c, operator, ...mine, ...(theirs ?? [])] };
 }
@@ -280,8 +252,7 @@ function scoreReviews(rows, verdicts, nowMs) {
 /** Verdicts for every reviewer with a rating, then the score. */
 async function scoreFeedback(rows, ctx, deps) {
   const verdicts = new Map();
-  // One reviewer at a time: each can cost funder searches of fifty-odd reads, and the public
-  // RPC refuses a burst.
+  // One reviewer at a time: each can cost standing reads, and the public RPC refuses a burst.
   for (const [client, mine] of byClient(rows)) {
     if (meanRating(mine) === null) continue;
     verdicts.set(client, await verdictFor(client, ctx, deps));
@@ -298,7 +269,7 @@ function describe({ score, reviewers, clusters, excluded }) {
 
 module.exports = {
   payersByAmount, evidenceDigest,
-  snapshotOf, parsePublicFunders, findFirstFunder, verdictFor, scoreReviews, scoreFeedback, describe,
+  snapshotOf, parsePublicFunders, verdictFor, scoreReviews, scoreFeedback, describe,
   REVIEWER_MIN_TENURE_DAYS, REVIEWER_MIN_SCORE, REVIEW_HALF_LIFE_DAYS, FULL_WEIGHT_CLUSTERS, FUNDER_HOPS,
   SNAPSHOT_SECONDS, FUNDING_FLOOR,
 };

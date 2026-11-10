@@ -101,6 +101,10 @@ let paymentChainScanState = {};
 // Where the ERC-8004 link scan got to, and the links it found (link-claims.js). These are
 // read from chain, but a restart that lost them would rescan from EXTERNAL_LINK_FROM_BLOCK.
 let linkScanState = null;
+// How far each reviewer funding wallet's transfers in have been read, and the funding found
+// (funder-scan.js). Read from chain too, and thousands of reads a wallet to redo. It needs no format
+// version: a build before it ignores the key, and drops it on its next save, which costs only the reads.
+let funderScanState = null;
 
 /**
  * Clear `count` flags from an agent, and report what actually changed.
@@ -285,6 +289,7 @@ function parseState(parsed) {
     paymentScanState: parsed.paymentScanState || null,
     paymentChainScanState: isObject(parsed.paymentChainScanState) ? parsed.paymentChainScanState : {},
     linkScanState: parsed.linkScanState || null,
+    funderScanState: isObject(parsed.funderScanState) ? parsed.funderScanState : null,
     chainId: parsed.chainId ?? null,
   };
 
@@ -385,6 +390,7 @@ function applyState(next) {
   paymentScanState = next.paymentScanState;
   paymentChainScanState = next.paymentChainScanState;
   linkScanState = next.linkScanState;
+  funderScanState = next.funderScanState;
   stateChainId = next.chainId;
 }
 
@@ -566,6 +572,7 @@ function persist() {
         paymentScanState,
         paymentChainScanState,
         linkScanState,
+        funderScanState,
         savedAt: new Date().toISOString(),
       })) writeAll(fd, piece);
       // Flush before the rename. The rename is atomic, so a crash can never leave a
@@ -1068,6 +1075,10 @@ function setPaymentChainScanState(key, state) { paymentChainScanState = { ...pay
 function getLinkScanState() { return linkScanState; }
 function setLinkScanState(state) { linkScanState = state; }
 
+/** How far reviewer funding has been read (chain.getFunderState). */
+function getFunderScanState() { return funderScanState; }
+function setFunderScanState(state) { funderScanState = state; }
+
 // The last probe, so a caller that asks often (/health, public and unmetered) can reuse a recent one.
 let lastProbe = { at: -Infinity, ok: false };
 
@@ -1140,6 +1151,8 @@ module.exports = {
   setPaymentChainScanState,
   getLinkScanState,
   setLinkScanState,
+  getFunderScanState,
+  setFunderScanState,
   getPaymentEvents,
   allPaymentEvents,
   paymentVolume,
