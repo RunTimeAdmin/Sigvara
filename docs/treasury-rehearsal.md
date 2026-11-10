@@ -25,11 +25,12 @@ and sent it to the treasury ([`0xff614fb0…2d22`](https://explorer.testnet.arc.
 | | What happened | Transaction |
 |---|---|---|
 | A: 100 test SVR to a payee | Scheduled by the Safe, two owners signing, with 48 hours of delay. Operation `0x199ae952…d9bd`, ready from 2026-11-10 16:07:09 UTC | [`0x11dc7fd8…6c73`](https://explorer.testnet.arc.io/tx/0x11dc7fd8816bad1c5ba3e1c46f80d173899252bf9be6d20a79ed85b8fe0b6c73), block 71393502 |
+| A executed | Executed by a wallet that holds no role, after the delay. The payee then held 100 test SVR and the treasury 900 | [`0x69a5d90a…f9aad`](https://explorer.testnet.arc.io/tx/0x69a5d90a17e0912cca5202bb4892391d44c97f7f142d0054530ea144953f9aad), block 71737327 |
 | B: 50 test SVR to the same payee | Scheduled by the Safe, then cancelled by the Safe. Operation `0x510a8776…4723` reads Unset | [`0x12798ff5…bf85`](https://explorer.testnet.arc.io/tx/0x12798ff5dd6840aff5c8d31e7dfb6cf0b5ed93c0ffa746ee7024e5016ddbbf85) and [`0x10e60e6b…f356`](https://explorer.testnet.arc.io/tx/0x10e60e6b154d128578c4546090998dbb5150f4569c801e83f4b5f8aa9519f356) |
 
-Payment A has not been executed yet. Once its delay has run, anyone may execute it; this record will be
-updated with that transaction, the balances after it (the payee 100, the treasury 900) and a check that
-cancelled payment B still cannot execute.
+Payment A was executed on 10 November 2026, after its delay had run, by a wallet that holds no role, and the
+balances moved as scheduled: the payee 100 test SVR, the treasury 900. Cancelled payment B still cannot
+execute: tried after its delay, it reverts with `TimelockUnexpectedOperationState`, since it reads Unset.
 
 ## What was refused
 
