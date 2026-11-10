@@ -115,7 +115,7 @@ Health check with operational signals for production alerting.
 }
 ```
 
-Where the state file is, and what went wrong writing it, are in the log and not in this answer.
+Where the state file is, and what went wrong writing it, are in the log and not in this answer. It also carries `writePolicy`, `{ "scoreRefreshHours": 12, "maxWritesPerEpoch": 1000 }`, which both operators must share.
 Returns 503 when:
 - State file path is not writable (likely volume mount issue)
 - The last state write failed (`statePersisted: false`)
@@ -800,9 +800,9 @@ So the second operator runs with `ORACLE_MODE=checker` and never competes for th
 
 | pending proposal | checker does |
 |---|---|
-| none, for `CHECKER_GRACE_MINUTES` or longer | proposes: covers for a silent primary. A slot empty for less is left to the primary, since nothing recomputes a checker's proposal (until 3 November 2026 the checker did not wait, and proposed 35 of the first 262 scores, none of them recomputed) |
+| none, for `CHECKER_GRACE_MINUTES` or longer once due | proposes: covers for a silent primary. A slot empty for less is left to the primary, since nothing recomputes a checker's proposal (until 3 November 2026 the checker did not wait, and proposed 35 of the first 262 scores, none of them recomputed). Nothing is due while the score on chain is the checker's own and its last write is under `SCORE_REFRESH_HOURS` old, since the primary skips that slot on purpose |
 | agrees, window open | nothing |
-| agrees, window elapsed by `CHECKER_GRACE_MINUTES` or more | finalizes. Sooner, it leaves the finalize to the primary, which finalizes and proposes again in one epoch, so the slot is never left empty |
+| agrees, window elapsed by `CHECKER_GRACE_MINUTES` or more | finalizes. Sooner, it leaves the finalize to the primary, which finalizes and, when the score has changed or is due a refresh, proposes again in one epoch |
 | **disagrees** | **records a divergence and touches nothing** |
 
 The last row is the one that matters. Overwriting a disputed proposal would restart the
@@ -963,7 +963,7 @@ and then its silence means nothing. The slash keeper (`keeper.js`) has its own s
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `EPOCH_HOURS` | `24` | Hours between automatic epoch runs |
+| `EPOCH_HOURS` | `24` | Hours between automatic epoch runs. An epoch proposes a score only when it differs from the one on chain or that one's last write is `SCORE_REFRESH_HOURS` old (default `12`, `0` to `12`; `0` proposes every epoch; refused where, with a six-hour challenge window, a stable score could pass a day before its next write is finalized), and sends at most `MAX_WRITES_PER_EPOCH` proposals (default `1000`, finalizes not counted), the oldest scores on chain first. Both operators must run the same values of both; `/health` reports them as `writePolicy`, and `sigvara_oracle_unchanged_not_proposed_total` counts what was not proposed. An agent below the minimum stake is read once, then not again until a stake, status or minimum-stake log names it, or a day has passed |
 | `HOST` | `127.0.0.1` | HTTP bind address. Use `0.0.0.0` in Docker. |
 | `PORT` | `3030` | HTTP port |
 | `TRUSTED_PROXIES` | (empty) | Addresses or CIDR ranges, comma-separated, whose `X-Forwarded-For` is believed besides loopback. Behind a reverse proxy in a container set the proxy network, for example `172.16.0.0/12`; otherwise every visitor shares one rate-limit bucket |
@@ -1144,7 +1144,7 @@ What differs from the scored chain's scan:
   `paymentChainHold` on `/health`, and `/metrics` counts it as a failed epoch and in
   `sigvara_oracle_epochs_held_by_payment_chain_total`. Scans that fall behind while an epoch runs bring
   the cut-off down, below, and past that leave the remaining agents unscored. That epoch still counts as
-  succeeded unless it held every agent: only the held counter moves, and `paymentChainHold.agents` says how many and `reasons` why (`scan_behind`, or `payer_negative` for a negative held under ADR 0011, which `sigvara_oracle_agents_held_by_payer_negative_total` counts instead).
+  succeeded unless it held every agent: only the held counter moves, and `paymentChainHold.agents` says how many and `reasons` why (`scan_behind`, or `payer_negative` for a negative held under ADR 0011, which `sigvara_oracle_agents_held_by_payer_negative_total` counts instead, or `write_budget` for proposals past `MAX_WRITES_PER_EPOCH`, which `sigvara_oracle_agents_held_by_write_budget_total` counts).
 - **One cut-off.** With a payment chain on (shadow changes nothing), a score's evidence is
   everything that counted by a whole-minute cut-off: one minute before the chain's clock, read again
   for each agent, and brought down to where this operator's own scans of every chain have reached,
@@ -1308,7 +1308,7 @@ cd oracle
 node --test
 ```
 
-1435 tests (as of 10 November 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
+1443 tests (as of 10 November 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
 the trust weighting, Merkle evidence trees, HTTP helpers, store persistence and recovery,
 the streamed state file, chain access with backoff, scan checkpointing, fee caps and transaction replacement,
 metrics, and cooldown logic. Several of the files run the real `index.js` and `watcher.js`

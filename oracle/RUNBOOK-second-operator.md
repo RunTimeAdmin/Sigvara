@@ -350,7 +350,7 @@ including the scoring inputs, which must match the primary **exactly**: a differ
 half-life or fee unit guarantees divergence on every agent and tells you nothing about
 whether the primary is honest. Payment scanning is one of those inputs: match the primary on
 `PAYMENT_SCAN_ENABLED` and `PAYMENT_SCAN_FROM_BLOCK`, because one operator scanning and the other
-not diverges on every agent with a payment the other missed.
+not diverges on every agent with a payment the other missed. Match it on `SCORE_REFRESH_HOURS` and `MAX_WRITES_PER_EPOCH` too: with a shorter refresh than the primary's, the checker covers slots the primary leaves empty on purpose.
 
 Four settings are not negotiable, and the process refuses to start if the first two are
 wrong:
