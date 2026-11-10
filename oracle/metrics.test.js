@@ -299,3 +299,17 @@ test('every metric name used in the source is declared and exported', () => {
 
   assert.deepEqual(problems, [], problems.join('\n'));
 });
+
+test('the rejected-proposals HELP text does not claim the oracle counts committee rejections', () => {
+  // Nothing in the oracle increments proposalsRejected, so the series always reads 0.
+  // Its HELP text has to say so, and point at where a rejection is recorded.
+  metrics.reset();
+  const text = metrics.toPrometheusText();
+  const help = text.split('\n').find((l) => l.startsWith('# HELP sigvara_oracle_proposals_rejected_total '));
+
+  assert.ok(help, 'the series keeps its HELP line');
+  assert.doesNotMatch(help, /rejected by the (slashing )?committee/i, 'HELP must not say committee rejections are counted');
+  assert.match(help, /ScoreRejected/, 'HELP should name the event that records a rejection');
+  assert.ok(text.includes('# TYPE sigvara_oracle_proposals_rejected_total counter'), 'the series stays a counter');
+  assert.ok(text.includes('\nsigvara_oracle_proposals_rejected_total 0\n'), 'the series is still exposed, at 0');
+});

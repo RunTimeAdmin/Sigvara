@@ -115,9 +115,10 @@ const counters = {
   checkerDeferredPropose: 0,
 
   // Write outcomes that are neither success nor error and were likewise undeclared.
-  // proposeSlotTaken is the ordinary result of proposeIfEmpty losing a race, and
-  // proposalsRejected is the committee rejecting a score: both are things you want a
-  // rate for, and both read zero.
+  // proposeSlotTaken is the ordinary result of proposeIfEmpty losing a race, and reads
+  // zero until one happens. proposalsRejected is never incremented: the oracle does not
+  // count committee rejections (a rejection is the ScoreRejected event on
+  // SigvaraReputation), and the series stays 0 so dashboards that read it keep working.
   proposeSlotTaken: 0,
   proposalsRejected: 0,
 };
@@ -246,7 +247,7 @@ function toPrometheusText(extra = {}) {
   lines.push(`sigvara_oracle_checker_deferred_total{action="propose"} ${counters.checkerDeferredPropose}`);
 
   lines.push('');
-  lines.push('# HELP sigvara_oracle_proposals_rejected_total Proposals rejected by the slashing committee');
+  lines.push('# HELP sigvara_oracle_proposals_rejected_total Always 0: the oracle does not count committee rejections. A rejection is the ScoreRejected event on SigvaraReputation');
   lines.push('# TYPE sigvara_oracle_proposals_rejected_total counter');
   lines.push(`sigvara_oracle_proposals_rejected_total ${counters.proposalsRejected}`);
 
