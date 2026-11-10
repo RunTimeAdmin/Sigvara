@@ -209,7 +209,7 @@ Also exposed, and worth knowing about:
 | `sigvara_oracle_checker_comparisons_total{verdict}` | how many pending scores this checker re-measured, and how many it disagreed with. Zero on a primary, which never compares. Beside it, `sigvara_oracle_checker_deferred_total{action}` counts the finalizes and empty slots it left to the primary inside `CHECKER_GRACE_MINUTES`. |
 | `sigvara_oracle_propose_total{result="slot_taken"}` | `proposeIfEmpty` declining to overwrite a pending score. A normal race outcome, not a failure. |
 | `sigvara_oracle_propose_attempts_total`, `..._finalize_attempts_total` | attempts, so success + error + slot_taken can be reconciled rather than assumed to account for everything. |
-| `sigvara_oracle_proposals_rejected_total` | scores the slashing committee rejected. |
+| `sigvara_oracle_proposals_rejected_total` | always 0: the oracle does not count committee rejections. A rejection is the `ScoreRejected` event on `SigvaraReputation`. The series is kept so dashboards that read it do not break. |
 | `sigvara_oracle_proposals_stranded_total` | pending proposals whose proposer had lost its authority (its operator removed or exited, its signer cleared, or its `ORACLE_ROLE` revoked), so the contract would not finalize them. The primary replaces one with a fresh proposal; a checker takes over from it. Nonzero after a key rotation is expected; nonzero otherwise means an operator was removed with proposals in flight. |
 | `sigvara_oracle_fee_charges_total{result="already_paid"}` | agents the epoch fee was not taken from a second time, because the contract had already charged them in the same calendar epoch (an earlier run of this oracle, or anyone else). Scoring carried on. |
 | `sigvara_oracle_evidence_cache_total{result}` | `/evidence` responses served from cache against rebuilt. A miss hashes a Merkle tree over the agent's whole payment history and derives every proof, so the hit rate is the difference between a cheap endpoint and an expensive one. |
@@ -1308,7 +1308,7 @@ cd oracle
 node --test
 ```
 
-1443 tests (as of 10 November 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
+1444 tests (as of 10 November 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
 the trust weighting, Merkle evidence trees, HTTP helpers, store persistence and recovery,
 the streamed state file, chain access with backoff, scan checkpointing, fee caps and transaction replacement,
 metrics, and cooldown logic. Several of the files run the real `index.js` and `watcher.js`
