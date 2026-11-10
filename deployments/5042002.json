@@ -104,7 +104,7 @@
         {
           "implementation": "0x3073E91150Cad7A7AcF013CA0342C4901aB17d1d",
           "replacedAt": "2026-11-10T14:25:06.396Z",
-          "note": "the 44ff8e8 staking build, live from block 71720600 until the rollback in block 71720997 (tx 0xfd2cc808ec6085dc165b9b0b6ee3e49364e0e8bda788c268f3a8f7889085704e). It refuses an admin as a slash victim, which the slash drill names, so staking takes this code only after the drill ends on 24 November"
+          "note": "the 44ff8e8 staking build, live from block 71720600 until the rollback in block 71720997 (tx 0xfd2cc808ec6085dc165b9b0b6ee3e49364e0e8bda788c268f3a8f7889085704e). Staking's changes wait for the slash drill to end, so that the drill runs on the code it started on; staking takes this code after 24 November"
         }
       ],
       "recordedAt": "2026-11-10T14:25:06.396Z",
