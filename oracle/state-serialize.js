@@ -15,6 +15,10 @@ const DEFAULT_PIECE_CHARS = 1 << 20;
 
 // Written one entry at a time. These are the sections that grow with the number of agents.
 const KEYED = new Set(['attestations', 'flags', 'links', 'attestCooldowns', 'paymentEvents', 'divergences']);
+// And these, whose growing map is one level down: funder-scan.js keeps { wallets: { <address>: ... } }.
+const KEYED_WITHIN = new Map([['funderScanState', 'wallets']]);
+
+const isMap = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
 // A top-level array is written in slices this long. usedPaymentTxs is one entry per credited payment, so it is the
 // longest list in the file.
@@ -33,6 +37,19 @@ function* stateChunks(state, { pieceChars = DEFAULT_PIECE_CHARS } = {}) {
     if (piece.length >= pieceChars) { ready.push(piece); piece = ''; }
   };
   function* drain() { while (ready.length) yield ready.shift(); }
+  // A map, one entry at a time.
+  function* entries(map) {
+    put('{');
+    let firstEntry = true;
+    for (const [k, v] of Object.entries(map)) {
+      const text = JSON.stringify(v);
+      if (text === undefined) continue;
+      put((firstEntry ? '' : ',') + JSON.stringify(k) + ':' + text);
+      firstEntry = false;
+      yield* drain();
+    }
+    put('}');
+  }
 
   let first = true;
   for (const key of Object.keys(state)) {
@@ -42,15 +59,21 @@ function* stateChunks(state, { pieceChars = DEFAULT_PIECE_CHARS } = {}) {
     put((first ? '' : ',') + JSON.stringify(key) + ':');
     first = false;
 
-    if (KEYED.has(key) && value !== null && typeof value === 'object' && !Array.isArray(value)) {
+    if (KEYED.has(key) && isMap(value)) {
+      yield* entries(value);
+    } else if (KEYED_WITHIN.has(key) && isMap(value)) {
       put('{');
-      let firstEntry = true;
+      let firstPart = true;
       for (const [k, v] of Object.entries(value)) {
-        const text = JSON.stringify(v);
-        if (text === undefined) continue;
-        put((firstEntry ? '' : ',') + JSON.stringify(k) + ':' + text);
-        firstEntry = false;
-        yield* drain();
+        if (k === KEYED_WITHIN.get(key) && isMap(v)) {
+          put((firstPart ? '' : ',') + JSON.stringify(k) + ':');
+          yield* entries(v);
+        } else {
+          const text = JSON.stringify(v);
+          if (text === undefined) continue;
+          put((firstPart ? '' : ',') + JSON.stringify(k) + ':' + text);
+        }
+        firstPart = false;
       }
       put('}');
     } else if (Array.isArray(value) && value.length > SLICE) {
