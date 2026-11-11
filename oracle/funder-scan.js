@@ -18,6 +18,14 @@
 //
 // The answer depends only on the chain up to the block asked about, so two operators that have both
 // read that far agree, however much further either has read.
+//
+// What has been read is kept for WALLETS_KEPT wallets. Past that, readWanted drops the ones
+// asked about longest ago. A dropped wallet answers UNREAD, so it is read again if it is asked about,
+// and its agent waits for that read as it waits for any reviewer not read yet: what one operator has
+// dropped can make it wait, never disagree with the other. A wallet asked about in the last IN_USE_MS
+// is not dropped, even past the bound. An agent's reviewers are asked about when a day's snapshot is
+// first scored (index.js externalScoreOf), so a shorter memory would drop the wallets of agents still
+// being scored and hold each of them every day while they are read again from block 0.
 
 const { readSplitting } = require('./log-spans');
 
@@ -26,6 +34,11 @@ const { readSplitting } = require('./log-spans');
 const SPAN_BLOCKS = 10_000;
 
 const UNREAD = 'unread';
+
+// About 1.5 MB of state file. Every wallet asked about passed reviewers.js's standing checks first (a
+// bonded agent, its operator, or a funder of either), so this is room for some 2,500 reviewers.
+const WALLETS_KEPT = 10_000;
+const IN_USE_MS = 7 * 86_400_000;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -45,19 +58,21 @@ function usableEntry(e) {
   if (!e || typeof e !== 'object' || !Number.isInteger(e.through) || e.through < -1) return null;
   if (e.funder !== undefined && !(/^0x[0-9a-f]{40}$/.test(e.funder) && Number.isInteger(e.block) && e.block <= e.through)) return null;
   if (e.want !== undefined && !Number.isInteger(e.want)) return null;
+  if (e.asked !== undefined && !Number.isFinite(e.asked)) return null;
   return e;
 }
 
 /**
- * A reader over one state, { wallets: { <address>: { through, funder?, block?, want? } } }: the last
- * block whose transfers in have been read (-1 before any), the first funding once found, and the
- * furthest block asked about and not yet read. Wallets are read in the order they were first asked about.
+ * A reader over one state, { wallets: { <address>: { through, funder?, block?, want?, asked } } }: the
+ * last block whose transfers in have been read (-1 before any), the first funding once found, the
+ * furthest block asked about and not yet read, and when it was last asked about by `now()`, in ms.
+ * Wallets are read in the order they were first asked about.
  *
  * `readIn(address, from, to)` answers the transfers into `address` in blocks [from, to] as
  * [{ from, value, blockNumber, logIndex }], `from` lowercased and `value` a BigInt, and throws when the
  * node cannot answer. `floor` is reviewers.FUNDING_FLOOR.
  */
-function createFunderReader({ readIn, floor, wait = sleep }) {
+function createFunderReader({ readIn, floor, wait = sleep, now = Date.now }) {
   let state = { wallets: {} };
 
   /** { funder, block } for `address` by block `cap`, null when nothing in by then names one, or UNREAD. */
@@ -69,16 +84,32 @@ function createFunderReader({ readIn, floor, wait = sleep }) {
 
   /**
    * Who first funded `address` by block `cap`, as answer() says. Asked about a block not read yet, it
-   * notes the wallet for readWanted and answers UNREAD. It never reads, so asking costs nothing.
+   * notes the wallet for readWanted and answers UNREAD. It never reads, so asking costs nothing. Either
+   * way it notes when, which keeps the wallet (dropIdle).
    */
   async function funderOf(address, cap) {
-    const found = answer(address, cap);
-    if (found !== UNREAD) return found;
     const key = String(address).toLowerCase();
+    const found = answer(key, cap);
     // In place: readWanted may hold this entry while it reads.
     const e = state.wallets[key] ?? (state.wallets[key] = { through: -1 });
+    e.asked = now();
+    if (found !== UNREAD) return found;
     e.want = Math.max(e.want ?? -1, cap);
     return UNREAD;
+  }
+
+  /**
+   * Past WALLETS_KEPT wallets read, drops the ones asked about longest ago, by address where that is
+   * the same, until the bound is met. Never one still to be read, nor one asked about in IN_USE_MS.
+   */
+  function dropIdle() {
+    const done = Object.keys(state.wallets).filter((a) => state.wallets[a].want === undefined);
+    if (done.length <= WALLETS_KEPT) return;
+    const since = now() - IN_USE_MS;
+    const idle = done
+      .filter((a) => state.wallets[a].asked < since)
+      .sort((a, b) => (state.wallets[a].asked - state.wallets[b].asked) || (a < b ? -1 : 1));
+    for (const a of idle.slice(0, done.length - WALLETS_KEPT)) delete state.wallets[a];
   }
 
   /**
@@ -86,6 +117,7 @@ function createFunderReader({ readIn, floor, wait = sleep }) {
    * or its funding is found, or `maxReads` reads have been made, or this host's clock passes `deadline`.
    * `paceMs` between reads. A read that fails stops it, keeping what was read before. Returns
    * { reads, left, error }: the reads made, the wallets still to read, and the failure if there was one.
+   * Then holds the cache to its bound (dropIdle).
    */
   async function readWanted({ maxReads = Infinity, deadline = Infinity, paceMs = 0 } = {}) {
     let reads = 0;
@@ -111,6 +143,8 @@ function createFunderReader({ readIn, floor, wait = sleep }) {
       }
     } catch (error) {
       return { reads, left: left(), error };
+    } finally {
+      dropIdle();
     }
     return { reads, left: left(), error: null };
   }
@@ -118,11 +152,14 @@ function createFunderReader({ readIn, floor, wait = sleep }) {
   /** The state, to keep in the state file. The live object, so a save at any time holds what was read. */
   function getState() { return state; }
 
-  /** Takes up a kept state. An entry this reader did not write is dropped, and that wallet is read again. */
+  /**
+   * Takes up a kept state. An entry this reader did not write is dropped, and that wallet is read again.
+   * One kept by a build before the bound has no time asked, and counts as asked now.
+   */
   function restore(kept) {
     const wallets = {};
     for (const [address, e] of Object.entries(kept?.wallets ?? {})) {
-      if (/^0x[0-9a-f]{40}$/.test(address) && usableEntry(e)) wallets[address] = e;
+      if (/^0x[0-9a-f]{40}$/.test(address) && usableEntry(e)) wallets[address] = Object.assign(e, { asked: e.asked ?? now() });
     }
     state = { wallets };
   }
@@ -130,4 +167,4 @@ function createFunderReader({ readIn, floor, wait = sleep }) {
   return { funderOf, readWanted, getState, restore };
 }
 
-module.exports = { createFunderReader, firstFunding, UNREAD, SPAN_BLOCKS };
+module.exports = { createFunderReader, firstFunding, UNREAD, SPAN_BLOCKS, WALLETS_KEPT, IN_USE_MS };

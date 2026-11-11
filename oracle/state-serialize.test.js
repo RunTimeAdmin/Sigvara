@@ -24,6 +24,10 @@ function sampleState(over = {}) {
     divergences: {},
     scanState: { lastScannedBlock: 123, agents: [{ didHash: '0xaa' }] },
     paymentScanState: null,
+    funderScanState: { wallets: {
+      ['0x' + '33'.repeat(20)]: { through: 99, funder: '0x' + '44'.repeat(20), block: 5, asked: 1700000000000 },
+      ['0x' + '55'.repeat(20)]: { through: -1, asked: 1700000000001, want: 100 },
+    } },
     savedAt: '2026-10-22T00:00:00.000Z',
     ...over,
   };
@@ -58,6 +62,9 @@ test('stateChunks: empty and missing sections come out as JSON.stringify writes 
     { attestations: null, flags: [], links: 'text' },
     { usedPaymentTxs: Array.from({ length: 5000 }, (_, i) => i) },
     { usedPaymentTxs: [undefined, null, 1, 'a'] },
+    { funderScanState: { gone: undefined, wallets: {}, n: null } },
+    { funderScanState: { wallets: [1] } },
+    { funderScanState: null },
   ];
   for (const state of cases) assert.equal(join(state, { pieceChars: 5 }), JSON.stringify(state), JSON.stringify(state));
 });

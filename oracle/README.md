@@ -973,7 +973,7 @@ and then its silence means nothing. The slash keeper (`keeper.js`) has its own s
 | `FEE_REGISTRY_ADDRESS` | (empty) | SigvaraEpochFees address for fee-gated scoring |
 | `EXTERNAL_RPC` | (empty) | RPC for ERC-8004 external score lookups |
 | `EXTERNAL_IDENTITY_ADDRESS` | (empty) | ERC-8004 Identity contract. `EXTERNAL_LINK_FROM_BLOCK` (empty: off) is the block its scan for links made on chain, under the `sigvara` metadata key, starts from; every operator must set the same block, the registry must be on this chain, and the RPC must serve state at blocks back to it |
-| `EXTERNAL_REPUTATION_ADDRESS` | (empty) | ERC-8004 Reputation contract. Its feedback counts only from reviewers `reviewers.js` accepts; `EXTERNAL_PUBLIC_FUNDERS` lists wallets that fund everyone (a faucet, an exchange), which end a funding trace instead of joining every reviewer they funded. Who funded a reviewer is read from block 0, up to 1,000 reads an epoch and kept in the state file; until it is read, the reviewer does not count and its agent is not proposed |
+| `EXTERNAL_REPUTATION_ADDRESS` | (empty) | ERC-8004 Reputation contract. Its feedback counts only from reviewers `reviewers.js` accepts; `EXTERNAL_PUBLIC_FUNDERS` lists wallets that fund everyone (a faucet, an exchange), which end a funding trace instead of joining every reviewer they funded. Who funded a reviewer is read from block 0, up to 1,000 reads an epoch, and kept in the state file for 10,000 wallets (`funder-scan.js`): past that, the wallets asked about longest ago are dropped and read again if asked, but never one asked about in the last 7 days. Until it is read, the reviewer does not count and its agent is not proposed |
 
 ### Transactions and the clock
 
@@ -1308,7 +1308,7 @@ cd oracle
 node --test
 ```
 
-1450 tests (as of 10 November 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
+1452 tests (as of 10 November 2026) covering scoring formulas, payment verification and decay, payer-signed outcomes, per-payer caps and
 the trust weighting, Merkle evidence trees, HTTP helpers, store persistence and recovery,
 the streamed state file, chain access with backoff, scan checkpointing, fee caps and transaction replacement,
 metrics, and cooldown logic. Several of the files run the real `index.js` and `watcher.js`
