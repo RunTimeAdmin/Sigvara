@@ -30,6 +30,10 @@ const NUMERIC = [
   ['PAYMENT_HALF_LIFE_DAYS', 'num', 0],
   ['PAYMENT_MAX_PER_PAYER', 'int', 0],
   ['PAYMENT_TRUST_WEIGHT', 'num', 0, 10],
+  // The payment ledger's caps (store.js). Extrapolating state-serialize.js's measurements, a save of 500,000 events
+  // peaks near 550 MB, inside the 768 MB the mainnet compose file allows.
+  ['PAYMENT_MAX_EVENTS_PER_AGENT', 'int', 1, 500_000],
+  ['PAYMENT_MAX_EVENTS_TOTAL', 'int', 1, 500_000],
   ['PAYMENT_SCAN_FROM_BLOCK', 'int', 0],
   ['PAYMENT_SCAN_CHUNK', 'int', 1],
   ['PAYMENT_SCAN_CONFIRMATIONS', 'int', 0],

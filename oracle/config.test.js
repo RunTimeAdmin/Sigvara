@@ -72,6 +72,18 @@ test('checkNumericConfig: the settings that used to fail open are refused', () =
   }
 });
 
+test('checkNumericConfig: a payment ledger cap that would turn itself off is refused', () => {
+  // NaN and Infinity compare false, so either cap stopped bounding anything; 0, a negative or a fraction is no cap.
+  for (const name of ['PAYMENT_MAX_EVENTS_PER_AGENT', 'PAYMENT_MAX_EVENTS_TOTAL']) {
+    for (const value of ['not-a-number', 'Infinity', '0', '-5', '2.5', '1e9']) {
+      const problems = checkNumericConfig({ [name]: value });
+      assert.equal(problems.length, 1, `${name}=${value} was accepted`);
+      assert.ok(problems[0].startsWith(`${name}=`), problems[0]);
+    }
+  }
+  assert.deepEqual(checkNumericConfig({ PAYMENT_MAX_EVENTS_PER_AGENT: '25000', PAYMENT_MAX_EVENTS_TOTAL: '150000' }), []);
+});
+
 test('checkNumericConfig: every problem is listed, not just the first', () => {
   const problems = checkNumericConfig({ PAYMENT_MAX_PER_PAYER: 'four', FROM_BLOCK: 'latest', PORT: '3030' });
   assert.equal(problems.length, 2);
