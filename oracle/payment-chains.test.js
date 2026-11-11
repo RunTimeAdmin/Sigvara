@@ -292,7 +292,7 @@ function deps(over = {}) {
       agents: [],
       state: null,
       isCredited: () => false,
-      credit: (c, ts) => { credited.push({ ...c, ts }); return true; },
+      creditAll: (list) => list.map(({ credit: c, ts }) => { credited.push({ ...c, ts }); return true; }),
       registeredAtMs: async () => 0,
       knownOnChain: new Map(),
       read: (_label, fn) => fn(),
