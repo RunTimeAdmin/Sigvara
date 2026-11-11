@@ -1,5 +1,5 @@
 {
-  "note": "Every address Sigvara's testnet simulation controls. Activity from these is simulated, not outside demand. See docs/simulation.md.",
+  "note": "Every address Sigvara's testnet simulation controls, in both batches. Activity from these is simulated, not outside demand. See docs/simulation.md.",
   "chainId": 5042002,
   "seed": "sigvara-testnet-sim-1",
   "treasury": "0x27772010eeD857712d44305Ba2c3884dBf945102",
@@ -27,6 +27,46 @@
     {
       "name": "ring",
       "address": "0x6651F74e4c3D18024c1f2830D51F183730af393B"
+    },
+    {
+      "name": "base-a",
+      "address": "0xc822c62643C2654A57CaDbe6077A2ebF51fA453B",
+      "batch": 2
+    },
+    {
+      "name": "dual",
+      "address": "0x03784CF63b010Cc885A6C50f628BEDFB99Df689C",
+      "batch": 2
+    },
+    {
+      "name": "handover",
+      "address": "0xf89D0bb64646B1EDfE648955173C60BeD51d74c4",
+      "batch": 2
+    },
+    {
+      "name": "handover-new",
+      "address": "0x98956CBCFa08D040B297e14aa21E7B4aA2dFe7Ee",
+      "batch": 2
+    },
+    {
+      "name": "bonding",
+      "address": "0xE2c7dA675D8CfBb04cCD77C426F3B3B80354F528",
+      "batch": 2
+    },
+    {
+      "name": "burst",
+      "address": "0xB2B6161ae0ecD287ab622631c51Fb94691caD829",
+      "batch": 2
+    },
+    {
+      "name": "reviewed",
+      "address": "0xc6358BdC78cCd5144F7d39bc38e51636D6D2c2DA",
+      "batch": 2
+    },
+    {
+      "name": "ring2",
+      "address": "0xA7EBD4392A4540f638A113136daeffC1Bb3a0165",
+      "batch": 2
     }
   ],
   "agents": [
@@ -169,6 +209,182 @@
       "profile": "ring",
       "day": 3,
       "operator": "ring"
+    },
+    {
+      "address": "0x6aEE44ef9FE2E1971acB1FE4B04bAb59867b170B",
+      "didHash": "0xde7ba7c1c5bf0fe487814215a0f0af9c287bb99b9c461a37d3176112960d9e4f",
+      "profile": "base",
+      "day": 0,
+      "operator": "base-a",
+      "batch": 2
+    },
+    {
+      "address": "0x8fE6Aa0Cca6118C0243d17fa2660bF48EDc10022",
+      "didHash": "0xbd3f12b8ff8369402428f0f6b000267ff3b71bcfe3ec4854a8671d251b96e7d5",
+      "profile": "base",
+      "day": 0,
+      "operator": "base-a",
+      "batch": 2
+    },
+    {
+      "address": "0xb603E0f6B296b57c743Ea130Ded03c78A3Ae9627",
+      "didHash": "0xc5f542b531d38eedd44c6c3d5563a1fb7475d5b8cc6d068d00f7dbb759e98713",
+      "profile": "base",
+      "day": 0,
+      "operator": "base-a",
+      "batch": 2
+    },
+    {
+      "address": "0xDae8d554e4bb3588771CF8Cb93EC7cF04F3D0E7a",
+      "didHash": "0xacb04491711425f1e196cecd3de997d49a813c36064156a398e9d24645a93705",
+      "profile": "dual",
+      "day": 0,
+      "operator": "dual",
+      "batch": 2
+    },
+    {
+      "address": "0xe8b0E99F021d8165b1Ec030d63F10Ed1F0452B76",
+      "didHash": "0xd22c7d6c49e3aee2ede769c3aa9869d3578353429678d648bea08f088753fa66",
+      "profile": "dual",
+      "day": 0,
+      "operator": "dual",
+      "batch": 2
+    },
+    {
+      "address": "0x78A11055459787e6b932bA39D032ed62C384d134",
+      "didHash": "0x1bb0c08df62d5bf44fb3f6933bb5f17059d6fcbe77e35dcd3d9b9528c8ccbe92",
+      "profile": "dual",
+      "day": 0,
+      "operator": "dual",
+      "batch": 2
+    },
+    {
+      "address": "0x67455dDd6223f1B9bDC814B7A9B57ed81f47a3C5",
+      "didHash": "0xdccd1d273855e569fc29bee29430fe93a95177c8c320fdc3289c148bc024b3dd",
+      "profile": "handover",
+      "day": 0,
+      "operator": "handover",
+      "batch": 2
+    },
+    {
+      "address": "0xf2680f3709Ec43CCaF62bEAB9278020D718B607d",
+      "didHash": "0x8d44da486b2047b256db1172717f144643c53197fd78a4b155c4788bccde6d35",
+      "profile": "bonding",
+      "day": 0,
+      "operator": "bonding",
+      "batch": 2
+    },
+    {
+      "address": "0x6B374667F0cdEBA17B2305341dd1b4A27D33402F",
+      "didHash": "0xae37e2617356ebb5145a33a82813377024ab572ea953a602dea35dc96612eb21",
+      "profile": "burst",
+      "day": 2,
+      "operator": "burst",
+      "batch": 2
+    },
+    {
+      "address": "0xC491B4D2F6c736Ec2c60E9BC66a7b2c48ebE789E",
+      "didHash": "0x910e8e9aa4321a07f4320c43efbfeee90613aeee38d4fa40206622aa0f07ed50",
+      "profile": "burst",
+      "day": 2,
+      "operator": "burst",
+      "batch": 2
+    },
+    {
+      "address": "0xfE66BdE20d88db0094846486D1Acef36524c57E6",
+      "didHash": "0x1c54d4bfaca4852f28fa60f6d29f2d7f1842e57dbab21284c1eff85c56c794ff",
+      "profile": "burst",
+      "day": 2,
+      "operator": "burst",
+      "batch": 2
+    },
+    {
+      "address": "0x9Ae60D1CF36C56e8275Bf97bBa600d465ea23a36",
+      "didHash": "0x6b6ef0a6fa0e0ef33f5f35a27e626ae5f5c75bc914885bf36e72106d21695929",
+      "profile": "burst",
+      "day": 2,
+      "operator": "burst",
+      "batch": 2
+    },
+    {
+      "address": "0x289D52FFFd278AdFC4E36743840dd534c083a4c9",
+      "didHash": "0x0bcadbac0a9c6dd44213baa83bffa5ac0fda935131d12ccb8e49c7af5f8b634d",
+      "profile": "burst",
+      "day": 2,
+      "operator": "burst",
+      "batch": 2
+    },
+    {
+      "address": "0x9DaFe2d063bAdea1c1dBdF751C8A415eAEAFCa84",
+      "didHash": "0x204ea3c536a4feef61084c2d5d3d568cec0d5257d943616cbbfd3b7b1002a508",
+      "profile": "burst",
+      "day": 2,
+      "operator": "burst",
+      "batch": 2
+    },
+    {
+      "address": "0xDd8c652b44FB0910A6a9ab5fDa7C32f25f2CB7E2",
+      "didHash": "0xa209611639caa986d0e7c9b5fb8ff8dc801a8f5329210d387b1417575782f53d",
+      "profile": "burst",
+      "day": 2,
+      "operator": "burst",
+      "batch": 2
+    },
+    {
+      "address": "0xaC55003142e726de0d7d2A209a3d5C05f937F4c2",
+      "didHash": "0x7d268db521632235d3daab87f6bda6a815e5fdd8d895626a570d691310983842",
+      "profile": "burst",
+      "day": 2,
+      "operator": "burst",
+      "batch": 2
+    },
+    {
+      "address": "0xC7DeF0a85077c33aC3c49dCB58A9BbE845cc3be1",
+      "didHash": "0xcb5e59bf23b3ab57a9731802696b43d1cefab5321a499dc1b5092f05f0375b79",
+      "profile": "reviewed",
+      "day": 0,
+      "operator": "reviewed",
+      "batch": 2
+    },
+    {
+      "address": "0x8fE78dCaD6b5401AaF276d9c12623991B3E35Dc6",
+      "didHash": "0x99e50fc6af7d9f72141f6445cb8e707d407a122921eeea07ab82962f0805e9ae",
+      "profile": "reviewed",
+      "day": 0,
+      "operator": "reviewed",
+      "batch": 2
+    },
+    {
+      "address": "0xf3BE8FABa2F1076e8B157910644bcbC702082320",
+      "didHash": "0xd153828a3c0403d61f6d1f5546030fcdc7d46820b708852f7a5d9992dd3a544a",
+      "profile": "reviewed",
+      "day": 0,
+      "operator": "reviewed",
+      "batch": 2
+    },
+    {
+      "address": "0x51BA0Bd07533116f7294AE61A935a9baFDB40E9B",
+      "didHash": "0xe48eb64daad581344b14d44fbd61479b9c52c3cf082b8d5c774c8f10069b1a97",
+      "profile": "ring2",
+      "day": 3,
+      "operator": "ring2",
+      "batch": 2
+    },
+    {
+      "address": "0x9888E0CB2f862C70be3dA5848283Fef7128a82Db",
+      "didHash": "0x4c7945d7bc40700e6a2d00fd8d06a73621bfa159e690e0f2909bab5ab9269110",
+      "profile": "ring2",
+      "day": 3,
+      "operator": "ring2",
+      "batch": 2
+    },
+    {
+      "address": "0x7366F4846A6e80D774CeA9216025D29AB5c55fa3",
+      "didHash": "0xe8ba5bc3d68f5295ec61e3cbe7a332e8af98643ab4cb973301223300ec2bd8c1",
+      "profile": "ring2",
+      "day": 3,
+      "operator": "ring2",
+      "batch": 2
     }
   ],
   "payers": [
@@ -211,7 +427,25 @@
     "0xa5680D22074A9114c0ACDE36CF8C7e36e68CBD54",
     "0x2A43174986b2dABAedeE5Cc0c7fFFe5A6b6E5658",
     "0xd0c7562dAE0A6F67A11063B582cC0cf499D3C465",
-    "0x584538593760A0d29bCF5410fAF006d47Cdd4d2b"
+    "0x584538593760A0d29bCF5410fAF006d47Cdd4d2b",
+    "0x5eb80edc867778726e646A248612Ee4CF6c6c69b",
+    "0x01CdD947D9e64750F55B2a965af664c209526831",
+    "0xb7D803031355d2871d804f194d93948494BB253f",
+    "0x869488BC17012E33367c1c8F4318A9D077740BcA",
+    "0xD49aBC6c326498B2A345720Ec8d62406BE0E4451",
+    "0xFBfe4479C554f6279f46c4bD422f4b91C0eF2968",
+    "0x2aFE6b0c8b6C393062f0e37E34DcfdD0B02CE2Ac",
+    "0x8981faa482c885dB93d62F2897073e5e430F3D6d",
+    "0xF50c40Fc641D9da71115f05AFEd49B5934469dF3",
+    "0xa842DbD35c2CDA53B8d9DD938DD54E4153a39caE",
+    "0xc5bf81A171cC7159E45DeC3EfadF8e12F5C93A25",
+    "0xA8B2e78281cf9602C8ebfBb1A4cF4C64418e3854",
+    "0x45a4c5d19a99bf559F8A2B7E94A5390A28bFe5D1",
+    "0x0731E98fe4Ca12360a7167Fd1D540e348921FE6C",
+    "0xC6d1afF5B7088c1fcF7315CE81B9A3088Ad299eA",
+    "0x54881A6380c4666A4aa99872a022855896800f79",
+    "0x7FE6Bdc195D3C4d83f55d04A139a9650069B64Ad",
+    "0x1984Ddead4869AD8FBb352877858b864c1CA1e70"
   ],
   "ringPayers": [
     "0x85A6A22230EBD11bb86F7F5F495F4Fb0453fa2d0",
@@ -219,7 +453,67 @@
     "0xDaB5dD9E4BBf2b5f1E6E109245b25392319B865b",
     "0xe48D411188cd8e036E761a5dd06E19AE5585D018",
     "0x14f775150D0E703057A2F3ee78Dd5D557028107A",
-    "0xDC225DD44a250713aD523d5a9E20B3C10f15FC79"
+    "0xDC225DD44a250713aD523d5a9E20B3C10f15FC79",
+    "0x1D33Dfc6577A457F401e0fFF9B6f82e7eBB628A3",
+    "0x0e15C51BDadAC611B66bD80f577cB1CF30368520",
+    "0xd148437Bc58A52dCaC37C26054c226841f46a2D2",
+    "0x89a88eCeFE4e43538A9bA8C84917d76228180744",
+    "0x48C83ea012e9BeA93999C8F3197B1B388857DA77",
+    "0x060f1f7F50aba7435905f6E7C4B6d4480E9840A1"
   ],
-  "ringOperator": "0x6651F74e4c3D18024c1f2830D51F183730af393B"
+  "ringOperator": "0x6651F74e4c3D18024c1f2830D51F183730af393B",
+  "wallets": [
+    {
+      "address": "0x9a15817cFf3907e55073501F1FDdE141e508C7Af",
+      "role": "treasury (batch 2)"
+    },
+    {
+      "address": "0x690FdF47579D11Dd2b50860354cE699c99b814AC",
+      "role": "ring 2 hub"
+    }
+  ],
+  "batch2": {
+    "seed": "sigvara-testnet-sim-2",
+    "chainIds": [
+      5042002,
+      84532
+    ],
+    "basePayers": [
+      "0xc5bf81A171cC7159E45DeC3EfadF8e12F5C93A25",
+      "0xA8B2e78281cf9602C8ebfBb1A4cF4C64418e3854",
+      "0x45a4c5d19a99bf559F8A2B7E94A5390A28bFe5D1",
+      "0x0731E98fe4Ca12360a7167Fd1D540e348921FE6C",
+      "0xC6d1afF5B7088c1fcF7315CE81B9A3088Ad299eA",
+      "0x54881A6380c4666A4aa99872a022855896800f79",
+      "0x7FE6Bdc195D3C4d83f55d04A139a9650069B64Ad",
+      "0x1984Ddead4869AD8FBb352877858b864c1CA1e70"
+    ],
+    "ringOperator": "0xA7EBD4392A4540f638A113136daeffC1Bb3a0165",
+    "reviewers": [
+      {
+        "address": "0x27751d91B4c718046d954072a8B52b92b9D621b5",
+        "funder": "batch 2 treasury"
+      },
+      {
+        "address": "0x63Ed853B55Ac325870598d29f95276194c3EE7C8",
+        "funder": "batch 2 treasury"
+      },
+      {
+        "address": "0xEEaE5a390EE60Caf24A4c649EC19b86A4f96fC93",
+        "funder": "batch 2 treasury"
+      },
+      {
+        "address": "0x540CB6bc038789F97789bdfD54f60DD7ADd202f9",
+        "funder": "batch 2 treasury"
+      },
+      {
+        "address": "0xa622d0f442Ce9fbBBdAc2DEfcB3D5b1b238E8c3e",
+        "funder": "batch 2 treasury"
+      },
+      {
+        "address": "0x643A7f4CeD7bC6eB26950f0042f0FCf0CD6a1ff2",
+        "funder": "reviewed operator"
+      }
+    ]
+  }
 }

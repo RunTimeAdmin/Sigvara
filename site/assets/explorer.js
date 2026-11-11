@@ -206,6 +206,7 @@
       for (const o of Array.isArray(j?.operators) ? j.operators : []) put(o?.address, `operator ${String(o?.name ?? "")}`.trim());
       for (const p of Array.isArray(j?.payers) ? j.payers : []) put(p, "customer");
       for (const p of Array.isArray(j?.ringPayers) ? j.ringPayers : []) put(p, "ring customer");
+      for (const x of Array.isArray(j?.wallets) ? j.wallets : []) put(x?.address, String(x?.role ?? "simulation wallet"));
       for (const a of Array.isArray(j?.agents) ? j.agents : []) {
         if (isAddr(a?.address)) agents.set(a.address.toLowerCase(), String(a.profile ?? "agent"));
       }
