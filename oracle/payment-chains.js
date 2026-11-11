@@ -43,11 +43,14 @@
  * orders too.
  */
 
+const http = require('http');
+const https = require('https');
 const net = require('net');
+const zlib = require('zlib');
 const { ethers } = require('ethers');
 const payments = require('./payments');
 const paymentScan = require('./payment-scan');
-const { spanRefused } = require('./log-spans');
+const { spanRefused, readAnswer } = require('./log-spans');
 
 const DEFAULT_DELAY_SECONDS = 3600;
 // Longer than Base Sepolia's finality lag (about 17 minutes, measured 3 November 2026) with room to
@@ -68,6 +71,13 @@ const DEFAULT_MAX_READS = 1_000;
 // scoring, and each read is tried four times, so ethers' default of 5 minutes would let one hung
 // endpoint hold an epoch for 20 minutes. At 30 seconds it costs about 2.
 const RPC_TIMEOUT_MS = 30_000;
+// The most one answer may hold, unzipped, and the most logs one getLogs may. Past either the read fails before
+// anything in it is used, as one the endpoint refused for its size does, so a log read is asked for in halves
+// (log-spans.js) and any other read fails. Measured on Base Sepolia on 10 November 2026: 200 blocks of every
+// USDC transfer, not only the agents', were 31 logs in 21 KB, about 670 bytes a log, and a finalized block was
+// 2 KB. So 10,000 logs come to about 7 MB, inside the byte limit, and Elysium's public RPC refuses more itself.
+const MAX_ANSWER_BYTES = 8 * 1024 * 1024;
+const MAX_LOGS = 10_000;
 const MODES = ['shadow', 'on'];
 // A score's evidence is cut at a whole minute, one minute before the scoring operator's clock, so a
 // checker can find the cut from the proposal's time alone. It tries every whole minute in the half
@@ -194,7 +204,46 @@ function readConfig(env = process.env, { scoredChainId = null, paymentRequired =
 function providerFor(chain, timeoutMs = RPC_TIMEOUT_MS) {
   const request = new ethers.FetchRequest(chain.rpcUrl);
   request.timeout = timeoutMs;
+  request.getUrlFunc = cappedGetUrl;
   return new ethers.JsonRpcProvider(request, chain.chainId, { staticNetwork: true });
+}
+
+/**
+ * ethers' own Node transport (its createGetUrl), except that an answer is read only up to MAX_ANSWER_BYTES,
+ * before and after unzipping, and past that fails with readAnswer's error before ethers parses any of it.
+ * The provider's timeout still covers a socket gone quiet.
+ */
+function cappedGetUrl(req, signal) {
+  return new Promise((resolve, reject) => {
+    const protocol = req.url.split(':')[0].toLowerCase();
+    if (protocol !== 'http' && protocol !== 'https') {
+      reject(ethers.makeError(`unsupported protocol ${protocol}`, 'UNSUPPORTED_OPERATION', { operation: 'request' }));
+      return;
+    }
+    const request = (protocol === 'http' ? http : https).request(req.url, { method: req.method, headers: { ...req.headers } });
+    const fail = (err) => { request.destroy(); reject(err); };
+    request.setTimeout(req.timeout, () => fail(ethers.makeError('request timeout', 'TIMEOUT')));
+    if (signal) signal.addListener(() => fail(ethers.makeError('request cancelled', 'CANCELLED')));
+    request.on('error', reject);
+    request.once('response', async (res) => {
+      try {
+        const headers = {};
+        for (const [name, value] of Object.entries(res.headers)) headers[name] = Array.isArray(value) ? value.join(', ') : value || '';
+        let body = await readAnswer(res, MAX_ANSWER_BYTES);
+        if (headers['content-encoding'] === 'gzip' && body.length) body = await readAnswer(zlib.createGunzip().end(body), MAX_ANSWER_BYTES);
+        resolve({ statusCode: res.statusCode || 0, statusMessage: res.statusMessage || '', headers, body: body.length ? body : null });
+      } catch (err) {
+        fail(err);
+      }
+    });
+    request.end(req.body ? Buffer.from(req.body) : undefined);
+  });
+}
+
+/** `logs`, unless there are more than MAX_LOGS: refused as a span the endpoint refused would be, so the scan halves it. */
+function fewLogs(logs) {
+  if (logs.length > MAX_LOGS) throw Object.assign(new Error(`more than ${MAX_LOGS} logs in one answer`), { spanRefused: true });
+  return logs;
 }
 
 /**
@@ -507,7 +556,7 @@ async function scanChain(chain, deps) {
 
   const logs = await paymentScan.scanRange(
     {
-      readLogs: (filter) => read('payment chain getLogs', () => provider.getLogs(filter)),
+      readLogs: (filter) => read('payment chain getLogs', async () => fewLogs(await provider.getLogs(filter))),
       asset: chain.asset,
       paceMs: chain.paceMs,
       ...(deps.sleep ? { sleep: deps.sleep } : {}),

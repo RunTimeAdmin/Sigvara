@@ -42,6 +42,21 @@ function spanTooBig(err) {
 }
 
 /**
+ * An answer's body from its chunks (a fetch body or a Node stream), refused as a node refuses a span for
+ * its size once it passes `maxBytes`: nothing past that is read, and none of it is parsed.
+ */
+async function readAnswer(chunks, maxBytes) {
+  const out = [];
+  let size = 0;
+  for await (const chunk of chunks) {
+    size += chunk.length;
+    if (size > maxBytes) throw Object.assign(new Error(`an answer past ${maxBytes} bytes`), { spanRefused: true });
+    out.push(chunk);
+  }
+  return Buffer.concat(out);
+}
+
+/**
  * The logs of blocks [from, to] from `read(a, b)`, in block order, halving any span it refuses. A
  * single block it still refuses is thrown, and so is any other failure: there is nothing smaller to
  * ask for. `pause` runs before each smaller read, so a run of refusals keeps to the caller's pace.
@@ -61,4 +76,4 @@ async function readSplitting(read, from, to, { tooBig = spanRefused, pause = asy
   }
 }
 
-module.exports = { spanRefused, spanTooBig, readSplitting, wordsOf };
+module.exports = { spanRefused, spanTooBig, readAnswer, readSplitting, wordsOf };
