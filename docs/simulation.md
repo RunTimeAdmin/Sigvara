@@ -1,8 +1,8 @@
 # Testnet simulation
 
-**Status:** running since 2 November 2026, and it stops by itself on 30 November.
-[sigvara.xyz/simulation](https://sigvara.xyz/simulation) shows where it is, day by day, and
-[what changed during the run](#what-changed-during-the-run) is recorded below.
+**Status:** the first batch has run since 2 November 2026 and stops by itself on 30 November. A [second
+batch](#batch-2) runs beside it for 28 days from its first tick. [sigvara.xyz/simulation](https://sigvara.xyz/simulation)
+shows where each is, and [what changed during the run](#what-changed-during-the-run) is recorded below.
 
 When this was built, Sigvara on Arc testnet had three registered agents, two of them its own, and two oracle operators,
 both its own. Nothing outside depends on a score yet. A protocol with that little traffic cannot
@@ -58,10 +58,10 @@ victim's quarter returns to the simulation.
 It exercises registration, bonding, payment scanning, payer-signed outcomes, scoring, maturity,
 both operators' agreement, the explorer's evidence check, and a disputed and an undisputed slash.
 
-It does not exercise recorded failures (that needs `PAYER_OUTCOMES=both`), outcomes carried through
-CounterAudit, or agents that do real work. Those are the next phase, each needing an oracle
-configuration change. An ERC-8004 link and a Base payment have each been tried on one agent, by hand
-and beside the run, as the next section says.
+It does not exercise recorded failures (that needs `PAYER_OUTCOMES=both`) or agents that do real
+work. An ERC-8004 link and a Base payment were each tried on one agent, by hand and beside the run,
+as the next section says. The [second batch](#batch-2) drives Base payments, outcomes carried through
+CounterAudit and ERC-8004 reviews in volume.
 
 A score earned in the simulation measures the simulation. Read it as evidence the protocol works,
 never as evidence anyone wants it.
@@ -154,6 +154,102 @@ Before it, `sigvara_verify_evidence` reported this agent's served root as differ
 list at 03:13 UTC as one leaf of 61. In 1.0.0-alpha.17 that tool still fails on this agent, with `Could not
 read the chain`: it confirms up to 100 payments at a pace the public RPC refuses. 1.0.0-alpha.18 confirms them in one read through Multicall3. That says nothing about
 the agent.
+
+## Batch 2
+
+The first batch drives the path the protocol was built for. Since it started, more has gone live on
+testnet: payments on Base Sepolia, the rule that an operator's own payments never count after a change
+of operator, skipping agents that leave their bond, ERC-8004 reviewers whose funding is traced, and
+outcomes carried through CounterAudit. Each has carried a few payments made by hand, or none. The
+second batch runs them for 28 days, beside the first batch and on the same two operators.
+
+Its code is `sim/src/batch2/`, with the seed `sigvara-testnet-sim-2`. Its wallets come from the first
+batch's mnemonic at indices from 1000, so the batches share no wallet except the reviewers below. Its
+addresses are published in the same `simulation.json`: each agent and operator marked `"batch": 2`,
+its customers in `payers` and `ringPayers`, its treasury and hub under `wallets`, and the Base
+customers and reviewers in a `batch2` block. The explorer marks all of them as simulated.
+
+### Its cast
+
+| Group | Agents | What it drives |
+|---|---|---|
+| base | 3 | Paid only in USDC on Base Sepolia, 1 to 10 cents a job |
+| dual | 3 | Paid in SVR on Arc and in USDC on Base Sepolia |
+| handover | 1 | Changes operator on day 9 |
+| bonding | 1 | Suspends itself and withdraws its whole bond on day 6, bonds again on day 9 |
+| burst | 8 | All register and bond on day 2, and deliver 85% of jobs |
+| reviewed | 3 | Linked to ERC-8004 identities on day 1, reviewed on day 22 |
+| ring2 | 3 | A ring from day 3 whose customers are funded one wallet further back |
+
+Ten customers pay on Arc and eight on Base Sepolia, a few hundred Base payments over the batch. The
+other agents deliver 95% of jobs and the ring all of them. As in the first batch, a job that is not
+delivered gets no outcome.
+
+A Base payment is settled the way x402's exact scheme settles one: the customer signs an EIP-3009
+`transferWithAuthorization`, and the batch's treasury submits it, as a facilitator would. The transfer
+is the customer's own, so the oracle reads the customer as the payer, and only the treasury needs
+Base Sepolia ETH. There is no HTTP 402 exchange, so this is not the Wallet MCP payment the
+[roadmap](roadmap.md) still names. Its outcome is posted 20 minutes later, once Base has finalized it.
+
+About 30% of signed outcomes go through CounterAudit (`POST /v1/audit/ingest`, connector
+`sigvara-payment-outcome-v1`), which seals each one and forwards it to both operators. The rest go to
+the oracle's `/attest`. The state file keeps every answer, so a refused outcome shows its code.
+
+### What should happen
+
+- **Base:** payments count on both operators like Arc ones, and the base and dual agents' scores
+  climb like steady agents'. Each Base payment is in its agent's evidence with `chainId` 84532.
+- **Handover:** from day 4 to day 8 the wallet that will take the agent over pays it as a customer,
+  and those payments count. On day 9 it accepts the agent. From day 10 the former and the new
+  operator each pay it once a day on each chain, with a signed outcome, and both operators should
+  refuse every one as `self_payment`: the former was named the operator at registration and the new
+  one by `OperatorTransferred`, both before paying. The new operator's earlier payments keep counting.
+- **Bonding:** while it is suspended with no active bond, the agent is left out of the per-epoch
+  reads, and it is read again when it bonds and returns to Active.
+- **Burst:** eight registrations and bonds in one day, on top of the first batch's agents, without
+  an epoch falling behind.
+- **Reviews:** a reviewer counts only if it is a Sigvara agent registered for 30 days with a matured
+  score of at least 40, so this batch borrows six of the first batch's steady agents, registered on
+  2 November and idle once that batch stops. On day 21 five of them get 2 USDC each from this batch's
+  treasury and the sixth from the reviewed agents' own operator. Each pays each reviewed agent 10 SVR
+  and, the next day, rates it 90 on ERC-8004 with the tag `starred`. The five share a funder, so they
+  should count as one reviewer cluster. The sixth was funded by the reviewed agents' operator and
+  should not count at all. A reviewed agent is held from proposals until its reviewers' funding has
+  been read.
+- **Ring 2:** its customers are funded by a hub wallet its operator funds, and 30% of their jobs go
+  to honest agents, at ordinary prices. Per-payer caps should limit what that buys, as with the
+  first ring. Nothing is slashed in this batch.
+
+The results are recorded here when it ends.
+
+### What it changes for the first batch
+
+From its first tick the operators carry both batches, and an operator whose scan of Base falls
+behind scores nothing that epoch, the first batch's agents included. That is the same
+`paymentChainHold` as before, now with traffic behind it. The six reviewers act only after the
+first batch has stopped.
+
+### Running batch 2
+
+```bash
+cd sim && npm ci
+node src/batch2/run.mjs plan 24     # the next day's actions, no keys or chain needed
+node --test                         # both batches' casts and plans
+```
+
+On the host, beside the first batch, with its own state and pause files:
+
+```bash
+SIM_MNEMONIC_FILE=/keys/sim-mnemonic SIM_STATE_FILE=/data/state.json SIM_PAUSE_FILE=/data/pause \
+SIM_COUNTERAUDIT_KEY_FILE=/keys/counteraudit-key node src/batch2/run.mjs loop
+```
+
+- The treasury needs about 35 USDC of Arc testnet gas, about 35 USDC on Base Sepolia, and a little
+  Base Sepolia ETH to submit the payments.
+- Without the CounterAudit key file every outcome goes straight to the oracle, and the state records
+  which way each one went.
+- It acts only on its own cast and the six reviewers, and they pay and review only the reviewed
+  agents.
 
 ## Running it
 

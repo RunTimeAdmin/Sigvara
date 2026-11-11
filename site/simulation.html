@@ -52,6 +52,7 @@
     <span class="sim-flag">Simulation</span>
     <h1 class="u-h1-28">Testnet simulation</h1>
     <p class="ep-lede">Sigvara is running a small, simulated agent economy on Arc testnet so anyone can watch its scoring and slashing work. <b>Every agent and customer on this page is operated by Sigvara.</b> None of it is real demand, and none of it should be read as traction.</p>
+    <p class="sim-batches">Batch <a href="simulation" data-batch="1">1</a> · <a href="simulation?batch=2" data-batch="2">2</a>. The second batch drives Base payments, a change of operator, a bond withdrawn and returned, many agents at once, outcomes through CounterAudit and ERC-8004 reviews.</p>
     <div class="card-body"><p class="netnote">Reading…</p></div>
   </section>
 
@@ -63,7 +64,7 @@
 
   <div class="app-card u-hidden" id="castCard">
     <h2>The cast</h2>
-    <p class="sub">Twenty simulated agents in four kinds. Each kind behaves differently, so its score should end up somewhere different.</p>
+    <p class="sub" id="castSub">Twenty simulated agents in four kinds. Each kind behaves differently, so its score should end up somewhere different.</p>
     <div class="card-body"></div>
   </div>
 
@@ -77,6 +78,20 @@
         <li><b>Every number can be checked.</b> Open an agent on the <a href="agents">Agents</a> page and press <i>Check evidence</i> to recompute its score's evidence yourself.</li>
       </ul>
       <p class="netnote">How it works and what it cannot show: <a href="https://github.com/RunTimeAdmin/Sigvara/blob/main/docs/simulation.md" target="_blank" rel="noopener">docs/simulation.md</a>. Every address it controls: <a href="simulation.json">simulation.json</a>.</p>
+    </div>
+  </div>
+
+  <div class="app-card u-hidden" id="watchCard2">
+    <h2>What to look for</h2>
+    <div class="card-body">
+      <ul class="sim-watch">
+        <li><b>Base payments count.</b> Agents paid in USDC on Base Sepolia should climb like steady agents on Arc. Each payment shows in the agent's evidence with its chain.</li>
+        <li><b>An operator's own money does not count.</b> After the handover, payments from the former and the new operator should be refused, on both chains.</li>
+        <li><b>A bond that leaves and comes back.</b> The bonding agent is suspended with no bond for three days, then Active again.</li>
+        <li><b>Reviews count by funder.</b> Five reviewers funded from one wallet should count as one, and one funded by the reviewed agents' own operator not at all.</li>
+        <li><b>Every number can be checked.</b> Open an agent on the <a href="agents">Agents</a> page and press <i>Check evidence</i> to recompute its score's evidence yourself.</li>
+      </ul>
+      <p class="netnote">How it works and what it cannot show: <a href="https://github.com/RunTimeAdmin/Sigvara/blob/main/docs/simulation.md#batch-2" target="_blank" rel="noopener">docs/simulation.md</a>. Every address it controls: <a href="simulation.json">simulation.json</a>.</p>
     </div>
   </div>
 </div>
@@ -95,7 +110,7 @@
 </footer>
 
 <script src="assets/did.js?v=32000f8"></script>
-<script src="assets/explorer.js?v=sm1"></script>
-<script src="assets/simulation.js?v=sm1"></script>
+<script src="assets/explorer.js?v=sm2"></script>
+<script src="assets/simulation.js?v=sm2"></script>
 </body>
 </html>
