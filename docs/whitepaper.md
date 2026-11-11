@@ -166,7 +166,7 @@ payment and forging it means forging a chain transfer. A settlement hash alone c
 attach an outcome, because it is public and proves neither who paid nor that the work went
 well. The outcome needs a credentialed service's token or the payer's own EIP-712
 signature over the payment ([ADR 0006](adr/0006-payer-signed-outcomes.md)), which the
-testnet operators have taken since 31 October 2026 for "delivered" only.
+testnet operators have taken since 31 October 2026, and "not delivered" too under ADR 0011's 7-day hold.
 
 What this does not fix, on the deployment as it runs today: a payment that settled but
 which nobody submits. Detecting unreported work requires an independent watcher of the
@@ -700,7 +700,7 @@ Ordered by what unblocks what, not by difficulty. The goal is an outside team ga
    paying operators for epochs served. It stays a draft until mainnet.
 7. **Delivery and disputes for x402 payments.** Partly built. Outcomes bound to the settled
    payment by a payer signature are built ([ADR 0006](adr/0006-payer-signed-outcomes.md))
-   and live on Arc testnet since 31 October 2026, for "delivered" only. A payer that was not
+   and live on Arc testnet since 31 October 2026; a "not delivered" there waits 7 days for a refund (ADR 0011). A payer that was not
    delivered what it paid for still has no recourse of its own: the payer-initiated
    challenge against the agent's bond and an arbiter path beyond the committee are not
    started, and are outside the first audit, so mainnet launches with positive outcomes only. Who rules is decided first, in its own ADR. x402 now has an authorize, capture and refund scheme and open

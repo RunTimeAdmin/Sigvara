@@ -31,10 +31,12 @@ const MILESTONES_2 = [
   { day: 1, title: "ERC-8004 links", text: "The three reviewed agents get ERC-8004 identities that name them." },
   { day: 2, title: "Eight agents at once", text: "Eight agents register and bond on the same day." },
   { day: 3, title: "A second ring", text: "Three ring agents bond. Their customers are funded through a hub wallet and also buy from honest agents." },
+  { day: 3, title: "Customers report failures", text: "From now most customers whose job was not delivered sign that it was not. The oracle holds each report for 7 days." },
   { day: 4, title: "A future operator buys", text: "The wallet that will take over the handover agent pays it as a customer, through day 8." },
   { day: 6, title: "An agent leaves its bond", text: "The bonding agent suspends itself and withdraws its whole bond." },
   { day: 9, title: "Handover and return", text: "The handover agent changes operator. The bonding agent bonds again and is Active." },
   { day: 10, title: "Operators pay their own agent", text: "The former and the new operator pay the handover agent every day. Neither payment should count." },
+  { day: 10, title: "Unrefunded failures count", text: "The first reports end their hold. One the agent refunded in full never counts. A partial refund, a refund from another wallet or a late one leaves it to count." },
   { day: 21, title: "Reviewers pay", text: "Six first-batch agents, now over 30 days old, are funded and pay the reviewed agents." },
   { day: 22, title: "Reviews posted", text: "They rate the reviewed agents on ERC-8004. Five share a funder; the sixth was funded by the reviewed agents' operator." },
   { day: 28, title: "End", text: "The batch stops by itself. Agents keep their scores." },
@@ -129,7 +131,9 @@ async function load() {
         a.payments = list.length;
         // Test SVR on this chain only: a payment chain's amounts are in another asset (ADR 0009).
         a.paid = list.filter((e) => e.chainId == null).reduce((s, e) => { try { return s + BigInt(e.amount); } catch (_) { return s; } }, 0n);
-        a.signed = list.filter((e) => e.outcomeSource === "payer_signed").length;
+        // A payer's "not delivered" is signed too (ADR 0011), and is counted apart.
+        a.signed = list.filter((e) => e.outcomeSource === "payer_signed" && !e.payerNegative).length;
+        a.negatives = list.filter((e) => e.payerNegative).length;
         a.onBase = list.filter((e) => e.chainId != null).length;
       } catch (_) { a.payments = null; }
     }));
@@ -148,6 +152,7 @@ function renderHero(agents, start, live) {
   const payments = counted.reduce((s, a) => s + a.payments, 0);
   const paid = counted.reduce((s, a) => s + a.paid, 0n);
   const signed = counted.reduce((s, a) => s + a.signed, 0);
+  const negatives = counted.reduce((s, a) => s + a.negatives, 0);
   const onBase = counted.reduce((s, a) => s + a.onBase, 0);
   const pending = live === null;
   const tile = (value, label, sub) => `<div class="sim-tile"><div class="sim-tile-value">${value}</div><div class="sim-tile-label">${label}</div>${sub ? `<div class="sim-tile-sub">${sub}</div>` : ""}</div>`;
@@ -161,7 +166,9 @@ function renderHero(agents, start, live) {
     ${BATCH === 2
       ? tile(pending ? "…" : onBase.toLocaleString("en-US"), "on Base Sepolia", "of those payments, in test USDC")
       : tile(pending ? "…" : X.esc(X.fmtSvr(paid).replace(" SVR", "")), "SVR paid", "testnet tokens, no value")}
-    ${tile(pending ? "…" : signed.toLocaleString("en-US"), "signed outcomes", "customers confirming delivery")}
+    ${tile(pending ? "…" : signed.toLocaleString("en-US"), "signed outcomes", negatives > 0
+      ? `customers confirming delivery, and ${negatives.toLocaleString("en-US")} reporting it did not happen`
+      : "customers confirming delivery")}
   </div>`;
   widths($("simHero"));
 }

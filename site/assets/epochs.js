@@ -107,6 +107,13 @@ function operatorName(a) {
   return name ? `the ${name} (${addrLink(a)})` : addrLink(a);
 }
 const sourceLabel = (s) => s === "payer_signed" ? "signed by the payer" : s === "credentialed" ? "credentialed" : "payment only";
+// A payer's "not delivered" (ADR 0011) as the evidence serves it: held until it counts, then counted, or refunded.
+const negativeLabel = (n, success) => {
+  if (n.refundTx) return "payer-reported, refunded";
+  if (success === false) return "payer-reported, not delivered";
+  const from = Date.parse(n.countsFrom);
+  return Number.isFinite(from) ? `payer-reported, held until ${fmtWhen(from / 1000)}` : "payer-reported, held";
+};
 
 // ---- io ----
 async function getJson(url, init) {
@@ -378,9 +385,11 @@ function renderEvidence(didHash, evidence, chain) {
   const list = (Array.isArray(j?.evidence) ? j.evidence : []).filter(e => e && typeof e === "object");
   const root = isHash(j?.evidenceRoot) ? j.evidenceRoot.toLowerCase() : null;
   const by = (s) => list.filter(e => (e.outcomeSource ?? null) === s).length;
+  const negatives = list.filter(e => e.payerNegative).length;
   const c = chain.status === "fulfilled" ? chain.value : null;
   const p = c?.pending;
-  const kinds = [[by("payer_signed"), "signed by the payer"], [by("credentialed"), "credentialed"], [by(null), "with no outcome"]]
+  const kinds = [[by("payer_signed") - negatives, "signed by the payer"], [negatives, "reported not delivered by the payer"],
+    [by("credentialed"), "credentialed"], [by(null), "with no outcome"]]
     .filter(([n]) => n > 0).map(([n, label]) => `${n} ${label}`).join(", ");
 
   let html = `<p>The primary oracle holds <b>${list.length}</b> payment${list.length === 1 ? "" : "s"} for this agent`
@@ -412,7 +421,9 @@ function renderEvidence(didHash, evidence, chain) {
     html += '<ul class="pay-list">' + rows.map(e => `<li>
       <span>${esc(fmtWhen(Number(e.settledAt)))}</span>
       <span>${esc(e.chainId != null ? X.fmtAmount(e) : fmtSvr(e.amount))} from ${e.chainId != null ? X.paymentPayerLink(e) : addrLink(e.payer)}</span>
-      <span class="${e.outcomeSource === "payer_signed" ? "pill-ok" : ""}">${esc(sourceLabel(e.outcomeSource))}${e.success === false ? ", failed" : ""}</span>
+      ${e.payerNegative
+        ? `<span class="${e.payerNegative.refundTx ? "" : "pill-warn"}">${esc(negativeLabel(e.payerNegative, e.success))}</span>`
+        : `<span class="${e.outcomeSource === "payer_signed" ? "pill-ok" : ""}">${esc(sourceLabel(e.outcomeSource))}${e.success === false ? ", failed" : ""}</span>`}
       <span>${e.chainId != null ? X.paymentTxLink(e) : txLink(e.txHash)}</span>
     </li>`).join("") + "</ul>";
     if (list.length > rows.length) html += `<p class="netnote">Newest ${rows.length} of ${list.length} shown.</p>`;

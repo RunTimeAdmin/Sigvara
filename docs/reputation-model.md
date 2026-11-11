@@ -9,7 +9,7 @@ Sigvara reputation is a deterministic 6-factor score between 0 and 100. It is co
 | Factor | Max Points | Source | Formula |
 |---|---|---|---|
 | Fee Activity | 20 | Settled payments to the agent, verified on chain | `min(20, decayedVolume / PAYMENT_FEE_UNIT)`, capped per payer |
-| Success Rate | 15 | Outcome signed by the payer (positive only for now), or reported by a credentialed service | `floor(successful / (total + 5) × 15)`, on decayed weights |
+| Success Rate | 15 | Outcome signed by the payer (on Arc testnet "not delivered" too, counted after a 7-day hold unless refunded, [ADR 0011](adr/0011-who-rules-negative-outcomes.md)), or reported by a credentialed service | `floor(successful / (total + 5) × 15)`, on decayed weights |
 | Tenure | 30 | Span of verified trading, faded by how long since the last of it | `min(30, floor(log₂(spanDays+1) × 3)) × recency` |
 | External Trust | 25 | Normalized ERC-8004 feedback for a linked agent, from reviewers that are bonded Sigvara agents and paid it | mean rating × 25, in full only with five independent reviewers |
 | Community | 5 | Unresolved flags | `max(0, 5 − flags × 2)` |

@@ -12,6 +12,24 @@ export const HOURS = DAYS * 24;
 const POST_SHARE = 0.85;
 const VIA_COUNTERAUDIT = 0.3;
 
+// Payer-reported negatives (docs/adr/0011-who-rules-negative-outcomes.md). From this hour, the payer of
+// most jobs that were not delivered signs "not delivered", and the agent answers each in one of the ways
+// REFUNDS lists. Drawn from a stream of their own, so every hour before this one, and every other choice
+// in every hour, plans exactly as it did before negatives existed. The groups whose tests depend on their
+// evidence (the handover, the bonding agent, the reviewed agents and the ring) get none.
+export const NEGATIVES_FROM = 3 * 24;
+export const NEGATIVE_GROUPS = new Set(['base', 'dual', 'burst']);
+const NEGATIVE_SHARE = 0.8;
+// What the agent does, with each one's share. Only `full` cures the negative: the whole payment back from
+// the agent's own address within the hold. `partial` (half of it), `other` (all of it from another wallet)
+// and `late` (all of it after the hold has ended) do not, and neither does `none`.
+export const REFUNDS = [['none', 0.35], ['full', 0.3], ['partial', 0.15], ['other', 0.1], ['late', 0.1]];
+const refundOf = (r) => {
+  let acc = 0;
+  for (const [kind, share] of REFUNDS) if (r < (acc += share)) return kind;
+  return REFUNDS[REFUNDS.length - 1][0];
+};
+
 // Actions retried every tick until they are done, whatever hour they were planned for. A job is not
 // one of them: it belongs to its hour and is skipped, not made up, once the hour has passed.
 export const RETRIED = new Set([
@@ -19,11 +37,15 @@ export const RETRIED = new Set([
   'leave-bond', 'rebond', 'review-fund', 'review-pay', 'review-post',
 ]);
 
-/** Every action for hour `h` (0 is the first hour of the batch). */
-export function planHour(cast, seed, h) {
+/**
+ * Every action for hour `h` (0 is the first hour of the batch). `negativesFrom` is there for the tests,
+ * which compare the plan with and without negatives.
+ */
+export function planHour(cast, seed, h, { negativesFrom = NEGATIVES_FROM } = {}) {
   if (h < 0 || h >= HOURS) return [];
   const day = Math.floor(h / 24);
   const rand = rng(`${seed}:plan:${h}`);
+  const negRand = rng(`${seed}:neg:${h}`);
   const out = [];
   const at = (d, hour = 0) => h === d * 24 + hour;
 
@@ -59,7 +81,13 @@ export function planHour(cast, seed, h) {
     const delivered = opts.delivered ?? rand() < g.success;
     const post = delivered && (opts.post ?? rand() < (agent.group === 'ring2' ? 1 : POST_SHARE));
     const via = post && rand() < VIA_COUNTERAUDIT ? 'counteraudit' : 'oracle';
-    out.push({ id: `pay:${h}:${payer}:${chain}`, type: 'pay', chain, payer, agent: agent.id, amount, delivered, post, via, ...opts.tag && { tag: opts.tag } });
+    const id = `pay:${h}:${payer}:${chain}`;
+    if (!delivered && !opts.tag && h >= negativesFrom && NEGATIVE_GROUPS.has(agent.group) && negRand() < NEGATIVE_SHARE) {
+      const negVia = negRand() < VIA_COUNTERAUDIT ? 'counteraudit' : 'oracle';
+      out.push({ id, type: 'pay', chain, payer, agent: agent.id, amount, delivered, post: true, via: negVia, refund: refundOf(negRand()) });
+      return;
+    }
+    out.push({ id, type: 'pay', chain, payer, agent: agent.id, amount, delivered, post, via, ...opts.tag && { tag: opts.tag } });
   };
   for (const payer of cast.payers) {
     if (rand() >= payer.rate / 24) continue;

@@ -70,7 +70,7 @@ part worth understanding before you set a threshold.
    payment is the credential for the payment. Without a token it carries no outcome.
    To record an outcome, the payer signs that the work was delivered with
    `signPaymentOutcome` (SDK 1.0.0-alpha.13 or later) and posts it as `payerOutcome` in
-   place of `success`. No token is needed. Only "delivered" is taken.
+   place of `success`. No token is needed. On Arc testnet "not delivered" is taken too, and counts after a 7-day hold unless the agent refunds the payment.
    Self-payments are refused.
 
 4. **Wait for an epoch.** The oracle proposes hourly, and a proposal sits in a challenge
