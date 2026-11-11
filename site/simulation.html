@@ -73,7 +73,7 @@
     <div class="card-body">
       <ul class="sim-watch">
         <li><b>Steady agents climb.</b> They deliver almost every job, so their scores should rise week by week. A score matures slowly, so the score other contracts read trails the earned one.</li>
-        <li><b>Failing agents stall.</b> Testnet records only successful outcomes, so a failing agent shows up as fewer signed outcomes and customers drifting away, not as a list of failures.</li>
+        <li><b>Failing agents stall.</b> In the first batch customers sign only delivered jobs, so a failing agent shows up as fewer signed outcomes and customers drifting away. From day 3 of the second, they also sign most jobs that were not delivered. Each such report is held for 7 days and then counts against the agent, unless the agent refunded the whole payment from its own wallet in that time.</li>
         <li><b>The ring does not buy a high score.</b> Its customers are wallets its own operator funds. Caps on what one payer can add should limit what that money buys, and two ring agents are slashed.</li>
         <li><b>Every number can be checked.</b> Open an agent on the <a href="agents">Agents</a> page and press <i>Check evidence</i> to recompute its score's evidence yourself.</li>
       </ul>

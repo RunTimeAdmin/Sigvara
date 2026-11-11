@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildCast, GROUPS, INDEX, REVIEW, HANDOVER, BONDING, ARC_PAYERS, BASE_PAYERS, RING_PAYERS } from '../src/batch2/cast.mjs';
-import { planHour, HOURS, RETRIED } from '../src/batch2/plan.mjs';
+import { planHour, HOURS, RETRIED, NEGATIVES_FROM, NEGATIVE_GROUPS, REFUNDS } from '../src/batch2/plan.mjs';
 import { buildCast as buildFirstCast } from '../src/cast.mjs';
 import { rng } from '../src/rng.mjs';
 
@@ -39,7 +39,7 @@ test('every payment goes to this batch\'s agents, on a chain the agent is paid o
     assert.ok(GROUPS[agent.group].chains.includes(p.chain), `${p.id}: ${agent.group} is not paid on ${p.chain}`);
     assert.ok(p.h > agent.day * 24, `${p.id} pays before its agent bonded`);
     if (p.chain === 'base') assert.ok(p.amount >= 1 && p.amount <= 10, 'one to ten cents, above the oracle\'s one-cent minimum');
-    if (!p.delivered) assert.equal(p.post, false, 'no negative outcomes');
+    if (!p.delivered && !p.refund) assert.equal(p.post, false, 'a job not delivered posts only as a planned negative');
     assert.ok(['oracle', 'counteraudit'].includes(p.via));
   }
   assert.equal(new Set(all.map((a) => a.id)).size, all.length, 'no action id repeats');
@@ -105,4 +105,36 @@ test('setup is retried and nothing is planned past the end', () => {
   assert.ok(!RETRIED.has('pay'));
   assert.deepEqual(planHour(cast, SEED, HOURS), []);
   assert.deepEqual(planHour(cast, SEED, -1), []);
+});
+
+// Payer-reported negatives (docs/adr/0011-who-rules-negative-outcomes.md).
+const negatives = pays.filter((p) => p.refund);
+
+test('negatives start on their day, only for the groups that may have them, each with an answer', () => {
+  assert.ok(negatives.length >= 20, `${negatives.length} negatives`);
+  for (const p of negatives) {
+    assert.ok(p.h >= NEGATIVES_FROM, `${p.id} is before negatives start`);
+    assert.ok(NEGATIVE_GROUPS.has(agentById.get(p.agent).group), `${p.id}: ${agentById.get(p.agent).group} gets no negatives`);
+    assert.equal(p.delivered, false);
+    assert.equal(p.post, true);
+    assert.equal(p.tag, undefined, 'no tagged job is a negative');
+    assert.ok(REFUNDS.some(([kind]) => kind === p.refund), p.refund);
+  }
+  assert.deepEqual(new Set(negatives.map((p) => p.refund)), new Set(REFUNDS.map(([kind]) => kind)), 'every answer is planned at least once');
+  assert.ok(negatives.some((p) => p.via === 'counteraudit') && negatives.some((p) => p.via === 'oracle'), 'both routes');
+  assert.ok(negatives.some((p) => p.chain === 'arc') && negatives.some((p) => p.chain === 'base'), 'both chains');
+});
+
+test('negatives change nothing else: without them every hour plans as before, draw for draw', () => {
+  for (let h = 0; h < HOURS; h++) {
+    const without = planHour(cast, SEED, h, { negativesFrom: Infinity });
+    const withThem = planHour(cast, SEED, h).map((a) => {
+      if (!a.refund) return a;
+      // As the job was planned before negatives: not delivered, nothing posted.
+      const { refund, ...rest } = a;
+      return { ...rest, post: false, via: 'oracle' };
+    });
+    assert.deepEqual(withThem, without, `hour ${h}`);
+    if (h < NEGATIVES_FROM) assert.deepEqual(planHour(cast, SEED, h), without, `hour ${h} is before negatives start`);
+  }
 });

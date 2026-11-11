@@ -32,7 +32,7 @@ Built by `sim/src/cast.mjs` from a fixed seed, so it is the same on every run.
 Forty customers each make two to four jobs a day across a handful of favourite agents. A delivered
 job gets a payer-signed "delivered" outcome posted to the oracle's `/attest` (85% of the time; not
 every customer bothers). A job that is not delivered gets no outcome at all, because Arc testnet
-accepts only positive outcomes from payers (`PAYER_OUTCOMES=positive`); a failing agent shows up as
+accepted only positive outcomes from payers when it started (`PAYER_OUTCOMES=positive`); a failing agent shows up as
 fewer outcomes and fewer customers, not as recorded failures. Over the four weeks the plan comes to
 about 4,400 payments.
 
@@ -183,8 +183,8 @@ customers and reviewers in a `batch2` block. The explorer marks all of them as s
 | ring2 | 3 | A ring from day 3 whose customers are funded one wallet further back |
 
 Ten customers pay on Arc and eight on Base Sepolia, a few hundred Base payments over the batch. The
-other agents deliver 95% of jobs and the ring all of them. As in the first batch, a job that is not
-delivered gets no outcome.
+other agents deliver 95% of jobs and the ring all of them. Until day 3, as in the first batch, a job
+that is not delivered gets no outcome. From day 3 most of them get a payer-reported negative (below).
 
 A Base payment is an x402 exact-scheme payment: the customer signs an EIP-3009
 `transferWithAuthorization`, and x402's public testnet facilitator (`x402.org/facilitator`) submits
@@ -198,6 +198,31 @@ About 30% of signed outcomes go through CounterAudit (`POST /v1/audit/ingest`, c
 today the primary; the checker imports it from there like any payer outcome. The rest go to the
 oracle's `/attest`. The state file keeps every answer, so a refused outcome shows its code. The first
 one through CounterAudit, at 05:03 UTC on 11 November, was sealed (201) and recorded by the primary.
+
+### Payer-reported negatives, from day 3
+
+From hour 72 (14 November 2026, 03:00 UTC) the customer of a job that a base, dual or burst agent did
+not deliver signs "not delivered" for 80% of them: rollout step 3 of
+[ADR 0011](adr/0011-who-rules-negative-outcomes.md). It needs both operators on `PAYER_OUTCOMES=both`
+before then. The groups whose results depend on their evidence (handover, bonding, reviewed, ring2) get
+none. Negatives are drawn from a random stream of their own, so every earlier hour, and every other
+choice after it, plans as it did before (`sim/test/batch2.test.mjs` checks this hour by hour). Once an
+operator has taken a negative, the agent answers it in one of five ways:
+
+| Answer | Share | What happens | Should it count? |
+|---|---|---|---|
+| none | 35% | Nothing | Yes, an hour after its 7-day hold ends |
+| full | 30% | The agent sends the whole payment back from its own address 2 days later | No, the refund cures it |
+| partial | 15% | The agent sends half of it back 2 days later | Yes |
+| other | 10% | The batch's treasury sends the whole payment back 2 days later | Yes, the refund is not from the agent |
+| late | 10% | The agent sends the whole payment back 9 days later | Yes, the hold has ended |
+
+With this seed that is 83 negatives over the batch, 75 on Arc and 8 on Base, 20 of them through
+CounterAudit. An agent refunding on Arc first gets 0.05 USDC of gas from the treasury, under the 1 USDC
+that would name a funder, so the reviewer and ring tests read the same funding as before. A Base refund
+is an EIP-3009 authorization the agent signs, submitted by the facilitator like a payment. A negative
+an operator refuses, or one whose deadline passes unposted, gets no refund, and the state file's
+`refunds` record says why.
 
 ### What should happen
 
@@ -223,6 +248,10 @@ one through CounterAudit, at 05:03 UTC on 11 November, was sealed (201) and reco
 - **Ring 2:** its customers are funded by a hub wallet its operator funds, and 30% of their jobs go
   to honest agents, at ordinary prices. Per-payer caps should limit what that buys, as with the
   first ring. Nothing is slashed in this batch.
+- **Negatives:** both operators take each negative and serve it in the evidence with a `payerNegative`
+  field, reading as no outcome (`success: null`) for 7 days. After the hold, the `full` ones never
+  count and name their refund in `refundTx`; the rest count as failed jobs on both operators alike,
+  and the checker finds no divergence. The first ones end their hold on day 10.
 
 The results are recorded here when it ends.
 

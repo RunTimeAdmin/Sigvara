@@ -16,7 +16,7 @@
 
 import { readFileSync, writeFileSync, existsSync, renameSync } from 'node:fs';
 import { ethers } from 'ethers';
-import { registerAgent, depositStake, signPaymentOutcome, computeDidHash, OUTCOME_DELIVERED } from '@sigvara/protocol-sdk';
+import { registerAgent, depositStake, signPaymentOutcome, computeDidHash, OUTCOME_DELIVERED, OUTCOME_NOT_DELIVERED } from '@sigvara/protocol-sdk';
 import { buildCast, REVIEW } from './cast.mjs';
 import { planHour, HOURS, RETRIED } from './plan.mjs';
 import { rng } from '../rng.mjs';
@@ -56,6 +56,12 @@ const BASE_TOPUP = 2_000_000n;
 const FAUCET_AMOUNT = ethers.parseEther('10000');
 // A Base payment is final after about a quarter of an hour; its outcome is posted after this.
 const BASE_POST_DELAY_S = 20 * 60;
+// Refunds of payer-reported negatives (plan.mjs REFUNDS), this long after the operator took the negative.
+// The oracle holds a negative for 7 days; `late` comes two days after that, so it misses the hold even
+// when CounterAudit passed the negative on a day after answering.
+const REFUND_AFTER_S = { full: 2 * 86400, partial: 2 * 86400, other: 2 * 86400, late: 9 * 86400 };
+// Gas on Arc for an agent that sends a refund. Under 1 USDC, so the grant names no funder.
+const AGENT_GAS = ethers.parseEther('0.05');
 const LOOP_MS = 5 * 60 * 1000;
 const STATUS = { Active: 0, Suspended: 1 };
 // What a reviewed agent's ERC-8004 registration says about itself.
@@ -103,9 +109,11 @@ const log = (...a) => console.log(new Date().toISOString(), ...a);
 
 // ---- state: which actions are done, outcomes waiting to be posted, ERC-8004 links ----
 function loadState() {
-  if (!existsSync(STATE_FILE)) return { seed: SEED, start: null, done: {}, skipped: 0, outcomes: {}, links: {} };
+  if (!existsSync(STATE_FILE)) return { seed: SEED, start: null, done: {}, skipped: 0, outcomes: {}, links: {}, refunds: {} };
   const s = JSON.parse(readFileSync(STATE_FILE, 'utf8'));
   if (s.seed !== SEED) throw new Error(`${STATE_FILE} belongs to seed ${s.seed}, not ${SEED}`);
+  // A state file from before negatives has no refunds.
+  s.refunds ??= {};
   return s;
 }
 function saveState(s) {
@@ -310,6 +318,7 @@ async function tick(state) {
     }
   }
   await postOutcomes(state);
+  await sendRefunds(state, w, { svr, usdc, svrFor, provider });
   return true;
 }
 
@@ -387,14 +396,53 @@ async function pay(a, state, w, { svr, usdc, svrFor, provider, funderOf, agentId
   if (a.post) {
     const chainId = a.chain === 'base' ? BASE_CHAIN_ID : CHAIN_ID;
     const payerOutcome = await signPaymentOutcome(a.chain === 'base' ? w.onBase(a.payer) : w.at(a.payer), {
-      didHash: did, txHash, outcome: OUTCOME_DELIVERED, chainId, reputationAddress: REPUTATION,
+      didHash: did, txHash, outcome: a.delivered ? OUTCOME_DELIVERED : OUTCOME_NOT_DELIVERED, chainId, reputationAddress: REPUTATION,
     });
     const body = { didHash: did, payment: a.chain === 'base' ? { txHash, chainId } : { txHash }, payerOutcome };
     const notBefore = Math.floor(Date.now() / 1000) + (a.chain === 'base' ? BASE_POST_DELAY_S : 0);
-    state.outcomes[a.id] = { body, via: a.via, notBefore, deadline: payerOutcome.deadline, tries: 0 };
+    state.outcomes[a.id] = { body, via: a.via, notBefore, deadline: payerOutcome.deadline, tries: 0, ...a.refund && { refund: a.refund } };
+    // The payment it would give back, in the asset's smallest unit. Sent once the negative is taken.
+    if (a.refund && a.refund !== 'none') {
+      const value = a.chain === 'base' ? BigInt(a.amount) * 10_000n : ethers.parseEther(String(a.amount));
+      state.refunds[a.id] = { kind: a.refund, chain: a.chain, payer: a.payer, agent: a.agent, value: value.toString(), payment: txHash };
+    }
     saveState(state);
   }
-  log(`${w.at(a.payer).address} paid ${a.chain === 'base' ? `${a.amount} cents of USDC on Base` : `${a.amount} SVR on Arc`} to ${agent}${a.tag ? ` (${a.tag})` : ''}`);
+  const what = a.refund ? `, not delivered, reported by the payer (refund: ${a.refund})` : '';
+  log(`${w.at(a.payer).address} paid ${a.chain === 'base' ? `${a.amount} cents of USDC on Base` : `${a.amount} SVR on Arc`} to ${agent}${a.tag ? ` (${a.tag})` : ''}${what}`);
+}
+
+// Refunds of payer-reported negatives that the operator took (postOutcomes sets `dueAt`). `full` and `late`
+// send the whole payment from the agent, `partial` half of it, and `other` the whole of it from the
+// treasury, on the payment's chain and in its asset. Only `full` meets ADR 0011's terms for a cure.
+async function sendRefunds(state, w, { svr, usdc, svrFor, provider }) {
+  const now = Math.floor(Date.now() / 1000);
+  for (const [id, r] of Object.entries(state.refunds)) {
+    if (r.status || !r.dueAt || now < r.dueAt) continue;
+    if (existsSync(PAUSE_FILE)) break;
+    const value = BigInt(r.value) / (r.kind === 'partial' ? 2n : 1n);
+    const fromId = r.kind === 'other' ? cast.treasury : r.agent;
+    try {
+      if (r.chain === 'arc') {
+        const from = w.at(fromId);
+        if (fromId !== cast.treasury && (await provider.getBalance(from.address)) < AGENT_GAS / 5n) {
+          await (await w.at(cast.treasury).sendTransaction({ to: from.address, value: AGENT_GAS })).wait();
+        }
+        if (fromId === cast.treasury && !(await svrFor(from, value))) { log(`refund for ${id} waits for the treasury's faucet cooldown`); continue; }
+        const tx = await svr(from).transfer(w.at(r.payer).address, value);
+        Object.assign(r, { status: 'sent', tx: tx.hash, at: new Date().toISOString() });
+        saveState(state);
+        await tx.wait();
+      } else {
+        const tx = await settleUsdc(w.onBase(fromId), w.onBase(r.payer).address, value, `refund:${id}`, usdc, w.onBase(cast.treasury));
+        Object.assign(r, { status: 'sent', tx: tx ?? 'sent before, not recorded', at: new Date().toISOString() });
+        saveState(state);
+      }
+      log(`refund for ${id} (${r.kind}): ${r.chain === 'base' ? `${Number(value) / 1e6} USDC on Base` : `${ethers.formatEther(value)} SVR on Arc`} from ${fromId === cast.treasury ? 'the treasury' : 'the agent'}`);
+    } catch (e) {
+      log(`refund for ${id} (${r.kind}) failed: ${e.shortMessage ?? e.message}`);
+    }
+  }
 }
 
 // Moves `value` USDC on Base Sepolia from `from` (a wallet) to `to` by an EIP-3009 authorization that
@@ -432,7 +480,12 @@ async function postOutcomes(state) {
   for (const [id, o] of Object.entries(state.outcomes)) {
     if (o.status || now < o.notBefore) continue;
     if (existsSync(PAUSE_FILE)) break;
-    if (now > Number(o.deadline)) { o.status = 'expired'; saveState(state); continue; }
+    if (now > Number(o.deadline)) {
+      o.status = 'expired';
+      if (state.refunds[id] && !state.refunds[id].status) state.refunds[id].status = 'not sent: the outcome expired';
+      saveState(state);
+      continue;
+    }
     const via = o.via === 'counteraudit' && key ? 'counteraudit' : 'oracle';
     try {
       const res = via === 'counteraudit'
@@ -452,6 +505,12 @@ async function postOutcomes(state) {
         o.code = answer.code ?? answer.error ?? null;
         if (via === 'counteraudit') o.forwarded = answer.forwarded ?? null;
         log(`outcome for ${id} via ${via}: ${res.status}${o.code ? ` ${o.code}` : ''}`);
+        // A negative the operator took is answered as planned; one it refused gets no refund.
+        const r = state.refunds[id];
+        if (r && !r.status) {
+          if (res.ok) r.dueAt = now + REFUND_AFTER_S[r.kind];
+          else r.status = `not sent: the outcome was answered ${res.status}`;
+        }
       }
     } catch (e) {
       o.tries++;
