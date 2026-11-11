@@ -25,7 +25,7 @@ const http = require('http');
 const zlib = require('zlib');
 const ix = require('./event-index');
 const { runningCommit, clientKey, parseTrustedProxies, rateLimited } = require('./http-helpers');
-const { spanTooBig, readSplitting } = require('./log-spans');
+const { spanTooBig, readAnswer, readSplitting } = require('./log-spans');
 
 const fail = (message) => { console.error(`[indexer] ${message}`); process.exit(1); };
 const intSetting = (name, fallback, min, max = Number.MAX_SAFE_INTEGER) => {
@@ -150,14 +150,7 @@ async function rpc(body) {
     signal: AbortSignal.timeout(60_000),
   });
   if (!res.ok) throw new Error(`the RPC answered HTTP ${res.status}`);
-  const chunks = [];
-  let size = 0;
-  for await (const chunk of res.body) {
-    size += chunk.length;
-    if (size > MAX_ANSWER_BYTES) throw Object.assign(new Error(`an answer past ${MAX_ANSWER_BYTES} bytes`), { spanRefused: true });
-    chunks.push(chunk);
-  }
-  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  return JSON.parse((await readAnswer(res.body, MAX_ANSWER_BYTES)).toString('utf8'));
 }
 
 async function call(method, params) {
