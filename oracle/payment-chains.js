@@ -496,7 +496,8 @@ function scanEnd(credits, to, maxReads) {
  *   @param {Array<{didHash, agentAddress, operator, operators?}>} deps.agents  as the registry scan holds them
  *   @param {object|null} deps.state      the last { lastBlock, lastBlockTs } for this chain
  *   @param {(txHash, didHash, payer) => boolean} deps.isCredited  already credited on THIS chain
- *   @param {(credit, tsMs) => boolean} deps.credit  credit one payment; not called in shadow mode
+ *   @param {(credits: Array<{ credit, ts: number }>) => boolean[]} deps.creditAll  credit the step's payments in one call
+ *     (store.creditPayments), saying of each whether it was credited; not called in shadow mode
  *   @param {(didHash) => Promise<number>} deps.registeredAtMs  when the agent registered, in ms
  *   @param {Map<string, object[]>} deps.knownOnChain  this chain's payments already held, for the canary
  *   @param {(label, fn) => Promise} deps.read  backoff for one RPC read; its errors must not carry the URL
@@ -505,7 +506,7 @@ function scanEnd(credits, to, maxReads) {
  * @returns {Promise<object>} a summary; `state` is what to store, or null to leave it as it was
  */
 async function scanChain(chain, deps) {
-  const { provider, scoredProvider, agents, state, isCredited, credit, registeredAtMs, knownOnChain, read } = deps;
+  const { provider, scoredProvider, agents, state, isCredited, creditAll, registeredAtMs, knownOnChain, read } = deps;
 
   const actual = Number(BigInt(await read('payment chain id', () => provider.send('eth_chainId', []))));
   if (actual !== chain.chainId) {
@@ -624,6 +625,7 @@ async function scanChain(chain, deps) {
   let credited = 0;
   let refused = 0;
   const unresolved = [];
+  const toCredit = [];
   for (const c of kept) {
     const ts = times.get(c.blockNumber);
     if (ts === undefined) { unresolved.push(c); continue; }
@@ -634,7 +636,10 @@ async function scanChain(chain, deps) {
     // every operator knows each change up to the payment. One named later stops counting then (eventsAt).
     if (named.get(c.didHash).get(lower(c.payer)) <= ts) { skip(c, 'self_payment'); continue; }
     if (chain.mode !== 'on') { credited += 1; continue; }
-    if (credit(c, ts)) credited += 1;
+    toCredit.push({ credit: c, ts });
+  }
+  for (const ok of toCredit.length ? creditAll(toCredit) : []) {
+    if (ok) credited += 1;
     else refused += 1;
   }
 

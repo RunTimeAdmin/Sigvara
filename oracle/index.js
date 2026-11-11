@@ -219,10 +219,10 @@ const lastPaymentChainScans = new Map();
 // were left unscored when the scans fell behind while it ran, and why (HOLD). Null when it was not held.
 let lastEpochHold = null;
 // Why an epoch left agents unscored: a scan behind where the evidence must be cut, or a payer's negative that is due
-// and not read, or starts to count before a proposal could land (negative-hold.js), a ledger at its cap, or the epoch's
-// proposals (MAX_WRITES_PER_EPOCH) spent.
+// and not read, or starts to count before a proposal could land (negative-hold.js), or the epoch's proposals
+// (MAX_WRITES_PER_EPOCH) spent.
 const HOLD = Object.freeze({
-  SCAN_BEHIND: 'scan_behind', PAYER_NEGATIVE: 'payer_negative', LEDGER_FULL: 'ledger_full', WRITE_BUDGET: 'write_budget',
+  SCAN_BEHIND: 'scan_behind', PAYER_NEGATIVE: 'payer_negative', WRITE_BUDGET: 'write_budget',
 });
 // Agents with no bond, left out of the epoch's reads until a log says that may have changed (bond-watch.js).
 const bondWatch = createBondWatch();
@@ -342,6 +342,10 @@ const {
   checkAttestCooldown,
   recordAttestation,
   creditPayment,
+  creditPayments,
+  trimLedger,
+  isDropped,
+  setLedgerFeeUnits,
   setPaymentOutcome,
   recordPayerOutcome,
   hasPayerOutcome,
@@ -360,7 +364,6 @@ const {
   isCredited,
   getLastPersist,
   getPaymentEvents,
-  atEventCap,
   ledgerStatus,
   allPaymentEvents,
   prunePaymentEvents,
@@ -384,6 +387,8 @@ const {
 
 // No settlement older than pruning keeps is credited, by any path: the same half-life the epoch prunes by.
 setCreditAgeLimit(paymentCfg.halfLifeMs);
+// A full ledger drops its smallest payments first, measured in fee units as the score measures them.
+setLedgerFeeUnits(paymentCfg.feeUnit, paymentChainsCfg.chains);
 
 /**
  * The payments a score made at `atMs` reads: every one on the scored chain, and a payment chain's
@@ -1010,6 +1015,7 @@ async function runPaymentScan(agents) {
   let credited = 0;
   let refused = 0;
   const unresolved = [];
+  const toCredit = [];
   for (const c of credits) {
     const ts = times.get(c.blockNumber);
     if (ts === undefined) {
@@ -1020,7 +1026,14 @@ async function runPaymentScan(agents) {
     }
     // Older than pruning keeps, so the store refuses it (creditPayment), and that is no disagreement.
     if (tooOldToCredit(ts)) continue;
-    if (creditPayment(c.didHash, c.txHash, c.amount, c.payer, null, ts, null, c.blockNumber)) {
+    toCredit.push(c);
+  }
+  // In one call, so that a full ledger is copied once a scan rather than once a payment (creditPayments).
+  const results = creditPayments(toCredit.map((c) => ({
+    didHash: c.didHash, txHash: c.txHash, amount: c.amount, payer: c.payer, ts: times.get(c.blockNumber), blockNumber: c.blockNumber,
+  })));
+  for (const [i, c] of toCredit.entries()) {
+    if (results[i]) {
       credited += 1;
     } else {
       // planCredits already asked isCredited about this exact pair, so a refusal here
@@ -1116,7 +1129,9 @@ async function runPaymentChainScans(agents, chains) {
           agents,
           state: getPaymentChainScanState(key),
           isCredited: (txHash, didHash, payer) => isCredited(txHash, didHash, payer, pc.chainId),
-          credit: (c, ts) => creditPayment(c.didHash, c.txHash, c.amount, c.payer, null, ts, null, c.blockNumber, pc.chainId),
+          creditAll: (list) => creditPayments(list.map(({ credit: c, ts }) => ({
+            didHash: c.didHash, txHash: c.txHash, amount: c.amount, payer: c.payer, ts, blockNumber: c.blockNumber, chainId: pc.chainId,
+          }))),
           knownOnChain: eventsOnChain(pc.chainId),
           registeredAtMs: async (didHash) => {
             if (!registered.has(didHash)) registered.set(didHash, Number((await chain.getAgentInfo(didHash)).registeredAt) * 1000);
@@ -1373,8 +1388,6 @@ async function runEpochInner() {
   // negative (HOLD).
   let agentsHeld = 0;
   let agentsHeldByNegative = 0;
-  // Agents whose ledger is at its cap (store.js MAX_EVENTS_PER_AGENT).
-  let agentsHeldByLedger = 0;
   // Proposals sent this epoch against MAX_WRITES_PER_EPOCH, and the agents left for the next one once it was spent.
   // A finalize is not counted: each makes live a proposal some epoch already counted.
   let proposalsSent = 0;
@@ -1695,13 +1708,6 @@ async function runEpochInner() {
           }
           scoringNowMs = cut.nowMs;
           evidenceCutMs = cut.cutMs;
-        }
-        // A ledger at its cap stopped taking payments at whichever payment reached it, which need not be the same one
-        // on every operator. Held until pruning by age makes room, rather than scored on evidence that may differ.
-        if (atEventCap(didHash)) {
-          console.warn(`[oracle]   ${didHash.slice(0, 10)}… its payment ledger is full, skipping`);
-          agentsHeldByLedger++;
-          continue;
         }
         // A payer's negative that should count by now, whose refunds this operator has not finished reading
         // (negative-hold.js): read differently from the other operator's, it would be a disagreement that is not one.
@@ -2203,10 +2209,6 @@ async function runEpochInner() {
     console.warn(`[oracle] ${agentsHeldByNegative} agent(s) left unscored for a payer's negative: due with its refunds not read, or counting before a proposal could land`);
     metrics.inc('agentsHeldByPayerNegative', agentsHeldByNegative);
   }
-  if (agentsHeldByLedger) {
-    console.error(`[oracle] ${agentsHeldByLedger} agent(s) left unscored: payment ledger full`);
-    metrics.inc('agentsHeldByLedgerCap', agentsHeldByLedger);
-  }
   if (agentsHeldByBudget) {
     console.error(`[oracle] ${agentsHeldByBudget} agent(s) left unscored: this epoch's ${cfg.maxWritesPerEpoch} proposal(s) (MAX_WRITES_PER_EPOCH) were spent`);
     metrics.inc('agentsHeldByWriteBudget', agentsHeldByBudget);
@@ -2214,17 +2216,16 @@ async function runEpochInner() {
   {
     const ledger = ledgerStatus();
     if (ledger.events >= ledger.maxTotal * 0.8) {
-      console.error(`[oracle] payment ledger at ${ledger.events} of ${ledger.maxTotal} events; ${ledger.refused} payment(s) refused`);
+      console.error(`[oracle] payment ledger at ${ledger.events} of ${ledger.maxTotal} events; ${ledger.dropped} payment(s) dropped since start`);
     }
   }
-  if (agentsHeld || agentsHeldByNegative || agentsHeldByLedger || agentsHeldByBudget) {
+  if (agentsHeld || agentsHeldByNegative || agentsHeldByBudget) {
     lastEpochHold = {
       at: new Date().toISOString(),
-      agents: agentsHeld + agentsHeldByNegative + agentsHeldByLedger + agentsHeldByBudget,
+      agents: agentsHeld + agentsHeldByNegative + agentsHeldByBudget,
       reasons: [
         ...(agentsHeld ? [HOLD.SCAN_BEHIND] : []),
         ...(agentsHeldByNegative ? [HOLD.PAYER_NEGATIVE] : []),
-        ...(agentsHeldByLedger ? [HOLD.LEDGER_FULL] : []),
         ...(agentsHeldByBudget ? [HOLD.WRITE_BUDGET] : []),
       ],
     };
@@ -2236,7 +2237,7 @@ async function runEpochInner() {
     ` in ${Date.now() - start}ms`,
   );
   // One that held every agent it would have scored did no more than one held at its start, and counts the same.
-  if (candidates.length && agentsHeld + agentsHeldByNegative + agentsHeldByLedger === candidates.length) {
+  if (candidates.length && agentsHeld + agentsHeldByNegative === candidates.length) {
     metrics.inc('epochsFailed');
   } else {
     metrics.inc('epochsSucceeded');
@@ -2372,6 +2373,10 @@ const NOT_YET = ['unconfirmed', 'not_found', 'agent_not_seen'];
 
 // The answer to a payment older than pruning keeps (store.tooOldToCredit), on POST /attest and for a payer's outcome.
 const SETTLEMENT_TOO_OLD = 'this payment is older than this oracle keeps payments for, so it cannot be credited';
+// The answer to an outcome for a payment credited without one and since dropped from the agent's full ledger
+// (store.dropPastCaps), on POST /attest and for a payer's outcome. Final: the payment cannot come back.
+const PAYMENT_DROPPED = 'this payment was dropped from the agent\'s full payment ledger, as one of its smallest without an '
+  + 'outcome, so no outcome can be recorded for it';
 
 /**
  * Takes an outcome the payer signed, once its payment has been verified
@@ -2509,14 +2514,12 @@ async function admitPayerOutcome({ didHash, credited, info, signed, packetId = n
   }
 
   // Every leg of the transaction is credited as a payment, as the credentialed path does; the
-  // outcome goes on the signer's own leg only.
+  // outcome goes on the signer's own leg only. The caps wait until it is filed (trimLedger below): the outcome
+  // keeps the leg however small it is, and a leg dropped in between would have its payer's outcome refused.
   const paidLegs = (credited.legs ?? []).filter((l) => !ownMoney(l.payer));
-  let credits = 0;
-  for (const l of paidLegs) {
-    if (creditPayment(didHash, credited.txHash, l.amount, l.payer, null, credited.settledAt, null, credited.blockNumber, chainId)) {
-      credits += 1;
-    }
-  }
+  const credits = creditPayments(paidLegs.map((l) => ({
+    didHash, txHash: credited.txHash, amount: l.amount, payer: l.payer, ts: credited.settledAt, blockNumber: credited.blockNumber, chainId,
+  })), { trim: false }).filter(Boolean).length;
   const record = {
     outcome: signed.outcome,
     evidence: signed.evidence,
@@ -2543,6 +2546,7 @@ async function admitPayerOutcome({ didHash, credited, info, signed, packetId = n
     chainId,
     blockNumber: credited.blockNumber,
   });
+  trimLedger(didHash);
   if (filed === 'already_set' || filed === 'outside_window') {
     // Payments credited above stay credited; keep them through a restart.
     if (credits > 0 && !fromPeer) persistState();
@@ -2553,7 +2557,9 @@ async function admitPayerOutcome({ didHash, credited, info, signed, packetId = n
   }
   if (filed === 'not_found') {
     if (credits > 0 && !fromPeer) persistState();
-    const r = refuse(409, 'replayed', 'this settlement has already been credited', 'attestRejectedPayment');
+    const r = isDropped(credited.txHash, didHash, leg.payer, chainId)
+      ? refuse(409, 'payment_dropped', PAYMENT_DROPPED, 'attestRejectedPayment')
+      : refuse(409, 'replayed', 'this settlement has already been credited', 'attestRejectedPayment');
     return { ...r, body: { ...r.body, sameOutcome: false } };
   }
   metrics.inc('paymentsVerified');
@@ -3415,6 +3421,7 @@ async function handleRequest(req, res) {
         const legs = credited.legs ?? [{ payer: credited.payer, amount: credited.amount }];
         let anyCredited = false;
         let outcomeConflict = false;
+        let outcomeDropped = false;
         for (const [i, leg] of legs.entries()) {
           // Per leg, matching planCredits, which refuses a self-paying sender group and
           // credits the rest of the transaction. Checking only the largest contributor
@@ -3438,9 +3445,11 @@ async function handleRequest(req, res) {
           const filed = setPaymentOutcome(didHash, credited.txHash, leg.payer, legOutcome, packet);
           if (filed === 'set') { anyCredited = true; outcomeRecorded = true; }
           else if (filed === 'already_set') outcomeConflict = true;
+          else if (isDropped(credited.txHash, didHash, leg.payer)) outcomeDropped = true;
         }
         if (!anyCredited) {
           metrics.inc('attestRejectedPayment');
+          if (outcomeDropped) return json(res, 409, { error: PAYMENT_DROPPED, code: 'payment_dropped' });
           return outcomeConflict
             ? json(res, 409, { error: 'an outcome has already been recorded for this settlement', code: 'outcome_recorded' })
             : json(res, 409, { error: 'this settlement has already been credited', code: 'replayed' });

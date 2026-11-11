@@ -1187,25 +1187,24 @@ test('a final refund read keeps the end of the hold it was read against', () => 
 
 // ---- the payment ledger's caps ------------------------------------------------------------------------------
 
-test('a payment past the per-agent or total cap is not credited, not marked used, and holds the agent', () => {
+test('past the per-agent or total cap the payment that matters least is dropped, and stays credited', () => {
   const out = inChildWithState(null, `
     process.env.PAYMENT_MAX_EVENTS_PER_AGENT = '2';
     process.env.PAYMENT_MAX_EVENTS_TOTAL = '3';
     const s = require('./store');
     const a = '0x' + 'aa'.repeat(32), b = '0x' + 'bb'.repeat(32), payer = '0x' + '11'.repeat(20);
     const tx = (n) => '0x' + n.toString(16).padStart(64, '0');
-    const credited = [s.creditPayment(a, tx(1), '5', payer, null), s.creditPayment(a, tx(2), '5', payer, null)];
-    const capped = s.creditPayment(a, tx(3), '5', payer, null);
-    const atCap = [s.atEventCap(a), s.atEventCap(b)];
-    const thirdOverall = s.creditPayment(b, tx(4), '5', payer, null);
-    const pastTotal = s.creditPayment(b, tx(5), '5', payer, null);
+    const credit = (did, n, amount) => s.creditPayment(did, tx(n), amount, payer, null, 1000 + n);
+    // The third to a drops its oldest; the fifth overall drops the oldest of the smallest anywhere, a's second.
+    const credited = [credit(a, 1, '5'), credit(a, 2, '5'), credit(a, 3, '5'), credit(b, 4, '5'), credit(b, 5, '7')];
+    const kept = (did) => s.getPaymentEvents(did).map((e) => Number(e.txHash));
     console.log(JSON.stringify({
-      credited, capped, atCap, thirdOverall, pastTotal,
-      used: s.isCredited(tx(3), a, payer), ledger: s.ledgerStatus(),
+      credited, a: kept(a), b: kept(b),
+      used: [1, 2].map((n) => s.isCredited(tx(n), a, payer) && s.isDropped(tx(n), a, payer)), ledger: s.ledgerStatus(),
     }));
   `);
   assert.deepEqual(JSON.parse(out.trim().split('\n').at(-1)), {
-    credited: [true, true], capped: false, atCap: [true, false], thirdOverall: true, pastTotal: false,
-    used: false, ledger: { events: 3, maxTotal: 3, maxPerAgent: 2, refused: 2 },
+    credited: [true, true, true, true, true], a: [3], b: [4, 5],
+    used: [true, true], ledger: { events: 3, maxTotal: 3, maxPerAgent: 2, dropped: 2 },
   });
 });

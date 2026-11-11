@@ -47,12 +47,26 @@ const FLAG_HALF_LIFE_MS =
 
 // Bounded so a stream of small payments, to one agent or across all of them, cannot grow the ledger until a
 // save no longer fits in memory: state-serialize.js measured about 280 MB at 200,000 events against the 768 MB
-// the mainnet compose file allows. A payment past a cap is not credited and not marked used. An agent at its own
-// cap is held by the epoch loop (atEventCap) rather than scored, since an operator that reached the cap at a
-// different payment would score it differently. Pruning by age makes room again.
+// the mainnet compose file allows. Past a cap the ledger drops the payments that matter least (dropOrder), which
+// may include the one just credited, so an agent is never held for a full ledger, and two operators holding the
+// same payments keep the same ones whatever order they arrived in. A payment with an outcome is never dropped.
+// A dropped payment stays credited: its key is kept until pruning by age would have dropped it (droppedPayments).
 const MAX_EVENTS_PER_AGENT = numberSetting(process.env.PAYMENT_MAX_EVENTS_PER_AGENT, 25_000);
 const MAX_EVENTS_TOTAL = numberSetting(process.env.PAYMENT_MAX_EVENTS_TOTAL, 150_000);
-let ledgerRefusals = 0;
+// Payments the caps dropped since this process started, for /health.
+let ledgerDrops = 0;
+// How many events paymentEvents holds across every agent, kept as it changes rather than counted for each credit.
+let eventTotal = 0;
+// The creditKey of each payment a cap dropped, to the time it settled. The key stays in usedPaymentTxs, so the
+// payment cannot be credited again, until prunePaymentEvents would have dropped the payment itself; then both go.
+// Saved with the state. It needs no format version: a build before it ignores the list and drops it on its next
+// save, which leaves those keys in usedPaymentTxs for good, the safe direction.
+const droppedPayments = new Map();
+// The scored chain's fee unit and each payment chain's (setLedgerFeeUnits), so that the caps compare payments from
+// different chains in one unit, as forScoring does. Until set, amounts compare as stored.
+let scoredFeeUnit = 1n;
+let chainFeeUnits = null;
+let feeUnitLcm = 1n;
 
 // didHash → ERC-8004 agentId (string) this agent is linked to (ownership-verified at link time)
 const links = new Map();
@@ -284,6 +298,9 @@ function parseState(parsed) {
   if (parsed.usedPaymentTxs !== undefined && !Array.isArray(parsed.usedPaymentTxs)) {
     throw new Error('usedPaymentTxs is not a list');
   }
+  if (parsed.droppedPayments !== undefined && !Array.isArray(parsed.droppedPayments)) {
+    throw new Error('droppedPayments is not a list');
+  }
   if (parsed.prunedBefore !== undefined && parsed.prunedBefore !== null && !Number.isFinite(parsed.prunedBefore)) {
     throw new Error(`prunedBefore ${JSON.stringify(parsed.prunedBefore)} is not a time`);
   }
@@ -298,6 +315,7 @@ function parseState(parsed) {
     attestCooldowns: new Map(),
     paymentEvents: new Map(),
     usedPaymentTxs: new Set(),
+    droppedPayments: new Map(),
     prunedBefore: parsed.prunedBefore ?? null,
     divergences: new Map(),
     scanState: parsed.scanState || null,
@@ -367,6 +385,10 @@ function parseState(parsed) {
     );
   }
   for (const h of parsed.usedPaymentTxs || []) next.usedPaymentTxs.add(h);
+  // An entry that is not a key and a time is passed over: its key, if any, then stays in usedPaymentTxs for good.
+  for (const d of parsed.droppedPayments || []) {
+    if (Array.isArray(d) && typeof d[0] === 'string' && Number.isFinite(d[1])) next.droppedPayments.set(d[0], d[1]);
+  }
   for (const [k, v] of Object.entries(parsed.divergences || {})) {
     // Re-applied on load, not just on write: a file that grew under an older build
     // would otherwise never shrink back inside the cap.
@@ -388,8 +410,10 @@ function applyState(next) {
   for (const [k, v] of next.attestCooldowns) attestCooldowns.set(k, v);
   paymentEvents.clear();
   acceptedOrder = [];
+  eventTotal = 0;
   for (const [k, v] of next.paymentEvents) {
     paymentEvents.set(k, v);
+    eventTotal += v.length;
     for (const e of v) {
       const at = e.payerOutcome?.acceptedAt;
       if (Number.isSafeInteger(at)) acceptedOrder.push({ acceptedAt: at, did: k, tx: e.txHash, who: String(e.payer).toLowerCase() });
@@ -399,6 +423,8 @@ function applyState(next) {
   lastAcceptedAt = acceptedOrder.length ? acceptedOrder[acceptedOrder.length - 1].acceptedAt : 0;
   usedPaymentTxs.clear();
   for (const h of next.usedPaymentTxs) usedPaymentTxs.add(h);
+  droppedPayments.clear();
+  for (const [k, ts] of next.droppedPayments) droppedPayments.set(k, ts);
   prunedBefore = next.prunedBefore;
   divergences.clear();
   for (const [k, v] of next.divergences) divergences.set(k, v);
@@ -583,6 +609,7 @@ function persist() {
         attestCooldowns: Object.fromEntries(attestCooldowns),
         paymentEvents: Object.fromEntries(paymentEvents),
         usedPaymentTxs: [...usedPaymentTxs],
+        droppedPayments: [...droppedPayments],
         prunedBefore,
         divergences: Object.fromEntries(divergences),
         scanState,
@@ -693,21 +720,57 @@ const onChain = (event, chainId) => (chainId == null ? event.chainId == null : e
 function creditPayment(
   didHash, txHash, amount, payer, success, now = Date.now(), packetId = null, blockNumber = null, chainId = null,
 ) {
-  const key = txHash.toLowerCase();
-  // The same spelling isCredited uses. Filing under the caller's spelling while marking
-  // the receipt used in lowercase let a mixed-case hash spend a payment where no score
-  // would ever read it.
-  const did = String(didHash).toLowerCase();
-  // Older than the ledger keeps: its key may have been pruned with it, so this is what stops it counting twice.
-  // Here rather than at each caller, so that no way in can credit one.
-  if (tooOldToCredit(now)) return false;
-  if (isCredited(key, did, payer, chainId)) return false;
-  if ((paymentEvents.get(did)?.length ?? 0) >= MAX_EVENTS_PER_AGENT || paymentEventTotal() >= MAX_EVENTS_TOTAL) {
-    ledgerRefusals += 1;
-    return false;
+  return creditPayments([{ didHash, txHash, amount, payer, success, ts: now, packetId, blockNumber, chainId }])[0];
+}
+
+/**
+ * Credits several payments, each as creditPayment does, and says of each whether it was credited.
+ *
+ * The scans credit through here. An agent's list is replaced rather than edited (see below), so crediting one payment
+ * at a time copied the whole list for each, and filling a ledger of 25,000 took over five seconds; here each agent's
+ * list is copied once for the batch. A payment the caps drop (dropPastCaps) still counts as credited, the one just
+ * credited included. With `trim: false` the caps wait for trimLedger, so that a payment given its payer's outcome
+ * straight after it is credited is not dropped in between.
+ *
+ * @param {Array<{ didHash: string, txHash: string, amount, payer: string, success?: boolean|null, ts: number,
+ *   packetId?: string|null, blockNumber?: number|null, chainId?: number|null }>} credits  `ts` is the settlement's time
+ * @returns {boolean[]}
+ */
+function creditPayments(credits, { trim = true } = {}) {
+  const added = new Map();
+  const results = credits.map(({
+    didHash, txHash, amount, payer, success = null, ts, packetId = null, blockNumber = null, chainId = null,
+  }) => {
+    const key = txHash.toLowerCase();
+    // The same spelling isCredited uses. Filing under the caller's spelling while marking
+    // the receipt used in lowercase let a mixed-case hash spend a payment where no score
+    // would ever read it.
+    const did = String(didHash).toLowerCase();
+    // Older than the ledger keeps: its key may have been pruned with it, so this is what stops it counting twice.
+    // Here rather than at each caller, so that no way in can credit one.
+    if (tooOldToCredit(ts)) return false;
+    if (isCredited(key, did, payer, chainId)) return false;
+    usedPaymentTxs.add(creditKey(key, did, payer, chainId));
+    if (!added.has(did)) added.set(did, []);
+    added.get(did).push(Object.freeze(paymentEvent(key, amount, payer, success, ts, packetId, blockNumber, chainId)));
+    return true;
+  });
+  for (const [did, events] of added) {
+    eventTotal += events.length;
+    // Frozen, not copied. The evidence cache treats the array's identity as the revision
+    // token, so handing out copies would turn every request into a miss; freezing keeps one
+    // array per version and makes the "never mutated in place" rule the cache depends on
+    // enforced rather than merely documented.
+    // The event is frozen as well as the array: merkle.js caches a leaf against the event and a root
+    // against the array, and that is only sound for values that cannot change.
+    paymentEvents.set(did, Object.freeze([...(paymentEvents.get(did) ?? []), ...events]));
   }
-  usedPaymentTxs.add(creditKey(key, did, payer, chainId));
-  const list = paymentEvents.get(did) ?? [];
+  if (trim) dropPastCaps(added.keys());
+  return results;
+}
+
+/** One credited payment as the ledger stores it. */
+function paymentEvent(key, amount, payer, success, now, packetId, blockNumber, chainId) {
   // The settlement hash is kept, not just used for dedupe: it is what lets a third
   // party pull the payment off the chain and check it for themselves, which is the
   // whole point of committing to the evidence.
@@ -744,14 +807,103 @@ function creditPayment(
   // The chain it settled on, for a payment chain's payment only (ADR 0009). Unlike the block it is
   // evidence: the leaf commits to it, so a verifier knows which chain to rebuild the payment from.
   if (chainId != null) event.chainId = Number(chainId);
-  // Frozen, not copied. The evidence cache treats the array's identity as the revision
-  // token, so handing out copies would turn every request into a miss; freezing keeps one
-  // array per version and makes the "never mutated in place" rule the cache depends on
-  // enforced rather than merely documented.
-  // The event is frozen as well as the array: merkle.js caches a leaf against the event and a root
-  // against the array, and that is only sound for values that cannot change.
-  paymentEvents.set(did, Object.freeze([...list, Object.freeze(event)]));
-  return true;
+  return event;
+}
+
+/** Whether the caps keep this payment whatever else they drop: it carries an outcome, its payer's or a token holder's. */
+const hasOutcome = (e) => Boolean(e.payerOutcome) || typeof e.success === 'boolean';
+
+const ascending = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+const gcd = (a, b) => (b === 0n ? a : gcd(b, a % b));
+
+/**
+ * The fee units the caps compare amounts in: the scored chain's (PAYMENT_FEE_UNIT) and each payment chain's, given as
+ * { chainId, feeUnit }. The oracle sets them at boot. A payment from a chain not given counts as nothing, as forScoring
+ * counts it.
+ */
+function setLedgerFeeUnits(scored, chains) {
+  scoredFeeUnit = BigInt(scored);
+  chainFeeUnits = new Map([...chains].map((c) => [Number(c.chainId), BigInt(c.feeUnit)]));
+  feeUnitLcm = [...chainFeeUnits.values()].reduce((l, u) => (l / gcd(l, u)) * u, scoredFeeUnit);
+  ranks = new WeakMap();
+}
+
+// ranked() of each stored payment. A stored payment is frozen, so its rank cannot change until the fee units do.
+let ranks = new WeakMap();
+
+/** A payment as dropOrder reads it: its amount scaled to a unit every chain's fee unit divides, so none is rounded. */
+function ranked(e, did) {
+  let r = ranks.get(e);
+  if (!r) {
+    const unit = e.chainId == null ? scoredFeeUnit : chainFeeUnits === null ? 1n : chainFeeUnits.get(Number(e.chainId)) ?? 0n;
+    r = { e, did, payer: String(e.payer).toLowerCase(), key: unit ? BigInt(e.amount) * (feeUnitLcm / unit) : 0n };
+    ranks.set(e, r);
+  }
+  return r;
+}
+
+/**
+ * The order the caps drop payments in, first to go first: the smallest amount in fee units, then the oldest, then by
+ * transaction hash, payer, chain and agent, so that no two payments tie. It reads only the payments themselves, never
+ * this host's clock or when a payment arrived, so two operators holding the same payments put them in the same order.
+ */
+function dropOrder(x, y) {
+  return ascending(x.key, y.key) || (x.e.ts - y.e.ts) || ascending(x.e.txHash, y.e.txHash)
+    || ascending(x.payer, y.payer) || ((x.e.chainId ?? 0) - (y.e.chainId ?? 0)) || ascending(x.did, y.did);
+}
+
+/**
+ * Brings the ledger back inside its caps: each of these agents down to MAX_EVENTS_PER_AGENT, then the whole ledger
+ * down to MAX_EVENTS_TOTAL, each time dropping the payments without an outcome that go first (dropOrder).
+ *
+ * What is left depends only on which payments were credited, not on their order: per agent its payments with an
+ * outcome and the highest-ranked of the rest, and across agents the same again. That holds because a payment's rank
+ * never changes and, between prunes, the room left for payments without an outcome never grows, so one that goes
+ * would have gone in any order. Two operators can still part when an outcome reaches one after the other has dropped
+ * its payment, or when one prunes between two credits that the other prunes after. Payments with an outcome are
+ * never dropped, so enough of them hold a ledger above a cap, and anything credited past it then goes at once.
+ */
+function dropPastCaps(dids) {
+  for (const did of dids) {
+    const list = paymentEvents.get(did) ?? [];
+    if (list.length <= MAX_EVENTS_PER_AGENT) continue;
+    const open = list.filter((e) => !hasOutcome(e)).map((e) => ranked(e, did));
+    dropFirst(open, list.length - MAX_EVENTS_PER_AGENT);
+  }
+  if (eventTotal <= MAX_EVENTS_TOTAL) return;
+  const open = [];
+  for (const [did, list] of paymentEvents) for (const e of list) if (!hasOutcome(e)) open.push(ranked(e, did));
+  dropFirst(open, eventTotal - MAX_EVENTS_TOTAL);
+}
+
+/** Drops the first `n` of `open` (dropOrder), keeping each one's key until it would have been pruned. */
+function dropFirst(open, n) {
+  const gone = n >= open.length ? open : open.sort(dropOrder).slice(0, n);
+  if (!gone.length) return;
+  const byDid = new Map();
+  for (const { e, did } of gone) {
+    if (!byDid.has(did)) byDid.set(did, new Set());
+    byDid.get(did).add(e);
+    const key = creditKey(e.txHash, did, e.payer, e.chainId ?? null);
+    usedPaymentTxs.add(key);
+    droppedPayments.set(key, e.ts);
+  }
+  for (const [did, events] of byDid) {
+    // A new array, as for every change (creditPayments).
+    const kept = paymentEvents.get(did).filter((e) => !events.has(e));
+    if (kept.length) paymentEvents.set(did, Object.freeze(kept));
+    else paymentEvents.delete(did);
+  }
+  eventTotal -= gone.length;
+  ledgerDrops += gone.length;
+}
+
+/** Applies the caps to this agent's ledger and the whole one, after creditPayments with `trim: false`. */
+function trimLedger(didHash) { dropPastCaps([String(didHash).toLowerCase()]); }
+
+/** Whether this payment was credited and then dropped by a cap, so that no outcome can be recorded for it. */
+function isDropped(txHash, didHash, payer, chainId = null) {
+  return droppedPayments.has(creditKey(txHash, didHash, payer, chainId));
 }
 
 /**
@@ -982,19 +1134,9 @@ function paymentVolume(didHash) {
 /// not grow without bound. At a 90-day half-life and the default floor this keeps
 /// roughly the last three years, by which point an event contributes under a
 /// thousandth of its original value and cannot move an integer score.
-/** How many payment events this oracle holds, across every agent. */
-function paymentEventTotal() {
-  let n = 0;
-  for (const list of paymentEvents.values()) n += list.length;
-  return n;
-}
-
-/** Whether this agent's ledger is at MAX_EVENTS_PER_AGENT, so further payments to it are not credited. */
-const atEventCap = (didHash) => (paymentEvents.get(String(didHash).toLowerCase())?.length ?? 0) >= MAX_EVENTS_PER_AGENT;
-
-/** The ledger's size against its caps, and how many payments the caps refused since this process started. */
+/** The ledger's size against its caps, and how many payments the caps dropped since this process started. */
 const ledgerStatus = () => ({
-  events: paymentEventTotal(), maxTotal: MAX_EVENTS_TOTAL, maxPerAgent: MAX_EVENTS_PER_AGENT, refused: ledgerRefusals,
+  events: eventTotal, maxTotal: MAX_EVENTS_TOTAL, maxPerAgent: MAX_EVENTS_PER_AGENT, dropped: ledgerDrops,
 });
 
 const PRUNE_MIN_WEIGHT = 0.001;
@@ -1038,7 +1180,16 @@ function prunePaymentEvents(halfLifeMs, minWeight = PRUNE_MIN_WEIGHT, now = Date
     if (kept.length === 0) paymentEvents.delete(did);
     else if (kept.length !== list.length) paymentEvents.set(did, Object.freeze(kept));
   }
-  if (dropped) prunedBefore = Math.max(prunedBefore ?? -Infinity, cutoff);
+  eventTotal -= dropped;
+  // A payment a cap dropped goes now, as it would have had it been kept, and its key with it.
+  let keys = 0;
+  for (const [key, ts] of droppedPayments) {
+    if (ts >= cutoff) continue;
+    droppedPayments.delete(key);
+    usedPaymentTxs.delete(key);
+    keys += 1;
+  }
+  if (dropped || keys) prunedBefore = Math.max(prunedBefore ?? -Infinity, cutoff);
   return dropped;
 }
 
@@ -1159,8 +1310,11 @@ function getStatePath() {
 }
 
 module.exports = {
-  atEventCap,
   ledgerStatus,
+  creditPayments,
+  trimLedger,
+  isDropped,
+  setLedgerFeeUnits,
   MAX_EVENTS_PER_AGENT,
   MAX_EVENTS_TOTAL,
   attestations,

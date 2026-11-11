@@ -67,7 +67,7 @@ async function scanAs(agent, logs, reachMs) {
     agents: [agent],
     state: null,
     isCredited: () => false,
-    credit: (c, ts) => { credited.push(Object.freeze({ chainId: BASE, txHash: c.txHash.toLowerCase(), payer: c.payer, amount: c.amount, ts, success: null })); return true; },
+    creditAll: (list) => list.map(({ credit: c, ts }) => { credited.push(Object.freeze({ chainId: BASE, txHash: c.txHash.toLowerCase(), payer: c.payer, amount: c.amount, ts, success: null })); return true; }),
     registeredAtMs: async () => 0,
     knownOnChain: new Map(),
     read: (_label, fn) => fn(),
@@ -117,7 +117,7 @@ test('the new operator is refused for what it paid once named, and what it paid 
   const big = { ...cfg.chains[0], maxBlocks: 100_000 };
   const out = await pc.scanChain(big, {
     provider: fake, scoredProvider: { getCode: async () => '0x' }, agents: [after(w)], state: null,
-    isCredited: () => false, credit: (c, ts) => { credited.push(Object.freeze({ chainId: BASE, txHash: c.txHash, payer: c.payer, amount: c.amount, ts, success: null })); return true; },
+    isCredited: () => false, creditAll: (list) => list.map(({ credit: c, ts }) => { credited.push(Object.freeze({ chainId: BASE, txHash: c.txHash, payer: c.payer, amount: c.amount, ts, success: null })); return true; }),
     registeredAtMs: async () => 0, knownOnChain: new Map(), read: (_l, fn) => fn(), sleep: async () => {},
   });
   assert.equal(out.reasons.self_payment, 1, 'B paying after it was named is refused');
