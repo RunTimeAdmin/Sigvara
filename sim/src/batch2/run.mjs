@@ -6,9 +6,10 @@
 //   node sim/src/batch2/run.mjs loop           tick every few minutes until the batch ends
 //
 // Environment, as the first batch's (SIM_MNEMONIC_FILE, SIM_STATE_FILE, SIM_SEED, SIM_RPC_URL,
-// SIM_ORACLE_URL, SIM_PAUSE_FILE), plus SIM_BASE_RPC_URL for Base Sepolia, and SIM_COUNTERAUDIT_URL
-// with SIM_COUNTERAUDIT_KEY_FILE, a file holding a CounterAudit API key. Without the key every
-// outcome goes straight to the oracle, and the state says so.
+// SIM_ORACLE_URL, SIM_PAUSE_FILE), plus SIM_BASE_RPC_URL for Base Sepolia, SIM_X402_FACILITATOR (the
+// public testnet facilitator by default; `self` submits from the treasury, which then needs Base
+// Sepolia ETH), and SIM_COUNTERAUDIT_URL with SIM_COUNTERAUDIT_KEY_FILE, a file holding a CounterAudit
+// API key. Without the key every outcome goes straight to the oracle, and the state says so.
 //
 // It acts only on its cast: every payment goes to one of its agents, and the reviewers it borrows
 // from the first batch pay and review only this batch's reviewed agents. It stops after DAYS days.
@@ -20,9 +21,9 @@ import { buildCast, REVIEW } from './cast.mjs';
 import { planHour, HOURS, RETRIED } from './plan.mjs';
 import { rng } from '../rng.mjs';
 import { loadMnemonic, walletAt, agentEd25519 } from '../wallets.mjs';
+import { BASE_CHAIN_ID, BASE_USDC, AUTH_TYPES, USDC_DOMAIN, authorization, settleRequest } from './x402.mjs';
 
 const CHAIN_ID = 5042002;
-const BASE_CHAIN_ID = 84532;
 // From deployments/5042002.json.
 const IDENTITY = '0x7e3aFC532eE5d922ab3cc3FFb510c7C8151477Dd';
 const REPUTATION = '0x6603C96275e85F724Cdf74666b399365e4cA29ed';
@@ -31,8 +32,6 @@ const SVR = '0x41De2D6D55318e197a00E8f5B496eA2790e23E6c';
 // The ERC-8004 registries on Arc testnet, as the publisher uses them (oracle/signer.js).
 const ERC8004_IDENTITY = '0x8004A818BFB912233c491871b3d84c89A494BD9e';
 const ERC8004_REPUTATION = '0x8004B663056A597Dffe9eCcC1965A193B7388713';
-// Base Sepolia USDC, the asset both operators count there (docs/operations-runbook.md).
-const BASE_USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 
 const env = process.env;
 const SEED = env.SIM_SEED || 'sigvara-testnet-sim-2';
@@ -42,6 +41,10 @@ const BASE_RPC = env.SIM_BASE_RPC_URL || 'https://sepolia.base.org';
 const ORACLE = env.SIM_ORACLE_URL || 'https://oracle.sigvara.xyz';
 const COUNTERAUDIT = env.SIM_COUNTERAUDIT_URL || 'https://api.counteraudit.io';
 const PAUSE_FILE = env.SIM_PAUSE_FILE || 'sim2-pause';
+// Who submits Base Sepolia transfers: the public x402 testnet facilitator, which pays the gas, or with
+// `self` the treasury, which then needs Base Sepolia ETH.
+const FACILITATOR = env.SIM_X402_FACILITATOR || 'https://x402.org/facilitator';
+const RESOURCE = 'https://sigvara.xyz/simulation?batch=2';
 // Native USDC (18 decimals) for gas on Arc. A wallet that funds a reviewer, or a ring customer, sends
 // at least FUNDER_GRANT, since only a transfer of 1 USDC or more names its sender as the funder.
 const GAS_GRANT = ethers.parseEther('0.25');
@@ -91,17 +94,9 @@ const ERC8004_REPUTATION_ABI = [
 ];
 const USDC_ABI = [
   'function balanceOf(address) view returns (uint256)',
-  'function transfer(address,uint256) returns (bool)',
   'function authorizationState(address,bytes32) view returns (bool)',
   'function transferWithAuthorization(address from, address to, uint256 value, uint256 validAfter, uint256 validBefore, bytes32 nonce, uint8 v, bytes32 r, bytes32 s)',
 ];
-// EIP-3009, as x402's exact scheme settles a payment: the payer signs, someone else submits.
-const AUTH_TYPES = {
-  TransferWithAuthorization: [
-    { name: 'from', type: 'address' }, { name: 'to', type: 'address' }, { name: 'value', type: 'uint256' },
-    { name: 'validAfter', type: 'uint256' }, { name: 'validBefore', type: 'uint256' }, { name: 'nonce', type: 'bytes32' },
-  ],
-};
 
 const cast = buildCast(rng(`${SEED}:cast`));
 const log = (...a) => console.log(new Date().toISOString(), ...a);
@@ -209,9 +204,8 @@ async function tick(state) {
       } else if (a.type === 'fund-base') {
         const to = w.onBase(a.wallet).address;
         if ((await usdc().balanceOf(to)) >= BASE_GRANT / 2n) { done(a, { note: 'already funded' }); continue; }
-        const tx = await usdc(w.onBase(cast.treasury)).transfer(to, BASE_GRANT);
-        await tx.wait();
-        done(a, { tx: tx.hash });
+        const tx = await settleUsdc(w.onBase(cast.treasury), to, BASE_GRANT, a.id, usdc, w.onBase(cast.treasury));
+        done(a, { tx });
         log(`funded ${to} with ${Number(BASE_GRANT) / 1e6} USDC on Base Sepolia`);
       } else if (a.type === 'register') {
         if (!isDone(`fund:${a.operator}`)) continue;
@@ -379,25 +373,16 @@ async function pay(a, state, w, { svr, usdc, svrFor, provider, funderOf, agentId
     done(a, { tx: txHash, amount: a.amount, delivered: a.delivered });
     await tx.wait(2);
   } else {
-    // The payer signs an EIP-3009 authorization and the treasury submits it, as an x402 facilitator
-    // would, so the transfer is the payer's and only the treasury needs Base Sepolia ETH. The nonce
-    // comes from the action id, so the same job can never be paid twice.
+    // An x402 exact-scheme payment (x402.mjs): the payer signs, the facilitator submits.
     const payer = w.onBase(a.payer), treasury = w.onBase(cast.treasury);
     const value = BigInt(a.amount) * 10_000n;
     if ((await usdc().balanceOf(payer.address)) < value) {
-      await (await usdc(treasury).transfer(payer.address, BASE_TOPUP)).wait();
+      await settleUsdc(treasury, payer.address, BASE_TOPUP, `topup:${a.id}`, usdc, treasury);
       log(`topped up ${payer.address} with ${Number(BASE_TOPUP) / 1e6} USDC on Base Sepolia`);
     }
-    const nonce = ethers.keccak256(ethers.toUtf8Bytes(`${SEED}:${a.id}`));
-    if (await usdc().authorizationState(payer.address, nonce)) { done(a, { note: 'authorization already used' }); return; }
-    const validBefore = BigInt(Math.floor(Date.now() / 1000) + 3600);
-    const domain = { name: 'USDC', version: '2', chainId: BASE_CHAIN_ID, verifyingContract: BASE_USDC };
-    const msg = { from: payer.address, to: agent, value, validAfter: 0n, validBefore, nonce };
-    const sig = ethers.Signature.from(await payer.signTypedData(domain, AUTH_TYPES, msg));
-    const tx = await usdc(treasury).transferWithAuthorization(payer.address, agent, value, 0n, validBefore, nonce, sig.v, sig.r, sig.s);
-    txHash = tx.hash;
+    txHash = await settleUsdc(payer, agent, value, a.id, usdc, treasury);
+    if (!txHash) { done(a, { note: 'authorization already used' }); return; }
     done(a, { tx: txHash, cents: a.amount, delivered: a.delivered });
-    await tx.wait();
   }
   if (a.post) {
     const chainId = a.chain === 'base' ? BASE_CHAIN_ID : CHAIN_ID;
@@ -410,6 +395,32 @@ async function pay(a, state, w, { svr, usdc, svrFor, provider, funderOf, agentId
     saveState(state);
   }
   log(`${w.at(a.payer).address} paid ${a.chain === 'base' ? `${a.amount} cents of USDC on Base` : `${a.amount} SVR on Arc`} to ${agent}${a.tag ? ` (${a.tag})` : ''}`);
+}
+
+// Moves `value` USDC on Base Sepolia from `from` (a wallet) to `to` by an EIP-3009 authorization that
+// `from` signs, submitted by the facilitator, or by `treasury` when FACILITATOR is `self`. Returns the
+// transaction hash once it is mined, or null when this key's authorization was already used, which
+// means an earlier try went through without being recorded.
+async function settleUsdc(from, to, value, key, usdc, treasury) {
+  const auth = authorization({ from: from.address, to, value, key, seed: SEED, nowS: Math.floor(Date.now() / 1000) });
+  if (await usdc().authorizationState(auth.from, auth.nonce)) return null;
+  const signature = await from.signTypedData(USDC_DOMAIN, AUTH_TYPES, auth);
+  if (FACILITATOR === 'self') {
+    const sig = ethers.Signature.from(signature);
+    const tx = await usdc(treasury).transferWithAuthorization(
+      auth.from, auth.to, auth.value, auth.validAfter, auth.validBefore, auth.nonce, sig.v, sig.r, sig.s);
+    await tx.wait();
+    return tx.hash;
+  }
+  const res = await fetch(`${FACILITATOR}/settle`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(settleRequest(auth, signature, RESOURCE)),
+  });
+  const answer = await res.json().catch(() => ({}));
+  if (!res.ok || !answer.success || !answer.transaction) {
+    throw new Error(`facilitator refused: ${answer.errorReason ?? answer.error ?? res.status}`);
+  }
+  return answer.transaction;
 }
 
 // Posts each queued outcome once its payment can be read, to the oracle or through CounterAudit. A 2xx

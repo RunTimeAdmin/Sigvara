@@ -185,10 +185,11 @@ Ten customers pay on Arc and eight on Base Sepolia, a few hundred Base payments 
 other agents deliver 95% of jobs and the ring all of them. As in the first batch, a job that is not
 delivered gets no outcome.
 
-A Base payment is settled the way x402's exact scheme settles one: the customer signs an EIP-3009
-`transferWithAuthorization`, and the batch's treasury submits it, as a facilitator would. The transfer
-is the customer's own, so the oracle reads the customer as the payer, and only the treasury needs
-Base Sepolia ETH. There is no HTTP 402 exchange, so this is not the Wallet MCP payment the
+A Base payment is an x402 exact-scheme payment: the customer signs an EIP-3009
+`transferWithAuthorization`, and x402's public testnet facilitator (`x402.org/facilitator`) submits
+it and pays the gas, so nothing in the batch needs Base Sepolia ETH. The treasury's grants to Base
+customers go the same way. The transfer is the customer's own, so the oracle reads the customer as
+the payer. There is no HTTP 402 exchange, so this is not the Wallet MCP payment the
 [roadmap](roadmap.md) still names. Its outcome is posted 20 minutes later, once Base has finalized it.
 
 About 30% of signed outcomes go through CounterAudit (`POST /v1/audit/ingest`, connector
@@ -244,8 +245,9 @@ SIM_MNEMONIC_FILE=/keys/sim-mnemonic SIM_STATE_FILE=/data/state.json SIM_PAUSE_F
 SIM_COUNTERAUDIT_KEY_FILE=/keys/counteraudit-key node src/batch2/run.mjs loop
 ```
 
-- The treasury needs about 35 USDC of Arc testnet gas, about 35 USDC on Base Sepolia, and a little
-  Base Sepolia ETH to submit the payments.
+- The treasury needs about 35 USDC of Arc testnet gas and about 35 USDC on Base Sepolia. With
+  `SIM_X402_FACILITATOR=self` it submits Base transfers itself and also needs a little Base Sepolia
+  ETH, about 0.001 for the whole batch.
 - Without the CounterAudit key file every outcome goes straight to the oracle, and the state records
   which way each one went.
 - It acts only on its own cast and the six reviewers, and they pay and review only the reviewed
