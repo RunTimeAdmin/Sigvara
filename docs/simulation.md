@@ -1,7 +1,7 @@
 # Testnet simulation
 
 **Status:** the first batch has run since 2 November 2026 and stops by itself on 30 November. A [second
-batch](#batch-2) runs beside it for 28 days from its first tick. [sigvara.xyz/simulation](https://sigvara.xyz/simulation)
+batch](#batch-2) has run beside it since 11 November and stops by itself on 9 December. [sigvara.xyz/simulation](https://sigvara.xyz/simulation)
 shows where each is, and [what changed during the run](#what-changed-during-the-run) is recorded below.
 
 When this was built, Sigvara on Arc testnet had three registered agents, two of them its own, and two oracle operators,
@@ -77,6 +77,7 @@ been used for tests by hand. Read the results on 30 November against this list.
 | 4 November | 2 | Reputation upgraded to `f35cbc6` ([#199](https://github.com/RunTimeAdmin/Sigvara/pull/199)) | Each finalize used to throw away the fraction of a point built up since the last, which gave about 3.4 points a day in place of 4. Compare maturity rates from this day on |
 | 5 November | 3 | Reputation upgraded to `dcad617` ([#218](https://github.com/RunTimeAdmin/Sigvara/pull/218)) | A score's age now runs from its proposal and not its finalize. Score values do not change |
 | 7 November | 5 | Payments on Base Sepolia count on both operators | Below |
+| 11 November | 9 | The [second batch](#batch-2) starts beside it, at 03:22 UTC, on the same two operators | More for both operators to scan, Base payments among them. An operator whose Base scan falls behind holds both batches' agents that epoch |
 
 ### Base Sepolia, from 7 November
 
