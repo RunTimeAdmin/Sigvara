@@ -194,8 +194,10 @@ the payer. There is no HTTP 402 exchange, so this is not the Wallet MCP payment 
 [roadmap](roadmap.md) still names. Its outcome is posted 20 minutes later, once Base has finalized it.
 
 About 30% of signed outcomes go through CounterAudit (`POST /v1/audit/ingest`, connector
-`sigvara-payment-outcome-v1`), which seals each one and forwards it to both operators. The rest go to
-the oracle's `/attest`. The state file keeps every answer, so a refused outcome shows its code.
+`sigvara-payment-outcome-v1`), which seals each one and forwards it to the operators it is set up for,
+today the primary; the checker imports it from there like any payer outcome. The rest go to the
+oracle's `/attest`. The state file keeps every answer, so a refused outcome shows its code. The first
+one through CounterAudit, at 05:03 UTC on 11 November, was sealed (201) and recorded by the primary.
 
 ### What should happen
 
