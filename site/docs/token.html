@@ -138,6 +138,32 @@
           </tbody>
         </table>
 
+        <table class="data-table">
+          <thead><tr><th>12 November 2026</th><th>Second buy</th></tr></thead>
+          <tbody>
+            <tr><td>Time (UTC)</td><td>13:47:54</td></tr>
+            <tr><td>SVR</td><td>1,021,584.286701452</td></tr>
+            <tr><td>Paid</td><td>5.859458 USDC, including a 0.85% swap-route fee of 0.049805, paid partly from the fee claim below</td></tr>
+            <tr><td>Transaction</td><td><a href="https://explorer.arc.io/tx/0x937c213cbfeacd1ddd6762aec6b723fc09db82719180fd068d7a29c0831de2e0" target="_blank" rel="noopener"><code>0x937c213c…e2e0</code></a></td></tr>
+            <tr><td>Held by</td><td>The deployer, then the treasury timelock</td></tr>
+            <tr><td>Held for</td><td>Treasury inventory (below).</td></tr>
+          </tbody>
+        </table>
+
+        <table class="data-table">
+          <thead><tr><th>12 November 2026</th><th>Third buy</th></tr></thead>
+          <tbody>
+            <tr><td>Time (UTC)</td><td>13:48:45</td></tr>
+            <tr><td>SVR</td><td>869,990.046016952</td></tr>
+            <tr><td>Paid</td><td>5 USDC, including a 0.85% swap-route fee of 0.0425</td></tr>
+            <tr><td>Transaction</td><td><a href="https://explorer.arc.io/tx/0x269ec146716d69369ac62fbb13b690bf58bfa4d8213de4a2d3cc8123a041f0fd" target="_blank" rel="noopener"><code>0x269ec146…f0fd</code></a></td></tr>
+            <tr><td>Held by</td><td>The deployer, then the treasury timelock</td></tr>
+            <tr><td>Held for</td><td>Treasury inventory: 1,890,000 of the two buys was sent to the treasury timelock <a href="https://explorer.arc.io/address/0xBc6acE041434368dBD20a092425F6008bCFe50d4" target="_blank" rel="noopener"><code>0xBc6acE04…50d4</code></a> at 14:26:13. The remaining 1,574.332718404 is with the deployer.</td></tr>
+          </tbody>
+        </table>
+
+        <p>On 12 November 2026 the creator fee share accrued since launch, 7.070578 USDC, was claimed from Tolly's fee locker to the deployer at 13:47:36 in <a href="https://explorer.arc.io/tx/0x5cbf5c0dcee17895a61fe060cdde198ce3c3162147a7bb840462e2ad6e6cd868" target="_blank" rel="noopener"><code>0x5cbf5c0d…d868</code></a>. With 3.788880 USDC of the deployer's own it paid for the two buys above, 10.859458 USDC in all, and 1,890,000 of the SVR bought was sent to the treasury timelock at 14:26:13 in <a href="https://explorer.arc.io/tx/0xf02e578ab7374ad214bbe569818c53c4d8a68842adea2c28f7454977d9281773" target="_blank" rel="noopener"><code>0xf02e578a…1773</code></a>. It was done once, as a test that the claim, the purchase and the transfer to the treasury work end to end. That departs from the treasury policy below in two ways: the claim was made on the 12th rather than the 1st, and it reached the treasury as SVR rather than as USDC held for a published buyback schedule. The remaining 1,574.332718404 SVR is held by the deployer, beside the 5,000,000 for the operator bonds.</p>
+
         <h3>Locked</h3>
         <table class="data-table">
           <thead><tr><th>Lock</th><th><a href="https://explorer.arc.io/address/0xE246eaF919a39d7E0ff656320f7132Ee8AfBB8FB" target="_blank" rel="noopener"><code>0xE246eaF9…B8FB</code></a></th></tr></thead>
