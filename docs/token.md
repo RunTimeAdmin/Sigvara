@@ -26,6 +26,7 @@ project.
 | Launch venue | Tolly on Arc (pad `0xcad7ee36ac193bf2eddb7b3e2736c5bdb8269c8b`), Uniswap V3 pool, 1% tier, USDC quote |
 | Liquidity | Whole supply seeded single-sided at launch; LP NFT held by Tolly's ownerless, collect-only fee locker `0xe20e4297759597da75c8998ee76ec900600ad920` (no withdraw path in code) |
 | Pool | [`0xa9Be080545C6d61529c27294512bDb3Bde67A735`](https://explorer.arc.io/address/0xa9Be080545C6d61529c27294512bDb3Bde67A735), created in the launch transaction [`0x67ac918f…d749`](https://explorer.arc.io/tx/0x67ac918fbe80bd9f4556c44f03daf739aa996b6d63d34b99201ed69b5126d749) (block 30269650, sent by the deployer to the pad); the LP NFT is #59419, held by the fee locker |
+| Chart | [DexScreener](https://dexscreener.com/arc/0xa9Be080545C6d61529c27294512bDb3Bde67A735), a third-party chart of the pool above. Its token info (icon, links, description) was submitted by the team on 12 November 2026 |
 
 The token contract is Tolly's `TollyToken`, a plain OpenZeppelin ERC-20 with
 public source ([TollyLabs/v3-contracts](https://github.com/TollyLabs/v3-contracts)).
