@@ -16,7 +16,7 @@ As of 6 November 2026. This is the one list of what comes next. The [launch chec
 | A read-only Sigvara plugin for Coinbase's Wallet MCP, once a score describes payments those agents can make | Submitted to `coinbase/agents` |
 | Design partners | One outside team has agreed to gate on a score |
 | The first outside gate in production | Outside consumers reads 1, and [/integrate](https://sigvara.xyz/integrate) says so |
-| Use the partner's numbers: real job sizes set how large a job a bond should back, and a score distribution figure starts | The ratio is chosen from real data |
+| Use the partner's numbers: real job sizes set how large a job a bond should back, and the spread of scores on [/status](https://sigvara.xyz/status), measured since 13 November but over simulated agents so far, starts to describe agents in real use | The ratio is chosen from real data |
 
 ## Mainnet
 
