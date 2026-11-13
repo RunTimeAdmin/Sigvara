@@ -49,8 +49,9 @@ The SVR launch transaction was sent from the deployer address above, and the Arc
 **mainnet** registry deployment will be too. A token or mainnet contract attributed to Sigvara
 that was not created by that address is not ours. Arc testnet is deployed from a
 separate address (see [deploy-testnet.md](deploy-testnet.md)) so that a testnet key
-never touches anything with value. The treasury address holds protocol-owned SVR and pays the
-costs listed under treasury policy; it holds nothing else. The admin Safe schedules every payment from it, and a payment executes 48 hours later at the earliest, so each one is public two days before it happens ([ADR 0005](adr/0005-governance-and-emergency-powers.md), decision 13). Until 8 November 2026 this table listed `0xeDC966e23318782c0241aBe1790bd221b8aCE867` as the treasury. That is a single key, it is not the treasury, and nothing should be sent to it.
+never touches anything with value. The treasury address holds protocol-owned SVR and the
+USDC from monthly fee claims, and nothing else. The SVR pays only the costs listed under
+treasury policy, and the USDC is not spent until a buyback schedule is published there. The admin Safe schedules every payment from it, and a payment executes 48 hours later at the earliest, so each one is public two days before it happens ([ADR 0005](adr/0005-governance-and-emergency-powers.md), decision 13). Until 8 November 2026 this table listed `0xeDC966e23318782c0241aBe1790bd221b8aCE867` as the treasury. That is a single key, it is not the treasury, and nothing should be sent to it.
 
 ## Distribution
 
