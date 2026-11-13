@@ -437,8 +437,9 @@ or in Codex:
 codex mcp add sigvara -- npx -y -p @sigvara/protocol-sdk sigvara-mcp
 ```
 
-From 1.0.0-alpha.20, `server.json` lists it in the official MCP Registry as `io.github.RunTimeAdmin/sigvara`, once that
-release is published there.
+It is listed in the [official MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.RunTimeAdmin/sigvara)
+as `io.github.RunTimeAdmin/sigvara`, from 1.0.0-alpha.20 (`server.json`), so a host that reads the registry can
+find it by name.
 
 It reads the Arc testnet deployment unless told otherwise. On another chain, set `SIGVARA_RPC_URL`,
 `SIGVARA_CHAIN_ID` and the three registries (`SIGVARA_IDENTITY`, `SIGVARA_REPUTATION`, `SIGVARA_STAKING`);
