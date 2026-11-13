@@ -49,11 +49,16 @@
     <li><a href="status" aria-current="page">Status</a></li>
   </ul>
   <h1 class="u-h1-28">Status</h1>
-  <p class="ep-lede">Whether Sigvara's testnet services are running. Your browser reads each one from its public endpoint when this page opens, and nothing is kept or summarised in between.</p>
+  <p class="ep-lede">Whether Sigvara's testnet services are running, and what the scores they write add up to. Your browser reads each one from its public endpoint when this page opens, and nothing is kept or summarised in between.</p>
   <p class="netnote">Arc testnet (5042002). Reads only. The Sigvara team runs both oracle operators and the event index, so this is their own report of themselves, and each line links to where it came from. The same limits are checked from outside, on a schedule, by <a href="https://github.com/RunTimeAdmin/Sigvara/actions/workflows/live-checks.yml" target="_blank" rel="noopener">the live checks workflow</a>.</p>
 
   <div class="app-card" id="statusCard">
     <h2>Right now</h2>
+    <div class="card-body" aria-live="polite"><p class="netnote">Reading…</p></div>
+  </div>
+
+  <div class="app-card" id="scoresCard">
+    <h2>The scores</h2>
     <div class="card-body" aria-live="polite"><p class="netnote">Reading…</p></div>
   </div>
 </div>
@@ -72,7 +77,8 @@
 </footer>
 
 <script src="assets/did.js?v=32000f8"></script>
-<script src="assets/explorer.js?v=sm2"></script>
+<script src="assets/explorer.js?v=scores1"></script>
 <script src="assets/status.js?v=status1"></script>
+<script src="assets/score-report.js?v=scores1"></script>
 </body>
 </html>

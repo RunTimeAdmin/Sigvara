@@ -6,11 +6,7 @@ const X = window.SigvaraExplorer;
 const Lobby = window.SigvaraLobby;
 const $ = (id) => document.getElementById(id);
 
-// Agents the repository itself says are Sigvara's own, so the list does not pass them off as
-// outside demand. The demo agent is named in docs/slash-drill.md and docs/divergence-log.md.
-const KNOWN_AGENTS = {
-  "0x8414ce0bf4f1e1695193623e0a656a9439e356f8bed0b8bf249b179fe77c7e19": "Sigvara's demo agent",
-};
+const KNOWN_AGENTS = X.KNOWN_AGENTS;
 // keccak256("Transfer(address,address,uint256)"), the ERC-20 event a payment settles with.
 const TRANSFER_TOPIC = window.SigvaraDid.keccak256(window.SigvaraDid.utf8("Transfer(address,address,uint256)"));
 // The newest payments checked against the chain in one go, so one click never sends the
