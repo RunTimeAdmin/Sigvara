@@ -1,0 +1,23 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.RunTimeAdmin/sigvara",
+  "title": "Sigvara",
+  "description": "Read-only checks of an AI agent's Sigvara standing, score, stake and slashes before you rely on it.",
+  "repository": {
+    "url": "https://github.com/RunTimeAdmin/Sigvara",
+    "source": "github",
+    "subfolder": "packages/sdk"
+  },
+  "websiteUrl": "https://sigvara.xyz",
+  "version": "1.0.0-alpha.20",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@sigvara/protocol-sdk",
+      "version": "1.0.0-alpha.20",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

@@ -42,6 +42,21 @@ export function standingDecision(
 }
 
 /**
+ * The bands the status page counts scores in (site/assets/score-report.js, which test/standing-bands.test.ts
+ * holds equal to these). The edges are the thresholds the docs use, 30, 40 and 50, and 60, past which a
+ * threshold starts to carry information (docs/whitepaper.md 5.3). A band says where a score sits among
+ * the others the page counts. It is not a verdict.
+ */
+export const SCORE_BANDS: readonly (readonly [number, number])[] = [[0, 29], [30, 39], [40, 49], [50, 59], [60, 79], [80, 100]];
+
+/** The band a score is in, as "40-49", or null for anything that is not a whole number from 0 to 100. */
+export function scoreBand(score: number): string | null {
+  if (!Number.isInteger(score)) return null;
+  const band = SCORE_BANDS.find(([lo, hi]) => score >= lo && score <= hi);
+  return band ? `${band[0]}-${band[1]}` : null;
+}
+
+/**
  * A bond floor in the bond token's base units, or a thrown error. Not a number: a floor of 2,500,000
  * tokens at 18 decimals is past what a double can hold, and would quietly become a different floor.
  */

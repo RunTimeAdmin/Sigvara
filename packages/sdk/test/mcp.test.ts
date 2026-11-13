@@ -199,7 +199,7 @@ describe('sigvara_check_agent', () => {
     expect(r.value.signals.map((s: any) => s.code)).toEqual([
       'suspended', 'slash_pending', 'withdrawal_queued', 'score_maturing', 'score_pending',
     ]);
-    expect(r.value.score).toEqual({ matured: 30, earned: 45, updatedAt: new Date((NOW - 60) * 1000).toISOString(), ageSeconds: 60 });
+    expect(r.value.score).toEqual({ matured: 30, earned: 45, band: '30-39', updatedAt: new Date((NOW - 60) * 1000).toISOString(), ageSeconds: 60 });
   });
 
   it('refuses every read when the RPC serves another chain, and asks again after an outage', async () => {
