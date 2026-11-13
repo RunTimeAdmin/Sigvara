@@ -427,6 +427,15 @@ or, in a host's JSON config:
 { "mcpServers": { "sigvara": { "command": "npx", "args": ["-y", "-p", "@sigvara/protocol-sdk", "sigvara-mcp"] } } }
 ```
 
+or in Codex:
+
+```bash
+codex mcp add sigvara -- npx -y -p @sigvara/protocol-sdk sigvara-mcp
+```
+
+From 1.0.0-alpha.20, `server.json` lists it in the official MCP Registry as `io.github.RunTimeAdmin/sigvara`, once that
+release is published there.
+
 It reads the Arc testnet deployment unless told otherwise. On another chain, set `SIGVARA_RPC_URL`,
 `SIGVARA_CHAIN_ID` and the three registries (`SIGVARA_IDENTITY`, `SIGVARA_REPUTATION`, `SIGVARA_STAKING`);
 there are no defaults off Arc testnet. Before its first read it asks the RPC which chain it serves, and
@@ -436,7 +445,7 @@ redacted the same way.
 
 | Tool | What it answers |
 |---|---|
-| `sigvara_check_agent` | Registered, Active, holding the minimum stake now; the agent's and operator's addresses on chain; matured score and when it was written; the stake a slash could take; and what is pending: a slash, a queued withdrawal, a new score. With `threshold` (and optionally `maxScoreAgeSeconds`), a yes or no. |
+| `sigvara_check_agent` | Registered, Active, holding the minimum stake now; the agent's and operator's addresses on chain; matured score, the band it is in (the bands [the status page](https://sigvara.xyz/status) counts every agent in), and when it was written; the stake a slash could take; and what is pending: a slash, a queued withdrawal, a new score. With `threshold` (and optionally `maxScoreAgeSeconds`), a yes or no. |
 | `sigvara_score` | The six factors, the earned total, the matured total a threshold is checked against, and a proposal waiting out its challenge window. |
 | `sigvara_stake` | Stake held, queued for withdrawal and when it can leave, the minimum, and the most recent slash proposal. |
 | `sigvara_identity` | Operator, status, registration time, the Ed25519 key and the DID document. |
