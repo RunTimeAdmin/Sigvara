@@ -125,6 +125,10 @@ const ok = await verifier.verifySignature(
 const trusted = ok && (await verifier.isActive(agent.did)) && (await verifier.meetsThreshold(agent.did, 40));
 ```
 
+The 40 in these examples is a placeholder. A score below roughly 60 says little on its own, so read
+[what a fake score costs](https://github.com/RunTimeAdmin/Sigvara/blob/main/docs/whitepaper.md#53-what-a-fake-score-costs) before you pick a number, and
+[sigvara.xyz/status](https://sigvara.xyz/status) for how the scores spread today.
+
 Signature validity, status and score are separate reads. Combining them correctly is
 easy to get subtly wrong, so there is a piece that does it.
 
