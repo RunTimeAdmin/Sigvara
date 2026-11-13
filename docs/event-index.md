@@ -1,6 +1,6 @@
 # Event index
 
-The event index holds every log the four Sigvara contracts have emitted on the Arc testnet (identity, reputation, staking and the oracle bond) since they were deployed, and serves them over HTTP. The explorer pages on sigvara.xyz (agents, operators, slashes and score epochs) read their history from it.
+The event index holds every log the four Sigvara contracts have emitted on the Arc testnet (identity, reputation, staking and the oracle bond) since they were deployed, and serves them over HTTP. The explorer pages on sigvara.xyz (agents, operators, slashes and score epochs) and the score report on the status page read their history from it.
 
 Code: `oracle/indexer.js` (the service) and `oracle/event-index.js` (what it accepts and answers), tested by `oracle/indexer.test.js` and `oracle/event-index.test.js`. Deploy: `docker-compose.indexer.vps.yml`.
 
