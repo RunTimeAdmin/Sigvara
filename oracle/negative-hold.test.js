@@ -219,3 +219,37 @@ test('a hold never starts before the payer signed, whatever block it was checked
   assert.equal(hold.holdEndMs(negative({ payerOutcome: Object.freeze({ outcome: 2, signedAt: Math.floor(CHECKED_MS / 1000) - 60, checkedAtBlock: 200, checkedAtMs: CHECKED_MS }) }), cfg), END,
     'from the checked block when that is later');
 });
+
+test('an epoch reads held negatives the most urgent first and stops at its deadline, checked before each one', async () => {
+  // Thirty negatives, each checked a minute after the one before, so each counts a minute later; the eighth not dated.
+  const items = Array.from({ length: 30 }, (_, i) => ({
+    didHash: '0x' + (i % 3).toString(16).padStart(64, '0'),
+    e: negative({
+      txHash: '0x' + i.toString(16).padStart(64, '0'),
+      payerOutcome: Object.freeze(i === 7
+        ? { outcome: 2, checkedAtBlock: 200 }
+        : { outcome: 2, checkedAtBlock: 200, checkedAtMs: CHECKED_MS + (29 - i) * 60_000 }),
+    }),
+  }));
+  let clock = 0;
+  const reached = [];
+  // Each read takes 40 seconds, so ten minutes reach fifteen of them.
+  const left = await hold.readInTurn(items, cfg, {
+    deadline: 600_000,
+    now: () => clock,
+    read: async ({ e }) => { reached.push(Number(e.txHash)); clock += 40_000; },
+  });
+  assert.equal(left, 15);
+  // The undated one first, since one read dates it, then by when each counts: the last checked counts first.
+  assert.deepEqual(reached, [7, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16]);
+});
+
+test("a read given its head block's time asks the node for logs before anything else", async () => {
+  const calls = [];
+  const headBlock = blockAt(END) + 10;
+  const getLogs = async (filter) => { calls.push('getLogs'); return node([]).getLogs(filter); };
+  const counting = async (n) => { calls.push(`block ${n}`); return blockMs(n); };
+  await hold.readRefund(negative(), cfg, { getLogs, blockMs: counting, asset: ASSET, agent: AGENT, headBlock, headMs: await blockMs(headBlock), chunk: 1_000_000 });
+  // Without headMs its first call is the head's block, which an epoch now reads once a chain (index.js settleNegatives).
+  assert.equal(calls[0], 'getLogs');
+});

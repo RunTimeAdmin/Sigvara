@@ -492,68 +492,93 @@ function measuredFactorsFor(didHash, now, payerScores = null, held = evidenceAt(
  * PAYER_OUTCOMES at its default nothing is read. A read that fails is tried again next epoch, from where it got;
  * until it finishes, an agent whose negative is due is skipped rather than scored on a guess. Each negative gets
  * enough reads to reach its hold's end by the time it counts (negative-hold.readBudget), and all of them together
- * at most REFUND_READ_BUDGET_MS an epoch.
+ * at most REFUND_READ_BUDGET_MS an epoch: the most urgent first (negative-hold.readOrder), the deadline checked
+ * before each and before every getLogs, and each chain's head read once an epoch.
  */
 async function settleNegatives(agentInfos) {
   let recorded = false;
   const deadline = Date.now() + REFUND_READ_BUDGET_MS;
+  const items = [];
   for (const info of agentInfos) {
     if (info.error || !info.agentAddress) continue;
-    for (let e of negativeHold.toRead(getPaymentEvents(info.didHash))) {
-      const pc = e.chainId != null ? paymentChainsCfg.byId.get(e.chainId) : null;
-      if (e.chainId != null && !pc) continue;
-      const provider = pc ? paymentChainProviders.get(pc.chainId) : chain.getProvider();
-      // With backoff, as the scans read, and on a payment chain with their deadline and without the URL in an error.
-      const read = pc
-        ? (label, fn) => chain.readWithBackoff(label, () => paymentChains.withDeadline(fn)).catch((err) => { throw paymentChains.rpcError(err, pc.rpcUrl); })
-        : (label, fn) => chain.readWithBackoff(label, fn);
-      const blockMs = async (n) => {
-        const block = await read('refund read getBlock', () => provider.getBlock(n));
-        if (!block) throw new Error(`no block ${n}`);
-        return Number(block.timestamp) * 1000;
-      };
-      try {
-        // An outcome recorded before its block's time was kept: dated from that block on the payment's chain, as an
-        // operator importing it dates it, so that every operator holds it from the same moment.
-        const checkedAtBlock = e.payerOutcome.checkedAtBlock;
-        if (!Number.isSafeInteger(e.payerOutcome.checkedAtMs) && Number.isInteger(checkedAtBlock)) {
-          const checkedAtMs = await blockMs(checkedAtBlock);
-          recorded = setPayerOutcomeCheck(info.didHash, e.txHash, e.payer, e.chainId ?? null, { checkedAtMs }) || recorded;
-          e = { ...e, payerOutcome: { ...e.payerOutcome, checkedAtMs } };
-        }
-        const headBlock = pc
-          ? (await read('refund read finalized block', () => provider.getBlock('finalized'))).number
-          : paymentScan.safeHead(await read('refund read head', () => provider.getBlockNumber()), paymentScanCfg.confirmations);
-        const check = await negativeHold.readRefund(e, negativeHoldCfg, {
-          getLogs: (filter) => read('refund read getLogs', () => provider.getLogs(filter)),
-          blockMs,
-          asset: pc ? pc.asset : paymentCfg.asset,
-          agent: info.agentAddress,
-          headBlock,
-          chunk: pc ? pc.chunkSize : paymentScanCfg.chunkSize,
-          paceMs: pc ? pc.paceMs : 0,
-          epochMs: cfg.epochMs,
-          deadline,
-        });
-        // A final read keeps the end of the hold it was read against.
-        const kept = check.final ? { ...check, holdEndMs: negativeHold.holdEndMs(e, negativeHoldCfg) } : check;
-        recorded = setRefundCheck(info.didHash, e.txHash, e.payer, e.chainId ?? null, kept) || recorded;
-        if (check.final) {
-          console.log(`[oracle]   ${info.didHash.slice(0, 10)}… payer negative on ${e.txHash.slice(0, 10)}…: ${check.refunded ? 'refunded, so it does not count' : 'not refunded, so it counts'}`);
-        } else if (check.error) {
-          console.warn(`[oracle]   ${info.didHash.slice(0, 10)}… could not read refunds for ${e.txHash.slice(0, 10)}… past block ${check.readThroughBlock}: ${check.error.message}`);
-        } else if (Date.now() >= deadline) {
-          const countsFrom = negativeHold.countsFromMs(e, negativeHoldCfg);
-          console.warn(
-            `[oracle]   ${info.didHash.slice(0, 10)}… refunds for ${e.txHash.slice(0, 10)}… read through block ${check.readThroughBlock}, ` +
-            `and this epoch's time for reading them is spent: it may not be settled by ${Number.isFinite(countsFrom) ? new Date(countsFrom).toISOString() : 'the time it counts'}`,
-          );
-        }
-      } catch (err) {
-        const message = pc ? paymentChains.rpcError(err, pc.rpcUrl).message : err.message;
-        console.warn(`[oracle]   ${info.didHash.slice(0, 10)}… could not read refunds for ${e.txHash.slice(0, 10)}…: ${message}`);
-      }
+    for (const e of negativeHold.toRead(getPaymentEvents(info.didHash))) {
+      if (e.chainId != null && !paymentChainsCfg.byId.get(e.chainId)) continue;
+      items.push({ didHash: info.didHash, info, e });
     }
+  }
+  // Each chain's settled head and its time, read once this epoch: { headBlock, headMs }, or null where it failed.
+  const heads = new Map();
+  const left = await negativeHold.readInTurn(items, negativeHoldCfg, { deadline, read: async ({ info, e: held }) => {
+    let e = held;
+    const pc = e.chainId != null ? paymentChainsCfg.byId.get(e.chainId) : null;
+    const provider = pc ? paymentChainProviders.get(pc.chainId) : chain.getProvider();
+    // With backoff, as the scans read, and on a payment chain with their deadline and without the URL in an error.
+    const read = pc
+      ? (label, fn) => chain.readWithBackoff(label, () => paymentChains.withDeadline(fn)).catch((err) => { throw paymentChains.rpcError(err, pc.rpcUrl); })
+      : (label, fn) => chain.readWithBackoff(label, fn);
+    const blockMs = async (n) => {
+      const block = await read('refund read getBlock', () => provider.getBlock(n));
+      if (!block) throw new Error(`no block ${n}`);
+      return Number(block.timestamp) * 1000;
+    };
+    const chainKey = pc ? pc.chainId : 'scored';
+    if (heads.get(chainKey) === null) return;
+    try {
+      // An outcome recorded before its block's time was kept: dated from that block on the payment's chain, as an
+      // operator importing it dates it, so that every operator holds it from the same moment.
+      const checkedAtBlock = e.payerOutcome.checkedAtBlock;
+      if (!Number.isSafeInteger(e.payerOutcome.checkedAtMs) && Number.isInteger(checkedAtBlock)) {
+        const checkedAtMs = await blockMs(checkedAtBlock);
+        recorded = setPayerOutcomeCheck(info.didHash, e.txHash, e.payer, e.chainId ?? null, { checkedAtMs }) || recorded;
+        e = { ...e, payerOutcome: { ...e.payerOutcome, checkedAtMs } };
+      }
+      if (!heads.has(chainKey)) {
+        try {
+          const headBlock = pc
+            ? (await read('refund read finalized block', () => provider.getBlock('finalized'))).number
+            : paymentScan.safeHead(await read('refund read head', () => provider.getBlockNumber()), paymentScanCfg.confirmations);
+          heads.set(chainKey, { headBlock, headMs: await blockMs(headBlock) });
+        } catch (err) {
+          // Not asked again this epoch: every negative on this chain would ask, one after the other.
+          heads.set(chainKey, null);
+          throw err;
+        }
+      }
+      const { headBlock, headMs } = heads.get(chainKey);
+      const check = await negativeHold.readRefund(e, negativeHoldCfg, {
+        getLogs: (filter) => read('refund read getLogs', () => provider.getLogs(filter)),
+        blockMs,
+        asset: pc ? pc.asset : paymentCfg.asset,
+        agent: info.agentAddress,
+        headBlock,
+        headMs,
+        chunk: pc ? pc.chunkSize : paymentScanCfg.chunkSize,
+        paceMs: pc ? pc.paceMs : 0,
+        epochMs: cfg.epochMs,
+        deadline,
+      });
+      // A final read keeps the end of the hold it was read against.
+      const kept = check.final ? { ...check, holdEndMs: negativeHold.holdEndMs(e, negativeHoldCfg) } : check;
+      recorded = setRefundCheck(info.didHash, e.txHash, e.payer, e.chainId ?? null, kept) || recorded;
+      if (check.final) {
+        console.log(`[oracle]   ${info.didHash.slice(0, 10)}… payer negative on ${e.txHash.slice(0, 10)}…: ${check.refunded ? 'refunded, so it does not count' : 'not refunded, so it counts'}`);
+      } else if (check.error) {
+        console.warn(`[oracle]   ${info.didHash.slice(0, 10)}… could not read refunds for ${e.txHash.slice(0, 10)}… past block ${check.readThroughBlock}: ${check.error.message}`);
+      } else if (Date.now() >= deadline) {
+        const countsFrom = negativeHold.countsFromMs(e, negativeHoldCfg);
+        console.warn(
+          `[oracle]   ${info.didHash.slice(0, 10)}… refunds for ${e.txHash.slice(0, 10)}… read through block ${check.readThroughBlock}, ` +
+          `and this epoch's time for reading them is spent: it may not be settled by ${Number.isFinite(countsFrom) ? new Date(countsFrom).toISOString() : 'the time it counts'}`,
+        );
+      }
+    } catch (err) {
+      const message = pc ? paymentChains.rpcError(err, pc.rpcUrl).message : err.message;
+      console.warn(`[oracle]   ${info.didHash.slice(0, 10)}… could not read refunds for ${e.txHash.slice(0, 10)}…: ${message}`);
+    }
+  } });
+  if (left) {
+    console.warn(`[oracle] ${left} payer negative(s) not read for refunds this epoch: its time for reading them is spent, and the most urgent go first next epoch`);
+    metrics.inc('payerNegativesUnread', left);
   }
   if (recorded) persistState();
 }

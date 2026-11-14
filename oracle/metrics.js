@@ -76,6 +76,8 @@ const counters = {
   // ADR 0011. Agents left unscored for a payer's "not delivered": due with its refunds not read yet, or starting to
   // count before a proposal could land. A run of them for one agent means its refund read cannot keep up.
   agentsHeldByPayerNegative: 0,
+  // Payer negatives an epoch did not reach before its time for reading refunds was spent (index.js settleNegatives).
+  payerNegativesUnread: 0,
   agentsHeldByLedgerCap: 0,
   // Agents left for the next epoch because this one's proposals (MAX_WRITES_PER_EPOCH) were spent, and agents not
   // proposed because the score on chain is the same and recent enough (SCORE_REFRESH_HOURS). The first should be zero.
@@ -375,6 +377,11 @@ function toPrometheusText(extra = {}) {
   lines.push('# HELP sigvara_oracle_agents_held_by_payer_negative_total Agents left unscored for a payer negative that was due and not read, or counted before a proposal could land (ADR 0011)');
   lines.push('# TYPE sigvara_oracle_agents_held_by_payer_negative_total counter');
   lines.push(`sigvara_oracle_agents_held_by_payer_negative_total ${counters.agentsHeldByPayerNegative}`);
+
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_payer_negatives_unread_total Payer negatives an epoch left unread when its time for reading refunds was spent (ADR 0011)');
+  lines.push('# TYPE sigvara_oracle_payer_negatives_unread_total counter');
+  lines.push(`sigvara_oracle_payer_negatives_unread_total ${counters.payerNegativesUnread}`);
 
   lines.push('');
   lines.push('# HELP sigvara_oracle_agents_held_by_ledger_cap_total Agents left unscored because their payment ledger was at its cap');
