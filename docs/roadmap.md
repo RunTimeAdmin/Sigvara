@@ -1,6 +1,6 @@
 # Sigvara roadmap
 
-As of 6 November 2026. This is the one list of what comes next. The [launch checklist](launch-checklist.md) holds the detail of each mainnet gate, and [section 8 of the whitepaper](whitepaper.md#8-roadmap) keeps the reasoning behind the main steps.
+As of 14 November 2026. This is the one list of what comes next. The [launch checklist](launch-checklist.md) holds the detail of each mainnet gate, and [section 8 of the whitepaper](whitepaper.md#8-roadmap) keeps the reasoning behind the main steps.
 
 **The goal:** someone outside the team accepts or refuses an agent in production because of its Sigvara score, on mainnet.
 
@@ -22,7 +22,7 @@ As of 6 November 2026. This is the one list of what comes next. The [launch chec
 
 | Step | When |
 |---|---|
-| The adversarial [slash drill](slash-drill.md) | Day 7 from 10 November 03:46 UTC, day 21 from 24 November 03:45 UTC |
+| The adversarial [slash drill](slash-drill.md) | Day 7 done on 10 November, day 21 from 24 November 03:45 UTC |
 | The staking half of the contract upgrade | After the drill |
 | Testnet roles to a Safe and a timelock. Upgrades then wait 48 hours, so this follows the staking upgrade | After the staking upgrade |
 | An ADR on who rules a contested negative outcome | Done, 9 November 2026: [ADR 0011](adr/0011-who-rules-negative-outcomes.md) |
@@ -31,13 +31,13 @@ As of 6 November 2026. This is the one list of what comes next. The [launch chec
 | External audit, and fixing what it finds (phase 2) | After the staking upgrade, so it reads what will run |
 | Registries on Arc mainnet with bonds in SVR, mainnet keepers, pinned operators (phase 4) | After the audit's fixes |
 
-Mainnet launches with payer outcomes positive only, as [ADR 0006](adr/0006-payer-signed-outcomes.md) allows. Non-delivery cannot be used as a ground for a slash until the challenge process below exists ([ADR 0010](adr/0010-what-can-be-slashed.md)).
+Mainnet launches with payer outcomes positive only, as [ADR 0006](adr/0006-payer-signed-outcomes.md) allows. Arc testnet operators have taken a payer's "not delivered" since 11 November 2026 and hold it 7 days for the agent to refund ([ADR 0011](adr/0011-who-rules-negative-outcomes.md)). On mainnet, non-delivery cannot ground a slash (A3 in [ADR 0010](adr/0010-what-can-be-slashed.md)) until its operators take negatives too.
 
 ## After usage
 
 | Step | What starts it |
 |---|---|
-| The payer challenge, and an arbiter path beyond the committee | The ADR above is accepted, a partner needs recourse, and x402's escrow and delivery-receipt work has settled enough to fit |
+| An arbiter beyond the committee for a contested negative. Today a full refund within 7 days is the agent's only answer ([ADR 0011](adr/0011-who-rules-negative-outcomes.md)) | A partner needs recourse, and x402's escrow and delivery-receipt work has settled enough to fit |
 | Epoch fees on | Real volume (checklist phase 5) |
 | The reward distributor, then staking rewards | Mainnet, then treasury inventory |
 | A bond review | Any trigger in checklist phase 6, such as 250 active agents |

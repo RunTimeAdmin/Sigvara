@@ -4,7 +4,7 @@ Sequenced by gate, not by date. The wider plan, adoption included, is the [roadm
 
 ## Where this stands
 
-As of 10 November 2026. The SVR token is on Arc mainnet; the registries and the oracle run on Arc testnet only. What runs where is in the
+As of 14 November 2026. The SVR token is on Arc mainnet; the registries and the oracle run on Arc testnet only. What runs where is in the
 [runbook](operations-runbook.md). There has been no external audit, and nobody outside the team gates on a score yet.
 
 **In progress, with dates.**
@@ -22,6 +22,7 @@ As of 10 November 2026. The SVR token is on Arc mainnet; the registries and the 
 - The handover: moving testnet roles to a Safe and a timelock, after the drill, since `executeSlash` needs
   the reporter still on the committee.
 - A review of retention by counsel, before public outcome retrieval and peer import on mainnet.
+- How a credit for a transaction that a reorganization removed would be taken back (Phase 4).
 
 **Open, and not blocking mainnet.**
 - Design partners, the first users from outside the team.
