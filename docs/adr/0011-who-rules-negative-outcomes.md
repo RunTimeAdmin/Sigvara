@@ -1,7 +1,10 @@
 # ADR 0011: Who rules a contested negative outcome
 
 **Status:** Accepted · 2026-11-09, the owner's choice of option D (section 3). Rollout steps 1 and 2 are built in
-`oracle/negative-hold.js`, off unless `PAYER_OUTCOMES=both`. Operators keep `PAYER_OUTCOMES=positive` until rollout step 3.
+`oracle/negative-hold.js`, off unless `PAYER_OUTCOMES=both`. Step 3: both Arc testnet operators have run
+`PAYER_OUTCOMES=both` since 11 November 2026, and took the first three negatives, from the simulation, on 14 November;
+they count from 21 November unless refunded. Step 4: [ADR 0010](0010-what-can-be-slashed.md#2-agent-violations) now
+rests A3 on negatives that counted. Mainnet starts with "delivered" only.
 
 ## 1. Context
 

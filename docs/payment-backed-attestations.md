@@ -60,8 +60,11 @@ the payment. The response says which happened with `outcomeRecorded`.
 directly, and a verified payment proves money moved but never that the work failed.
 Leaving that open would mean anyone could downgrade any agent for the price of one
 `PAYMENT_MIN_AMOUNT` transfer — which, on a testnet whose bond token has an open
-faucet, is free. Negative outcomes therefore need a token holder, and the operators
-refuse a payer's signed "not delivered" too until an agent has a way to contest it.
+faucet, is free. Negative outcomes therefore need a token holder, or the payer's own
+signed "not delivered", which an operator with `PAYER_OUTCOMES=both` holds 7 days and
+counts only if the agent has not refunded the payment by then
+([ADR 0011](adr/0011-who-rules-negative-outcomes.md)). Both Arc testnet operators have
+taken them since 11 November 2026.
 CounterAudit's relay, which held a token for this and reported the ingesting org's word
 rather than judging the work itself, has been off in production since 30 October 2026.
 Positive claims carry their own cost and can be left open as payment evidence; negative

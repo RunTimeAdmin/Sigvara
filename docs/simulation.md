@@ -224,6 +224,10 @@ is an EIP-3009 authorization the agent signs, submitted by the facilitator like 
 an operator refuses, or one whose deadline passes unposted, gets no refund, and the state file's
 `refunds` record says why.
 
+The first three came on 14 November at 03:04, 04:05 and 05:00 UTC, answered `full`, `late` and
+`none`, the first through CounterAudit. Both operators took each at the same block and serve it as
+counting from 21 November, at 04:04, 05:05 and 06:00 UTC.
+
 ### What should happen
 
 - **Base:** payments count on both operators like Arc ones, and the base and dual agents' scores
