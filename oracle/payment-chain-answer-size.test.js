@@ -129,11 +129,18 @@ test('a getLogs answer past 8 MiB is asked for in halves, and a block that stays
     // The next scan reaches FLOOD, which is too big even alone. It fails, so the cursor stays at 1199 and the
     // payment after FLOOD waits for a later scan instead of being passed over.
     e.head.finalized = 1399;
-    await assert.rejects(scan(e, a, out.state, credited), (err) => {
-      assert.match(err.message, /an answer past 8388608 bytes/);
-      assert.ok(!err.message.includes('SECRET-KEY'));
-      return true;
-    });
+    // On a new provider: ethers answers the same request from its cache for 250 ms, and on a fast runner this scan
+    // asks for the finalized block inside that, so it saw 1199 again, scanned nothing and did not fail.
+    const fresh = { ...e, provider: pc.providerFor(e.chain) };
+    try {
+      await assert.rejects(scan(fresh, a, out.state, credited), (err) => {
+        assert.match(err.message, /an answer past 8388608 bytes/);
+        assert.ok(!err.message.includes('SECRET-KEY'));
+        return true;
+      });
+    } finally {
+      fresh.provider.destroy();
+    }
     assert.deepEqual(e.asked.at(-1), [FLOOD, FLOOD], 'asked for FLOOD alone before giving up');
     assert.equal(credited.length, 1, 'nothing past FLOOD was credited');
   } finally {
