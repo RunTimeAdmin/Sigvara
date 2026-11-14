@@ -979,9 +979,10 @@ test('persist: writes the format version and the chain, and load reads the chain
   `);
   const r = lastJson(out);
   // Version 2 only once a payment chain's data is held (ADR 0009), see payment-chains.test.js; 3 once a payer's
-  // negative is (ADR 0011), below; 4 once a prune has dropped a replay key.
+  // negative is (ADR 0011), below; 4 once a prune has dropped a replay key; 5 once a cap has forgotten dropped keys
+  // (ledger-cap.test.js).
   assert.equal(r.version, 1);
-  assert.equal(r.current, 4);
+  assert.equal(r.current, 5);
   assert.equal(r.chainId, 5042);
   assert.equal(r.back, 5042);
 });
@@ -1195,7 +1196,8 @@ test('past the per-agent or total cap the payment that matters least is dropped,
     const a = '0x' + 'aa'.repeat(32), b = '0x' + 'bb'.repeat(32), payer = '0x' + '11'.repeat(20);
     const tx = (n) => '0x' + n.toString(16).padStart(64, '0');
     const credit = (did, n, amount) => s.creditPayment(did, tx(n), amount, payer, null, 1000 + n);
-    // The third to a drops its oldest; the fifth overall drops the oldest of the smallest anywhere, a's second.
+    // The third to a drops its oldest. The fifth overall is one past the total: a and b hold two each, so each has a
+    // share of one and the odd one goes to the lower id, a, and b drops its smaller.
     const credited = [credit(a, 1, '5'), credit(a, 2, '5'), credit(a, 3, '5'), credit(b, 4, '5'), credit(b, 5, '7')];
     const kept = (did) => s.getPaymentEvents(did).map((e) => Number(e.txHash));
     console.log(JSON.stringify({
@@ -1204,7 +1206,8 @@ test('past the per-agent or total cap the payment that matters least is dropped,
     }));
   `);
   assert.deepEqual(JSON.parse(out.trim().split('\n').at(-1)), {
-    credited: [true, true, true, true, true], a: [3], b: [4, 5],
-    used: [true, true], ledger: { events: 3, maxTotal: 3, maxPerAgent: 2, dropped: 2 },
+    credited: [true, true, true, true, true], a: [2, 3], b: [5],
+    used: [true, false],
+    ledger: { events: 3, maxTotal: 3, maxPerAgent: 2, dropped: 2, withOutcome: 0, droppedWithOutcome: 0, droppedKeys: 2, agentsWithFloor: 0 },
   });
 });
