@@ -45,12 +45,13 @@ const DEFAULT_FLAG_HALF_LIFE_DAYS = 30;
 const FLAG_HALF_LIFE_MS =
   numberSetting(process.env.FLAG_HALF_LIFE_DAYS, DEFAULT_FLAG_HALF_LIFE_DAYS) * 86_400_000;
 
-// Bounded so a stream of small payments, to one agent or across all of them, cannot grow the ledger until a
-// save no longer fits in memory: state-serialize.js measured about 280 MB at 200,000 events against the 768 MB
-// the mainnet compose file allows. Past a cap the ledger drops the payments that matter least (dropOrder), which
-// may include the one just credited, so an agent is never held for a full ledger, and two operators holding the
-// same payments keep the same ones whatever order they arrived in. A payment with an outcome is never dropped.
-// A dropped payment stays credited: its key is kept until pruning by age would have dropped it (droppedPayments).
+// Bounded so a stream of payments, to one agent or across all of them, cannot grow the ledger until a save no
+// longer fits in memory: state-serialize.js measured about 280 MB at 200,000 events against the 768 MB the mainnet
+// compose file allows. Past a cap the ledger drops payments by fair share (dropPastCaps): from the agents holding
+// the most first, and within an agent from the payers holding the most, so that payments into some agents, or from
+// a few wallets, push out their own and not other agents' or other payers'. What it drops may include the one just
+// credited, so an agent is never held for a full ledger, and two operators holding the same payments keep the same
+// ones whatever order they arrived in. A dropped payment stays credited: its key is kept (droppedPayments).
 const MAX_EVENTS_PER_AGENT = numberSetting(process.env.PAYMENT_MAX_EVENTS_PER_AGENT, 25_000);
 const MAX_EVENTS_TOTAL = numberSetting(process.env.PAYMENT_MAX_EVENTS_TOTAL, 150_000);
 // Payments the caps dropped since this process started, for /health.
@@ -61,7 +62,15 @@ let eventTotal = 0;
 // payment cannot be credited again, until prunePaymentEvents would have dropped the payment itself; then both go.
 // Saved with the state. It needs no format version: a build before it ignores the list and drops it on its next
 // save, which leaves those keys in usedPaymentTxs for good, the safe direction.
+// The keys are bounded by the same caps as the events, by the same fair share (boundDropped). Past them an agent's
+// oldest keys go, and dropFloors keeps, per agent, the latest settlement time a key went at: a payment to that agent
+// settled no later than it is refused (tooOldToCredit), since its key may be gone.
 const droppedPayments = new Map();
+// droppedPayments' keys by agent, built from them (keyDid), not saved.
+const droppedByAgent = new Map();
+const dropFloors = new Map();
+// Payments with an outcome the caps dropped since this process started, for /health.
+let outcomeDrops = 0;
 // The scored chain's fee unit and each payment chain's (setLedgerFeeUnits), so that the caps compare payments from
 // different chains in one unit, as forScoring does. Until set, amounts compare as stored.
 let scoredFeeUnit = 1n;
@@ -226,7 +235,10 @@ function pruneFlags(minWeight = 0.001, now = Date.now(), halfLifeMs = FLAG_HALF_
 // Version 4 is a file whose replay set has lost the keys of pruned payments (prunedBefore). A build before it has no
 // age limit on credits, so it would credit those settlements a second time. Until a prune drops one the file stays
 // at 3 or below.
-const STATE_SCHEMA_VERSION = 4;
+//
+// Version 5 is a file whose replay set has lost the keys of payments a cap dropped (dropFloors). A build before it
+// would credit those a second time. Until the keys outgrow their caps the file stays at 4 or below.
+const STATE_SCHEMA_VERSION = 5;
 
 function holdsPaymentChainData() {
   if (Object.keys(paymentChainScanState).some((key) => !key.endsWith('/shadow'))) return true;
@@ -236,6 +248,7 @@ function holdsPaymentChainData() {
 
 /** The oldest format that can hold this state (STATE_SCHEMA_VERSION). */
 function schemaVersionFor() {
+  if (dropFloors.size) return 5;
   if (prunedBefore !== null) return 4;
   for (const list of paymentEvents.values()) if (list.some((e) => e.payerOutcome?.outcome === 2)) return 3;
   return holdsPaymentChainData() ? 2 : 1;
@@ -304,6 +317,13 @@ function parseState(parsed) {
   if (parsed.prunedBefore !== undefined && parsed.prunedBefore !== null && !Number.isFinite(parsed.prunedBefore)) {
     throw new Error(`prunedBefore ${JSON.stringify(parsed.prunedBefore)} is not a time`);
   }
+  if (parsed.dropFloors !== undefined && parsed.dropFloors !== null) {
+    // Thrown rather than passed over: a floor that is lost lets a payment whose key is gone be credited again.
+    if (!isObject(parsed.dropFloors)) throw new Error('dropFloors is not an object');
+    for (const [did, ts] of Object.entries(parsed.dropFloors)) {
+      if (!Number.isFinite(ts)) throw new Error(`dropFloors for ${did} is not a time`);
+    }
+  }
   if (parsed.chainId !== undefined && parsed.chainId !== null && !Number.isInteger(parsed.chainId)) {
     throw new Error(`chainId ${JSON.stringify(parsed.chainId)} is not a whole number`);
   }
@@ -316,6 +336,7 @@ function parseState(parsed) {
     paymentEvents: new Map(),
     usedPaymentTxs: new Set(),
     droppedPayments: new Map(),
+    dropFloors: new Map(Object.entries(parsed.dropFloors || {})),
     prunedBefore: parsed.prunedBefore ?? null,
     divergences: new Map(),
     scanState: parsed.scanState || null,
@@ -424,7 +445,10 @@ function applyState(next) {
   usedPaymentTxs.clear();
   for (const h of next.usedPaymentTxs) usedPaymentTxs.add(h);
   droppedPayments.clear();
-  for (const [k, ts] of next.droppedPayments) droppedPayments.set(k, ts);
+  droppedByAgent.clear();
+  for (const [k, ts] of next.droppedPayments) addDropped(k, ts);
+  dropFloors.clear();
+  for (const [did, ts] of next.dropFloors) dropFloors.set(did, ts);
   prunedBefore = next.prunedBefore;
   divergences.clear();
   for (const [k, v] of next.divergences) divergences.set(k, v);
@@ -610,6 +634,7 @@ function persist() {
         paymentEvents: Object.fromEntries(paymentEvents),
         usedPaymentTxs: [...usedPaymentTxs],
         droppedPayments: [...droppedPayments],
+        dropFloors: Object.fromEntries(dropFloors),
         prunedBefore,
         divergences: Object.fromEntries(divergences),
         scanState,
@@ -748,7 +773,7 @@ function creditPayments(credits, { trim = true } = {}) {
     const did = String(didHash).toLowerCase();
     // Older than the ledger keeps: its key may have been pruned with it, so this is what stops it counting twice.
     // Here rather than at each caller, so that no way in can credit one.
-    if (tooOldToCredit(ts)) return false;
+    if (tooOldToCredit(ts, undefined, did)) return false;
     if (isCredited(key, did, payer, chainId)) return false;
     usedPaymentTxs.add(creditKey(key, did, payer, chainId));
     if (!added.has(did)) added.set(did, []);
@@ -810,7 +835,7 @@ function paymentEvent(key, amount, payer, success, now, packetId, blockNumber, c
   return event;
 }
 
-/** Whether the caps keep this payment whatever else they drop: it carries an outcome, its payer's or a token holder's. */
+/** Whether this payment carries an outcome, its payer's or a token holder's. Within its payer's share it goes last. */
 const hasOutcome = (e) => Boolean(e.payerOutcome) || typeof e.success === 'boolean';
 
 const ascending = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
@@ -852,56 +877,168 @@ function dropOrder(x, y) {
     || ascending(x.payer, y.payer) || ((x.e.chainId ?? 0) - (y.e.chainId ?? 0)) || ascending(x.did, y.did);
 }
 
+/** dropOrder, with a payment that carries an outcome after every one that does not. */
+const lossOrder = (x, y) => (Number(hasOutcome(x.e)) - Number(hasOutcome(y.e))) || dropOrder(x, y);
+
+/**
+ * How many each group keeps when together they must fit `room`, by fair share: every group keeps what it holds up to
+ * one level, and a group holding more keeps the level. What does not divide evenly goes one each to the groups above
+ * the level, in the order `first` puts them in (by default their ids). Answers, by id, only for the groups that must
+ * lose some.
+ *
+ * While the groups only grow and `room` does not, no group's share grows, so what the caps keep depends only on which
+ * payments were credited, not on their order: a payment that went would have gone in any order. `first` keeps that so
+ * long as a group's place in it only falls as others grow, as ranking each group by its next payment does (trimAgent).
+ */
+function overShare(counts, room, first = (ids) => ids.sort(ascending)) {
+  let total = 0;
+  for (const n of counts.values()) total += n;
+  if (total <= room) return new Map();
+  const sizes = [...counts.values()].sort((a, b) => a - b);
+  let below = 0;
+  let level = 0;
+  for (let i = 0; i < sizes.length; i += 1) {
+    const left = sizes.length - i;
+    if (below + sizes[i] * left > room) { level = Math.floor((room - below) / left); break; }
+    below += sizes[i];
+  }
+  let spare = room;
+  for (const n of counts.values()) spare -= Math.min(n, level);
+  const keep = new Map();
+  for (const id of first([...counts.keys()].filter((id) => counts.get(id) > level), level)) {
+    const share = level + (spare > 0 ? 1 : 0);
+    if (spare > 0) spare -= 1;
+    if (share < counts.get(id)) keep.set(id, share);
+  }
+  return keep;
+}
+
 /**
  * Brings the ledger back inside its caps: each of these agents down to MAX_EVENTS_PER_AGENT, then the whole ledger
- * down to MAX_EVENTS_TOTAL, each time dropping the payments without an outcome that go first (dropOrder).
+ * down to MAX_EVENTS_TOTAL by each agent's fair share of it (overShare), the agents holding the most giving up the
+ * difference. Within an agent the payers holding the most give it up (trimAgent). Then the dropped keys are bounded
+ * the same way (boundDropped).
  *
- * What is left depends only on which payments were credited, not on their order: per agent its payments with an
- * outcome and the highest-ranked of the rest, and across agents the same again. That holds because a payment's rank
- * never changes and, between prunes, the room left for payments without an outcome never grows, so one that goes
- * would have gone in any order. Two operators can still part when an outcome reaches one after the other has dropped
- * its payment, or when one prunes between two credits that the other prunes after. Payments with an outcome are
- * never dropped, so enough of them hold a ledger above a cap, and anything credited past it then goes at once.
+ * So payments into an attacker's own agents push out those agents' payments, and a few wallets paying one agent push
+ * out their own: never another agent's while it holds less than its share, nor another payer's while that payer holds
+ * less than its share of the agent. A payment with an outcome goes only after its payer's others.
+ *
+ * What is left depends only on which payments were credited, not on their order (overShare), with three exceptions:
+ * an outcome that reaches one operator after the other has dropped its payment, a prune that one operator runs
+ * between two credits and the other after them, and a payment that reaches one operator only after its agent's
+ * floor (boundDropped) has passed it there.
  */
 function dropPastCaps(dids) {
   for (const did of dids) {
-    const list = paymentEvents.get(did) ?? [];
-    if (list.length <= MAX_EVENTS_PER_AGENT) continue;
-    const open = list.filter((e) => !hasOutcome(e)).map((e) => ranked(e, did));
-    dropFirst(open, list.length - MAX_EVENTS_PER_AGENT);
+    if ((paymentEvents.get(did)?.length ?? 0) > MAX_EVENTS_PER_AGENT) trimAgent(did, MAX_EVENTS_PER_AGENT);
   }
-  if (eventTotal <= MAX_EVENTS_TOTAL) return;
-  const open = [];
-  for (const [did, list] of paymentEvents) for (const e of list) if (!hasOutcome(e)) open.push(ranked(e, did));
-  dropFirst(open, eventTotal - MAX_EVENTS_TOTAL);
+  if (eventTotal > MAX_EVENTS_TOTAL) {
+    const counts = new Map();
+    for (const [did, list] of paymentEvents) counts.set(did, list.length);
+    for (const [did, keep] of overShare(counts, MAX_EVENTS_TOTAL)) trimAgent(did, keep);
+  }
+  boundDropped();
 }
 
-/** Drops the first `n` of `open` (dropOrder), keeping each one's key until it would have been pruned. */
-function dropFirst(open, n) {
-  const gone = n >= open.length ? open : open.sort(dropOrder).slice(0, n);
-  if (!gone.length) return;
-  const byDid = new Map();
-  for (const { e, did } of gone) {
-    if (!byDid.has(did)) byDid.set(did, new Set());
-    byDid.get(did).add(e);
+/**
+ * Brings one agent's ledger down to `keep` payments, each payer over its fair share losing its first (lossOrder). The
+ * odd places go to the payers whose next payment would rank highest, so that among payers holding one payment each
+ * the largest are kept, as before fair shares.
+ */
+function trimAgent(did, keep) {
+  const list = paymentEvents.get(did) ?? [];
+  if (list.length <= keep) return;
+  const byPayer = new Map();
+  for (const e of list) {
+    const payer = String(e.payer).toLowerCase();
+    if (!byPayer.has(payer)) byPayer.set(payer, []);
+    byPayer.get(payer).push(ranked(e, did));
+  }
+  // Each payer's payments, first to go first.
+  for (const events of byPayer.values()) events.sort(lossOrder);
+  const counts = new Map([...byPayer].map(([payer, events]) => [payer, events.length]));
+  // A payer's next payment above the level is the one it would keep with an odd place.
+  const next = (payer, level) => byPayer.get(payer)[byPayer.get(payer).length - level - 1];
+  const byNext = (payers, level) => payers.sort((a, b) => lossOrder(next(b, level), next(a, level)));
+  const gone = new Set();
+  for (const [payer, share] of overShare(counts, keep, byNext)) {
+    const events = byPayer.get(payer);
+    for (const r of events.slice(0, events.length - share)) gone.add(r.e);
+  }
+  if (!gone.size) return;
+  for (const e of gone) {
     const key = creditKey(e.txHash, did, e.payer, e.chainId ?? null);
     usedPaymentTxs.add(key);
-    droppedPayments.set(key, e.ts);
+    addDropped(key, e.ts);
+    if (hasOutcome(e)) outcomeDrops += 1;
   }
-  for (const [did, events] of byDid) {
-    // A new array, as for every change (creditPayments).
-    const kept = paymentEvents.get(did).filter((e) => !events.has(e));
-    if (kept.length) paymentEvents.set(did, Object.freeze(kept));
-    else paymentEvents.delete(did);
+  // A new array, as for every change (creditPayments).
+  const kept = list.filter((e) => !gone.has(e));
+  if (kept.length) paymentEvents.set(did, Object.freeze(kept));
+  else paymentEvents.delete(did);
+  // A payer's outcome that went with its payment is no longer served (GET /outcomes).
+  if ([...gone].some((e) => Number.isSafeInteger(e.payerOutcome?.acceptedAt))) {
+    const went = new Set([...gone].map((e) => `${e.txHash}|${String(e.payer).toLowerCase()}`));
+    acceptedOrder = acceptedOrder.filter((o) => o.did !== did || !went.has(`${o.tx}|${o.who}`));
   }
-  eventTotal -= gone.length;
-  ledgerDrops += gone.length;
+  eventTotal -= gone.size;
+  ledgerDrops += gone.size;
+}
+
+/** The agent a creditKey names: `[chain:]tx|did|payer`. */
+const keyDid = (key) => key.split('|')[1];
+
+function addDropped(key, ts) {
+  droppedPayments.set(key, ts);
+  const did = keyDid(key);
+  if (!droppedByAgent.has(did)) droppedByAgent.set(did, new Set());
+  droppedByAgent.get(did).add(key);
+}
+
+function forgetDropped(key) {
+  droppedPayments.delete(key);
+  usedPaymentTxs.delete(key);
+  const did = keyDid(key);
+  const keys = droppedByAgent.get(did);
+  if (keys) {
+    keys.delete(key);
+    if (!keys.size) droppedByAgent.delete(did);
+  }
+}
+
+/**
+ * Bounds the dropped keys as dropPastCaps bounds the events: each agent's to MAX_EVENTS_PER_AGENT, then all of them to
+ * MAX_EVENTS_TOTAL by each agent's fair share. An agent over its share loses its oldest keys (by settlement time, then
+ * key), and its dropFloors entry rises to the newest of them, so that no payment they named can be credited again.
+ * What is kept depends only on which keys there were, as with the events: an agent keeps its newest.
+ */
+function boundDropped() {
+  const over = [];
+  for (const [did, keys] of droppedByAgent) if (keys.size > MAX_EVENTS_PER_AGENT) over.push(did);
+  for (const did of over) forgetOldest(did, MAX_EVENTS_PER_AGENT);
+  if (droppedPayments.size <= MAX_EVENTS_TOTAL) return;
+  const counts = new Map([...droppedByAgent].map(([did, keys]) => [did, keys.size]));
+  for (const [did, keep] of overShare(counts, MAX_EVENTS_TOTAL)) forgetOldest(did, keep);
+}
+
+function forgetOldest(did, keep) {
+  const keys = [...(droppedByAgent.get(did) ?? [])];
+  if (keys.length <= keep) return;
+  const oldest = keys.sort((a, b) => (droppedPayments.get(a) - droppedPayments.get(b)) || ascending(a, b))
+    .slice(0, keys.length - keep);
+  let floor = dropFloors.get(did) ?? -Infinity;
+  for (const key of oldest) {
+    floor = Math.max(floor, droppedPayments.get(key));
+    forgetDropped(key);
+  }
+  dropFloors.set(did, floor);
 }
 
 /** Applies the caps to this agent's ledger and the whole one, after creditPayments with `trim: false`. */
 function trimLedger(didHash) { dropPastCaps([String(didHash).toLowerCase()]); }
 
-/** Whether this payment was credited and then dropped by a cap, so that no outcome can be recorded for it. */
+/** Whether this payment was credited and then dropped by a cap, so that no outcome can be recorded for it. Once its
+ * key is forgotten (boundDropped) this says no, and tooOldToCredit refuses the payment instead. */
 function isDropped(txHash, didHash, payer, chainId = null) {
   return droppedPayments.has(creditKey(txHash, didHash, payer, chainId));
 }
@@ -1135,9 +1272,15 @@ function paymentVolume(didHash) {
 /// roughly the last three years, by which point an event contributes under a
 /// thousandth of its original value and cannot move an integer score.
 /** The ledger's size against its caps, and how many payments the caps dropped since this process started. */
-const ledgerStatus = () => ({
-  events: eventTotal, maxTotal: MAX_EVENTS_TOTAL, maxPerAgent: MAX_EVENTS_PER_AGENT, dropped: ledgerDrops,
-});
+const ledgerStatus = () => {
+  let withOutcome = 0;
+  for (const list of paymentEvents.values()) for (const e of list) if (hasOutcome(e)) withOutcome += 1;
+  return {
+    events: eventTotal, maxTotal: MAX_EVENTS_TOTAL, maxPerAgent: MAX_EVENTS_PER_AGENT, dropped: ledgerDrops,
+    // What the caps also bound (boundDropped): the dropped payments' keys, and the agents that have lost some.
+    withOutcome, droppedWithOutcome: outcomeDrops, droppedKeys: droppedPayments.size, agentsWithFloor: dropFloors.size,
+  };
+};
 
 const PRUNE_MIN_WEIGHT = 0.001;
 
@@ -1162,9 +1305,14 @@ function creditCutoff(now = Date.now()) {
   return Math.max(pruneCutoff(creditHalfLifeMs, PRUNE_MIN_WEIGHT, now), prunedBefore ?? -Infinity);
 }
 
-/** Whether a settlement made at `settledAt` (ms) is too old to credit. */
-function tooOldToCredit(settledAt, now = Date.now()) {
-  return !(Number(settledAt) >= creditCutoff(now));
+/**
+ * Whether a settlement made at `settledAt` (ms) is too old to credit: older than creditCutoff, or, given the agent it
+ * paid, no later than that agent's dropFloors entry, where a cap has forgotten the keys of its dropped payments.
+ */
+function tooOldToCredit(settledAt, now = Date.now(), didHash = null) {
+  if (!(Number(settledAt) >= creditCutoff(now))) return true;
+  const floor = didHash == null ? undefined : dropFloors.get(String(didHash).toLowerCase());
+  return floor !== undefined && !(Number(settledAt) > floor);
 }
 
 function prunePaymentEvents(halfLifeMs, minWeight = PRUNE_MIN_WEIGHT, now = Date.now()) {
@@ -1185,10 +1333,11 @@ function prunePaymentEvents(halfLifeMs, minWeight = PRUNE_MIN_WEIGHT, now = Date
   let keys = 0;
   for (const [key, ts] of droppedPayments) {
     if (ts >= cutoff) continue;
-    droppedPayments.delete(key);
-    usedPaymentTxs.delete(key);
+    forgetDropped(key);
     keys += 1;
   }
+  // A floor below the cutoff refuses nothing the cutoff does not.
+  for (const [did, floor] of dropFloors) if (floor < cutoff) dropFloors.delete(did);
   if (dropped || keys) prunedBefore = Math.max(prunedBefore ?? -Infinity, cutoff);
   return dropped;
 }

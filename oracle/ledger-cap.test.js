@@ -85,7 +85,10 @@ test('a payer flooding an agent past its cap with one-cent payments drops the ol
     newestKept: true,
     replayed: false,
     dropped: true,
-    ledger: { events: 25_000, maxTotal: 150_000, maxPerAgent: 25_000, dropped: 30_000 - (25_000 - 25) },
+    ledger: {
+      events: 25_000, maxTotal: 150_000, maxPerAgent: 25_000, dropped: 30_000 - (25_000 - 25),
+      withOutcome: 5, droppedWithOutcome: 0, droppedKeys: 30_000 - (25_000 - 25), agentsWithFloor: 0,
+    },
   });
 });
 
@@ -162,23 +165,46 @@ test('two operators crediting the same payments in different orders keep the sam
   const b = run(second);
   assert.deepEqual(b, a);
 
-  // And what both keep is the top of all of them: per agent its outcomes and its largest others up to 40, then
-  // across agents every outcome and the largest others up to 100. Smallest in fee units first, then oldest, then by
-  // transaction and payer.
+  // And what both keep is each one's fair share: per agent up to 40, each payer keeping its share of them, then across
+  // agents up to 100, each agent keeping its share and its payers theirs. A share is every group's count up to one
+  // level, the odd places to the lowest agent ids, and among payers to those whose next payment ranks highest. Within
+  // a payer an outcome goes last, then the largest in fee units, then the newest, then by transaction. Written again
+  // here, to check the store's.
   const key = (p) => BigInt(p.amount) * (p.chainId ? 1n : 10n ** 12n);
   const lower = (x, y) => (x < y ? -1 : x > y ? 1 : 0);
   const order = (x, y) => lower(key(x), key(y)) || (x.ts - y.ts) || lower(x.txHash, y.txHash) || lower(x.payer, y.payer)
     || ((x.chainId ?? 0) - (y.chainId ?? 0)) || lower(x.didHash, y.didHash);
-  const top = (list, cap) => {
-    const fixed = list.filter((p) => typeof p.success === 'boolean');
-    const open = list.filter((p) => typeof p.success !== 'boolean').sort(order).reverse();
-    return [...fixed, ...open.slice(0, Math.max(0, cap - fixed.length))];
+  const outcome = (p) => Number(typeof p.success === 'boolean');
+  const lossOrder = (x, y) => (outcome(x) - outcome(y)) || order(x, y);
+  const shares = (counts, room, first = (ids) => ids.sort(lower)) => {
+    const ids = [...counts.keys()];
+    const fit = (level) => ids.reduce((n, id) => n + Math.min(counts.get(id), level), 0);
+    let level = 0;
+    while (fit(level + 1) <= room && level < Math.max(...counts.values())) level += 1;
+    let spare = room - fit(level);
+    const out = new Map();
+    for (const id of ids) if (counts.get(id) <= level) out.set(id, counts.get(id));
+    for (const id of first(ids.filter((id) => counts.get(id) > level), level)) {
+      out.set(id, level + (spare > 0 ? 1 : 0));
+      spare -= 1;
+    }
+    return out;
   };
-  const perAgent = dids.flatMap((did) => top(payments.filter((p) => p.didHash === did), 40));
-  const kept = top(perAgent, 100);
+  const trim = (list, cap) => {
+    if (list.length <= cap) return list;
+    const byPayer = new Map();
+    for (const p of list) byPayer.set(p.payer.toLowerCase(), [...(byPayer.get(p.payer.toLowerCase()) ?? []), p]);
+    for (const ps of byPayer.values()) ps.sort(lossOrder);
+    const next = (who, level) => byPayer.get(who)[byPayer.get(who).length - level - 1];
+    const share = shares(new Map([...byPayer].map(([who, ps]) => [who, ps.length])), cap,
+      (ids, level) => ids.sort((x, y) => lossOrder(next(y, level), next(x, level))));
+    return [...byPayer].flatMap(([who, ps]) => ps.slice(ps.length - share.get(who)));
+  };
+  const perAgent = new Map(dids.map((did) => [did, trim(payments.filter((p) => p.didHash === did), 40)]));
+  const agentShare = shares(new Map([...perAgent].map(([did, ps]) => [did, ps.length])), 100);
   for (const did of dids) {
-    const mine = kept.filter((p) => p.didHash === did).map((p) => `${p.chainId ?? ''}:${p.txHash}`).sort();
-    assert.deepEqual(a[did].kept, mine, `the top of every payment for ${did}`);
+    const mine = trim(perAgent.get(did), agentShare.get(did)).map((p) => `${p.chainId ?? ''}:${p.txHash}`).sort();
+    assert.deepEqual(a[did].kept, mine, `the fair share of every payment for ${did}`);
   }
   assert.equal(Object.values(a).reduce((n, x) => n + x.kept.length, 0), 100);
 });
@@ -225,6 +251,122 @@ test("a dropped payment's key is kept, saved, and goes only when pruning would h
     console.log(JSON.stringify(r));
   `);
   assert.deepEqual(r, { dropped: true, reloaded: true, keptAt90: true, at10: { credited: false, dropped: false, events: 1 }, again: false });
+});
+
+test('payments into other agents do not push out an agent\'s payments, and its payer can still record an outcome', () => {
+  const r = inChild({ PAYMENT_MAX_EVENTS_PER_AGENT: '5', PAYMENT_MAX_EVENTS_TOTAL: '12' }, `${HELPERS}
+    const did = (n) => '0x' + n.toString(16).padStart(64, '0');
+    const T0 = 1_780_000_000_000;
+    const victim = did(0xaa);
+    // A customer's three payments of 5 USDC, with no outcome yet.
+    s.creditPayments([0, 1, 2].map((i) => ({ didHash: victim, txHash: tx('a1', i), amount: '5000000', payer: addr(1000 + i), ts: T0 + i })));
+    // Then three agents of the attacker's own, each paid 5.01 USDC five times by its own wallets, the money going round.
+    const flood = [];
+    for (let a = 1; a <= 3; a++) for (let i = 0; i < 5; i++) {
+      flood.push({ didHash: did(a), txHash: tx('b' + a, i), amount: '5010000', payer: addr(5000 + a * 10 + i), ts: T0 + 1000 + i });
+    }
+    s.creditPayments(flood);
+    console.log(JSON.stringify({
+      victim: s.getPaymentEvents(victim).length,
+      flooded: [1, 2, 3].map((a) => s.getPaymentEvents(did(a)).length),
+      outcome: s.recordPayerOutcome(victim, tx('a1', 0), addr(1000), false, { outcome: 2 }, { windowMs: 30 * 86_400_000, now: T0 + 5000 }),
+      events: s.ledgerStatus().events,
+    }));
+  `);
+  // Before fair shares the flood took the victim's three, the smallest anywhere, and the outcome was refused.
+  assert.deepEqual(r, { victim: 3, flooded: [3, 3, 3], outcome: 'set', events: 12 });
+});
+
+test('a few wallets paying an agent past its cap push out their own payments, not a customer\'s', () => {
+  const r = inChild({ PAYMENT_MAX_EVENTS_PER_AGENT: '10', PAYMENT_MAX_EVENTS_TOTAL: '1000' }, `${HELPERS}
+    const agent = '0x' + 'aa'.repeat(32);
+    const T0 = 1_780_000_000_000;
+    s.creditPayment(agent, tx('c1', 1), '5000000', addr(1000), null, T0);
+    // Two of the agent's own wallets, twenty payments each, every one larger than the customer's.
+    for (const w of [1, 2]) {
+      s.creditPayments(Array.from({ length: 20 }, (_, i) => ({ didHash: agent, txHash: tx('d' + w, i), amount: '6000000', payer: addr(7000 + w), ts: T0 + 100 + i })));
+    }
+    const held = s.getPaymentEvents(agent);
+    console.log(JSON.stringify({
+      held: held.length,
+      customer: held.some((e) => e.txHash === tx('c1', 1)),
+      perWallet: [1, 2].map((w) => held.filter((e) => e.payer === addr(7000 + w)).length),
+    }));
+  `);
+  // The customer's one fits under the level. The two wallets share the other nine, and the odd one goes to the wallet
+  // whose next payment ranks higher: the same amount at the same time, so the higher transaction hash, the second's.
+  assert.deepEqual(r, { held: 10, customer: true, perWallet: [4, 5] });
+});
+
+test('payments with an outcome no longer hold a ledger above its cap: they go after their payer\'s others', () => {
+  const r = inChild({ PAYMENT_MAX_EVENTS_PER_AGENT: '5', PAYMENT_MAX_EVENTS_TOTAL: '1000' }, `${HELPERS}
+    const agent = '0x' + 'aa'.repeat(32);
+    const T0 = 1_780_000_000_000;
+    const many = addr(1);
+    // One payer: two payments without an outcome, then six with one, all the same amount.
+    s.creditPayments([0, 1].map((i) => ({ didHash: agent, txHash: tx('e0', i), amount: '${CENT}', payer: many, ts: T0 + 10 + i })));
+    s.creditPayments(Array.from({ length: 6 }, (_, i) => ({ didHash: agent, txHash: tx('e1', i), amount: '${CENT}', payer: many, success: true, ts: T0 + i })));
+    // Another payer's one payment.
+    s.creditPayment(agent, tx('e2', 0), '${CENT}', addr(2), null, T0);
+    const held = s.getPaymentEvents(agent);
+    console.log(JSON.stringify({
+      held: held.length,
+      open: held.filter((e) => e.payer === many && e.success === null).length,
+      withOutcome: held.filter((e) => e.success === true).length,
+      other: held.some((e) => e.payer === addr(2)),
+      ledger: s.ledgerStatus(),
+    }));
+  `);
+  assert.deepEqual(r, {
+    held: 5, open: 0, withOutcome: 4, other: true,
+    ledger: { events: 5, maxTotal: 1000, maxPerAgent: 5, dropped: 4, withOutcome: 4, droppedWithOutcome: 2, droppedKeys: 4, agentsWithFloor: 0 },
+  });
+});
+
+test('the dropped keys are bounded too: an agent past its share forgets its oldest and refuses payments that old, through a restart', () => {
+  const r = inChild({ PAYMENT_MAX_EVENTS_PER_AGENT: '3', PAYMENT_MAX_EVENTS_TOTAL: '1000' }, `${HELPERS}
+    const x = '0x' + 'aa'.repeat(32), y = '0x' + 'bb'.repeat(32);
+    const payer = addr(1);
+    const T0 = 1_780_000_000_000;
+    // Ten to x from one payer, a millisecond apart: x keeps the newest three and drops seven, and of the seven keys
+    // keeps the newest three, forgetting the four oldest, the last of them settled at T0 + 3.
+    s.creditPayments(Array.from({ length: 10 }, (_, i) => ({ didHash: x, txHash: tx('f0', i), amount: '${CENT}', payer, ts: T0 + i })));
+    const r = { held: s.getPaymentEvents(x).map((e) => e.ts - T0), ledger: s.ledgerStatus() };
+    r.refused = {
+      forgotten: s.creditPayment(x, tx('f0', 0), '${CENT}', payer, null, T0),
+      atTheFloor: s.creditPayment(x, tx('f9', 1), '${CENT}', addr(2), null, T0 + 3),
+    };
+    r.taken = { otherAgent: s.creditPayment(y, tx('f9', 2), '${CENT}', payer, null, T0), afterTheFloor: s.creditPayment(x, tx('f9', 3), '${CENT}', addr(3), null, T0 + 4) };
+    s.persist();
+    r.version = JSON.parse(require('fs').readFileSync(process.env.ORACLE_STATE_PATH, 'utf8')).schemaVersion;
+    s.usedPaymentTxs.clear();
+    s.paymentEvents.clear();
+    s.load();
+    r.reloaded = { refused: s.tooOldToCredit(T0 + 3, undefined, x), keys: s.ledgerStatus().droppedKeys };
+    console.log(JSON.stringify(r));
+  `);
+  assert.deepEqual(r, {
+    held: [7, 8, 9],
+    ledger: { events: 3, maxTotal: 1000, maxPerAgent: 3, dropped: 7, withOutcome: 0, droppedWithOutcome: 0, droppedKeys: 3, agentsWithFloor: 1 },
+    refused: { forgotten: false, atTheFloor: false },
+    taken: { otherAgent: true, afterTheFloor: true },
+    version: 5,
+    // Taking the payment after the floor put x one over its cap again, and its payer over its share, so a fourth key.
+    // That made four, and the oldest went too.
+    reloaded: { refused: true, keys: 3 },
+  });
+});
+
+test('past the total cap the dropped keys go by fair share too, from the agents holding the most', () => {
+  const r = inChild({ PAYMENT_MAX_EVENTS_PER_AGENT: '100', PAYMENT_MAX_EVENTS_TOTAL: '4' }, `${HELPERS}
+    const x = '0x' + 'aa'.repeat(32), y = '0x' + 'bb'.repeat(32);
+    const T0 = 1_780_000_000_000;
+    s.creditPayments(Array.from({ length: 6 }, (_, i) => ({ didHash: x, txHash: tx('g0', i), amount: '${CENT}', payer: addr(1), ts: T0 + i })));
+    s.creditPayments(Array.from({ length: 6 }, (_, i) => ({ didHash: y, txHash: tx('g1', i), amount: '${CENT}', payer: addr(2), ts: T0 + i })));
+    const status = s.ledgerStatus();
+    console.log(JSON.stringify({ events: status.events, keys: status.droppedKeys, floors: status.agentsWithFloor, x: s.getPaymentEvents(x).length, y: s.getPaymentEvents(y).length }));
+  `);
+  assert.deepEqual(r, { events: 4, keys: 4, floors: 2, x: 2, y: 2 });
 });
 
 // ---- the real oracle, against the stubbed chain ------------------------------------------------------------

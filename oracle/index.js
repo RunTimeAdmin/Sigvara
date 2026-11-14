@@ -1049,8 +1049,9 @@ async function runPaymentScan(agents) {
       unresolved.push(c);
       continue;
     }
-    // Older than pruning keeps, so the store refuses it (creditPayment), and that is no disagreement.
-    if (tooOldToCredit(ts)) continue;
+    // Older than pruning keeps, or than the caps keep for this agent, so the store refuses it (creditPayment), and
+    // that is no disagreement.
+    if (tooOldToCredit(ts, undefined, c.didHash)) continue;
     toCredit.push(c);
   }
   // In one call, so that a full ledger is copied once a scan rather than once a payment (creditPayments).
@@ -2396,12 +2397,13 @@ async function paymentOnChain(pc, didHash, info, txHash) {
 // of an hour, so these are the usual answers to an outcome posted just after paying.
 const NOT_YET = ['unconfirmed', 'not_found', 'agent_not_seen'];
 
-// The answer to a payment older than pruning keeps (store.tooOldToCredit), on POST /attest and for a payer's outcome.
-const SETTLEMENT_TOO_OLD = 'this payment is older than this oracle keeps payments for, so it cannot be credited';
-// The answer to an outcome for a payment credited without one and since dropped from the agent's full ledger
-// (store.dropPastCaps), on POST /attest and for a payer's outcome. Final: the payment cannot come back.
-const PAYMENT_DROPPED = 'this payment was dropped from the agent\'s full payment ledger, as one of its smallest without an '
-  + 'outcome, so no outcome can be recorded for it';
+// The answer to a payment older than pruning keeps, or than the caps keep for its agent (store.tooOldToCredit), on
+// POST /attest and for a payer's outcome.
+const SETTLEMENT_TOO_OLD = 'this payment is older than this oracle keeps payments to this agent for, so it cannot be credited';
+// The answer to an outcome for a payment credited and since dropped from the agent's full ledger (store.dropPastCaps),
+// on POST /attest and for a payer's outcome. Final: the payment cannot come back.
+const PAYMENT_DROPPED = 'this payment was dropped from the agent\'s payment ledger, which was past its cap while its payer '
+  + 'held more than its share, so no outcome can be recorded for it';
 
 /**
  * Takes an outcome the payer signed, once its payment has been verified
@@ -2455,7 +2457,7 @@ async function admitPayerOutcome({ didHash, credited, info, signed, packetId = n
   if (early) return refuse(400, 'outcome_window', early, 'attestRejectedOther');
   // Its payment is credited below, which the store refuses for one this old (creditPayment). Said here, for an
   // import as well as a post.
-  if (tooOldToCredit(credited.settledAt)) {
+  if (tooOldToCredit(credited.settledAt, undefined, didHash)) {
     return refuse(402, 'settlement_too_old', SETTLEMENT_TOO_OLD, 'attestRejectedPayment');
   }
 
@@ -3346,7 +3348,7 @@ async function handleRequest(req, res) {
         }
         // Older than pruning keeps. Its record, and the key that refused it a second time, may be gone, so it is
         // refused for its age, before any outcome is filed on it.
-        if (tooOldToCredit(credited.settledAt)) {
+        if (tooOldToCredit(credited.settledAt, undefined, didHash)) {
           metrics.inc('attestRejectedPayment');
           return json(res, 402, { error: SETTLEMENT_TOO_OLD, code: 'settlement_too_old' });
         }
