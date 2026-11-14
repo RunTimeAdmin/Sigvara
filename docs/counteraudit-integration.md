@@ -208,8 +208,10 @@ This is the role [ADR 0006 section 7](adr/0006-payer-signed-outcomes.md#7-what-c
 gives it: a courier and a sealer, not an attester. Each operator checks the payment and the
 signature again itself and trusts the payer, not CounterAudit, so the org allowlist and the
 oracle token the relay needs do not apply. Operators import each other's payer-signed
-outcomes, so one that takes the post shares it with the rest. They accept "delivered"
-(`outcome: 1`) only; "not delivered" waits for a challenge process.
+outcomes, so one that takes the post shares it with the rest. On Arc testnet they have
+accepted "not delivered" (`outcome: 2`) as well since 11 November 2026, held 7 days for a
+refund before it counts ([ADR 0011](adr/0011-who-rules-negative-outcomes.md)); the first came
+through CounterAudit on 14 November. Mainnet starts with "delivered" only.
 
 ---
 

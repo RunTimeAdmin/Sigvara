@@ -42,8 +42,9 @@ A refund before the ruling cures A3, and only A3. Returning stolen funds once ca
 A2 asks for a closed loop, not a common funder. Public faucets fund many unrelated wallets, so a shared
 funder proves nothing. The 50% bar stops ordinary refunds from tripping it.
 
-A3 cannot be used yet. Payer negatives are paused until the challenge process exists
-([ADR 0006](0006-payer-signed-outcomes.md)).
+A3 rests on payer negatives that counted under [ADR 0011](0011-who-rules-negative-outcomes.md): signed by the
+payer, held 7 days, and not refunded by the agent in that time. Arc testnet operators have taken them since
+11 November 2026. Mainnet's do not yet, so there A3 waits until they do.
 
 ### 3. Operator violations
 

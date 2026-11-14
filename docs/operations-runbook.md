@@ -3,7 +3,7 @@
 For the two oracle operators on the Arc testnet: keeping and restoring state, payer-signed
 outcomes that are slow to reach the other operator, the two operators disagreeing, the event
 index the explorer pages read (section 4), the ERC-8004 publisher (section 5), payment
-chains (section 6), and the slash keeper (section 7). A stolen
+chains (section 6), the slash keeper (section 7), and payer negatives (section 8). A stolen
 key is [incident-operator-key.md](incident-operator-key.md); bringing up an operator is
 [oracle/RUNBOOK-second-operator.md](../oracle/RUNBOOK-second-operator.md).
 
@@ -16,18 +16,18 @@ key is [incident-operator-key.md](incident-operator-key.md); bringing up an oper
 | State volume | `sigvara-oracle_oracle_state` | `sigvara-checker_checker_state` |
 | Local port, for `/metrics` | `127.0.0.1:3030` | `127.0.0.1:3031` |
 
-**What runs what, as of 7 November 2026.** Each public `/health` names its own commit, and that is the
+**What runs what, as of 14 November 2026.** Each public `/health` names its own commit, and that is the
 one to trust when this table has gone stale.
 
 | Service | Host | Commit | Since (UTC) |
 |---|---|---|---|
-| Primary oracle | `archipelago-standby` | `e3addfa` | 7 November, 03:25 |
-| Checker | `packrai-vps` | `e3addfa` | 7 November, 03:24 |
+| Primary oracle | `archipelago-standby` | `ee2d59d` | 14 November, 02:41 |
+| Checker | `packrai-vps` | `ee2d59d` | 14 November, 02:41 |
 | Event index | `archipelago-standby` | `b95f0aa` | 5 November, 13:31 |
 | Watcher | a third host | `aa34cee` | 6 November, 08:37 |
 | Policy signer | `packrai-vps` | `b95f0aa` | 5 November, 13:33 |
 | ERC-8004 publisher | `archipelago-standby` | `e39ff5b` | 5 November, 11:08 |
-| Slash keepers | `archipelago-standby`, `packrai-vps` | `d26ebc1` | 5 November, 15:25 and 15:26 |
+| Slash keepers | `archipelago-standby`, `packrai-vps` | `50386ef` | 10 November, 16:39 |
 
 Open items are listed in the [launch checklist](launch-checklist.md#where-this-stands).
 
@@ -750,3 +750,30 @@ the keeper waits 500 ms between log reads and tries a throttled read again.
 
 **Rehearsing.** Point it at a local fork of Arc, using Anvil's public keys, and move the fork's clock.
 Rewind the state file whenever you rewind the fork, or it remembers a slash the fork has forgotten.
+
+## 8. Payer negatives
+
+Both operators have run `PAYER_OUTCOMES=both` since 11 November 2026, so they take a payer's signed
+"not delivered" ([ADR 0011](adr/0011-who-rules-negative-outcomes.md)). Each is held 7 days
+(`PAYER_NEGATIVE_HOLD_DAYS`) from the block the first operator checked it at; the other operator
+moves to that block when it imports it. Each epoch reads the agents' transfers back to the payers
+for at most ten minutes, the most urgent first. A negative counts an hour after its hold ends, and
+only if no refund of at least the amount came from the agent's address.
+
+**Reading them.** `GET /evidence/<didHash>` serves each with `payerNegative`: `countsFrom`,
+`settled` (its refund read is final) and `refundTx` (the refund that cured it, if one did). Until it
+counts it reads as `success: null`. Both operators should serve the same `countsFrom`; a different
+one means they took it at different blocks.
+
+```sh
+curl -s https://oracle.sigvara.xyz/evidence/<didHash> | jq -c '.evidence[] | select(.payerNegative) | {txHash, success, payerNegative}'
+```
+
+| What it says | What it means | What to do |
+|---|---|---|
+| `refund read getLogs failed (...), retrying in 500ms` | One read of the payment chain failed and is being retried | Nothing, unless the lines below follow |
+| `N payer negative(s) not read for refunds this epoch`, or `sigvara_oracle_payer_negatives_unread_total` rising | The ten minutes ran out | They are read first next epoch. A rise every epoch means the queue grows faster than the reads: check that chain's RPC |
+| `could not read refunds for ...` | A read failed outright | It is tried again next epoch. If it repeats, check that chain's RPC |
+| `sigvara_oracle_agents_held_by_payer_negative_total` rising, or `payer_negative` in `paymentChainHold.reasons` | A negative should count but its refund read is not final, so the agent is held from proposals | It clears once the read finishes |
+
+The first three, from the simulation, were taken on 14 November 2026 and count from 21 November.
