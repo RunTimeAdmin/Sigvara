@@ -496,8 +496,8 @@ the wrong instruction. The default nonce store is per process. In a deployment p
 and `maxScoreAgeSeconds` are set, and `instances: 'multiple'` needs a shared `NonceStore`
 with an atomic `consume()`, such as `atomicNonceStore` over a Redis `SET NX` (the
 [SDK README](packages/sdk/README.md) shows one). The gate exists from 1.0.0-alpha.9; use
-1.0.0-alpha.19. A worked example of the gate lives in
-[examples/mcp-gated-tool](examples/mcp-gated-tool). The other direction, checking an agent before paying it from any MCP host, is `sigvara-mcp` (from 1.0.0-alpha.15, [SDK README](packages/sdk/README.md#trust-lookups-for-agents-sigvara-mcp)), or from your own code, `SigvaraTrustCheck` and `sigvaraX402Fetch` around an x402 client (from 1.0.0-alpha.16, [SDK README](packages/sdk/README.md#before-paying-or-hiring-sigvaratrustcheck)).
+1.0.0-alpha.20. A worked example of the gate lives in
+[examples/mcp-gated-tool](examples/mcp-gated-tool). The other direction, checking an agent before paying it from any MCP host, is `sigvara-mcp` (from 1.0.0-alpha.15, [SDK README](packages/sdk/README.md#trust-lookups-for-agents-sigvara-mcp)), listed in the [official MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.RunTimeAdmin/sigvara) as `io.github.RunTimeAdmin/sigvara` since 13 November 2026, or from your own code, `SigvaraTrustCheck` and `sigvaraX402Fetch` around an x402 client (from 1.0.0-alpha.16, [SDK README](packages/sdk/README.md#before-paying-or-hiring-sigvaratrustcheck)).
 
 ### Agent-to-Agent authentication
 
@@ -601,12 +601,12 @@ Everything below runs offline, with no deployed contracts, except three fork sui
 | Suite | Count | Command |
 |---|---|---|
 | Contracts: unit, fuzz, E2E, upgrade, deploy-script, handover and 22 invariants | 796 | `forge test` |
-| Oracle | 1462 | `cd oracle && node --test` |
-| SDK | 377 | `cd packages/sdk && npx vitest run` |
+| Oracle | 1473 | `cd oracle && node --test` |
+| SDK | 381 | `cd packages/sdk && npx vitest run` |
 
-Counts are individual tests as measured on 10 November 2026, so each of the 22 invariants counts once. Without a fork URL, 784 of the contract tests run and 12 skip. Run after `npm run build`, 368 of the SDK's 377 pass and 9 skip: the 8 integration tests, which need a live deployment, and one check that runs only in CI. Without a build, the 9 built-package tests skip too. Vitest strips types without checking them, so `npm run typecheck` in `packages/sdk` checks the tests against the SDK's types as well as the sources. [`scripts/mutation`](scripts/mutation/README.md) holds the harnesses that measure whether these tests would catch a deliberate break in the contracts or deploy scripts.
+Counts are individual tests, so each of the 22 invariants counts once. The contracts were counted on 10 November 2026 and have not changed since; the oracle and the SDK were counted on 13 November. Without a fork URL, 784 of the contract tests run and 12 skip. Run after `npm run build`, 372 of the SDK's 381 pass and 9 skip: the 8 integration tests, which need a live deployment, and one check that runs only in CI. Without a build, the 9 built-package tests skip too. Vitest strips types without checking them, so `npm run typecheck` in `packages/sdk` checks the tests against the SDK's types as well as the sources. [`scripts/mutation`](scripts/mutation/README.md) holds the harnesses that measure whether these tests would catch a deliberate break in the contracts or deploy scripts.
 
-A commit marked `[skip ci]` was checked locally before merge instead of on GitHub Actions, to save CI minutes: the suites its change touches, or `node scripts/check-docs.mjs` for a docs change. Each is checked against the `main` its branch started from, so two such changes merged close together can still break `main`. That happened once, on 11 November 2026, and the next merge fixed it.
+Merges to `main` carry `[skip ci]`, to save CI minutes, so the push to `main` does not run the suites again. A change to code runs them on its pull request and merges only once every job there has passed; a docs-only change is checked locally with `node scripts/check-docs.mjs`. Each is checked against the `main` its branch started from, so two changes merged close together can still break `main`. That happened once, on 11 November 2026, and the next merge fixed it. The rule that every job must pass dates from 14 November 2026: before it, #281, #282 and #288 merged with their oracle job failing, and #283 and #297 fixed the tests that failed. On 13 November the oracle and SDK suites were run on `main` at `eaccb91` and passed.
 
 ### Unit Tests (default)
 
@@ -789,9 +789,9 @@ require(ISigvaraReader(READER).isTrusted(agent, 40), "agent not in good standing
 
 | Track | What is in it | What moves it |
 |---|---|---|
-| Built, on Arc testnet | Contracts, oracle epochs and `@sigvara/protocol-sdk` · CounterAudit attestation and HoodScan flag feeds · [payment-backed attestations](docs/payment-backed-attestations.md), decay, per-payer caps, tenure and a maturity lock · a second bonded operator and a public watcher on separate hosts · [payer-signed positive outcomes](docs/adr/0006-payer-signed-outcomes.md) · USDC payments on Base Sepolia, with their outcomes ([ADR 0009](docs/adr/0009-payments-on-base.md)) · a public slash and two slash keepers · ERC-8004 feedback reading and score publishing. One simulation agent is linked and no feedback counts toward a score yet, so External Trust and propagation read 0 and the reachable ceiling today is 70/100 | Done |
+| Built, on Arc testnet | Contracts, oracle epochs and `@sigvara/protocol-sdk` · CounterAudit attestation and HoodScan flag feeds · [payment-backed attestations](docs/payment-backed-attestations.md), decay, per-payer caps, tenure and a maturity lock · a second bonded operator and a public watcher on separate hosts · [payer-signed positive outcomes](docs/adr/0006-payer-signed-outcomes.md) · USDC payments on Base Sepolia, with their outcomes ([ADR 0009](docs/adr/0009-payments-on-base.md)) · a public slash and two slash keepers · ERC-8004 feedback reading and score publishing · a cap on each epoch's writes. One simulation agent is linked and no feedback counts toward a score yet, so External Trust and propagation read 0 and the reachable ceiling today is 70/100 | Done |
 | Adoption | A Wallet MCP x402 payment on Base Sepolia ([ADR 0009](docs/adr/0009-payments-on-base.md)) · a read-only plugin for Coinbase's Wallet MCP, submitted · design partners · the first outside gate in production · real job sizes set how large a job a bond should back | An outside team |
-| Mainnet | The slash drill, to 24 November · the staking upgrade · a Safe and timelock on testnet ([treasury rehearsal](docs/treasury-rehearsal.md)) · a limit on operators' epoch spend · external audit and fixes · registries on Arc mainnet with bonds in SVR | What each step unblocks ([checklist](docs/launch-checklist.md)) |
+| Mainnet | The slash drill, to 24 November · the staking upgrade · a Safe and timelock on testnet ([treasury rehearsal](docs/treasury-rehearsal.md)) · external audit and fixes · registries on Arc mainnet with bonds in SVR | What each step unblocks ([checklist](docs/launch-checklist.md)) |
 | After usage | The payer challenge and an arbiter path · epoch fees · the reward distributor · a bond review · operators run by *independent parties*, which is the part that still matters | Real volume and real users |
 | Candidates | Proof of personhood for reviewers · Solana payments · bond-based eligibility tiers · the ERC-8004 Validation Registry · evidence bundles · a way to notice a dead watcher | A named event for each |
 | New ideas | Whose problem is it, what changes at the gate, which decision does it touch, what is the smallest version, what starts it | Five questions in the [roadmap](docs/roadmap.md#how-a-new-idea-gets-on-this-list) |

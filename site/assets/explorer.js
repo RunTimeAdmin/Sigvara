@@ -45,6 +45,11 @@
   // The operator of the slash-drill agents (docs/slash-drill.md, "The adversarial drill"). It
   // holds no role; the agents it bonds exist to be slashed at, so they are marked as Sigvara's.
   const DRILL_OPERATOR = "0x11bbb7764D215c7Ab2E7c677283E226D599ce956";
+  // Agents the repository itself says are Sigvara's own, by didHash, so no page passes them off as
+  // outside demand. The demo agent is named in docs/slash-drill.md and docs/divergence-log.md.
+  const KNOWN_AGENTS = {
+    "0x8414ce0bf4f1e1695193623e0a656a9439e356f8bed0b8bf249b179fe77c7e19": "Sigvara's demo agent",
+  };
   // The two ORACLE_ROLE holders, read from RoleGranted on the reputation proxy on 1 Nov 2026
   // (none revoked). Both are run by the Sigvara team. Used to name them; any other address is
   // shown bare.
@@ -68,6 +73,10 @@
   const EVENTS = [
     { name: "AgentRegistered", sig: "AgentRegistered(bytes32,address,address,bytes32)", topic: "0x05721be61cc3d7a6bf132adf5eaa7898a92db50c5db47b35e8ade18b06423281", contract: "identity" },
     { name: "ScoreProposed", sig: "ScoreProposed(bytes32,uint256,bytes32)", topic: "0x2ecf59b65d6c5f89b87bffff8937f2a81e253859b6b76bfd7f137c2db9b6caff", contract: "reputation" },
+    { name: "ReputationUpdated", sig: "ReputationUpdated(bytes32,uint8,uint256,bytes32)", topic: "0x3326e60e6a1b323d1c5f9b8de1276b4fe3d90a79f228cc79766b6ada11428e3a", contract: "reputation" },
+    { name: "ReputationUpdated", sig: "ReputationUpdated(bytes32,uint8,uint256)", topic: "0x741d706ed4c3bf9f21d7f0ba307ed608886278a922287cc099e8e0e5fb5eeeb5", contract: "reputation", legacy: true },
+    { name: "ReputationZeroed", sig: "ReputationZeroed(bytes32)", topic: "0x70503cbb48ebe74f26e5b96b532e80c13ba04ee396f33ebe1c766877bad61d75", contract: "reputation" },
+    { name: "WithdrawalInitiated", sig: "WithdrawalInitiated(bytes32,address,uint256,uint256)", topic: "0xba29502abbfe02f71fd06661385334e15cf3cb09b1185ee0465f0d213da13fa9", contract: "staking" },
     { name: "SlashInitiated", sig: "SlashInitiated(bytes32,address,address,uint256)", topic: "0x68a6dcb0be51611092b43c97ef36088f9f1c0905c37d8170b379a590d8a50f01", contract: "staking" },
     { name: "SlashDisputed", sig: "SlashDisputed(bytes32,address)", topic: "0x58fadd7ae5483f79dd4d61a778aa5c239fb4d42bef831f52807cd1ec32d9999a", contract: "staking" },
     { name: "SlashExecuted", sig: "SlashExecuted(bytes32,uint256,uint256)", topic: "0x2c8595d6ea47659522ccbb27b6d576b6f1aa1fa9b540727b7e4292546f78af8d", contract: "staking" },
@@ -718,7 +727,7 @@
 
   const api = {
     CHAIN_ID, RPC, EXPLORER, INDEX, PRIMARY, CHECKER, SOURCE,
-    IDENTITY, REPUTATION, STAKING, ORACLE_BOND, SVR, DEPLOYER, DRILL_OPERATOR, OPERATORS,
+    IDENTITY, REPUTATION, STAKING, ORACLE_BOND, SVR, DEPLOYER, DRILL_OPERATOR, KNOWN_AGENTS, OPERATORS,
     SEL, EVENTS, BOND_EVENTS, STATUS, BOND_STATUS, ZERO32, READING_HISTORY, TAIL_BLOCKS,
     esc, strip, pad32, word, wordAddr, isAddr, isHash, same, short, topicAddr,
     fmtWhen, fmtSvr, txLink, addrLink, rootCode, commitLink, whoIs, failed,

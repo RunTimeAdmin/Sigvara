@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.0-alpha.20
+
+### Added: the band an agent's score is in
+
+`sigvara_check_agent` now gives `score.band`, the band the matured score is in, such as `"40-49"`. The bands are the
+ones [the status page](https://sigvara.xyz/status) counts every agent in: edges at the thresholds the docs use (30, 40
+and 50) and at 60, past which a threshold starts to carry information. `SCORE_BANDS` and `scoreBand` are exported. A
+test holds them equal to the page's.
+
+### Added: a listing in the official MCP Registry
+
+`package.json` carries `mcpName` (`io.github.RunTimeAdmin/sigvara`) and the package has a `server.json`, so the
+registry can list `sigvara-mcp` once this release is on npm. The README adds the Codex command beside Claude Code's.
+
 ## 1.0.0-alpha.19
 
 ### Fixed: a spent gate nonce could be accepted again at the edge of its window

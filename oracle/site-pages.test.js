@@ -31,6 +31,10 @@ test('a Suspended or PendingBond simulated agent with stake is not shown as Acti
   const ctx = vm.createContext({
     window: { SigvaraExplorer: { getJson: () => new Promise(() => {}) } },
     document: { getElementById: () => ({ querySelector: () => ({}), querySelectorAll: () => [], classList: { remove() {} } }) },
+    // The page picks the batch it shows from its query string when it loads (#284), and a vm context
+    // has neither a URLSearchParams nor a location of its own.
+    URLSearchParams,
+    location: { search: '' },
   });
   vm.runInContext(source, ctx);
   const agent = (status) => ({ registeredAt: 1, status, slash: 'none', stake: 10n ** 21n, day: 0 });

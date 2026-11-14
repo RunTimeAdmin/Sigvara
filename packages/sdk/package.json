@@ -1,6 +1,7 @@
 {
   "name": "@sigvara/protocol-sdk",
-  "version": "1.0.0-alpha.19",
+  "version": "1.0.0-alpha.20",
+  "mcpName": "io.github.RunTimeAdmin/sigvara",
   "description": "TypeScript SDK for Sigvara. On-chain agent identity, reputation, and A2A challenge-response authentication.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

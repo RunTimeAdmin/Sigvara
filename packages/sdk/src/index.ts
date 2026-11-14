@@ -2,7 +2,7 @@ export { SigvaraAgent } from './agent';
 export { SigvaraVerifier, registerAgent } from './verifier';
 export { depositStake } from './stake';
 export { SigvaraGate, atomicNonceStore } from './gate';
-export { SigvaraTrustCheck, standingDecision } from './standing';
+export { SigvaraTrustCheck, standingDecision, SCORE_BANDS, scoreBand } from './standing';
 export type { TrustCheckConfig, TrustVerdict, TrustReason, StandingReason } from './standing';
 export { sigvaraX402Fetch, x402OffersFrom, X402SellerRefused, X402_MAX_BYTES, X402_MAX_OFFERS } from './x402';
 export type { X402Offer } from './x402';

@@ -22,7 +22,7 @@ import readline from 'readline';
 import type { Readable, Writable } from 'stream';
 import { ethers, FetchRequest } from 'ethers';
 import { SigvaraVerifier } from './verifier';
-import { REASON_DETAIL, standingDecision } from './standing';
+import { REASON_DETAIL, scoreBand, standingDecision } from './standing';
 import type { StandingReason } from './standing';
 import { computeDidHash, formatDid, parseDid } from './did';
 import { generateChallenge } from './challenge';
@@ -208,7 +208,7 @@ export const TRUST_TOOLS: Tool[] = [
     name: 'sigvara_check_agent',
     description:
       'Check an agent before paying or relying on it. Reports whether it is registered, Active and holding the '
-      + 'minimum stake now; its matured score and when the score was last written; the stake a slash could take; '
+      + 'minimum stake now; its matured score, the band it is in, and when the score was last written; the stake a slash could take; '
       + 'and anything pending (a slash, a queued withdrawal, a new score). With a threshold it also gives the yes or '
       + 'no SigvaraGate gives, without the proof of identity: use sigvara_challenge for that.',
     inputSchema: {
@@ -574,6 +574,8 @@ export function createTrustServer(options: TrustServerOptions): TrustServer {
       onChain: { agentAddress: identity.agentAddress, operator: identity.operator },
       score: {
         matured: score, earned,
+        // Of the matured score, in the bands https://sigvara.xyz/status counts every agent in.
+        band: scoreBand(score),
         updatedAt: iso(scoreUpdatedAt),
         ageSeconds: scoreUpdatedAt === 0 ? null : t - scoreUpdatedAt,
       },

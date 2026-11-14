@@ -171,6 +171,10 @@ console.log('Signature valid:', valid);
 console.log('Active, with 40 points or more:', trusted);
 ```
 
+The 40 in this example is a placeholder. A score below roughly 60 says little on its own, so read
+[what a fake score costs](whitepaper.md#53-what-a-fake-score-costs) before you pick a number, and
+[sigvara.xyz/status](https://sigvara.xyz/status) for how the scores spread today.
+
 `signChallengeFor` is in 1.0.0-alpha.10 and later. On alpha.9 call `signChallenge`, after
 checking yourself that the payload names the verifier you mean to prove yourself to. From
 1.0.0-alpha.12 the agent's `signChallenge` is gone: it throws and names `signChallengeFor`.

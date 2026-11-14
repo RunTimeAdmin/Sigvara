@@ -125,6 +125,10 @@ const ok = await verifier.verifySignature(
 const trusted = ok && (await verifier.isActive(agent.did)) && (await verifier.meetsThreshold(agent.did, 40));
 ```
 
+The 40 in these examples is a placeholder. A score below roughly 60 says little on its own, so read
+[what a fake score costs](https://github.com/RunTimeAdmin/Sigvara/blob/main/docs/whitepaper.md#53-what-a-fake-score-costs) before you pick a number, and
+[sigvara.xyz/status](https://sigvara.xyz/status) for how the scores spread today.
+
 Signature validity, status and score are separate reads. Combining them correctly is
 easy to get subtly wrong, so there is a piece that does it.
 
@@ -427,6 +431,16 @@ or, in a host's JSON config:
 { "mcpServers": { "sigvara": { "command": "npx", "args": ["-y", "-p", "@sigvara/protocol-sdk", "sigvara-mcp"] } } }
 ```
 
+or in Codex:
+
+```bash
+codex mcp add sigvara -- npx -y -p @sigvara/protocol-sdk sigvara-mcp
+```
+
+It is listed in the [official MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.RunTimeAdmin/sigvara)
+as `io.github.RunTimeAdmin/sigvara`, from 1.0.0-alpha.20 (`server.json`), so a host that reads the registry can
+find it by name.
+
 It reads the Arc testnet deployment unless told otherwise. On another chain, set `SIGVARA_RPC_URL`,
 `SIGVARA_CHAIN_ID` and the three registries (`SIGVARA_IDENTITY`, `SIGVARA_REPUTATION`, `SIGVARA_STAKING`);
 there are no defaults off Arc testnet. Before its first read it asks the RPC which chain it serves, and
@@ -436,7 +450,7 @@ redacted the same way.
 
 | Tool | What it answers |
 |---|---|
-| `sigvara_check_agent` | Registered, Active, holding the minimum stake now; the agent's and operator's addresses on chain; matured score and when it was written; the stake a slash could take; and what is pending: a slash, a queued withdrawal, a new score. With `threshold` (and optionally `maxScoreAgeSeconds`), a yes or no. |
+| `sigvara_check_agent` | Registered, Active, holding the minimum stake now; the agent's and operator's addresses on chain; matured score, the band it is in (the bands [the status page](https://sigvara.xyz/status) counts every agent in), and when it was written; the stake a slash could take; and what is pending: a slash, a queued withdrawal, a new score. With `threshold` (and optionally `maxScoreAgeSeconds`), a yes or no. |
 | `sigvara_score` | The six factors, the earned total, the matured total a threshold is checked against, and a proposal waiting out its challenge window. |
 | `sigvara_stake` | Stake held, queued for withdrawal and when it can leave, the minimum, and the most recent slash proposal. |
 | `sigvara_identity` | Operator, status, registration time, the Ed25519 key and the DID document. |

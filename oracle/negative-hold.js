@@ -152,6 +152,7 @@ function readBudget(e, cfg, { from, headBlock, headMs, chunk, epochMs }) {
  * @param {string} io.asset  the payment's asset on its chain
  * @param {string} io.agent  the agent's address, which was paid
  * @param {number} io.headBlock  the newest block this operator treats as settled on that chain
+ * @param {number} [io.headMs]  that block's time in ms, when the caller has read it already
  * @param {number} io.chunk  blocks per getLogs
  * @param {number} [io.paceMs]
  * @param {number} [io.maxReads]  by default MAX_READS_PER_EPOCH, or readBudget's when `epochMs` is given
@@ -159,7 +160,7 @@ function readBudget(e, cfg, { from, headBlock, headMs, chunk, epochMs }) {
  * @param {number} [io.deadline]  this host's time to stop reading by
  * @returns {Promise<{ final: boolean, refunded: boolean|null, readThroughBlock: number, txHash?: string, blockNumber?: number, error?: Error }>}
  */
-async function readRefund(e, cfg, { getLogs, blockMs, asset, agent, headBlock, chunk, paceMs = 0, maxReads, epochMs, deadline = Infinity }) {
+async function readRefund(e, cfg, { getLogs, blockMs, asset, agent, headBlock, headMs: knownHeadMs, chunk, paceMs = 0, maxReads, epochMs, deadline = Infinity }) {
   const end = holdEndMs(e, cfg);
   const amount = BigInt(e.amount);
   const paidBlock = Number(e.blockNumber);
@@ -171,7 +172,7 @@ async function readRefund(e, cfg, { getLogs, blockMs, asset, agent, headBlock, c
   let through = before;
   let passedEnd = false;
   try {
-    const headMs = await blockMs(headBlock);
+    const headMs = Number.isFinite(knownHeadMs) ? knownHeadMs : await blockMs(headBlock);
     const budget = maxReads ?? (epochMs ? readBudget(e, cfg, { from, headBlock, headMs, chunk, epochMs }) : MAX_READS_PER_EPOCH);
     while (from <= headBlock && reads < budget && Date.now() < deadline) {
       const to = Math.min(headBlock, from + chunk - 1);
@@ -206,6 +207,37 @@ async function readRefund(e, cfg, { getLogs, blockMs, asset, agent, headBlock, c
   return { final: passedEnd, refunded: passedEnd ? false : null, readThroughBlock: through };
 }
 
+/**
+ * The order the negatives still to read are read in, the most urgent first: one whose hold start is not dated yet
+ * (one read dates it), then by when each counts, then by agent and payment, so that every operator reads them alike.
+ *
+ * @param {Array<{ didHash: string, e: object }>} items
+ */
+function readOrder(items, cfg) {
+  const at = (x) => countsFromMs(x.e, cfg);
+  const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+  return [...items].sort((x, y) => {
+    const dx = Number.isFinite(at(x));
+    const dy = Number.isFinite(at(y));
+    return (Number(dx) - Number(dy)) || (dx && dy ? at(x) - at(y) : 0)
+      || cmp(String(x.didHash), String(y.didHash)) || cmp(String(x.e.txHash), String(y.e.txHash));
+  });
+}
+
+/**
+ * Reads each of `items` with `read`, in readOrder, and checks `deadline` before each one, so that an epoch's time for
+ * reading refunds bounds every read it makes for them, not only the getLogs inside readRefund. Returns how many it
+ * did not reach.
+ */
+async function readInTurn(items, cfg, { deadline, read, now = Date.now }) {
+  const queue = readOrder(items, cfg);
+  for (let i = 0; i < queue.length; i += 1) {
+    if (now() >= deadline) return queue.length - i;
+    await read(queue[i]);
+  }
+  return 0;
+}
+
 module.exports = {
   readConfig,
   isPayerNegative,
@@ -219,6 +251,8 @@ module.exports = {
   toRead,
   readBudget,
   readRefund,
+  readOrder,
+  readInTurn,
   NOT_DELIVERED,
   MARGIN_MS,
   DEFAULT_HOLD_DAYS,

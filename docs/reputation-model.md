@@ -15,7 +15,15 @@ Sigvara reputation is a deterministic 6-factor score between 0 and 100. It is co
 | Community | 5 | Unresolved flags | `max(0, 5 − flags × 2)` |
 | Trust Propagation | 5 | Standing of the counterparties that paid the agent | 1 pt per fully-trusted counterparty, pro-rated by its external standing |
 
-All six are live. Only a **bonded** agent is scored at all: a newly registered agent is
+All six are live, but two of them read 0 for every agent today. External Trust needs ERC-8004
+feedback that counts, and none does yet. Trust Propagation inherits its payers' external standing,
+so it waits on the same thing. The highest score any agent can reach now is therefore 70. Read on
+chain for all 43 registered agents on 13 November 2026, the highest of each factor was 20, 13, 14, 0,
+5 and 0. A factor at 0 does not hand its weight to the others: the points add up, so it lowers the
+ceiling. How the scores spread across the bands a threshold is set in, and what followed each band,
+is on [the status page](https://sigvara.xyz/status).
+
+Only a **bonded** agent is scored at all: a newly registered agent is
 `PendingBond` and `proposeReputation` refuses it.
 
 ### Fee Activity (20 pts)
