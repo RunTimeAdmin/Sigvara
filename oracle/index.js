@@ -685,10 +685,59 @@ async function rereadCredits(agentInfos, deadline) {
   if (updates.size) persistState();
 }
 
-// Counterparty standing, for the web of trust. Resolved once per epoch per address:
-// an agent's payers repeat across epochs and within one, and each lookup is three
-// chain reads. Cleared at the start of every epoch so standings cannot go stale.
-let payerScoreCache = new Map();
+// Counterparty standing, for the web of trust: each payer's standing as of the snapshot, the start of the
+// UTC day containing the score's time (reviewers.snapshotOf), read at the snapshot's block as the external
+// factor's reviewers are. A standing read there cannot change, so it is kept until the snapshot moves, and
+// a checker auditing a proposal made the same day reads exactly what its primary read. Each lookup is two
+// or three chain reads. Standings used to be read at the latest block and cleared at every epoch, so every
+// payer was read again every hour, and 20,000 one-time payers added most of an hour to every epoch.
+const standingsBySnapshot = new Map(); // snapshot block => Map(lowercased payer => standing)
+// Today's, and yesterday's for a checker auditing a proposal made just before midnight.
+const STANDING_SNAPSHOTS_KEPT = 2;
+// Reads in flight, by snapshot block and payer, so the epoch and every concurrent GET /score share one
+// read per payer. Each caller used to read every payer missing when it started, so 30 requests for an
+// agent with 300 payers made 4,650 reads in 45 s, against the 6.7 a second the epoch keeps to.
+const standingReads = new Map();
+
+function standingsAt(block) {
+  let standings = standingsBySnapshot.get(block);
+  if (!standings) {
+    standings = new Map();
+    standingsBySnapshot.set(block, standings);
+    while (standingsBySnapshot.size > STANDING_SNAPSHOTS_KEPT) {
+      standingsBySnapshot.delete(Math.min(...standingsBySnapshot.keys()));
+    }
+  }
+  return standings;
+}
+
+async function standingsBlockFor(nowMs) {
+  return chain.blockAtOrBefore(reviewers.snapshotOf(Math.floor(nowMs / 1000)));
+}
+
+function standingOf(block, key, address) {
+  const standings = standingsAt(block);
+  if (standings.has(key)) return Promise.resolve(standings.get(key));
+  const id = `${block}|${key}`;
+  let read = standingReads.get(id);
+  if (!read) {
+    read = chain.getAgentScore(address, block)
+      .then((standing) => { standings.set(key, standing); return standing; })
+      .finally(() => standingReads.delete(id));
+    standingReads.set(id, read);
+  }
+  return read;
+}
+
+/** An agent's payers, each once: lowercased key => the address as recorded. */
+function payersOf(events) {
+  const unique = new Map();
+  for (const e of events) {
+    const key = String(e.payer || '').toLowerCase();
+    if (!unique.has(key)) unique.set(key, e.payer);
+  }
+  return unique;
+}
 
 // A checker's memory of empty slots (decideCheckerAction): when it first found each agent's
 // slot empty, in chain seconds, and which agents it is covering because it finalized their
@@ -716,16 +765,14 @@ const checkerSlots = {
 const PAYER_READ_CHUNK = 10;
 const PAYER_READ_PACE_MS = 1_500;
 
-async function payerScoresFor(didHash, events = getPaymentEvents(didHash)) {
+async function payerScoresFor(didHash, events, nowMs) {
   if (!payments.required(paymentCfg)) return null;
 
   // Unique payers first: an address recurs across an agent's events, and this way it is
   // neither looked up nor awaited twice.
-  const unique = new Map(); // lowercased key => the address as recorded
-  for (const e of events) {
-    const key = String(e.payer || '').toLowerCase();
-    if (!unique.has(key)) unique.set(key, e.payer);
-  }
+  const unique = payersOf(events);
+  const block = await standingsBlockFor(nowMs);
+  const standings = standingsAt(block);
 
   // Resolve the cache misses together, a chunk at a time, rather than one at a time.
   //
@@ -739,19 +786,63 @@ async function payerScoresFor(didHash, events = getPaymentEvents(didHash)) {
   // read is kept either way, so the next try asks only for what is missing. The rejection reaches the
   // agent's own handler, which skips the agent for this epoch, so the rest are not asked for: that
   // would only press a node that is already failing.
-  const misses = [...unique].filter(([key]) => !payerScoreCache.has(key));
-  for (let i = 0; i < misses.length; i += PAYER_READ_CHUNK) {
-    if (i > 0) await new Promise((r) => setTimeout(r, PAYER_READ_PACE_MS));
-    const chunk = misses.slice(i, i + PAYER_READ_CHUNK);
-    const settled = await Promise.allSettled(chunk.map(([, addr]) => chain.getAgentScore(addr)));
-    chunk.forEach(([key], j) => { if (settled[j].status === 'fulfilled') payerScoreCache.set(key, settled[j].value); });
+  //
+  // The cache is checked as each chunk is made up, not once before the first, so a payer another caller
+  // has read in the meantime is not read again; a read another caller has in flight is shared.
+  const out = {};
+  const all = [...unique];
+  let first = true;
+  for (let i = 0; i < all.length;) {
+    const chunk = [];
+    for (; i < all.length && chunk.length < PAYER_READ_CHUNK; i += 1) {
+      const [key] = all[i];
+      if (standings.has(key)) out[key] = standings.get(key);
+      else chunk.push(all[i]);
+    }
+    if (!chunk.length) break;
+    if (!first) await new Promise((r) => setTimeout(r, PAYER_READ_PACE_MS));
+    first = false;
+    const settled = await Promise.allSettled(chunk.map(([key, addr]) => standingOf(block, key, addr)));
+    chunk.forEach(([key], j) => { if (settled[j].status === 'fulfilled') out[key] = settled[j].value; });
     const failed = settled.find((s) => s.status === 'rejected');
     if (failed) throw failed.reason;
   }
-
-  const out = {};
-  for (const [key] of unique) out[key] = payerScoreCache.get(key);
   return out;
+}
+
+// GET /score reads payers' standings for itself only between epochs, at most a chunk a request, and all
+// requests together no faster than the epoch reads (a bucket of two chunks, refilled at the epoch's
+// pace). A request that finds more than a chunk unread reads one chunk and asks to be tried again, so
+// each request moves the reads on and no burst of requests outruns the epoch. Requests used to read
+// their whole list each, and could be timed, by /health's epochRunning, to land on the epoch, whose
+// reads then failed and whose agents were skipped.
+const PREVIEW_READ_BURST = 2 * PAYER_READ_CHUNK;
+let previewReads = { tokens: PREVIEW_READ_BURST, at: 0 };
+
+function takePreviewReads(n) {
+  const now = Date.now();
+  const refilled = previewReads.tokens + ((now - previewReads.at) * PAYER_READ_CHUNK) / PAYER_READ_PACE_MS;
+  const tokens = Math.min(PREVIEW_READ_BURST, refilled);
+  if (tokens < n) {
+    previewReads = { tokens, at: now };
+    return false;
+  }
+  previewReads = { tokens: tokens - n, at: now };
+  return true;
+}
+
+async function previewStandingsReady(events, nowMs) {
+  if (!payments.required(paymentCfg)) return { ready: true };
+  const block = await standingsBlockFor(nowMs);
+  const standings = standingsAt(block);
+  const unread = [...payersOf(events)].filter(([key]) => !standings.has(key) && !standingReads.has(`${block}|${key}`));
+  if (!unread.length) return { ready: true };
+  if (epochRunning) return { ready: false, retryAfter: 60 };
+  const chunk = unread.slice(0, PAYER_READ_CHUNK);
+  if (!takePreviewReads(chunk.length)) return { ready: false, retryAfter: 2 };
+  if (unread.length === chunk.length) return { ready: true }; // scoreAt reads them, as one chunk
+  await Promise.allSettled(chunk.map(([key, addr]) => standingOf(block, key, addr)));
+  return { ready: false, retryAfter: 2 };
 }
 
 // An agent's external factor, kept per snapshot. Read at one block with the same evidence it cannot
@@ -913,7 +1004,7 @@ async function scoreAt(didHash, { registeredAt, att, flagWeight, externalScore }
   // The evidence this score reads, once: the payers looked up are the ones it scores. By default
   // what counted by the cut-off for a score made now (payment-chains.cutFor), as the epoch uses.
   const held = events ?? evidenceAt(didHash, paymentChains.cutFor(nowMs, paymentChainsCfg));
-  const measured = measuredFactorsFor(didHash, nowMs, await payerScoresFor(didHash, held), held);
+  const measured = measuredFactorsFor(didHash, nowMs, await payerScoresFor(didHash, held, nowMs), held);
   const scores = computeScore({
     registeredAt,
     attestations: measured.measuredAttestations ?? att,
@@ -1389,7 +1480,6 @@ async function evidenceCutFor() {
 
 async function runEpochInner() {
   const start = Date.now();
-  payerScoreCache = new Map();
   // This epoch's own, so one that stops early does not leave the last one's showing.
   lastEpochHold = null;
   console.log(`[oracle] epoch start — ${new Date().toISOString()}`);
@@ -4022,9 +4112,16 @@ async function handleRequest(req, res) {
       //
       // One extra chain read per request, on an endpoint that already makes several.
       const scoringNowMs = (await chain.getLatestBlockTimestamp()) * 1000;
+      const held = evidenceAt(didHash, paymentChains.cutFor(scoringNowMs, paymentChainsCfg));
+      const standingsReady = await previewStandingsReady(held, scoringNowMs);
+      if (!standingsReady.ready) {
+        metrics.inc('scoreStandingsPending');
+        res.setHeader('Retry-After', String(standingsReady.retryAfter));
+        return json(res, 503, { error: 'payer standings have not been read yet', code: 'standings_pending' });
+      }
       const { score: externalScore, agentId: linkedId } =
         await externalScoreOf(didHash, { operator, agentAddress }, scoringNowMs);
-      const { measured, scores } = await scoreAt(didHash, { registeredAt, att, flagWeight, externalScore }, scoringNowMs);
+      const { measured, scores } = await scoreAt(didHash, { registeredAt, att, flagWeight, externalScore }, scoringNowMs, held);
       return json(res, 200, {
         didHash,
         status,
