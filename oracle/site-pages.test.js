@@ -9,6 +9,8 @@ const path = require('node:path');
 const vm = require('node:vm');
 const explorer = require('../site/assets/explorer.js');
 const demo = require('../site/assets/demo.js');
+const did = require('../site/assets/did.js');
+const lobby = require('../site/assets/lobby.js');
 
 test('the demo does not number blocks from the start again after the log is cleared', () => {
   const sim = new demo.Simulator(null);
@@ -41,4 +43,45 @@ test('a Suspended or PendingBond simulated agent with stake is not shown as Acti
   assert.deepEqual([...ctx.statusOf(agent(1), 0)], ['warn', 'Suspended']);
   assert.deepEqual([...ctx.statusOf(agent(3), 0)], ['waiting', 'Not bonded yet']);
   assert.deepEqual([...ctx.statusOf(agent(0), 0)], ['live', 'Active']);
+});
+
+test('the agents page reads the chain only for the agents it shows, 50 rows at a time and 60 in the lobby', async () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'site', 'assets', 'agents.js'), 'utf8');
+  const word = (n) => n.toString(16).padStart(64, '0');
+  // 130 registrations, oldest first, as contractLogs gives them.
+  const logs = Array.from({ length: 130 }, (_, i) => ({
+    topics: [explorer.EVENTS[0].topic, '0x' + word(i + 1), '0x' + word(0xabc), '0x' + word(0x1000 + i)], time: 1_700_000_000 + i, tx: null,
+  }));
+  const asked = [];
+  const X = {
+    ...explorer,
+    contractLogs: async () => ({ logs, truncated: false, tail: null }),
+    loadSimulation: async () => {},
+    // The didHash each read is for. Every answer is zero words: an active agent with nothing yet.
+    ethCalls: async (calls) => { asked.push(...calls.map((c) => c.data.slice(-64))); return calls.map(() => '0x' + word(0).repeat(5)); },
+  };
+  let html = '', people = null, next = null;
+  const card = { querySelector: () => ({ set innerHTML(v) { html = v; } }), classList: { remove() {} }, scrollIntoView() {} };
+  const ctx = vm.createContext({
+    window: { SigvaraExplorer: X, SigvaraDid: did, SigvaraLobby: { ...lobby, startLobby: (_host, list) => { people = list; } } },
+    document: {
+      getElementById: () => card,
+      addEventListener() {},
+      querySelectorAll: (sel) => (sel === '[data-page]' ? [{ getAttribute: () => '1', addEventListener: (_ev, fn) => { next = fn; } }] : []),
+    },
+  });
+  vm.runInContext(source, ctx);
+  for (let i = 0; i < 50 && !people; i++) await new Promise(setImmediate);
+
+  const rows = () => (html.match(/data-check="/g) || []).length;
+  assert.equal(people.length, 60, 'the lobby holds 60');
+  assert.deepEqual([...new Set(asked)], Array.from({ length: 60 }, (_, i) => word(i + 1)), 'the first 60 agents, read once each');
+  assert.equal(asked.length, 60 * 5);
+  assert.equal(rows(), 50);
+  assert.match(html, /Rows 1 to 50 of 130\./);
+
+  await next();
+  assert.equal(rows(), 50);
+  assert.match(html, /Rows 51 to 100 of 130\./);
+  assert.deepEqual([...new Set(asked.slice(300))], Array.from({ length: 40 }, (_, i) => word(i + 61)), 'only the rows not read before');
 });

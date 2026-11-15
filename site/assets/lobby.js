@@ -148,6 +148,8 @@
       el.addEventListener("click", () => { picked = w; onPick(person); place(w); });
       group.appendChild(el);
       w.el = el;
+      // Someone seated never moves, so is placed once, here, and move() passes them by.
+      if (w.how === "sit") place(w);
       return w;
     });
 
@@ -176,6 +178,7 @@
       hoopX = step(hoopX, hoopToX, walk * 0.6);
       hoopY = step(hoopY, hoopToY, walk * 0.6);
       for (const w of walkers) {
+        if (w.how === "sit") continue;
         if (w.how === "float") {
           w.x = W / 2 - SIZE / 2 + W * 0.2 * Math.sin(t / 8000 + w.slot * 1.9);
           w.y = 16 + 6 * Math.sin(t / 1300 + w.slot);
