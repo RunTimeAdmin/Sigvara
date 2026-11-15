@@ -573,6 +573,24 @@ contract SigvaraIdentity is Initializable, TimelockedGrants, UUPSUpgradeable, In
         return identities[didHash];
     }
 
+    /**
+     * @notice Who operates the agent, its status, and when it was registered. registeredAt is zero
+     *         for a didHash that was never registered, and status then reads Active, the zero value,
+     *         so check registeredAt first.
+     * @dev    The three fields the reputation and staking registries act on. getIdentity copies all
+     *         five out of storage, and the agent address and the Ed25519 key are two storage reads
+     *         those callers never use. Both registries call this, so a live identity proxy runs this
+     *         code before either of them does; script/Upgrade.s.sol refuses the other order.
+     */
+    function standingOf(bytes32 didHash)
+        external
+        view
+        returns (address operator, AgentStatus status, uint256 registeredAt)
+    {
+        AgentIdentity storage id = identities[didHash];
+        return (id.operator, id.status, id.registeredAt);
+    }
+
     function isActive(bytes32 didHash) external view returns (bool) {
         AgentIdentity storage id = identities[didHash];
         return id.registeredAt != 0 && id.status == AgentStatus.Active;

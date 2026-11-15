@@ -891,6 +891,55 @@ contract SigvaraIdentityTest is Test, RegistrationHelper {
     }
 
     // -------------------------------------------------------------------------
+    // standingOf
+    // -------------------------------------------------------------------------
+
+    /// standingOf is what the reputation and staking registries read in place of getIdentity, so
+    /// it has to give the same three fields in every state they tell apart: a hash nobody
+    /// registered, each status an agent passes through, and a new operator after a handover.
+    function test_standingOf_matchesTheFullRecord() public {
+        bytes32 nobody = identity.computeDidHash(agent);
+        _assertStanding(nobody, address(0), SigvaraIdentity.AgentStatus.Active);
+        assertEq(identity.getIdentity(nobody).registeredAt, 0, "never registered");
+
+        bytes32 didHash = _register();
+        _assertStanding(didHash, operator, SigvaraIdentity.AgentStatus.PendingBond);
+
+        vm.prank(operator);
+        identity.updateStatus(didHash, SigvaraIdentity.AgentStatus.Active);
+        _assertStanding(didHash, operator, SigvaraIdentity.AgentStatus.Active);
+
+        address buyer = makeAddr("buyer");
+        vm.prank(operator);
+        identity.offerOperatorTransfer(didHash, buyer);
+        vm.prank(buyer);
+        identity.acceptOperatorTransfer(didHash);
+        _assertStanding(didHash, buyer, SigvaraIdentity.AgentStatus.Active);
+
+        vm.prank(buyer);
+        identity.updateStatus(didHash, SigvaraIdentity.AgentStatus.Suspended);
+        _assertStanding(didHash, buyer, SigvaraIdentity.AgentStatus.Suspended);
+
+        vm.prank(staking);
+        identity.updateStatus(didHash, SigvaraIdentity.AgentStatus.Slashed);
+        _assertStanding(didHash, buyer, SigvaraIdentity.AgentStatus.Slashed);
+    }
+
+    /// The three fields agree with getIdentity, and are the state the test walked the agent into.
+    function _assertStanding(bytes32 didHash, address expectedOperator, SigvaraIdentity.AgentStatus expectedStatus)
+        internal
+        view
+    {
+        SigvaraIdentity.AgentIdentity memory full = identity.getIdentity(didHash);
+        (address op, SigvaraIdentity.AgentStatus status, uint256 registeredAt) = identity.standingOf(didHash);
+        assertEq(op, full.operator, "operator");
+        assertEq(uint8(status), uint8(full.status), "status");
+        assertEq(registeredAt, full.registeredAt, "registeredAt");
+        assertEq(op, expectedOperator, "expected operator");
+        assertEq(uint8(status), uint8(expectedStatus), "expected status");
+    }
+
+    // -------------------------------------------------------------------------
     // Storage layout
     // -------------------------------------------------------------------------
     // Pins the base slots the original proxy layout was deployed with. slashSuspended was

@@ -339,9 +339,17 @@ contract PreTransferIdentity {
     function getIdentity(bytes32) external pure returns (uint256) { return 1; }
 }
 
+/// A registry with operator transfer and a stake view and no standingOf, as the Arc testnet
+/// identity proxy runs until it is upgraded.
+contract PreStandingIdentity {
+    function operatorChangedAt(bytes32) external pure returns (uint256) { return 0; }
+    function stakeView() external pure returns (address) { return address(1); }
+}
+
 contract CurrentIdentity {
     function operatorChangedAt(bytes32) external pure returns (uint256) { return 0; }
     function stakeView() external pure returns (address) { return address(1); }
+    function standingOf(bytes32) external pure returns (address, uint8, uint256) { return (address(0), 0, 0); }
 }
 
 /// Holds an identityRegistry the way reputation and staking do.
@@ -459,6 +467,36 @@ contract UpgradeDependencyTest is Test {
 
     function test_allowsStakingOnceIdentityIsCurrent() public {
         address proxy = address(new ProxyStub(address(new CurrentIdentity())));
+        harness.check("staking", proxy);
+    }
+
+    /// Reputation reads the agent through standingOf on every proposal and finalize. Upgraded
+    /// ahead of identity, the oracle could write no score until identity caught up.
+    function test_refusesReputationAgainstAnIdentityWithoutStandingOf() public {
+        address identity = address(new PreStandingIdentity());
+        address proxy = address(new ProxyStub(identity));
+        vm.expectRevert(abi.encodeWithSelector(
+            Upgrade.DependencyMissing.selector, "reputation", "identity.standingOf: upgrade identity first", identity
+        ));
+        harness.check("reputation", proxy);
+    }
+
+    /// Staking reads the agent through standingOf to deposit, withdraw, claim and dispute.
+    /// Upgraded ahead of identity, every one of them would revert until identity caught up.
+    function test_refusesStakingAgainstAnIdentityWithoutStandingOf() public {
+        address identity = address(new PreStandingIdentity());
+        address proxy = address(new ProxyStub(identity));
+        vm.expectRevert(abi.encodeWithSelector(
+            Upgrade.DependencyMissing.selector, "staking", "identity.standingOf: upgrade identity first", identity
+        ));
+        harness.check("staking", proxy);
+    }
+
+    /// The probes name functions the real identity has, so one built from this source passes both.
+    function test_allowsBothAgainstTheIdentityThisSourceBuilds() public {
+        (address[5] memory p,) = _proxies();
+        address proxy = address(new ProxyStub(p[0]));
+        harness.check("reputation", proxy);
         harness.check("staking", proxy);
     }
 

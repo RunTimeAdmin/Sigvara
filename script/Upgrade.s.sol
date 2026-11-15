@@ -117,8 +117,12 @@ contract Upgrade is Script {
      *      upgrade landed. The tests never caught it because they deploy both
      *      contracts from the same source every time; only a live pair can be skewed.
      *
-     *      The contracts are now tolerant of the skew as well. This is the second
+     *      The contracts are now tolerant of that skew as well. This is the second
      *      layer: refuse the ordering rather than quietly degrade into it.
+     *
+     *      For standingOf, which reputation and staking read on their write paths, this
+     *      check is the only layer. They do not fall back to getIdentity, because
+     *      upgrading identity first is safe: it only adds the view.
      */
     function _checkDependencies(string memory target, address proxy) internal view {
         bytes32 t = keccak256(bytes(target));
@@ -129,6 +133,11 @@ contract Upgrade is Script {
             if (!_answers(identity, abi.encodeWithSignature("operatorChangedAt(bytes32)", bytes32(0)))) {
                 revert DependencyMissing("reputation", "identity.operatorChangedAt: upgrade identity first", identity);
             }
+            // Every proposal and finalize reads the agent through standingOf, so against an
+            // identity without it the oracle could write no score at all.
+            if (!_answers(identity, abi.encodeWithSignature("standingOf(bytes32)", bytes32(0)))) {
+                revert DependencyMissing("reputation", "identity.standingOf: upgrade identity first", identity);
+            }
         }
 
         if (t == keccak256("staking")) {
@@ -138,6 +147,11 @@ contract Upgrade is Script {
             // new staking calls. Checking a view stands in for the one that writes.
             if (!_answers(identity, abi.encodeWithSignature("stakeView()"))) {
                 revert DependencyMissing("staking", "identity.stakeView: upgrade identity first", identity);
+            }
+            // Deposits, withdrawals, claims and disputes read the agent through standingOf,
+            // so against an identity without it each of them would revert.
+            if (!_answers(identity, abi.encodeWithSignature("standingOf(bytes32)", bytes32(0)))) {
+                revert DependencyMissing("staking", "identity.standingOf: upgrade identity first", identity);
             }
         }
     }

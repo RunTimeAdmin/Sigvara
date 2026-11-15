@@ -92,7 +92,8 @@ The contract takes one address, and it cannot be zero, the reporter, a committee
 
 `evidenceHash` is free-form, so no contract change is needed. The bytes read
 `sigvara/slash/v1;ground=A1;sha256=<hash of the package>`, and the package is published when the slash is
-filed, as the drill's log was.
+filed, as the drill's log was. `initiateSlash` refuses more than 256 bytes (`MAX_EVIDENCE_BYTES`), and this
+form takes about a hundred.
 
 ### 7. Wrongful slashes and stolen keys
 

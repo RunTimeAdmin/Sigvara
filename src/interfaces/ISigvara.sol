@@ -117,6 +117,10 @@ interface ISigvaraStaking {
     ///         was one.
     function getSlashProposal(bytes32 didHash) external view returns (SlashProposal memory);
 
+    /// @notice getSlashProposal(didHash).state alone, without copying the rest of the
+    ///         proposal and its evidence.
+    function slashState(bytes32 didHash) external view returns (SlashState);
+
     function minimumStake() external view returns (uint256);
 
     /// @notice Seconds an operator has to dispute a slash before it can be executed.
