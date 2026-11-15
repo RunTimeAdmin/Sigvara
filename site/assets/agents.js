@@ -20,6 +20,11 @@ function setCard(id, html) {
 const plural = (n, one, many = one + "s") => `${n} ${n === 1 ? one : many}`;
 
 // ---- the list ----
+// Registering costs only gas, so however many agents there are, the table shows this many at a
+// time and the chain is read only for the agents on screen, in the table or in the lobby.
+const PAGE_ROWS = 50;
+// The most agents the lobby draws (agents.html says 60 in its note).
+const LOBBY_MAX = 60;
 let agents = [];
 
 async function loadAgents() {
@@ -32,34 +37,47 @@ async function loadAgents() {
       + `<p class="netnote">You can look an agent up by address on <a href="epochs">the epochs page</a>, which reads the chain directly.</p>`);
   }
   const seen = new Set();
+  // In the order they registered, as the logs come. Until an agent is read from the chain, its
+  // operator is the one that registered it, which is what puts it in a group for the filter.
   agents = registrations.logs
-    .map((l) => ({ didHash: l.topics[1], address: X.topicAddr(l.topics[3]), time: l.time, tx: l.tx }))
+    .map((l) => ({ didHash: l.topics[1], operator: X.topicAddr(l.topics[2]), address: X.topicAddr(l.topics[3]), time: l.time, tx: l.tx }))
     .filter((a) => X.isHash(a.didHash) && X.isAddr(a.address) && !seen.has(a.didHash) && seen.add(a.didHash));
   if (!agents.length) return setCard("agentsCard", "<p>No agent has registered on this deployment yet.</p>");
+  lastHistory = registrations;
 
+  // The lobby's agents, which take in the table's first page.
   try {
-    const reads = await X.ethCalls(agents.flatMap((a) => [
-      { to: X.IDENTITY,   data: X.SEL.identities     + X.pad32(a.didHash) },
-      { to: X.REPUTATION, data: X.SEL.getTotalScore  + X.pad32(a.didHash) },
-      { to: X.REPUTATION, data: X.SEL.getEarnedScore + X.pad32(a.didHash) },
-      { to: X.REPUTATION, data: X.SEL.evidenceRoots  + X.pad32(a.didHash) },
-      { to: X.STAKING,    data: X.SEL.getStake       + X.pad32(a.didHash) },
-    ]));
-    agents.forEach((a, i) => {
-      const [ident, total, earned, root, stake] = reads.slice(i * 5, i * 5 + 5);
-      // The operator now, which a transfer can change since registration.
-      a.operator = X.wordAddr(ident, 0);
-      a.status = Number(BigInt(X.word(ident, 3)));
-      a.total = Number(BigInt(total));
-      a.earned = Number(BigInt(earned));
-      a.root = X.word(root, 0).toLowerCase();
-      a.stake = BigInt(stake);
-    });
+    await readChain(agents.slice(0, LOBBY_MAX));
   } catch (e) {
     return setCard("agentsCard", X.failed("the agents' scores from the chain", e));
   }
-  renderAgents(registrations);
+  await renderAgents();
   renderLobby();
+}
+
+// What the chain says now about each agent in `list` not read yet: its operator and status, its
+// two scores, its evidence root and its stake.
+async function readChain(list) {
+  const todo = list.filter((a) => !a.read);
+  if (!todo.length) return;
+  const reads = await X.ethCalls(todo.flatMap((a) => [
+    { to: X.IDENTITY,   data: X.SEL.identities     + X.pad32(a.didHash) },
+    { to: X.REPUTATION, data: X.SEL.getTotalScore  + X.pad32(a.didHash) },
+    { to: X.REPUTATION, data: X.SEL.getEarnedScore + X.pad32(a.didHash) },
+    { to: X.REPUTATION, data: X.SEL.evidenceRoots  + X.pad32(a.didHash) },
+    { to: X.STAKING,    data: X.SEL.getStake       + X.pad32(a.didHash) },
+  ]));
+  todo.forEach((a, i) => {
+    const [ident, total, earned, root, stake] = reads.slice(i * 5, i * 5 + 5);
+    // The operator now, which a transfer can change since registration.
+    a.operator = X.wordAddr(ident, 0);
+    a.status = Number(BigInt(X.word(ident, 3)));
+    a.total = Number(BigInt(total));
+    a.earned = Number(BigInt(earned));
+    a.root = X.word(root, 0).toLowerCase();
+    a.stake = BigInt(stake);
+    a.read = true;
+  });
 }
 
 // Which group an agent is in, for the badge and the filter.
@@ -85,27 +103,42 @@ function characterOf(a) {
   };
 }
 let filter = "all";
+let page = 0;
 let lastHistory = null;
+let tableSeq = 0;
 
 // The committed root, linked to the payments it is over as the primary oracle serves them, which
 // "Check evidence" rebuilds it from.
 const rootLink = (a) => (X.same(a.root, X.ZERO32) ? X.rootCode(a.root)
   : `<a href="${X.PRIMARY}/evidence/${a.didHash}" target="_blank" rel="noopener" title="${X.esc(a.root)}: the payments behind it, from the primary oracle"><code>${X.esc(X.short(a.root))}</code></a>`);
 
-function renderAgents(history = lastHistory) {
-  lastHistory = history;
-  const sorted = [...agents].sort((a, b) => b.total - a.total || b.earned - a.earned || a.time - b.time);
+// The table, a page at a time in the order the agents registered: an order by score would need
+// every agent's score read first.
+async function renderAgents() {
+  const seq = ++tableSeq;
+  const listed = agents.filter((a) => filter === "all" || groupOf(a).key === filter);
+  const pages = Math.max(1, Math.ceil(listed.length / PAGE_ROWS));
+  page = Math.min(page, pages - 1);
+  const shown = listed.slice(page * PAGE_ROWS, (page + 1) * PAGE_ROWS);
+  try {
+    await readChain(shown);
+  } catch (e) {
+    if (seq === tableSeq) setCard("agentsCard", X.failed("the agents' scores from the chain", e));
+    return;
+  }
+  if (seq !== tableSeq) return;
+  const history = lastHistory;
   const count = (key) => agents.filter((a) => groupOf(a).key === key).length;
   const n = { all: agents.length, outside: count("outside"), sim: count("sim"), own: count("own") };
-  const active = agents.filter((a) => a.status === 0).length;
-  let html = `<p><b>${plural(agents.length, "agent")}</b> registered on this deployment, ${active} active.`
+  // A count of the active agents needs every agent's status, and only the agents shown are read.
+  const active = agents.every((a) => a.read) ? `, ${agents.filter((a) => a.status === 0).length} active` : "";
+  let html = `<p><b>${plural(agents.length, "agent")}</b> registered on this deployment${active}.`
     + (n.sim ? ` <b>${n.sim}</b> of them are Sigvara's <a href="simulation">testnet simulation</a>, which runs a simulated economy so the protocol can be watched working.` : "")
     + ` Both oracle operators are run by the Sigvara team (see <a href="operators">Operators</a>), so read these scores as the protocol working, not as outside demand.</p>`;
   if (X.simUnknown()) html += '<p class="pill-warn">The list of the testnet simulation\'s agents could not be read, so this page cannot tell its agents from outside ones. Reload to try again.</p>';
   const choices = [["all", "All"], ["outside", "Outside"], ["sim", "Simulated"], ["own", "Sigvara's own"]].filter(([k]) => k === "all" || n[k]);
   html += `<div class="ex-filter" role="group" aria-label="Show agents">${choices.map(([k, label]) =>
     `<button type="button" data-filter="${k}" aria-pressed="${filter === k}">${X.esc(label)} (${n[k]})</button>`).join("")}</div>`;
-  const shown = sorted.filter((a) => filter === "all" || groupOf(a).key === filter);
   html += `<div class="ex-scroll"><table class="ex-table">
     <thead><tr><th>Agent</th><th>Who</th><th>Status</th><th title="getTotalScore: the score other contracts read, which matures toward the earned score">Matured score</th><th title="getEarnedScore: the score as last finalized">Earned</th><th>Stake</th><th>Evidence root</th><th></th></tr></thead><tbody>`;
   for (const a of shown) {
@@ -123,7 +156,12 @@ function renderAgents(history = lastHistory) {
     </tr>`;
   }
   html += "</tbody></table></div>";
-  html += '<p class="netnote">The matured score is the total other contracts read (<code>getTotalScore</code>). It climbs toward the earned score, the one last finalized (<code>getEarnedScore</code>), at a bounded rate a day, and falls at once. <a href="docs/reputation">How scores work</a>. The agent links open its score epochs, and each evidence root links to the payments it commits to.</p>';
+  if (pages > 1) {
+    html += `<p>Rows ${page * PAGE_ROWS + 1} to ${page * PAGE_ROWS + shown.length} of ${listed.length}.`
+      + ` <button class="btn btn-secondary btn-sm" type="button" data-page="-1"${page === 0 ? " disabled" : ""}>Previous</button>`
+      + ` <button class="btn btn-secondary btn-sm" type="button" data-page="1"${page === pages - 1 ? " disabled" : ""}>Next</button></p>`;
+  }
+  html += `<p class="netnote">Agents are listed in the order they registered, ${PAGE_ROWS} to a page. The matured score is the total other contracts read (<code>getTotalScore</code>). It climbs toward the earned score, the one last finalized (<code>getEarnedScore</code>), at a bounded rate a day, and falls at once. <a href="docs/reputation">How scores work</a>. The agent links open its score epochs, and each evidence root links to the payments it commits to.</p>`;
   if (history?.truncated) html += '<p class="pill-warn">The explorer has more registrations than this page reads, so the newest may be missing.</p>';
   html += X.historyNote(history);
   setCard("agentsCard", html);
@@ -131,14 +169,25 @@ function renderAgents(history = lastHistory) {
     btn.addEventListener("click", () => checkEvidence(btn.getAttribute("data-check")));
   }
   for (const btn of document.querySelectorAll("[data-filter]")) {
-    btn.addEventListener("click", () => { filter = btn.getAttribute("data-filter"); renderAgents(); });
+    btn.addEventListener("click", () => { filter = btn.getAttribute("data-filter"); page = 0; renderAgents(); });
+  }
+  for (const btn of document.querySelectorAll("[data-page]")) {
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      page += Number(btn.getAttribute("data-page"));
+      await renderAgents();
+      // The buttons sit under the rows, so the new page is shown from its top.
+      $("agentsCard").scrollIntoView({ block: "start" });
+    });
   }
 }
 
 // ---- the lobby ----
+// The first LOBBY_MAX agents to register. They are the table's first rows, read with them, and a
+// wave of new registrations cannot crowd them out of the room.
 function renderLobby() {
   $("lobbyCard").classList.remove("u-hidden");
-  const people = agents.map((a) => ({ ...characterOf(a), agent: a }));
+  const people = agents.slice(0, LOBBY_MAX).map((a) => ({ ...characterOf(a), agent: a }));
   const onPick = (person) => showInLobby(person.agent);
   // The room with depth (lobby-scene.js) is a module and may not have loaded yet, and needs WebGL.
   // Until it is here, and wherever it cannot run, the flat room stands in.
@@ -225,7 +274,7 @@ async function renderCheck(a, evidence, pendingRead) {
   } else if (X.same(a.root, X.ZERO32)) {
     finalHtml = "none yet: no score with an evidence root has been finalized for this agent";
   } else {
-    const m = X.matchRoot(list, a.root, { delays });
+    const m = X.matchRoot(list, a.root, { delays, leaves: rebuilt });
     if (!m) {
       finalHtml = `${X.rootCode(a.root)} <span class="pill-err">no reading of these payments reproduces it</span>. The oracle no longer lists the set this score was made on, or lists it differently.`;
     } else {
@@ -239,7 +288,7 @@ async function renderCheck(a, evidence, pendingRead) {
     if (BigInt(X.word(raw, 8)) === 1n) {
       const proposedAt = Number(BigInt(X.word(raw, 7)));
       const root = X.word(raw, 9).toLowerCase();
-      const m = bad.length ? null : X.matchRoot(list, root, { at: proposedAt, delays, evidenceCut });
+      const m = bad.length ? null : X.matchRoot(list, root, { at: proposedAt, delays, evidenceCut, leaves: rebuilt });
       pendingHtml = `${X.rootCode(root)}, proposed ${X.esc(X.fmtWhen(proposedAt))}: ` + (m
         ? `<span class="pill-ok">reproduced</span> from ${describeMatch(m, list.length)}`
         : '<span class="pill-err">not reproduced</span> from the payments settled by then');

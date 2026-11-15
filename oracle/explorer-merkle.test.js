@@ -11,6 +11,7 @@ const { ethers } = require('ethers');
 const merkle = require('./merkle');
 const { evidenceAsOf } = require('./evidence-as-of');
 const explorer = require('../site/assets/explorer.js');
+const did = require('../site/assets/did.js');
 
 const T0 = 1_700_000_000;
 
@@ -112,6 +113,36 @@ test('matchRoot says so when no reading reproduces the root', () => {
   const list = Array.from({ length: 4 }, (_, i) => served(stored(i)));
   assert.equal(explorer.matchRoot(list, ethers.hexlify(ethers.randomBytes(32))), null);
   assert.equal(explorer.matchRoot(list, 'not a root'), null);
+});
+
+test('matchRoot hashes each pair once across its cut-offs, so a root 10 payments behind a long list is found quickly', (t) => {
+  // Built here rather than by stored(), whose random wallet is slow a thousand times over.
+  const events = Object.freeze(Array.from({ length: 1000 }, (_, i) => Object.freeze({
+    txHash: ethers.hexlify(ethers.randomBytes(32)),
+    payer: ethers.hexlify(ethers.randomBytes(20)),
+    amount: String(10n ** 18n * BigInt(i + 1)),
+    ts: (T0 + i * 60) * 1000,
+    success: [true, false, null][i % 3],
+  })));
+  const list = events.map(served);
+  const committed = merkle.rootFor(events.slice(0, 990));
+  // The oracle's leaves, which the first test holds to the browser's, passed as agents.js passes the
+  // ones it has built, so what is counted below is the trees alone.
+  const leaves = events.map((e) => merkle.leafFor(e));
+  const keccak = did.keccak256;
+  let pairs = 0;
+  // Two 32-byte nodes are the only thing matchRoot hashes from exactly 64 bytes.
+  t.mock.method(did, 'keccak256', (bytes) => { if (bytes.length === 64) pairs++; return keccak(bytes); });
+
+  const found = explorer.matchRoot(list, committed, { leaves });
+  assert.ok(found, 'found by trying each settlement time');
+  assert.equal(found.events.length, 990);
+  assert.equal(found.cut, list[989].settledAt);
+  assert.equal(found.unset, false);
+  assert.deepEqual(found.leaves, leaves.slice(0, 990));
+  // The cut-offs run from all 1,000 payments down to 990. Built one by one, those trees take about
+  // 12,000 pairs; sharing them, one tree's 999 and the few each later cut-off changes.
+  assert.ok(pairs < 1300, `${pairs} pairs hashed`);
 });
 
 test('verifyEvidence calldata is what the contract ABI encodes', () => {

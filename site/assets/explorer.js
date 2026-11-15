@@ -643,20 +643,21 @@
     return keccak(hexBytes(strip(x) + strip(y)));
   }
 
-  // Every layer, leaves first. An odd node is promoted, not duplicated.
-  function layersOf(leaves) {
+  // Every layer, leaves first. An odd node is promoted, not duplicated. `pair` hashes two nodes;
+  // matchRoot passes one that remembers its answers across the trees it builds.
+  function layersOf(leaves, pair = hashPair) {
     if (!leaves.length) return [];
     const layers = [leaves.slice()];
     let level = leaves.slice();
     while (level.length > 1) {
       const next = [];
-      for (let i = 0; i < level.length; i += 2) next.push(i + 1 < level.length ? hashPair(level[i], level[i + 1]) : level[i]);
+      for (let i = 0; i < level.length; i += 2) next.push(i + 1 < level.length ? pair(level[i], level[i + 1]) : level[i]);
       layers.push(next);
       level = next;
     }
     return layers;
   }
-  const rootOf = (leaves) => (leaves.length ? layersOf(leaves).at(-1)[0] : ZERO32);
+  const rootOf = (leaves, pair = hashPair) => (leaves.length ? layersOf(leaves, pair).at(-1)[0] : ZERO32);
 
   // The sibling path for the leaf at `index`, in the order MerkleProof.verify expects.
   function proofOf(layers, index) {
@@ -683,14 +684,15 @@
    * payment enters a score than its settlement: it counts for a cut-off once settledAt plus its
    * delay has passed. `evidenceCut` ({ quantumSeconds, windowSeconds }, also from /evidence, present
    * when the oracle reads payment chains) says a proposal's evidence was cut at a whole quantum at
-   * most the window before `at`, so with `at` those cut-offs are tried too.
+   * most the window before `at`, so with `at` those cut-offs are tried too. `leaves`, from a
+   * caller that has built them already, are leafOf of each event in order, and are not hashed again.
    *
    * Returns { events, leaves, cut, unset } for the reading that matched, or null.
    */
-  function matchRoot(events, committed, { at = null, maxCuts = 64, delays = {}, evidenceCut = null } = {}) {
+  function matchRoot(events, committed, { at = null, maxCuts = 64, delays = {}, evidenceCut = null, leaves = null } = {}) {
     if (!isHash(committed)) return null;
     const want = committed.toLowerCase();
-    const asServed = events.map((e) => leafOf(e));
+    const asServed = leaves ?? events.map((e) => leafOf(e));
     const signed = events.map((e) => e.outcomeSource === "payer_signed");
     const unsetLeaves = events.map((e, i) => (signed[i] ? leafOf(e, null) : asServed[i]));
     const counts = events.map((e) => Number(e.settledAt) + (e.chainId != null ? Number(delays[e.chainId] ?? 0) : 0));
@@ -703,15 +705,29 @@
     const cuts = at !== null
       ? [Number(at), ...quantized.filter((t) => t < Number(at))]
       : [Infinity, ...[...new Set(counts)].sort((a, b) => b - a).slice(0, maxCuts)];
+    // One memo for every tree tried here. Neighbouring cut-offs keep nearly the same payments in
+    // the same order, so their trees share every pair left of where they differ, and the keccak in
+    // did.js is slow enough that hashing each of those pairs again froze the page for seconds.
+    const memo = new Map();
+    const pair = (a, b) => {
+      const key = a + b;
+      let h = memo.get(key);
+      if (h === undefined) memo.set(key, (h = hashPair(a, b)));
+      return h;
+    };
     // Each cut-off keeps every payment that counted by then, so those times cover every set a
     // proposal made between two of them could have committed to.
+    let last = null;
     for (const cut of cuts) {
       const idx = events.map((e, i) => (counts[i] <= cut ? i : -1)).filter((i) => i >= 0);
+      // The same payments as the cut-off before give the same roots, and those did not match.
+      if (last && idx.length === last.length && idx.every((v, k) => v === last[k])) continue;
+      last = idx;
       const tries = [[asServed, false]];
       if (idx.some((i) => signed[i])) tries.push([unsetLeaves, true]);
-      for (const [leaves, unset] of tries) {
-        const picked = idx.map((i) => leaves[i]);
-        if (rootOf(picked).toLowerCase() === want) {
+      for (const [list, unset] of tries) {
+        const picked = idx.map((i) => list[i]);
+        if (rootOf(picked, pair).toLowerCase() === want) {
           return { events: idx.map((i) => events[i]), leaves: picked, cut, unset };
         }
       }

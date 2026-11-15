@@ -241,6 +241,10 @@ function start(host, people, onPick) {
     hoopX = step(hoopX, hoopToX, walk * 0.6);
     hoopZ = step(hoopZ, hoopToZ, walk * 0.6);
     for (const w of walkers) {
+      const big = w === hovered || w === picked ? 1.25 : 1;
+      // Someone seated never moves, so is set again only when the pointer picks them out or lets go.
+      if (w.how === "sit" && w.big === big) continue;
+      w.big = big;
       w.moving = false;
       if (w.how === "float") {
         w.x = W * 0.15 * Math.sin(t / 8 + w.slot * 1.9) - W * 0.03;
@@ -271,7 +275,6 @@ function start(host, people, onPick) {
       // A small hop while walking, and a slow breath while standing.
       const lift = w.how === "sit" || w.how === "float" ? 0 : w.moving ? Math.abs(Math.sin(t * 9 + w.seed)) * 0.07 : Math.sin(t * 2.4 + w.seed) * 0.012;
       w.mesh.position.set(w.x, w.y + lift, w.z);
-      const big = w === hovered || w === picked ? 1.25 : 1;
       w.mesh.scale.set(w.face * big, big, 1);
       if (w.shadow) w.shadow.position.set(w.x, 0.02, w.z + 0.04);
     }
