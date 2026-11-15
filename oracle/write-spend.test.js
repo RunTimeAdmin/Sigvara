@@ -340,12 +340,38 @@ test('bond watch: lets an agent back for a log naming it, everyone for a new min
   assert.ok((await refresh(240_000)).error, 'a read that fails is said');
   assert.equal(watch.size(), 0, 'and lets everyone back');
 
-  watch.add('0xaa');
+  watch.add('0xaa'); // found by the epoch at 240 s
   changes = { agents: new Set(), minimumChanged: false };
   await refresh(300_000);
   assert.equal(watch.excluded('0xaa'), true);
-  await refresh(24 * HOUR * 1000);
-  assert.equal(watch.size(), 0, 'once a day everyone is read again');
+  await refresh(24 * HOUR * 1000 + 240_000);
+  assert.equal(watch.size(), 0, 'a day after an agent was found it is read again');
+});
+
+// Every agent left out was read again in one epoch once a day: about 0.47 s each, 78 minutes at 10,000 registrations.
+test('bond watch: the daily reads of agents left out are spread over the day\'s epochs, the earliest found first', async () => {
+  const { createBondWatch } = require('./bond-watch');
+  const watch = createBondWatch();
+  const refresh = (nowMs) => watch.refresh({
+    readHead: async () => 1_000, readChanges: async () => ({ agents: new Set(), minimumChanged: false }), nowMs,
+  });
+  await refresh(0);
+  const all = Array.from({ length: 240 }, (_, i) => `0x${i.toString(16).padStart(64, '0')}`);
+  for (const didHash of all) watch.add(didHash);
+  const firstRead = new Map();
+  const perEpoch = [];
+  for (let h = 1; h <= 24; h += 1) {
+    await refresh(h * HOUR * 1000);
+    const back = all.filter((didHash) => !watch.excluded(didHash));
+    perEpoch.push(back.length);
+    // Each is read, found still unbonded, and left out again.
+    for (const didHash of back) {
+      if (!firstRead.has(didHash)) firstRead.set(didHash, h);
+      watch.add(didHash);
+    }
+  }
+  assert.deepEqual(perEpoch, Array(24).fill(10), 'a 24th of them each hourly epoch');
+  assert.deepEqual([...firstRead.keys()], all, 'every one within the day, in the order they were found');
 });
 
 test('writeDueAt: due at once unless the score on chain is the same one, and then once its last write is the refresh old', () => {

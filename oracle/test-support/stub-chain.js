@@ -142,7 +142,10 @@ function linkAt(agentId, block) {
 }
 
 const provider = {
-  getTransactionReceipt: async (hash) => world().receipts[String(hash).toLowerCase()] ?? null,
+  getTransactionReceipt: async (hash) => {
+    record('receipt', String(hash).toLowerCase());
+    return world().receipts[String(hash).toLowerCase()] ?? null;
+  },
   getBlockNumber: async () => world().head + moved,
   // 'finalized' is the head unless world.finalized holds it back (ADR 0012). A numbered block lists its transactions
   // only where world.blockTxs[n] says what they are: a world holds payments it has no block for, and a block without its

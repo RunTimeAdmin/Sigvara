@@ -43,6 +43,9 @@ const counters = {
   // A flag, a resolve or a link that was taken and held in memory, but the state file could not be written. The
   // reply says so (202, durable: false). Worth alerting on beside /health, like attestAcceptedNotDurable.
   writesNotDurable: 0,
+  // Saves of the whole state file. Each one serializes and fsyncs everything, so a rate that follows /attest
+  // traffic one for one means writes are not sharing saves.
+  stateSaves: 0,
   scoreRpcErrors: 0,
   scoreErrors: 0,
   // /score previews answered 503 because the payers' standings were not read yet. A steady count means requests
@@ -299,6 +302,11 @@ function toPrometheusText(extra = {}) {
   lines.push('# HELP sigvara_oracle_score_standings_pending_total /score previews whose payers\' standings were not read yet, answered 503');
   lines.push('# TYPE sigvara_oracle_score_standings_pending_total counter');
   lines.push(`sigvara_oracle_score_standings_pending_total ${counters.scoreStandingsPending}`);
+
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_state_saves_total Saves of the whole state file');
+  lines.push('# TYPE sigvara_oracle_state_saves_total counter');
+  lines.push(`sigvara_oracle_state_saves_total ${counters.stateSaves}`);
 
   lines.push('');
   lines.push('# HELP sigvara_oracle_badge_requests_total Badge SVG requests');

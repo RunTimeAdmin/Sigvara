@@ -121,7 +121,7 @@ const ev = (i, ts, over = {}) => Object.freeze({
 const endsAt = (e) => (e.removedAt != null ? Number(e.removedAt) : Infinity);
 const NO_CHAIN = paymentChains.readConfig({}, { scoredChainId: 5042002 });
 
-test('a root made before a removal still reproduces from the state that holds it, and the next one leaves it out', () => {
+test('a root made before a removal still reproduces from the state that holds it, and the next one leaves it out', async () => {
   const a = ev(1, NOW - 60 * MIN);
   const b = ev(2, NOW - 50 * MIN);
   const before = rootFor([a, b]); // proposed at NOW - 30 min
@@ -133,16 +133,16 @@ test('a root made before a removal still reproduces from the state that holds it
   assert.equal(rootFor(paymentChains.eventsAt(held, NOW, NO_CHAIN)), rootFor([a]));
 
   // The checker auditing each proposal from the same state reaches the same answer.
-  const audit = (atMs, root, cuts) => evidenceAsOf(
+  const audit = async (atMs, root, cuts) => evidenceAsOf(
     paymentChains.eventsAt(held, atMs, NO_CHAIN, undefined, { keepRemoved: true }), atMs, root, { endsAt, ...(cuts ? { cuts } : {}) },
   );
-  assert.equal(audit(NOW - 30 * MIN, before).matchedRoot, true, 'the earlier proposal');
-  assert.equal(audit(NOW, rootFor([a])).matchedRoot, true, 'the later one');
-  assert.equal(audit(NOW, before).matchedRoot, false, 'a proposal after the removal that still counts it is a disagreement');
+  assert.equal((await audit(NOW - 30 * MIN, before)).matchedRoot, true, 'the earlier proposal');
+  assert.equal((await audit(NOW, rootFor([a]))).matchedRoot, true, 'the later one');
+  assert.equal((await audit(NOW, before)).matchedRoot, false, 'a proposal after the removal that still counts it is a disagreement');
 
   // With payment chains on, a proposal dated after the removal whose evidence was cut before it still counted it.
   const cuts = [NOW - 19 * MIN, NOW - 20 * MIN, NOW - 21 * MIN];
-  assert.equal(audit(NOW - 18 * MIN, before, cuts).matchedRoot, true);
+  assert.equal((await audit(NOW - 18 * MIN, before, cuts)).matchedRoot, true);
 });
 
 test('the scan canary never points at a payment a reorganization removed', () => {

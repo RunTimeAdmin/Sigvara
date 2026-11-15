@@ -183,14 +183,35 @@ function hashPair(a, b) {
 }
 
 /**
- * Builds the tree over `events` and returns { root, leaves, layers }.
+ * hashPair through `pairs`, a Map shared by trees over nearly the same leaves, when one is given. Trees over two
+ * cut-offs of one list hold every pair left of where the lists differ, so a checker trying thirty of them hashes
+ * those pairs once (evidence-as-of.js).
+ */
+function pairOf(a, b, pairs) {
+  if (!pairs) return hashPair(a, b);
+  const key = a + b;
+  let hash = pairs.get(key);
+  if (hash === undefined) {
+    hash = hashPair(a, b);
+    pairs.set(key, hash);
+  }
+  return hash;
+}
+
+/**
+ * The work of building a tree, one hash a step, returning { root, leaves, layers }. buildTree runs it straight
+ * through; treeOf lets other work run between steps.
  *
  * An odd node is promoted rather than duplicated. Duplicating it is the classic
  * malleability bug: a tree can then be extended with the repeated leaf and still
  * produce the same root.
  */
-function buildTree(events) {
-  const leaves = events.map(leafFor);
+function* growTree(events, pairs) {
+  const leaves = [];
+  for (const event of events) {
+    leaves.push(leafFor(event));
+    yield;
+  }
   if (leaves.length === 0) return { root: ethers.ZeroHash, leaves: [], layers: [] };
 
   const layers = [leaves.slice()];
@@ -198,7 +219,8 @@ function buildTree(events) {
   while (level.length > 1) {
     const next = [];
     for (let i = 0; i < level.length; i += 2) {
-      next.push(i + 1 < level.length ? hashPair(level[i], level[i + 1]) : level[i]);
+      next.push(i + 1 < level.length ? pairOf(level[i], level[i + 1], pairs) : level[i]);
+      yield;
     }
     layers.push(next);
     level = next;
@@ -206,15 +228,55 @@ function buildTree(events) {
   return { root: level[0], leaves, layers };
 }
 
-function rootFor(events) {
+/** Builds the tree over `events` and returns { root, leaves, layers }. `pairs`: see pairOf. */
+function buildTree(events, pairs = null) {
+  const steps = growTree(events, pairs);
+  for (;;) {
+    const step = steps.next();
+    if (step.done) return step.value;
+  }
+}
+
+const frozenThrough = (events) => Array.isArray(events) && Object.isFrozen(events) && events.every((e) => Object.isFrozen(e));
+
+function rootFor(events, pairs = null) {
   const hit = rootCache.get(events);
   if (hit !== undefined) return hit;
-  const root = buildTree(events).root;
+  const root = buildTree(events, pairs).root;
   // Cached only when nothing in it can change: the array and every event are frozen.
-  if (Array.isArray(events) && Object.isFrozen(events) && events.every((e) => Object.isFrozen(e))) {
-    rootCache.set(events, root);
-  }
+  if (frozenThrough(events)) rootCache.set(events, root);
   return root;
+}
+
+// Trees treeOf built, by events array. Held only while the array is: the store replaces an agent's array on every
+// change, so a tree goes with the evidence it was built over.
+const treeCache = new WeakMap();
+const TREE_STEPS_BETWEEN_PAUSES = 2048;
+const pause = () => new Promise((resolve) => setImmediate(resolve));
+
+/**
+ * buildTree for a caller that must not hold the event loop while it hashes: /evidence, which took 1.4 s for an agent
+ * at the cap of 25,000 payments. Other work runs every TREE_STEPS_BETWEEN_PAUSES hashes. The tree is kept for a
+ * frozen array, as rootFor keeps the root, so the next request over the same evidence builds nothing.
+ */
+async function treeOf(events) {
+  const hit = treeCache.get(events);
+  if (hit !== undefined) return hit;
+  const steps = growTree(events, null);
+  let tree;
+  for (let n = 1; ; n += 1) {
+    const step = steps.next();
+    if (step.done) {
+      tree = step.value;
+      break;
+    }
+    if (n % TREE_STEPS_BETWEEN_PAUSES === 0) await pause();
+  }
+  if (frozenThrough(events)) {
+    treeCache.set(events, tree);
+    rootCache.set(events, tree.root);
+  }
+  return tree;
 }
 
 /// The sibling path for the leaf at `index`, in the order MerkleProof.verify expects.
@@ -238,5 +300,5 @@ function verifyProof(leaf, proof, root) {
 }
 
 module.exports = {
-  leafFor, leafByAbi, buildTree, rootFor, proofFor, verifyProof, hashPair, settledSeconds, outcomeCode,
+  leafFor, leafByAbi, buildTree, rootFor, treeOf, proofFor, verifyProof, hashPair, settledSeconds, outcomeCode,
 };

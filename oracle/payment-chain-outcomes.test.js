@@ -376,7 +376,9 @@ describe('POST /attest for a payment on a payment chain', () => {
     assert.equal(early.status, 503, early.text);
     assert.equal(early.body.code, 'unconfirmed');
 
-    const unknown = await post(oracle, agent.didHash, ethers.id('not mined'), signed);
+    // Signed for the hash it names: a signature for another payment is refused at once (400, bad_signature).
+    const notMined = ethers.id('not mined');
+    const unknown = await post(oracle, agent.didHash, notMined, await signOutcome(agent.didHash, notMined, payer));
     assert.equal(unknown.status, 503, unknown.text);
     assert.equal(unknown.body.code, 'not_found');
 

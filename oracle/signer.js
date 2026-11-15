@@ -31,6 +31,8 @@ const path = require('path');
 const http = require('http');
 const { ethers } = require('ethers');
 const { HEADER, MAX_SKEW_SECONDS, authProblem, readSecret } = require('./signer-auth');
+const { readWithBackoff } = require('./read-retry');
+const { rpcProvider } = require('./rpc-provider');
 
 const FEEDBACK = new ethers.Interface([
   'function giveFeedback(uint256 agentId, int128 value, uint8 valueDecimals, string tag1, string tag2, string endpoint, string feedbackURI, bytes32 feedbackHash)',
@@ -308,11 +310,12 @@ async function main(argv = process.argv.slice(2), env = process.env) {
   const password = fs.readFileSync(privateFile(cfg.passwordFile), 'utf8').trim();
   const wallet = await ethers.Wallet.fromEncryptedJson(fs.readFileSync(privateFile(cfg.keystore), 'utf8'), password);
   const secret = readSecret(privateFile(cfg.secretFile));
-  const provider = new ethers.JsonRpcProvider(cfg.rpcUrl);
-  const chain = async () => {
+  const provider = rpcProvider(cfg.rpcUrl, cfg.chainId);
+  // Retried here on a throttle or a timeout: the provider tries nothing again itself (rpc-provider.js).
+  const chain = () => readWithBackoff('signer chain', async () => {
     const [pendingNonce, block] = await Promise.all([provider.getTransactionCount(wallet.address, 'pending'), provider.getBlock('latest')]);
     return { pendingNonce, time: Number(block.timestamp) };
-  };
+  });
   fs.mkdirSync(path.dirname(cfg.stateFile), { recursive: true });
   const policy = createPolicy({ ...cfg, address: wallet.address });
   const handler = createSigner({

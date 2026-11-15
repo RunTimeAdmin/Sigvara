@@ -1258,3 +1258,33 @@ test('past the per-agent or total cap the payment that matters least is dropped,
     ledger: { events: 3, maxTotal: 3, maxPerAgent: 2, dropped: 2, withOutcome: 0, droppedWithOutcome: 0, droppedKeys: 2, agentsWithFloor: 0 },
   });
 });
+
+// ---- GET /outcomes ------------------------------------------------------------------------------------------------
+
+// Each entry of a page used to be looked up with .find over its agent's whole list, so the last page of a busy agent
+// cost its 500 entries times every event the agent held: about 1 s at 25,000 (performance review, 15 November).
+test('a page of outcomes costs its agents\' events once, not once an entry', () => {
+  const out = inChildWithState(null, `
+    process.env.PAYMENT_MAX_EVENTS_PER_AGENT = '25000';
+    const s = require('./store');
+    const did = '0x' + 'aa'.repeat(32), payer = '0x' + '11'.repeat(20);
+    const tx = (n) => '0x' + n.toString(16).padStart(64, '0');
+    const N = 20000, PAGE = 500;
+    s.creditPayments(Array.from({ length: N }, (_, n) => ({ didHash: did, txHash: tx(n + 1), amount: '5', payer, ts: 1000 + n })));
+    const signed = { outcome: 1, signedAt: 1, deadline: 9, signature: '0x', signer: 'eoa', checkedAtBlock: 40, checkedAtMs: 4000 };
+    // The last ones in the list, where a .find has the farthest to go.
+    for (let n = N - PAGE + 1; n <= N; n += 1) s.recordPayerOutcome(did, tx(n), payer, true, signed, { windowMs: 1 });
+    const t = process.hrtime.bigint();
+    const page = s.payerOutcomesSince(0, PAGE);
+    const ms = Number(process.hrtime.bigint() - t) / 1e6;
+    console.log(JSON.stringify({
+      ms, count: page.outcomes.length, more: page.more,
+      first: Number(page.outcomes[0].txHash), last: Number(page.outcomes.at(-1).txHash),
+      ordered: page.outcomes.every((o, i) => i === 0 || o.acceptedAt > page.outcomes[i - 1].acceptedAt),
+    }));
+  `);
+  const got = JSON.parse(out.trim().split('\n').at(-1));
+  assert.deepEqual({ ...got, ms: undefined }, { ms: undefined, count: 500, more: false, first: 19501, last: 20000, ordered: true });
+  // About 1 s with a .find an entry on the machine this was written on, about 10 ms indexed.
+  assert.ok(got.ms < 200, `a page of 500 took ${got.ms.toFixed(0)} ms`);
+});

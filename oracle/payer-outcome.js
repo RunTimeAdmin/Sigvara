@@ -504,6 +504,7 @@ module.exports = {
   timingProblem,
   checkedBlockProblem,
   importLateProblem,
+  recover,
   verifySignature,
   verifyImported,
   RpcError,

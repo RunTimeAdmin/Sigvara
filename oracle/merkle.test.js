@@ -383,3 +383,19 @@ test('rootFor: frozen events inside an array that is not frozen are not cached a
   events[1] = Object.freeze(ev(9));
   assert.notEqual(rootFor(events), before);
 });
+
+// /evidence built its tree with the event loop held: 1.4 s for an agent at the cap of 25,000 payments.
+test('treeOf builds the tree buildTree does, lets other work run while it hashes, and keeps it for a frozen list', async () => {
+  const events = Object.freeze(Array.from({ length: 3000 }, (_, i) => Object.freeze({
+    txHash: '0x' + (i + 1).toString(16).padStart(64, '0'), payer: '0x' + '11'.repeat(20), amount: '1000', ts: 1_700_000_000_000 + i, success: true,
+  })));
+  const merkle = require('./merkle');
+  let ran = false;
+  const building = merkle.treeOf(events);
+  setImmediate(() => { ran = true; });
+  const tree = await building;
+  assert.equal(ran, true, 'something else ran before it finished');
+  assert.deepEqual(tree, buildTree(events));
+  assert.equal(await merkle.treeOf(events), tree, 'kept, not built again');
+  assert.equal(rootFor(events), tree.root);
+});

@@ -462,20 +462,24 @@ test('a body far past the limit is cut off, and the oracle carries on', async ()
 
 // ---- the evidence cache ----------------------------------------------------------------
 
-test('the evidence cache is keyed on the stored spelling, not the caller\'s', async () => {
+test('an agent with no payments is served the same under every spelling, and none is cached', async () => {
   const lower = `0x${'ef'.repeat(32)}`;
   const upper = `0x${'EF'.repeat(32)}`;
   const mixed = `0x${'Ef'.repeat(32)}`;
   const entriesBefore = counter(await metricsText(), 'sigvara_oracle_evidence_cache_entries');
 
+  const bodies = [];
   for (const spelling of [lower, upper, mixed]) {
-    assert.equal((await oracle.call('GET', `/evidence/${spelling}`)).status, 200);
+    const r = await oracle.call('GET', `/evidence/${spelling}`);
+    assert.equal(r.status, 200);
+    bodies.push(r.text);
   }
 
-  // Entries, not hits: an agent with no payments gets a fresh empty array on every read, and
-  // the cache treats the array's identity as the revision, so it never hits for such an agent.
-  assert.equal(counter(await metricsText(), 'sigvara_oracle_evidence_cache_entries'), entriesBefore + 1,
-    'three spellings of one agent are one cache entry');
+  assert.equal(new Set(bodies).size, 1, 'one body, under the stored spelling');
+  assert.equal(JSON.parse(bodies[0]).didHash, lower);
+  // One stored for every didHash anyone asked about pushed out the bodies worth keeping. The keying is checked on
+  // an agent with payments in evidence-body.test.js.
+  assert.equal(counter(await metricsText(), 'sigvara_oracle_evidence_cache_entries'), entriesBefore);
 });
 
 // ---- credential scopes -----------------------------------------------------------------

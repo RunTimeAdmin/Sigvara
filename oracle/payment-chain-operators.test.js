@@ -180,9 +180,9 @@ test('two operators, one scanning Base before it reads the handover and one afte
   };
   const held = pc.eventsAt(Object.freeze(checker.credited), atProposalMs, cfg);
   const early = merkle.rootFor(pc.eventsAt(Object.freeze(primary.credited), HANDOVER_MS - 5 * 60_000, cfg, namedAt));
-  assert.equal(evidenceAsOf(held, atProposalMs, early, options).matchedRoot, true, 'a cut-off before the handover');
+  assert.equal((await evidenceAsOf(held, atProposalMs, early, options)).matchedRoot, true, 'a cut-off before the handover');
   const late = merkle.rootFor(pc.eventsAt(Object.freeze(primary.credited), HANDOVER_MS + 5 * 60_000, cfg, namedAt));
-  const got = evidenceAsOf(held, atProposalMs, late, options);
+  const got = await evidenceAsOf(held, atProposalMs, late, options);
   assert.equal(got.matchedRoot, true, 'a cut-off after it');
   assert.equal(got.events.length, 1);
 });

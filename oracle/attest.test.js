@@ -228,6 +228,42 @@ test('a refused replay does not lock the payer out of the agent', async () => {
   assert.equal(next.status, 200, next.text);
 });
 
+// A save writes and fsyncs the whole state, about 2.8 s at the ledger's caps, and every accepted /attest had its own.
+test('attestations that arrive together share a save, and each is answered after it', async () => {
+  const saves = async () => Number((await oracle.call('GET', '/metrics')).text.match(/^sigvara_oracle_state_saves_total (\d+)$/m)[1]);
+  const posts = Array.from({ length: 5 }, () => {
+    const agent = world.addAgent();
+    return [agent.didHash, world.addTx([{ from: wallet(), to: agent.agentAddress, value: 5n * USDC }])];
+  });
+  const before = await saves();
+
+  const answers = await Promise.all(posts.map(([didHash, tx]) => attest(didHash, tx, { success: true, token: AUDITOR })));
+
+  for (const r of answers) assert.equal(r.status, 200, r.text);
+  const used = (await saves()) - before;
+  assert.ok(used >= 1 && used <= 2, `${used} saves for 5 attestations`);
+});
+
+// Anyone can copy a credited settlement from /evidence, and each replay used to cost six chain reads before its 409.
+test('a replayed settlement is refused before the chain is read, and an auditor can still give it an outcome', async () => {
+  const agent = world.addAgent();
+  const tx = world.addTx([{ from: wallet(), to: agent.agentAddress, value: 5n * USDC }]);
+  assert.equal((await attest(agent.didHash, tx, { success: true })).status, 200);
+  const receiptReads = () => oracle.calls().filter((c) => c.name === 'receipt' && c.args[0] === tx.toLowerCase()).length;
+  const before = receiptReads();
+
+  const replay = await attest(agent.didHash, tx.toUpperCase().replace('0X', '0x'), { success: true });
+  assert.equal(replay.status, 409, replay.text);
+  assert.equal(replay.body.code, 'replayed');
+  assert.equal(receiptReads(), before, 'refused without reading the payment');
+
+  // An outcome is something to add, so the auditor's report goes through the full check and is recorded.
+  const audited = await attest(agent.didHash, tx, { success: false, token: AUDITOR });
+  assert.equal(audited.status, 200, audited.text);
+  assert.equal(audited.body.outcomeRecorded, true);
+  assert.equal(receiptReads(), before + 1);
+});
+
 test('a stranger is held to the cooldown, and the refusal does not burn the receipt', async () => {
   const agent = world.addAgent();
   const payer = wallet();
