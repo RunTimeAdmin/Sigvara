@@ -127,10 +127,31 @@ function decodeString(hex) {
 }
 
 // ---- chain io ----
+// Every RPC read goes through here. A node that accepts the connection and never answers would leave
+// the page waiting with no message, so a request that has not finished in 20 s, body included, is
+// aborted and fails like any other read. The epochs page uses the same limit (epochs.js).
+async function rpcPost(body) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), 20000);
+  try {
+    const res = await fetch(RPC, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: ctl.signal,
+    });
+    return await res.json();
+  } catch (e) {
+    if (e.name === "AbortError") throw new Error("the RPC did not answer within 20 seconds");
+    throw e;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 async function rpcRead(to, data) {
   const body = { jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to, data }, "latest"] };
-  const res = await fetch(RPC, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  const j = await res.json();
+  const j = await rpcPost(body);
   if (j.error) throw new Error(j.error.message);
   return j.result;
 }
@@ -150,12 +171,7 @@ async function rpcBatch(calls) {
     jsonrpc: "2.0", id: i, method: "eth_call",
     params: [{ to: c.to, data: c.data }, "latest"],
   }));
-  const res = await fetch(RPC, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const arr = await res.json();
+  const arr = await rpcPost(body);
   if (!Array.isArray(arr)) throw new Error(arr?.error?.message ?? "batch call failed");
   const byId = new Map(arr.map(r => [r.id, r]));
   return calls.map((c, i) => {
