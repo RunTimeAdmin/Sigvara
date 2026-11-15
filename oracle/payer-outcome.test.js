@@ -1219,3 +1219,14 @@ test('refuses to start taking payer outcomes without the chain id they are signe
   assert.equal(code, 1);
   assert.match(log, /PAYER_OUTCOMES=positive needs EXPECTED_CHAIN_ID/);
 });
+
+test('a signature is held to 1,024 bytes: room for a smart account\'s, not for padding', () => {
+  // 4,096 let a payer make each payment it holds 15 times the size of an ordinary one, and the caps count
+  // payments, not bytes: about 24,000 such outcomes took a state past what a restart could load.
+  const base = { payer: `0x${'44'.repeat(20)}`, outcome: payerOutcome.DELIVERED, signedAt: 1_700_000_000, deadline: 1_700_003_600 };
+  assert.equal(payerOutcome.parse({ ...base, signature: `0x${'ab'.repeat(640)}` }).ok, true, 'the longest held on 15 Nov');
+  assert.equal(payerOutcome.parse({ ...base, signature: `0x${'ab'.repeat(1024)}` }).ok, true);
+  const over = payerOutcome.parse({ ...base, signature: `0x${'ab'.repeat(1025)}` });
+  assert.equal(over.ok, false);
+  assert.match(over.error, /signature/);
+});

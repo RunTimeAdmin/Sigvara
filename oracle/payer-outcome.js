@@ -31,8 +31,11 @@ const MAX_FUTURE_SKEW_SECONDS = 300;
 // How far signedAt may be after the time of the block it is checked at. A confirmed block is a
 // little behind the head, and the head a little behind real time; an hour is far more than either.
 const MAX_CHECK_LAG_SECONDS = 3_600;
-// An ERC-1271 signature can be longer than 65 bytes (a multisig's, say), but not unboundedly.
-const MAX_SIGNATURE_BYTES = 4096;
+// An ERC-1271 signature can be longer than 65 bytes (a multisig's, say), but not unboundedly. The longest held
+// on 15 Nov 2026 was 640 bytes, a smart account's. 4,096 let a payer make each payment it holds 15 times the size of
+// an ordinary one, and the caps count payments, not bytes: about 24,000 such outcomes took a state past what a
+// restart could load. Both operators change this together, or one refuses imports the other accepted.
+const MAX_SIGNATURE_BYTES = 1024;
 const ERC1271_MAGIC = '0x1626ba7e';
 const ERC1271 = new ethers.Interface(['function isValidSignature(bytes32 hash, bytes signature) view returns (bytes4)']);
 // Gas for one isValidSignature call. Enough for a passkey (P-256) account without a precompile,
