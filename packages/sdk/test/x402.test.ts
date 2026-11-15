@@ -187,3 +187,38 @@ describe('x402 guard limits', () => {
     expect(most).toBeLessThanOrEqual(4);
   });
 });
+
+describe('x402 guard and the seller\'s connection', () => {
+  /** A 402 whose own body counts its cancels. The guard reads a clone, and the clone gets the real body. */
+  function counted(parts: Parameters<typeof required>[0]) {
+    const real = required(parts);
+    const cancel = vi.fn(async () => {});
+    const res = { status: 402, headers: real.headers, clone: () => real.clone(), body: { cancel } } as unknown as Response;
+    return { res, cancel };
+  }
+
+  const many = Array.from({ length: X402_MAX_OFFERS + 1 }, (_, i) => offer(`0x${(i + 1).toString(16).padStart(40, '0')}`));
+  const down = { check: vi.fn(async (): Promise<TrustVerdict> => { throw new Error('could not read the chain'); }) };
+  const refusals: [string, Parameters<typeof required>[0], { check(agent: string): Promise<TrustVerdict> }][] = [
+    ['a 402 it cannot read', { rawBody: 'pay up' }, trustOnly(GOOD)],
+    ['a body over the limit', { rawBody: JSON.stringify({ accepts: [offer(GOOD)], pad: 'x'.repeat(X402_MAX_BYTES) }) }, trustOnly(GOOD)],
+    ['a header over the limit', { rawHeader: encode({ accepts: [offer(GOOD)], pad: 'x'.repeat(X402_MAX_BYTES) }) }, trustOnly(GOOD)],
+    ['too many offers', { body: { accepts: many } }, trustOnly()],
+    ['a seller without standing', { body: { accepts: [offer(BAD)] } }, trustOnly(GOOD)],
+    ['because the chain cannot be read', { body: { accepts: [offer(GOOD)] } }, down],
+  ];
+
+  // Nobody reads a refused 402, so the guard has to release its body: one cut off at the limit holds its connection
+  // until the seller or a timeout closes it.
+  it.each(refusals)('cancels the body once when it refuses %s', async (_why, parts, trust) => {
+    const { res, cancel } = counted(parts);
+    await expect(guarded(res, trust)).rejects.toThrow();
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the body of a 402 it passes for the client to read', async () => {
+    const { res, cancel } = counted({ body: { accepts: [offer(GOOD)] } });
+    expect(await guarded(res, trustOnly(GOOD))).toBe(res);
+    expect(cancel).not.toHaveBeenCalled();
+  });
+});
