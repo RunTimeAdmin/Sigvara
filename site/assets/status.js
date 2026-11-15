@@ -59,7 +59,13 @@
       : `No epoch has finished since it started ${ago(Number(v.uptimeSeconds) * 1000 || 0)} ago, ${every}.`);
     if (v.epochRunning === true) said.push("One is running now.");
     if (v.commit) said.push(`Runs ${X.commitLink(v.commit)}.`);
-    return { state, text: said.join(" ") };
+    // For the room (status-scene.js): the one fact in a few words, and the measure against its limits.
+    return {
+      state, text: said.join(" "),
+      // In minutes, not rounded to hours, so that it agrees with the column it is written under.
+      fact: ran ? (since < 10 * 3600 * 1000 ? `${Math.round(since / 60000)} min since its last epoch` : `${ago(since)} since its last epoch`) : "no epoch finished yet",
+      gauge: ran ? since / epochMs : null,
+    };
   }
 
   // The event index's /health, against the chain's newest block as this browser read it, so the lag
@@ -78,7 +84,11 @@
     said.push(lag === null ? "It does not say how far behind the chain it is."
       : `${plural(lag, "block")} behind the chain, about ${ago(lag * SECONDS_PER_BLOCK * 1000)}.`);
     if (state === "down" && v.lastError) said.push(`Last error: ${X.esc(v.lastError)}.`);
-    return { state, text: said.join(" ") };
+    return {
+      state, text: said.join(" "),
+      fact: lag === null ? "lag not known" : `${plural(lag, "block")} behind`,
+      gauge: lag,
+    };
   }
 
   // The checker's /divergence. As in scripts/check-live.mjs, a record matters while its proposal can
@@ -109,12 +119,13 @@
         + (open ? `; ${open} can still be rejected.` : "; none can still be rejected."));
     }
     const text = said.join(" ");
-    return blind || open ? { state: "attention", text } : { state: "ok", label: "none open", text };
+    const fact = total === 0 ? "none on record" : `${open} open of ${total} on record`;
+    return blind || open ? { state: "attention", text, fact, beads: open } : { state: "ok", label: "none open", text, fact, beads: 0 };
   }
 
   function assessChain(head) {
     if (head.status === "rejected") return noAnswer(head);
-    return { state: "ok", label: "answering", text: `Newest block ${Number(head.value).toLocaleString("en-US")}. The RPC is Arc's, not Sigvara's.` };
+    return { state: "ok", label: "answering", text: `Newest block ${Number(head.value).toLocaleString("en-US")}. The RPC is Arc's, not Sigvara's.`, fact: `block ${Number(head.value).toLocaleString("en-US")}` };
   }
 
   // The worst state among the rows, for the line at the top.
@@ -148,12 +159,23 @@
       + (rows.some((r) => r.state === "unreachable")
         ? '<p class="netnote">No answer can be your connection rather than the service, so try the link from elsewhere before calling it an outage.</p>' : "")
       + `<dl class="kv">${rows.map((r) => `<dt>${link(r)}</dt><dd class="prose"><span class="${STATES[r.state].pill}">${r.label ?? STATES[r.state].label}</span> ${r.text}</dd>`).join("")}</dl>`;
+    // The room above (status-scene.js) draws the same judgement. It is a module, so it may load
+    // before or after this.
+    const epochs = { of: EPOCHS_DOWN, marks: [[1, "next epoch due"], [EPOCHS_LATE, "late from here"], [EPOCHS_DOWN, "down from here"]] };
+    root.SigvaraStatusScene = {
+      // Where each measure counts as late, and as down: epochs for an operator, blocks for the index.
+      limits: { primary: epochs, checker: epochs, index: { of: INDEX_LATE_BLOCKS * 1.2, tall: 0.5, marks: [[INDEX_LATE_BLOCKS, "late from here"]] } },
+      headline: HEADLINES[worst], pill: STATES[worst].pill, checked: `checked ${X.fmtWhen(Math.floor(Date.now() / 1000))}`,
+      rows: rows.map((r) => ({ ...r, label: r.label ?? STATES[r.state].label, pill: STATES[r.state].pill })),
+    };
+    document.dispatchEvent(new Event("sigvara-status-scene"));
   }
 
   let reading = false;
   async function refresh() {
     if (reading) return;
     reading = true;
+    document.dispatchEvent(new Event("sigvara-status-reading"));
     try {
       const [primary, checker, divergence, index, head] = await Promise.allSettled([
         readEndpoint(`${X.PRIMARY}/health`),
@@ -163,11 +185,11 @@
         X.blockNumber(),
       ]);
       render([
-        { name: "Primary oracle", href: `${X.PRIMARY}/health`, ...assessOracle(primary) },
-        { name: "Checker", href: `${X.CHECKER}/health`, ...assessOracle(checker) },
-        { name: "Disagreements", href: "operators", ...assessDivergence(divergence) },
-        { name: "Event index", href: `${X.INDEX}/health`, ...assessIndex(index, head) },
-        { name: "Arc testnet RPC", ...assessChain(head) },
+        { name: "Primary oracle", kind: "primary", href: `${X.PRIMARY}/health`, ...assessOracle(primary) },
+        { name: "Checker", kind: "checker", href: `${X.CHECKER}/health`, ...assessOracle(checker) },
+        { name: "Disagreements", kind: "divergence", href: "operators", ...assessDivergence(divergence) },
+        { name: "Event index", kind: "index", href: `${X.INDEX}/health`, ...assessIndex(index, head) },
+        { name: "Arc testnet RPC", kind: "chain", ...assessChain(head) },
       ]);
     } catch (e) {
       document.querySelector("#statusCard .card-body").innerHTML = X.failed("the services", e);

@@ -94,6 +94,29 @@
 .sim-tip { position: absolute; transform: translate(-50%, -100%); padding: 8px 10px; border-radius: 8px; background: rgba(9, 11, 22, .92); border: 1px solid var(--sig-line-strong); font-size: 12px; line-height: 1.5; color: var(--sig-text-soft); white-space: nowrap; pointer-events: none; }
 .sim-tip-addr { font-family: var(--sig-font-mono); color: var(--sig-text); }
 /* Operators page room. */
+/* Status page room. */
+#stSceneCard > .netnote { max-width: 760px; }
+.sim-scene.op-scene.st-scene { height: clamp(330px, 36vw, 440px); }
+.op-scene.st-scene .sim-tip { left: auto; right: 12px; top: 12px; bottom: auto; transform: none; text-align: left; width: max-content; max-width: min(360px, calc(100% - 24px)); white-space: normal; }
+@media (max-width: 900px) { .op-label.status span + span { display: none; } }
+@media (max-width: 560px) { .op-scene.st-scene .sim-tip { top: auto; bottom: 10px; } .sim-scene.op-scene.st-scene { height: 420px; } .st-scene .sim-scene-hud b { font-size: 15px; } .st-scene .op-label.scale { font-size: 10px; } }
+.st-scene .sim-scene-hud b.pill-ok { color: var(--sig-mint); }
+.st-scene .sim-scene-hud b.pill-warn { color: var(--sig-orange); }
+.st-scene .sim-scene-hud b.pill-err { color: var(--sig-danger); }
+.op-label.scale.left { transform: translate(0, -50%); align-items: flex-start; }
+.op-label.scale.right { transform: translate(-100%, -50%); align-items: flex-end; }
+.st-none { color: #c5b7ff; }
+.op-label.status span { font-size: 12px; }
+.op-label.status span + span { color: var(--sig-text-soft); }
+.sim-key.k-ok::before { background: var(--sig-mint); }
+.sim-key.k-warn::before { background: var(--sig-orange); }
+.sim-key.k-down::before { background: #ff5c6c; }
+.sim-key.k-none::before { background: transparent; border: 2px solid #c5b7ff; }
+.sim-key.k-bead::before { border-radius: 0; background: #ff5c6c; transform: rotate(45deg); width: 7px; height: 7px; }
+.sim-key.k-from::before { border-radius: 0; background: transparent; border-top: 2px dashed #ff9db0; width: 14px; height: 0; }
+.sim-key.k-gauge::before { border-radius: 2px; background: #9aa6dc; width: 6px; height: 13px; }
+.sim-key.k-mark::before { border-radius: 50%; background: transparent; border: 1px solid #fff; width: 10px; height: 5px; }
+.sim-key.k-reads::before { border-radius: 0; background: transparent; border-top: 2px dashed var(--sig-cyan); width: 14px; height: 0; }
 /* Score epochs page room. */
 .op-scene.ep-scene .sim-tip { bottom: auto; transform: translate(-50%, -100%); text-align: left; width: max-content; max-width: min(320px, calc(100% - 28px)); }
 .op-pending { color: var(--sig-orange); }
@@ -110,7 +133,7 @@
 .sim-key.k-line::before { border-radius: 2px; background: #c5b7ff; width: 14px; height: 2px; }
 .timeline .ep.flash { outline: 2px solid var(--sig-cyan); outline-offset: 4px; }
 #epSceneCard > .netnote { max-width: 760px; }
-#opSceneCard, #slSceneCard, #epSceneCard { width: min(1180px, calc(100vw - 32px)); margin-left: calc((100% - min(1180px, calc(100vw - 32px))) / 2); }
+#opSceneCard, #slSceneCard, #epSceneCard, #stSceneCard { width: min(1180px, calc(100vw - 32px)); margin-left: calc((100% - min(1180px, calc(100vw - 32px))) / 2); }
 #slSceneCard > .netnote { max-width: 760px; }
 /* Slashes page room. */
 .sl-replay { position: absolute; right: 12px; top: 10px; }
@@ -170,7 +193,7 @@
   .sim-tiles { grid-template-columns: repeat(2, 1fr); }
   .sim-scene { height: 340px; }
   .sim-scene.op-scene { height: 430px; }
-  #opSceneCard, #slSceneCard, #epSceneCard { padding: 16px; }
+  #opSceneCard, #slSceneCard, #epSceneCard, #stSceneCard { padding: 16px; }
   .sim-scene.op-scene.ep-scene { height: 340px; }
   .op-label.num { font-size: 11px; }
   .op-label.small { display: none; }

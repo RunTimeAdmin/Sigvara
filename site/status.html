@@ -19,7 +19,7 @@
   <link rel="stylesheet" href="assets/style.css?v=integrate1" />
   <link rel="stylesheet" href="assets/app.css?v=ac69814" />
   <link rel="stylesheet" href="assets/epochs.css?v=6081b79" />
-  <link rel="stylesheet" href="assets/explorer.css?v=simview1" />
+  <link rel="stylesheet" href="assets/explorer.css?v=stscene1" />
 </head>
 <body>
 
@@ -52,6 +52,23 @@
   <p class="ep-lede">Whether Sigvara's testnet services are running, and what the scores they write add up to. Your browser reads each one from its public endpoint when this page opens, and nothing is kept or summarised in between.</p>
   <p class="netnote">Arc testnet (5042002). Reads only. The Sigvara team runs both oracle operators and the event index, so this is their own report of themselves, and each line links to where it came from. The same limits are checked from outside, on a schedule, by <a href="https://github.com/RunTimeAdmin/Sigvara/actions/workflows/live-checks.yml" target="_blank" rel="noopener">the live checks workflow</a>.</p>
 
+  <div class="app-card u-hidden" id="stSceneCard">
+    <h2>The services, as last read</h2>
+    <div class="sim-scene op-scene st-scene" id="stScene"></div>
+    <div class="op-keys">
+      <span class="sim-key k-ok">Running</span>
+      <span class="sim-key k-warn">Look at this</span>
+      <span class="sim-key k-down">Down</span>
+      <span class="sim-key k-none">No answer</span>
+      <span class="sim-key k-gauge">Column: time since an operator's last epoch, or blocks the index is behind</span>
+      <span class="sim-key k-mark">Ring: where the next epoch is due, and where the column counts as late, or down</span>
+      <span class="sim-key k-bead">A disagreement that can still be rejected</span>
+      <span class="sim-key k-reads">Reads the chain</span>
+      <span class="sim-key k-from">Disagreements come from the checker</span>
+    </div>
+    <p class="netnote">The same judgement as the list below, drawn again each time the page reads. A low column is good. Point at a beacon, or tap it, to read it; click or tap again to open where it was read from. The lights' slow breathing and the dust mean nothing.</p>
+  </div>
+
   <div class="app-card" id="statusCard">
     <h2>Right now</h2>
     <div class="card-body" aria-live="polite"><p class="netnote">Reading…</p></div>
@@ -78,7 +95,8 @@
 
 <script src="assets/did.js?v=32000f8"></script>
 <script src="assets/explorer.js?v=memo1"></script>
-<script src="assets/status.js?v=status1"></script>
+<script src="assets/status.js?v=stscene1"></script>
+<script type="module" src="assets/status-scene.js?v=stscene1"></script>
 <script src="assets/score-report.js?v=scores1"></script>
 </body>
 </html>
