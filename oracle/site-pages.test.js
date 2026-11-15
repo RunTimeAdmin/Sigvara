@@ -85,3 +85,34 @@ test('the agents page reads the chain only for the agents it shows, 50 rows at a
   assert.match(html, /Rows 51 to 100 of 130\./);
   assert.deepEqual([...new Set(asked.slice(300))], Array.from({ length: 40 }, (_, i) => word(i + 61)), 'only the rows not read before');
 });
+
+test('the testnet page reports a read the RPC never answers after 20 seconds, rather than waiting for good', async () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'site', 'assets', 'testnet.js'), 'utf8');
+  const els = new Map();
+  const $ = (id) => {
+    if (!els.has(id)) els.set(id, { textContent: '', value: '', href: '', setAttribute() {}, addEventListener() {} });
+    return els.get(id);
+  };
+  let ready = null;
+  const waits = [];
+  const ctx = vm.createContext({
+    window: { SigvaraDid: did },
+    document: { getElementById: $, querySelector: () => null, addEventListener: (type, fn) => { if (type === 'DOMContentLoaded') ready = fn; } },
+    // An address in the query string starts a check when the page loads.
+    URLSearchParams,
+    location: { search: '?a=0x00000000000000000000000000000000000000a1' },
+    AbortController,
+    // A node that accepts the connection and never answers: the request ends only if the page aborts it.
+    fetch: (_url, init) => new Promise((_, reject) => {
+      init.signal?.addEventListener('abort', () => reject(new DOMException('This operation was aborted', 'AbortError')));
+    }),
+    // The page's timer fires at once, and the test checks the delay it asked for.
+    setTimeout: (fn, ms) => { waits.push(ms); return setImmediate(fn); },
+    clearTimeout: clearImmediate,
+  });
+  vm.runInContext(source, ctx);
+  ready();
+  for (let i = 0; i < 20; i++) await new Promise(setImmediate);
+  assert.equal($('cardDid').textContent, 'read failed: the RPC did not answer within 20 seconds');
+  assert.deepEqual(waits, [20000]);
+});

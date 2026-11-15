@@ -52,12 +52,26 @@
         params: c.params || [{ to: c.to, data: c.data }, "latest"],
       };
     });
-    var res = await fetch(RPC, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    var arr = await res.json();
+    // A node that accepts the connection and never answers would leave the card reading the
+    // chain with no message, so a request that has not finished in 20 s, body included, is
+    // aborted and reported like any other failed read. The epochs page uses the same limit.
+    var ctl = new AbortController();
+    var timer = setTimeout(function () { ctl.abort(); }, 20000);
+    var arr;
+    try {
+      var res = await fetch(RPC, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: ctl.signal,
+      });
+      arr = await res.json();
+    } catch (e) {
+      if (e.name === "AbortError") throw new Error("the RPC did not answer within 20 seconds");
+      throw e;
+    } finally {
+      clearTimeout(timer);
+    }
     if (!Array.isArray(arr)) throw new Error((arr && arr.error && arr.error.message) || "RPC batch failed");
     var byId = {};
     arr.forEach(function (r) { byId[r.id] = r; });

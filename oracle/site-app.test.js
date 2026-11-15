@@ -43,9 +43,10 @@ function element(id) {
 
 /**
  * The page, loaded. `agents` maps an address to its chain state; `hold(did)` may return a promise the
- * RPC waits on before it answers a lookup of that agent, or rejects with.
+ * RPC waits on before it answers a lookup of that agent, or rejects with. `rpc` replaces the stub RPC's
+ * fetch. Every timer the page sets fires at once, and `waits` records the delay it asked for.
  */
-function load({ agents = {}, hold = () => null } = {}) {
+function load({ agents = {}, hold = () => null, rpc = null } = {}) {
   const els = new Map();
   const $ = (id) => { if (!els.has(id)) els.set(id, element(id)); return els.get(id); };
   const byDid = new Map(Object.entries(agents).map(([addr, s]) => [didOf(addr), { addr, ...s }]));
@@ -84,18 +85,26 @@ function load({ agents = {}, hold = () => null } = {}) {
     }
     return { json: async () => one(body) };
   };
+  const waits = [];
   const ctx = vm.createContext({
     document: { getElementById: $, createElement: () => element(null), querySelector: () => null, querySelectorAll: () => [] },
     window: { addEventListener() {}, dispatchEvent() {} },
     Event: class { constructor(type) { this.type = type; } },
     SigvaraDid: Did,
-    fetch,
-    setTimeout: (fn) => setImmediate(fn),
+    fetch: rpc ?? fetch,
+    setTimeout: (fn, ms) => { waits.push(ms); return setImmediate(fn); },
+    clearTimeout: clearImmediate,
+    AbortController,
     console,
   });
   vm.runInContext(SOURCE, ctx, { filename: 'app.js' });
-  return { ctx, $, batches, get: (name) => vm.runInContext(name, ctx) };
+  return { ctx, $, batches, waits, get: (name) => vm.runInContext(name, ctx) };
 }
+
+// A node that accepts the connection and never answers: the request ends only if the page aborts it.
+const neverAnswers = (_url, init) => new Promise((_, reject) => {
+  init.signal?.addEventListener('abort', () => reject(new DOMException('This operation was aborted', 'AbortError')));
+});
 
 /** An EIP-1193 wallet. `chain` can be changed under the page, as a user switching networks does. */
 function wallet({ chain = ARC, account = OPERATOR, switchError = null, addSwitches = true } = {}) {
@@ -232,4 +241,17 @@ test('a Suspended agent below the minimum is not called suspended by its operato
   assert.match(status, /or left suspended after a slash proposal was dropped/);
   assert.match(status, /bond it back to the minimum and reactivate it/);
   assert.match(page.$('stakeNote').innerHTML, /then reactivate it/);
+});
+
+test('a read the RPC never answers fails after 20 seconds with a message, rather than leaving the page waiting', async () => {
+  const page = load({ rpc: neverAnswers });
+  await idle();
+  assert.equal(page.$('feeNow').textContent, 'unavailable', 'the token reads at load are still waiting');
+  assert.match(page.$('log').innerHTML, /RPC read failed: the RPC did not answer within 20 seconds/);
+
+  page.$('agentAddr').value = B;
+  page.ctx.lookup(); // not awaited: a lookup with no limit never settles
+  await idle();
+  assert.match(page.$('log').innerHTML, /lookup failed: the RPC did not answer within 20 seconds/);
+  assert.deepEqual(page.waits, [20000, 20000], 'one 20 s limit on each request');
 });
