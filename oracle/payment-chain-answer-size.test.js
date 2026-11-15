@@ -40,35 +40,44 @@ function transferLog(to, amount, n, i = 0) {
 
 /**
  * Base Sepolia at 127.0.0.1. `logsAnswer(from, to)` is the JSON a getLogs answers with, and `answer[method]`
- * the headers and raw body for anything else it should answer oddly. `asked` holds every span asked for, and
- * `head.finalized` can be moved on.
+ * the headers and raw body for anything else it should answer oddly, when asked on its own. `asked` holds every
+ * span asked for, and `head.finalized` can be moved on. A batch, as ethers sends the calls made in one tick (the
+ * scan asks for its blocks' times and code together), is answered call by call.
  */
 async function endpoint({ logsAnswer = () => '[]', answer = {} } = {}) {
   const asked = [];
   const head = { finalized: 1199 };
   const reply = (r, result) => `{"jsonrpc":"2.0","id":${JSON.stringify(r.id)},"result":${result}}`;
+  const one = (r) => {
+    let result = 'null';
+    if (r.method === 'eth_chainId') result = JSON.stringify(hex(BASE_SEPOLIA));
+    if (r.method === 'eth_getBlockByNumber') result = JSON.stringify(block(r.params[0] === 'finalized' ? head.finalized : Number(r.params[0])));
+    if (r.method === 'eth_getCode') result = '"0x"';
+    if (r.method === 'eth_getLogs') {
+      const [from, to] = [Number(r.params[0].fromBlock), Number(r.params[0].toBlock)];
+      asked.push([from, to]);
+      result = logsAnswer(from, to);
+    }
+    return reply(r, result);
+  };
   const server = http.createServer((req, res) => {
     let body = '';
     req.on('data', (d) => { body += d; });
     req.on('end', () => {
       const r = JSON.parse(body);
+      if (Array.isArray(r)) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(`[${r.map(one).join(',')}]`);
+        return;
+      }
       if (answer[r.method]) {
         const [headers, out] = answer[r.method](r);
         res.writeHead(200, { 'Content-Type': 'application/json', ...headers });
         res.end(out);
         return;
       }
-      let result = 'null';
-      if (r.method === 'eth_chainId') result = JSON.stringify(hex(BASE_SEPOLIA));
-      if (r.method === 'eth_getBlockByNumber') result = JSON.stringify(block(r.params[0] === 'finalized' ? head.finalized : Number(r.params[0])));
-      if (r.method === 'eth_getCode') result = '"0x"';
-      if (r.method === 'eth_getLogs') {
-        const [from, to] = [Number(r.params[0].fromBlock), Number(r.params[0].toBlock)];
-        asked.push([from, to]);
-        result = logsAnswer(from, to);
-      }
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(reply(r, result));
+      res.end(one(r));
     });
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));

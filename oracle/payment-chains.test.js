@@ -613,6 +613,37 @@ test('a scan of many payments stops at MAX_READS, saves its place, and the next 
   assert.throws(() => config({ [`PAYMENT_CHAIN_${BASE_SEPOLIA}_MAX_READS`]: '0' }), /MAX_READS/);
 });
 
+test('a scan asks for its payments\' block times and code eight blocks at a time, not a round trip each', async () => {
+  // One at a time, a step of 1,000 reads took about 150 s at Base Sepolia's 145 ms, so payments in more
+  // blocks an hour than the 10-minute budget could confirm put the scan behind, and that holds every agent.
+  const a = agent();
+  const payer = ethers.Wallet.createRandom().address;
+  const logs = Array.from({ length: 40 }, (_, i) => (
+    transferLog({ from: payer, to: a.agentAddress, amount: 1_000_000n, block: 1100 + i })
+  ));
+  const chain = fakeChain({ logs });
+  let inFlight = 0;
+  let most = 0;
+  const slow = (fn) => async (...args) => {
+    inFlight += 1;
+    most = Math.max(most, inFlight);
+    await new Promise((r) => setTimeout(r, 5));
+    inFlight -= 1;
+    return fn(...args);
+  };
+  const provider = {
+    ...chain,
+    getCode: slow(chain.getCode),
+    getBlock: async (tag) => (Number.isInteger(tag) ? slow(chain.getBlock)(tag) : chain.getBlock(tag)),
+  };
+  const { deps: d, credited } = deps({ provider, agents: [a] });
+
+  await pc.scanChain(config().chains[0], d);
+  assert.equal(credited.length, 40);
+  assert.ok(credited.every((c) => c.ts === (1_700_000_000 + c.blockNumber) * 1000), 'each at its own block\'s time');
+  assert.equal(most, 16, 'eight blocks\' time and code in one go');
+});
+
 test('a scan keeps a block whole, and moves however many payments one block holds', async () => {
   const agents = [agent(), agent(), agent(), agent(), agent()];
   const payer = ethers.Wallet.createRandom().address;

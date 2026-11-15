@@ -8,6 +8,16 @@ const net = require('net');
 
 const MAX_BODY_SIZE = 1024 * 1024; // 1 MB
 
+// POST /attest is public, so its bodies are held to what a real one needs. The largest is a payer
+// outcome: its signature (payer-outcome.js MAX_SIGNATURE_BYTES) in hex plus a few hundred bytes of
+// fields. A megabyte let each request a client left unfinished hold a megabyte of this process.
+const ATTEST_MAX_BODY_SIZE = 32 * 1024;
+
+// How long a request has to deliver its body. Node's requestTimeout is five minutes, and a client that
+// sent all but the last byte and stopped kept everything it had sent in memory for that long: at the
+// write limit of 60 requests a minute, about 300 MB from one address.
+const BODY_DEADLINE_MS = 10_000;
+
 // Past this many bytes the connection is cut. Up to it, the rest of an oversize body is read and
 // thrown away, so a client that is still writing can finish and read the 413. Destroying the
 // request at the limit left it with a reset and no answer.
@@ -24,21 +34,37 @@ function bodyTooLarge() {
   return Object.assign(new Error('Request body too large'), { code: 'body_too_large' });
 }
 
-// What a route answers when readBody rejects: 413 for an oversize body, 400 for anything else.
+function bodyTooSlow() {
+  return Object.assign(new Error('Request body too slow'), { code: 'body_timeout' });
+}
+
+// What a route answers when readBody rejects: 413 for an oversize body, 408 for one that did not
+// arrive in time, 400 for anything else.
 function bodyErrorStatus(err) {
-  return err && err.code === 'body_too_large' ? 413 : 400;
+  if (err && err.code === 'body_too_large') return 413;
+  if (err && err.code === 'body_timeout') return 408;
+  return 400;
 }
 
 // req only needs to be an EventEmitter emitting 'data' | 'end' | 'error' and
 // exposing destroy() — a real http.IncomingMessage satisfies this, and so
 // does a plain fake in tests. A declared content-length is read from
 // req.headers when it has them.
-async function readBody(req, maxBodySize = MAX_BODY_SIZE) {
+async function readBody(req, maxBodySize = MAX_BODY_SIZE, deadlineMs = BODY_DEADLINE_MS) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
     let refused = false;
     const refuse = () => { refused = true; chunks.length = 0; reject(bodyTooLarge()); };
+    // A body still arriving at the deadline is dropped, and the connection with it, so what was sent
+    // is let go. The timer does not hold the process open on its own.
+    const deadline = setTimeout(() => {
+      refused = true;
+      chunks.length = 0;
+      reject(bodyTooSlow());
+      req.destroy();
+    }, deadlineMs);
+    deadline.unref?.();
     // A declared length over the limit is refused before any of the body is read.
     if (Number(req.headers && req.headers['content-length']) > maxBodySize) refuse();
     req.on('data', c => {
@@ -51,10 +77,14 @@ async function readBody(req, maxBodySize = MAX_BODY_SIZE) {
       chunks.push(c);
     });
     req.on('end', () => {
+      clearTimeout(deadline);
       try { resolve(JSON.parse(Buffer.concat(chunks).toString() || '{}')); }
       catch { reject(new Error('Invalid JSON')); }
     });
-    req.on('error', reject);
+    req.on('error', (err) => {
+      clearTimeout(deadline);
+      reject(err);
+    });
   });
 }
 
@@ -425,6 +455,7 @@ module.exports = {
   SCOPES,
   MIN_TOKEN_LENGTH,
   MAX_BODY_SIZE,
+  ATTEST_MAX_BODY_SIZE,
   RATE_WINDOW_MS,
   RATE_MAX,
   json,

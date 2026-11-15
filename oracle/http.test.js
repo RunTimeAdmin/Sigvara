@@ -407,6 +407,15 @@ test('a body over the 1 MB limit is answered 413 on every route that reads one',
   }
 });
 
+test('POST /attest takes at most 32 KB (the loopback routes keep 1 MB, tested below)', async () => {
+  // /attest is public. At a megabyte, every request a client left unfinished held a megabyte of the
+  // oracle until Node's five-minute request timeout.
+  const room = 32 * 1024 - JSON.stringify({ didHash: DID, success: true, attester: 'counteraudit', pad: '' }).length;
+  const over = await oracle.call('POST', '/attest', { didHash: DID, success: true, attester: 'counteraudit', pad: 'x'.repeat(room + 1) }, AUDITOR);
+  assert.equal(over.status, 413, over.text.slice(0, 120));
+  assert.equal(over.body.error, 'Request body too large');
+});
+
 test('the limit is 1 MB to the byte', async () => {
   const unflagged = `0x${'12'.repeat(32)}`;
   const room = MAX_BODY - JSON.stringify({ didHash: unflagged, pad: '' }).length;

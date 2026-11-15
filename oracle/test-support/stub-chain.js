@@ -126,6 +126,8 @@ const step = (name) => { moved += world().clockSteps?.[name] ?? 0; };
 const registryUnreadable = () => Object.assign(new Error('could not read the ERC-8004 registry (8004 owner)'), { code: 'NETWORK_ERROR' });
 // Standing reads in flight, recorded when world.standingReadMs gives them time to overlap.
 let standingReads = 0;
+// Numbered block reads in flight, recorded the same way when world.blockReadMs is set.
+let blockReads = 0;
 const hostNow = Date.now;
 let hostAhead = 0;
 Date.now = () => hostNow() + hostAhead;
@@ -145,13 +147,20 @@ const provider = {
   // 'finalized' is the head unless world.finalized holds it back (ADR 0012). A numbered block lists its transactions
   // only where world.blockTxs[n] says what they are: a world holds payments it has no block for, and a block without its
   // list reads as unsettled rather than as one that lost them.
-  getBlock: async (n) => (n === 'finalized'
-    ? { number: world().finalized ?? world().head + moved, timestamp: world().nowSec + moved - 60 }
-    : {
+  getBlock: async (n) => {
+    if (n === 'finalized') return { number: world().finalized ?? world().head + moved, timestamp: world().nowSec + moved - 60 };
+    if (world().blockReadMs && Number.isInteger(n)) {
+      blockReads += 1;
+      record('blockRead', blockReads);
+      await new Promise((r) => setTimeout(r, world().blockReadMs));
+      blockReads -= 1;
+    }
+    return {
       number: n,
       timestamp: world().blockTimes?.[n] ?? world().nowSec + moved - 60,
       ...(world().blockTxs?.[n] ? { transactions: world().blockTxs[n] } : {}),
-    }),
+    };
+  },
   getLogs: async (filter) => {
     if (filter.fromBlock === filter.toBlock) return world().canaryLogs ?? [];
     return (world().scanLogs ?? []).filter((l) => l.blockNumber >= filter.fromBlock && l.blockNumber <= filter.toBlock);

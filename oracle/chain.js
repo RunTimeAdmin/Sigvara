@@ -452,9 +452,13 @@ async function getReputationData(didHash) {
   };
 }
 
-async function getAgentScore(address) {
+/**
+ * A counterparty's standing, at `blockTag` when given (the scoring snapshot's block) and at the latest
+ * block otherwise.
+ */
+async function getAgentScore(address, blockTag) {
   try {
-    return await readWithBackoff('payer standing', () => readStanding(address));
+    return await readWithBackoff('payer standing', () => readStanding(address, blockTag));
   } catch (err) {
     // A failure of the node says nothing about the counterparty. Read as "no standing" it lowers the
     // score this oracle proposes, and the checker, whose own reads succeeded, then records a divergence
@@ -466,7 +470,8 @@ async function getAgentScore(address) {
   }
 }
 
-async function readStanding(address) {
+async function readStanding(address, blockTag) {
+  const at = blockTag === undefined ? [] : [{ blockTag }];
   // Was three serial round trips per counterparty. The first is now arithmetic when
   // the derivation has been verified, so it is two, and those two are genuinely
   // dependent. At ~124 ms a call on Arc that is a third off every payer lookup, and
@@ -475,7 +480,7 @@ async function readStanding(address) {
     ? didHashOf(address, localDidHash.chainId)
     : await identityContract.computeDidHash(address);
 
-  const id = await identityContract.getIdentity(didHash);
+  const id = await identityContract.getIdentity(didHash, ...at);
   if (Number(id.registeredAt) === 0) return 0;
   if (Number(id.status) === STATUS_SLASHED) return 0;
 
@@ -492,8 +497,8 @@ async function readStanding(address) {
   // propagate it the same epoch, and a handover restarts maturity, so bought standing
   // is not instantly spendable through counterparties either.
   const [rep, matured] = await Promise.all([
-    reputationContract.getReputation(didHash),
-    reputationContract.getTotalScore(didHash),
+    reputationContract.getReputation(didHash, ...at),
+    reputationContract.getTotalScore(didHash, ...at),
   ]);
   return Math.min(Number(rep.externalScore), Number(matured));
 }

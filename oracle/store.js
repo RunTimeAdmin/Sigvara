@@ -12,7 +12,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { stateChunks } = require('./state-serialize');
+const { stateChunks, parseJsonBuffer } = require('./state-serialize');
 // The decay curve lives in payments.js. Imported rather than reimplemented so flags and
 // payments age on exactly the same function; payments.js requires only ethers, so this
 // direction of dependency is not circular.
@@ -464,8 +464,10 @@ function applyState(next) {
   stateChainId = next.chainId;
 }
 
+// The file's bytes, parsed a piece at a time (state-serialize.js, parseJsonBuffer). Reading it as one string and
+// parsing that peaked at about 2.2 times the file, which a state near the caps took past V8's heap.
 function readStateFile(file) {
-  return parseState(JSON.parse(fs.readFileSync(file, 'utf8')));
+  return parseState(parseJsonBuffer(fs.readFileSync(file)));
 }
 
 /**

@@ -64,9 +64,16 @@ const DEFAULT_PACE_MS = 500;
 // advances a bounded step per epoch instead of retrying an ever larger range after one failed call.
 const DEFAULT_MAX_BLOCKS = 36_000;
 // Reads one scan spends on its payments at most: a getCode for each agent and block, and a getBlock for each
-// block, one at a time. A chain that is on is scanned inside the epoch, so without this a step of many
-// payments could hold an epoch for hours with nothing saved.
+// block. A chain that is on is scanned inside the epoch, so without this a step of many payments could hold
+// an epoch for hours with nothing saved.
 const DEFAULT_MAX_READS = 1_000;
+// Blocks whose reads go out together: each block's time and its recipients' code, asked in one tick, which
+// ethers sends as one JSON-RPC batch, paced as the log reads are. They went one round trip at a time, so a
+// step of 1,000 reads took about 150 s at Base Sepolia's 145 ms, and payments in more blocks an hour than
+// the 10-minute budget could confirm put the scan behind, which holds every agent (ADR 0009). The endpoint
+// the operators use answered batches of 100 such reads on 15 Nov 2026; eight blocks ask about sixteen.
+const BLOCKS_PER_READ_BATCH = 8;
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // How long one read of a payment chain may take. A chain that is on is scanned inside the epoch, before
 // scoring, and each read is tried four times, so ethers' default of 5 minutes would let one hung
 // endpoint hold an epoch for 20 minutes. At 30 seconds it costs about 2.
@@ -599,27 +606,43 @@ async function scanChain(chain, deps) {
     }
     return scoredCode.get(a.didHash);
   };
+
+  // With the code, the block's own time, as on the scored chain: crediting with the clock would make an
+  // old payment look fresh and defeat the decay. Both are asked for BLOCKS_PER_READ_BATCH blocks at a
+  // time. A block's time is read even when every payment in it turns out to be to a contract: it rides in
+  // the same batch, so it costs no round trip.
+  const byBlock = new Map();
   for (const c of plan.credits) {
-    const a = byDid.get(c.didHash);
-    if (!a?.agentAddress || codeOk.has(codeKey(c))) continue;
-    const [here, scored] = await Promise.all([
-      read('payment chain getCode', () => provider.getCode(a.agentAddress, c.blockNumber)),
-      scoredCodeOf(a),
-    ]);
-    codeOk.set(codeKey(c), recipientCodeOk(here) && recipientCodeOk(scored));
+    if (!byBlock.has(c.blockNumber)) byBlock.set(c.blockNumber, []);
+    byBlock.get(c.blockNumber).push(c);
+  }
+  const blocks = [...byBlock.keys()].sort((x, y) => x - y);
+  const times = new Map();
+  const pause = deps.sleep ?? wait;
+  for (let i = 0; i < blocks.length; i += BLOCKS_PER_READ_BATCH) {
+    if (i > 0) await pause(chain.paceMs);
+    await Promise.all(blocks.slice(i, i + BLOCKS_PER_READ_BATCH).map(async (n) => {
+      const asking = new Map(); // codeKey => agent, once each
+      for (const c of byBlock.get(n)) {
+        const a = byDid.get(c.didHash);
+        if (a?.agentAddress) asking.set(codeKey(c), a);
+      }
+      const keys = [...asking.keys()];
+      const [block, ...codes] = await Promise.all([
+        read('payment chain getBlock', () => provider.getBlock(n)),
+        ...keys.map((k) => Promise.all([
+          read('payment chain getCode', () => provider.getCode(asking.get(k).agentAddress, n)),
+          scoredCodeOf(asking.get(k)),
+        ])),
+      ]);
+      if (block) times.set(n, Number(block.timestamp) * 1000);
+      keys.forEach((k, j) => codeOk.set(k, recipientCodeOk(codes[j][0]) && recipientCodeOk(codes[j][1])));
+    }));
   }
   const kept = [];
   for (const c of plan.credits) {
     if (codeOk.get(codeKey(c)) === false) skip(c, 'contract_recipient');
     else kept.push(c);
-  }
-
-  // The block's own time, as on the scored chain: crediting with the clock would make an old
-  // payment look fresh and defeat the decay.
-  const times = new Map();
-  for (const n of new Set(kept.map((c) => c.blockNumber))) {
-    const block = await read('payment chain getBlock', () => provider.getBlock(n));
-    if (block) times.set(n, Number(block.timestamp) * 1000);
   }
   const registered = new Map();
   const named = new Map();

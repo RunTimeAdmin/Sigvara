@@ -867,6 +867,33 @@ test('getAgentScore: capped by the matured total, so linked standing is not inst
   assert.equal(await chain.getAgentScore('0xPayer'), 4);
 });
 
+test('getAgentScore: every read is made at the block it is given, and at the latest without one', async () => {
+  // The epoch reads standings at the day's snapshot block, where they cannot change, and keeps them for
+  // the day. A read that went to the latest block instead would be cached as the snapshot's.
+  const asked = [];
+  const note = (name, value) => async (...args) => {
+    const last = args[args.length - 1];
+    asked.push([name, last && typeof last === 'object' ? last.blockTag : 'latest']);
+    return value;
+  };
+  chain.init(CFG, {
+    provider: makeFakeProvider(1),
+    identityContract: {
+      computeDidHash: async () => '0xdeadbeef',
+      getIdentity: note('getIdentity', { registeredAt: 1n, status: 0 }),
+    },
+    reputationContract: {
+      getReputation: note('getReputation', { externalScore: 20n }),
+      getTotalScore: note('getTotalScore', 60n),
+    },
+  });
+  assert.equal(await chain.getAgentScore('0xPayer', 4242), 20);
+  assert.deepEqual(asked.sort(), [['getIdentity', 4242], ['getReputation', 4242], ['getTotalScore', 4242]]);
+  asked.length = 0;
+  await chain.getAgentScore('0xPayer');
+  assert.deepEqual(asked.sort(), [['getIdentity', 'latest'], ['getReputation', 'latest'], ['getTotalScore', 'latest']]);
+});
+
 test('getAgentScore: an unregistered counterparty has no standing', async () => {
   chain.init(CFG, { provider: makeFakeProvider(1), ...makeStandingContracts({ registeredAt: 0, externalScore: 25, total: 90 }) });
   assert.equal(await chain.getAgentScore('0xStranger'), 0);

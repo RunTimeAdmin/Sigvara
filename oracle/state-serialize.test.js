@@ -132,3 +132,87 @@ test('persist then load: what one process saves, the next restores exactly', () 
     fsx.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ---- an agent's ledger in slices, and reading the file back a piece at a time -------------------------------
+
+const { parseJsonBuffer } = require('./state-serialize');
+const BS = String.fromCharCode(92); // a backslash, written so no tool between here and the file can eat it
+
+test('stateChunks: an agent\'s long ledger is written in slices, the same bytes as JSON.stringify', () => {
+  // It was one string: 11 MB at the caps, and 151 MB when a payer padded its outcomes.
+  const events = Array.from({ length: 2_000 }, (_, i) => ({
+    txHash: `0x${i.toString(16).padStart(64, '0')}`, ts: 1_700_000_000_000 + i, amount: '5', payer: `0x${'22'.repeat(20)}`,
+    success: i % 2 === 0,
+  }));
+  const state = sampleState({ paymentEvents: { '0xaa': events } });
+  const pieces = Array.from(stateChunks(state, { pieceChars: 16_384 }));
+  assert.equal(pieces.join(''), JSON.stringify(state));
+  const ledger = JSON.stringify(events).length;
+  assert.ok(Math.max(...pieces.map((p) => p.length)) < ledger / 4, `largest piece ${Math.max(...pieces.map((p) => p.length))} of a ${ledger}-char ledger`);
+});
+
+test('parseJsonBuffer: what JSON.parse gives, however small the pieces', () => {
+  const docs = [
+    sampleState(),
+    { a: [1, -2.5e-3, true, false, null, 'x', [], {}, [[[]]], { b: { c: [] } }] },
+    [{ 'k"ey': `va${BS}lue "quoted"`, '\u00e9\u4e2d\u{1F600}': '\u{1F600}\u4e2d\u00e9', '': '' }, BS, '"', `${BS}"`, `${BS}${BS}`],
+    { __proto__: 1, constructor: 2, toString: 3 },
+    JSON.parse('{"__proto__":{"polluted":true},"x":1}'),
+    { dup: 1 },
+  ];
+  for (const doc of docs) {
+    const text = JSON.stringify(doc);
+    for (const limit of [1, 2, 7, 64, 1 << 20]) {
+      assert.deepEqual(parseJsonBuffer(Buffer.from(text), { limit }), JSON.parse(text), `limit ${limit}: ${text.slice(0, 60)}`);
+    }
+  }
+  // Whitespace anywhere JSON allows it, as a file edited by hand may have, and a key given twice (the last wins).
+  const spaced = ' \n{ "a" :\t[ 1 , 2 ,\r\n 3 ] , "b" : { "c" : "d" } , "a" : [ 4 ] }\n ';
+  assert.deepEqual(parseJsonBuffer(Buffer.from(spaced), { limit: 3 }), JSON.parse(spaced));
+  const own = parseJsonBuffer(Buffer.from('{"__proto__":{"polluted":true}}'), { limit: 1 });
+  assert.equal(Object.getPrototypeOf(own), Object.prototype, 'a __proto__ key is an own property, not the prototype');
+  assert.deepEqual(Object.keys(own), ['__proto__']);
+  assert.equal({}.polluted, undefined);
+});
+
+test('parseJsonBuffer: refuses what JSON.parse refuses', () => {
+  const bad = [
+    '', '   ', '{', '{"a":1', '{"a":1}}', '{"a":1} x', '{"a" 1}', '{"a":1 "b":2}', '{a:1}', '[1,]', '[1 2]', '[1,2}',
+    '{"a":[1,2}', '{"a":"unterminated}', '{"a":tru}', '{"a":1,}', '{,}', '[,1]', '{"a":1}{"b":2}', `"${BS}`, 'nul',
+    `{"a":"${BS}"}`, `["${BS}x"]`,
+  ];
+  for (const text of bad) {
+    assert.throws(() => JSON.parse(text), SyntaxError, `JSON.parse should refuse ${text}`);
+    for (const limit of [1, 3, 1 << 20]) {
+      assert.throws(() => parseJsonBuffer(Buffer.from(text), { limit }), SyntaxError, `limit ${limit}: ${JSON.stringify(text)}`);
+    }
+  }
+});
+
+test('load: a state twice the size of the heap\'s room still loads, as the file is parsed a piece at a time', () => {
+  // Reading the file into one string and parsing it while the string was alive peaked at about 2.2 times the file.
+  // At the caps that was 351 MB of the 432 MB heap V8 allows in the 768 MiB container, and an out-of-memory abort
+  // is not an exception, so the .bak was never tried and the restart policy started it into the same failure.
+  const dir = fsx.mkdtempSync(pathx.join(os.tmpdir(), 'sigvara-bigload-'));
+  const statePath = pathx.join(dir, 'oracle-state.json');
+  const run = (script, flags = []) => execFileSync(process.execPath, [...flags, '-e', script], {
+    env: { ...process.env, ORACLE_STATE_PATH: statePath }, cwd: __dirname, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  try {
+    run(`
+      const s = require('./store');
+      const did = '0x' + 'a1'.repeat(32);
+      for (let i = 0; i < 220000; i++) s.usedPaymentTxs.add('0x' + i.toString(16).padStart(64, '0') + '|' + did + '|0x' + '22'.repeat(20));
+      if (!s.persist()) throw new Error('not saved');
+    `);
+    assert.ok(fsx.statSync(statePath).size > 38e6, 'a file of about 39 MB');
+    const loaded = run(`
+      const s = require('./store');
+      s.load();
+      console.log(s.usedPaymentTxs.size);
+    `, ['--max-old-space-size=80']);
+    assert.equal(loaded.trim().split('\n').pop(), '220000');
+  } finally {
+    fsx.rmSync(dir, { recursive: true, force: true });
+  }
+});

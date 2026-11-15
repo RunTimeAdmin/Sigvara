@@ -177,3 +177,27 @@ test('an operator handed over past the registry scan\'s reach cannot pay its own
   assert.match(oracle.logs(), /"self_payment":1/);
   assert.deepEqual(await evidenceTxs(agent.didHash), [], 'refused as the operator paying its own agent');
 });
+
+test('the scan reads its payments\' block times ten at a time, not a round trip each', async () => {
+  // One at a time and unpaced, the reads ran through Arc's bucket of about 60 requests and then crawled on
+  // backoff, so payments in enough blocks could keep the scan behind, which holds every agent.
+  const world = new World();
+  const agent = world.addRegisteredAgent({ registeredBlock: HEAD - 900 });
+  const payer = wallet();
+  const log = (block) => ({
+    address: ASSET,
+    topics: [TRANSFER_TOPIC, ethers.zeroPadValue(payer, 32), ethers.zeroPadValue(agent.agentAddress, 32)],
+    data: ethers.toBeHex(5n * USDC, 32),
+    blockNumber: block,
+    transactionHash: ethers.id(`batched-${block}`),
+    logIndex: 0,
+    removed: false,
+  });
+  world.set('scanLogs', Array.from({ length: 30 }, (_, i) => log(HEAD - 800 + i)));
+  world.set('blockReadMs', 5);
+  oracle = await startOracle({ world, env: ENV });
+  await waitForEpochs(1);
+  assert.match(oracle.logs(), /payment scan \d+-\d+: 30 credited/);
+  const inFlight = oracle.calls().filter((c) => c.name === 'blockRead').map((c) => c.args[0]);
+  assert.equal(Math.max(...inFlight), 10, 'ten blocks\' times in one go');
+});
