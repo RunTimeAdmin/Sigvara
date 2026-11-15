@@ -117,6 +117,8 @@ let chainIdError = null;
 // The check in flight, which every caller shares, and when the last one finished (ms).
 let checking = null;
 let checkedAt = 0;
+// How long a feed that could not be reached is left before a caller that accepts a cached answer asks again.
+const UNREACHABLE_RECHECK_MS = 30_000;
 
 
 // deps lets tests inject fake contracts. Production (index.js) calls init(cfg).
@@ -127,9 +129,10 @@ function init(cfg, deps = {}) {
   idContract = deps.idContract ?? new ethers.Contract(cfg.externalIdentity, ID_ABI, provider);
   repContract = deps.repContract ?? new ethers.Contract(cfg.externalReputation, REP_ABI, provider);
   // A re-init points at a different chain, so anything cached about the old one is a
-  // lie until proven otherwise.
+  // lie until proven otherwise, and the new one is asked at once.
   chainId = null;
   chainIdError = null;
+  checkedAt = 0;
 }
 
 /**
@@ -142,10 +145,13 @@ function init(cfg, deps = {}) {
  * A caller arriving while a check is in flight waits for it rather than reading the cache.
  * A cached id younger than `maxAgeMs` is returned without asking; the default asks every
  * time. An id that cannot be read again is dropped, so a failed re-check reads as unreachable.
+ * A feed that could not be reached is asked again after at most UNREACHABLE_RECHECK_MS for a
+ * caller that accepts a cached answer: /health asked a down feed on every request.
  */
 async function refreshChainId(maxAgeMs = 0, nowMs = Date.now()) {
   if (!enabled) return chainId;
-  if (!checking && (chainId === null || nowMs - checkedAt >= maxAgeMs)) {
+  const ageLimit = chainId === null ? Math.min(maxAgeMs, UNREACHABLE_RECHECK_MS) : maxAgeMs;
+  if (!checking && nowMs - checkedAt >= ageLimit) {
     checking = checkChainId().finally(() => { checkedAt = Date.now(); checking = null; });
   }
   return checking ?? chainId;

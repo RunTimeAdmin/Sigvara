@@ -575,3 +575,22 @@ test('readLinkLogs: filters on the key, and returns each log\'s agent, value and
   assert.deepEqual(calls, [['queryFilter', 'sigvara', 100, 199]]);
   external.init({ externalRpc: '', externalIdentity: '', externalReputation: '' });
 });
+
+// /health asked a feed it could not reach on every request, each ask up to READ_TIMEOUT_MS.
+test('refreshChainId: an unreachable feed is asked again after 30 s for a caller that takes a cached answer, at once for one that does not', async () => {
+  let calls = 0;
+  external.init(CFG, {
+    provider: { send: async () => { calls += 1; throw new Error('ECONNREFUSED'); } },
+    idContract: {}, repContract: {},
+  });
+  const FIVE_MIN = 5 * 60_000;
+  const t = Date.now();
+  assert.strictEqual(await external.refreshChainId(FIVE_MIN, t), null);
+  assert.strictEqual(calls, 1);
+  assert.strictEqual(await external.refreshChainId(FIVE_MIN, t + 10_000), null);
+  assert.strictEqual(calls, 1, 'not asked again within 30 s');
+  assert.strictEqual(await external.refreshChainId(FIVE_MIN, t + 31_000), null);
+  assert.strictEqual(calls, 2, 'asked again after 30 s');
+  assert.strictEqual(await external.refreshChainId(0, t + 31_001), null);
+  assert.strictEqual(calls, 3, 'a caller that takes no cached answer is always asked for');
+});

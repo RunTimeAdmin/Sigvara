@@ -1333,10 +1333,24 @@ function paymentVolume(didHash) {
 /// not grow without bound. At a 90-day half-life and the default floor this keeps
 /// roughly the last three years, by which point an event contributes under a
 /// thousandth of its original value and cannot move an integer score.
+// How many of a list's payments carry an outcome, counted once a list. The store replaces an agent's list on every
+// change and never edits one, so a count cannot go stale. /health recounted every payment on every request: 4 to
+// 19 ms a request at the caps (performance review, 15 November).
+const outcomeCounts = new WeakMap();
+function outcomesIn(list) {
+  let n = outcomeCounts.get(list);
+  if (n === undefined) {
+    n = 0;
+    for (const e of list) if (hasOutcome(e)) n += 1;
+    outcomeCounts.set(list, n);
+  }
+  return n;
+}
+
 /** The ledger's size against its caps, and how many payments the caps dropped since this process started. */
 const ledgerStatus = () => {
   let withOutcome = 0;
-  for (const list of paymentEvents.values()) for (const e of list) if (hasOutcome(e)) withOutcome += 1;
+  for (const list of paymentEvents.values()) withOutcome += outcomesIn(list);
   return {
     events: eventTotal, maxTotal: MAX_EVENTS_TOTAL, maxPerAgent: MAX_EVENTS_PER_AGENT, dropped: ledgerDrops,
     // What the caps also bound (boundDropped): the dropped payments' keys, and the agents that have lost some.

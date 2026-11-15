@@ -655,3 +655,27 @@ test('weakCredentials: names the credentials shorter than 32 characters, never t
   const weak = weakCredentials(new Map([['admin', 'x'.repeat(31)], ['ok', 'y'.repeat(32)], ['tiny', 'z']]));
   assert.deepEqual(weak, ['admin', 'tiny']);
 });
+
+// /attest and the token routes answered an error none of their checks expected with its raw message, which can name
+// what a caller should not see.
+test('uncaughtReply: a body that could not be read is said as it is; anything else is a bad request, its words kept for the log', () => {
+  const { uncaughtReply } = require('./http-helpers');
+  const tooBig = Object.assign(new Error('Request body too large'), { code: 'body_too_large' });
+  assert.deepEqual(uncaughtReply(tooBig), { status: 413, body: { error: 'Request body too large' }, log: null });
+  const badJson = Object.assign(new Error('Invalid JSON'), { code: 'bad_json' });
+  assert.deepEqual(uncaughtReply(badJson), { status: 400, body: { error: 'Invalid JSON' }, log: null });
+  const leak = new Error('request to https://rpc.example.invalid/v2/very-secret-key failed');
+  assert.deepEqual(uncaughtReply(leak), { status: 400, body: { error: 'bad request' }, log: leak.message });
+});
+
+test('readBody: invalid JSON is refused as a body error, with its own words', async () => {
+  const { readBody, uncaughtReply } = require('./http-helpers');
+  const { EventEmitter } = require('node:events');
+  const req = Object.assign(new EventEmitter(), { headers: {}, destroy() {} });
+  const reading = readBody(req);
+  req.emit('data', Buffer.from('{'));
+  req.emit('end');
+  const err = await reading.catch((e) => e);
+  assert.equal(err.code, 'bad_json');
+  assert.deepEqual(uncaughtReply(err).body, { error: 'Invalid JSON' });
+});
