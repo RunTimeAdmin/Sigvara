@@ -1,6 +1,6 @@
 # ADR 0012: A credit for a transaction a reorganization removed
 
-**Status:** Proposed · 2026-11-14. Recommends option C (section 3). It answers the open Phase 4 item in the
+**Status:** Accepted · 2026-11-14. Option C (section 3). It answers the open Phase 4 item in the
 [launch checklist](../launch-checklist.md): how a credit for a transaction that a reorganization removed would be
 taken back, without changing roots already published.
 
