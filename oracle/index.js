@@ -31,7 +31,7 @@ const { numberSetting } = require('./config');
 const {
   json, readBody, bodyErrorStatus, readCredentials, identifyCaller, mayAttestUnauthenticated, parseScorePath, parseDidHash,
   rateLimited, clientKey, adminTokenPolicyError, runningCommit,
-  parseTrustedProxies, parseRequestTarget, readScopes, mayUse, weakCredentials, MIN_TOKEN_LENGTH,
+  parseTrustedProxies, parseRequestTarget, readScopes, mayUse, weakCredentials, MIN_TOKEN_LENGTH, ATTEST_MAX_BODY_SIZE,
 } = require('./http-helpers');
 const payments = require('./payments');
 const merkle = require('./merkle');
@@ -3300,7 +3300,7 @@ async function handleRequest(req, res) {
   if (req.method === 'POST' && pathname === '/attest') {
     if (overLimit(req, res, 'write')) return;
     try {
-      const body = await readBody(req);
+      const body = await readBody(req, ATTEST_MAX_BODY_SIZE);
       const { success, packetId } = body;
 
       // An outcome the payer signed (docs/adr/0006-payer-signed-outcomes.md). The signature is
@@ -4080,8 +4080,12 @@ async function handleRequest(req, res) {
  * restart policy brought the container back, and the compose files re-cloned `main` each
  * time (they now fetch a pinned commit). The error is logged with the request line quoted, so a hostile target cannot forge
  * a log line, and the caller is told nothing about it.
+ *
+ * Node's defaults gave a client 60 s to send its headers and five minutes to send the whole request,
+ * and a request still arriving holds what it has sent. Nothing this server accepts needs more than a
+ * few seconds to send. These bound receiving only: a slow answer, such as a long /evidence, is not cut.
  */
-const server = http.createServer((req, res) => {
+const server = http.createServer({ headersTimeout: 10_000, requestTimeout: 15_000 }, (req, res) => {
   handleRequest(req, res).catch((err) => {
     metrics.inc('httpHandlerErrors');
     console.error(

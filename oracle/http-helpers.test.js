@@ -200,6 +200,37 @@ test('bodyErrorStatus: 413 for an oversized body, 400 for anything else', async 
   assert.equal(bodyErrorStatus(undefined), 400);
 });
 
+test('readBody: a body still arriving at the deadline is dropped with its connection, and answered 408', async () => {
+  // Before the deadline a client could send all but the last byte and stop, and everything it had sent
+  // stayed in memory until Node's five-minute requestTimeout.
+  const req = makeFakeRequest();
+  let destroyed = false;
+  req.on('destroyed', () => { destroyed = true; });
+  req.headers = { 'content-length': '1000' };
+  const promise = readBody(req, 1000, 50);
+  req.emit('data', Buffer.from('x'.repeat(999)));
+
+  const outcome = await Promise.race([
+    promise.then(() => 'resolved', (err) => err),
+    new Promise((r) => setTimeout(() => r('still waiting'), 1_000)),
+  ]);
+  assert.equal(outcome.code, 'body_timeout', `readBody ended as: ${outcome}`);
+  assert.equal(bodyErrorStatus(outcome), 408);
+  assert.equal(destroyed, true, 'the connection is cut, which lets go of what it sent');
+});
+
+test('readBody: a body that arrives in time is not cut by the deadline', async () => {
+  const req = makeFakeRequest();
+  let destroyed = false;
+  req.on('destroyed', () => { destroyed = true; });
+  const promise = readBody(req, 1000, 50);
+  req.emit('data', Buffer.from('{"a":1}'));
+  req.emit('end');
+  assert.deepEqual(await promise, { a: 1 });
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(destroyed, false);
+});
+
 test('readBody: chunks are reassembled in order', async () => {
   const req = makeFakeRequest();
   const promise = readBody(req);
