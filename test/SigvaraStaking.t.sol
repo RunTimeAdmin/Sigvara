@@ -2207,56 +2207,47 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
     // Gas: the agent is read through standingOf
     // -------------------------------------------------------------------------
 
-    // Each call is measured as a transaction of its own, as on chain: inside one transaction the
-    // identity's slots would already be warm. The registry reads three of the identity's five
-    // fields through standingOf, where getIdentity also read the agent address and the Ed25519
-    // key, two cold storage reads it threw away. Measured on 15 November 2026, with getIdentity
-    // and then with standingOf: depositStake 171,937 and 167,035, initiateWithdrawal 132,057 and
-    // 127,162, claimWithdrawal 74,185 and 69,288, disputeSlash 82,204 and 77,307. Each bound
-    // sits between the two.
+    // The registry asks the identity registry for the three fields it uses (standingOf), never for the whole
+    // record (getIdentity), whose agent address and Ed25519 key were two cold storage reads it threw away.
+    // Measured on 15 November 2026 as transactions of their own, with getIdentity and then with standingOf:
+    // depositStake 171,937 and 167,035, initiateWithdrawal 132,057 and 127,162, claimWithdrawal 74,185 and
+    // 69,288, disputeSlash 82,204 and 77,307. Checked by the calls made rather than by gas: how a cold read
+    // is counted depends on the toolchain, and CI's measured these reads warm.
+    function _expectOnlyTheStanding() internal {
+        vm.expectCall(address(identity), abi.encodeWithSelector(SigvaraIdentity.getIdentity.selector), 0);
+        vm.expectCall(address(identity), abi.encodeCall(SigvaraIdentity.standingOf, (didHash)));
+    }
 
-    /// forge-config: default.isolate = true
-    /// forge-config: ci.isolate = true
-    function test_gas_depositStakeReadsOnlyTheStanding() public {
+    function test_depositStake_readsOnlyTheStanding() public {
+        _expectOnlyTheStanding();
         vm.prank(operator);
         staking.depositStake(didHash, MIN_STAKE * 2);
-        uint256 used = vm.lastCallGas().gasTotalUsed;
-        assertLt(used, 169_500, "depositStake reads the whole identity again");
     }
 
-    /// forge-config: default.isolate = true
-    /// forge-config: ci.isolate = true
-    function test_gas_initiateWithdrawalReadsOnlyTheStanding() public {
+    function test_initiateWithdrawal_readsOnlyTheStanding() public {
         _deposit();
+        _expectOnlyTheStanding();
         vm.prank(operator);
         staking.initiateWithdrawal(didHash, MIN_STAKE);
-        uint256 used = vm.lastCallGas().gasTotalUsed;
-        assertLt(used, 129_500, "initiateWithdrawal reads the whole identity again");
     }
 
-    /// forge-config: default.isolate = true
-    /// forge-config: ci.isolate = true
-    function test_gas_claimWithdrawalReadsOnlyTheStanding() public {
+    function test_claimWithdrawal_readsOnlyTheStanding() public {
         _deposit();
         vm.prank(operator);
         staking.initiateWithdrawal(didHash, MIN_STAKE);
         vm.warp(block.timestamp + UNBONDING);
+        _expectOnlyTheStanding();
         vm.prank(operator);
         staking.claimWithdrawal(didHash);
-        uint256 used = vm.lastCallGas().gasTotalUsed;
-        assertLt(used, 71_500, "claimWithdrawal reads the whole identity again");
     }
 
-    /// forge-config: default.isolate = true
-    /// forge-config: ci.isolate = true
-    function test_gas_disputeSlashReadsOnlyTheStanding() public {
+    function test_disputeSlash_readsOnlyTheStanding() public {
         _deposit();
         vm.prank(committee);
         staking.initiateSlash(didHash, victim, "evidence");
+        _expectOnlyTheStanding();
         vm.prank(operator);
         staking.disputeSlash(didHash);
-        uint256 used = vm.lastCallGas().gasTotalUsed;
-        assertLt(used, 79_500, "disputeSlash reads the whole identity again");
     }
 
     // -------------------------------------------------------------------------

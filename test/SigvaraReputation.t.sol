@@ -443,19 +443,17 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
         assertLt(used, 140_000, "the next proposal filled zeroed slots again");
     }
 
-    /// Measured as a transaction of its own, as on chain. A finalize reads three of the identity's five
-    /// fields through standingOf, where getIdentity also read the agent address and the Ed25519 key,
-    /// two cold storage reads it threw away. On 15 November 2026 the finalize used 177,137 gas with
-    /// getIdentity and 172,236 with standingOf; the bound sits between the two.
-    /// forge-config: default.isolate = true
-    /// forge-config: ci.isolate = true
-    function test_gas_finalizeReputationReadsOnlyTheStanding() public {
+    /// A finalize asks the identity registry for the three fields it uses (standingOf), never for the whole
+    /// record (getIdentity), whose agent address and Ed25519 key were two cold storage reads it threw away. On
+    /// 15 November 2026 a finalize measured on its own used 177,137 gas with getIdentity and 172,236 with
+    /// standingOf. Checked by the calls made rather than by gas, which CI's toolchain counts differently.
+    function test_finalizeReputation_readsOnlyTheStanding() public {
         vm.prank(oracle);
         rep.proposeReputation(DID, maxScore, keccak256("evidence"));
         vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
+        vm.expectCall(address(identity), abi.encodeWithSelector(SigvaraIdentity.getIdentity.selector), 0);
+        vm.expectCall(address(identity), abi.encodeCall(SigvaraIdentity.standingOf, (DID)));
         rep.finalizeReputation(DID);
-        uint256 used = vm.lastCallGas().gasTotalUsed;
-        assertLt(used, 174_500, "finalize reads the whole identity again");
     }
 
     // -------------------------------------------------------------------------
