@@ -496,7 +496,12 @@ contract SigvaraReputation is Initializable, TimelockedGrants, UUPSUpgradeable, 
         bytes32 root = pending.evidenceRoot;
         reputations[didHash] = data;
         evidenceRoots[didHash] = root;
-        delete pendingScores[didHash];
+        // Clears the flag and leaves the other fields where they are. Everything that reads a
+        // pending proposal checks `exists` first, and the next proposal writes every field, so
+        // nothing of this one carries into it. Deleting the whole struct earned a refund and then
+        // made the next proposal pay about 22,100 gas for each slot it filled from zero, where
+        // overwriting a slot that still holds a value costs about 5,000.
+        pending.exists = false;
 
         maturedScore[didHash] = anchor;
         maturedAt[didHash] = clock;

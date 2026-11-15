@@ -94,3 +94,48 @@ describe('SigvaraVerifier: batches a node accepts', () => {
     }
   });
 });
+
+describe('SigvaraVerifier: the chain the node serves', () => {
+  it('is asked once before the first read, again after a failed ask, and a node on another chain is not read', async () => {
+    const asked: string[] = [];
+    // The node's answer to eth_chainId; null fails the ask.
+    let serves: string | null = null;
+    const server = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (c) => { body += c; });
+      req.on('end', () => {
+        const j = JSON.parse(body);
+        const answers = (Array.isArray(j) ? j : [j]).map((c: { id: number; method: string }) => {
+          asked.push(c.method);
+          if (c.method !== 'eth_chainId') return { jsonrpc: '2.0', id: c.id, result: `0x${'0'.repeat(63)}1` };
+          return serves === null
+            ? { jsonrpc: '2.0', id: c.id, error: { code: -32000, message: 'busy' } }
+            : { jsonrpc: '2.0', id: c.id, result: serves };
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(Array.isArray(j) ? answers : answers[0]));
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    try {
+      const rpcUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      const v = new SigvaraVerifier({ rpcUrl, addresses: ADDRESSES, chainId: 5042002 });
+      await expect(v.isActive(DID)).rejects.toThrow();
+      serves = '0x4cef52';
+      // Three waves of reads, as three trust checks make. Without staticNetwork ethers asked with each of them.
+      for (let i = 0; i < 3; i++) await Promise.all([v.isActive(DID), v.hasMinimumStake(DID), v.getTotalScore(DID)]);
+      expect(asked.filter((m) => m === 'eth_chainId')).toHaveLength(2);
+      expect(asked.filter((m) => m === 'eth_call')).toHaveLength(9);
+
+      asked.length = 0;
+      serves = '0x1';
+      const elsewhere = new SigvaraVerifier({ rpcUrl, addresses: ADDRESSES, chainId: 5042002 });
+      await expect(elsewhere.isActive(DID)).rejects.toThrow(/serves chain 1, but chain 5042002 is configured/);
+      await expect(elsewhere.getMinimumStake()).rejects.toThrow(/serves chain 1/);
+      expect(asked).toEqual(['eth_chainId']);
+    } finally {
+      server.closeAllConnections();
+      server.close();
+    }
+  });
+});

@@ -94,7 +94,20 @@
 .sim-tip { position: absolute; transform: translate(-50%, -100%); padding: 8px 10px; border-radius: 8px; background: rgba(9, 11, 22, .92); border: 1px solid var(--sig-line-strong); font-size: 12px; line-height: 1.5; color: var(--sig-text-soft); white-space: nowrap; pointer-events: none; }
 .sim-tip-addr { font-family: var(--sig-font-mono); color: var(--sig-text); }
 /* Operators page room. */
-#opSceneCard { width: min(1180px, calc(100vw - 32px)); margin-left: calc((100% - min(1180px, calc(100vw - 32px))) / 2); }
+#opSceneCard, #slSceneCard { width: min(1180px, calc(100vw - 32px)); margin-left: calc((100% - min(1180px, calc(100vw - 32px))) / 2); }
+#slSceneCard > .netnote { max-width: 760px; }
+/* Slashes page room. */
+.sl-replay { position: absolute; right: 12px; top: 10px; }
+.sl-scene .op-label span { font-size: 15px; font-weight: 600; color: var(--sig-text); }
+.op-scene.sl-scene .sim-tip { left: 14px; top: 46px; bottom: auto; transform: none; text-align: left; max-width: min(440px, calc(100% - 28px)); }
+.sim-key.k-open::before { background: #e9e5ff; }
+.sim-key.k-disputed::before { background: transparent; border: 2px solid var(--sig-orange); }
+.sim-key.k-dropped::before { background: var(--sig-mint); }
+.sim-key.k-vetoed::before { background: transparent; border: 2px solid #fff; }
+.sim-key.k-burn::before { border-radius: 1px; background: #ff8a3d; }
+.sim-key.k-victim::before { border-radius: 1px; background: var(--sig-cyan); }
+.sim-key.k-filer::before { border-radius: 1px; background: #ff7ad9; }
+.ex-proceeding.flash { outline: 2px solid var(--sig-cyan); outline-offset: 4px; }
 .op-keys { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 12px 0 2px; }
 .op-keys .sim-key { white-space: normal; }
 .op-keys .sim-key::before { flex: none; }
@@ -113,7 +126,7 @@
 .op-label b::first-letter { text-transform: uppercase; }
 .op-label.small { font-size: 12px; color: var(--sig-text-soft); }
 .op-label.under { transform: translate(-50%, 0); }
-.op-scene .sim-tip { left: 50%; bottom: 14px; transform: translateX(-50%); max-width: calc(100% - 28px); white-space: normal; text-align: center; }
+.op-scene .sim-tip { z-index: 2; background: rgba(9, 11, 22, .97); left: 50%; bottom: 14px; transform: translateX(-50%); max-width: calc(100% - 28px); white-space: normal; text-align: center; }
 .op-label.off b { color: var(--sig-text-soft); }
 .op-next.late { color: var(--sig-orange); }
 .sim-scene-controls { display: flex; align-items: center; gap: 12px; margin: 12px 0 4px; }
@@ -141,7 +154,7 @@
   .sim-tiles { grid-template-columns: repeat(2, 1fr); }
   .sim-scene { height: 340px; }
   .sim-scene.op-scene { height: 430px; }
-  #opSceneCard { padding: 16px; }
+  #opSceneCard, #slSceneCard { padding: 16px; }
   .op-label.small { display: none; }
   .op-label b { font-size: 13px; }
   .sim-agents li { grid-template-columns: 1fr 112px; grid-template-areas: "addr status" "score pays"; gap: 6px 12px; }

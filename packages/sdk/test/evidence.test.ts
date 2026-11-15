@@ -99,6 +99,26 @@ describe('matchEvidenceRoot', () => {
     expect(matchEvidenceRoot(FIXTURE, `0x${'99'.repeat(32)}`)).toBeNull();
     expect(matchEvidenceRoot(FIXTURE, 'not a hash')).toBeNull();
   });
+
+  it('hashes each pair once across its trees, and past its hash budget tries no further cut-off', () => {
+    // Sixty-four payments in settlement order, and a root over all but the last ten.
+    const list = Array.from({ length: 64 }, (_, i) => ({ ...FIXTURE[0], txHash: ethers.toBeHex(i + 1, 32), settledAt: 1_700_000_000 + i }));
+    const committed = root(list.slice(0, 54));
+    const memo = new Map<string, string>();
+    expect(matchEvidenceRoot(list, committed, { memo })!.indexes).toHaveLength(54);
+    // The first tree is 63 pairs, and each lower cut-off adds at most one a level, six levels. The eleven trees
+    // rebuilt whole come to 638.
+    expect(memo.size).toBeLessThanOrEqual(63 + 10 * 6);
+    // A match given the same memo hashes nothing it already holds.
+    const held = memo.size;
+    matchEvidenceRoot(list, committed, { memo });
+    expect(memo.size).toBe(held);
+    // The first cut-off is tried in full, both readings, whatever the budget, and the next one is not once past it.
+    expect(matchEvidenceRoot(list, committed, { hashBudget: 0 })).toBeNull();
+    const later = FIXTURE.map((r, i) => (i === 2 ? { ...r, outcomeSource: 'payer_signed' } : r));
+    const unsetRoot = root(later.map((r, i) => (i === 2 ? { ...r, success: null } : r)));
+    expect(matchEvidenceRoot(later, unsetRoot, { hashBudget: 0 })).toMatchObject({ indexes: [0, 1, 2], unset: true });
+  });
 });
 
 describe('a payment that settled on a payment chain', () => {

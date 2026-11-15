@@ -20,7 +20,7 @@
 
 import readline from 'readline';
 import type { Readable, Writable } from 'stream';
-import { ethers, FetchRequest } from 'ethers';
+import { ethers } from 'ethers';
 import { SigvaraVerifier } from './verifier';
 import { REASON_DETAIL, scoreBand, standingDecision } from './standing';
 import type { StandingReason } from './standing';
@@ -70,8 +70,9 @@ export interface TrustServerOptions {
   /**
    * Asks the RPC which chain it serves. Checked once, before the first read, so a server pointed at
    * the wrong endpoint refuses rather than reading another chain's contracts at these addresses.
-   * Defaults to an eth_chainId call on rpcUrl when the verifier is built here. With an injected
-   * verifier and no readChainId, the chain is not checked.
+   * Defaults to the verifier's getRpcChainId when the verifier is built here: the one eth_chainId it
+   * asks before its first read anyway. With an injected verifier and no readChainId, the server does
+   * not check the chain.
    */
   readChainId?: () => Promise<number>;
   /**
@@ -101,9 +102,12 @@ export interface TrustServerOptions {
 const MAX_EVIDENCE_BYTES = 4 * 1024 * 1024;
 const MAX_EVIDENCE_RECORDS = 2_000;
 /**
- * Leaves hashed into trees while matching a root, at most. Each cut-off tried rebuilds a tree over the list, so an
- * oracle serving a long list that matches nothing could otherwise hold the server's only thread for close to a
- * minute. A long list gets fewer cut-offs, the newest first, where a finalized root usually sits.
+ * Pair hashes computed while matching one root, at most. The trees for every cut-off tried hash through one memo,
+ * so this counts only the pairs no earlier tree held: on a list in settlement order, the first trees and then at
+ * most eleven a tree for each cut-off after them, so all 64 cut-offs fit at the 2,000 payments this tool reads. A
+ * list ordered so that its trees share little costs whole trees per cut-off, and an oracle serving a long one that
+ * matches nothing could otherwise hold the server's only thread for close to a minute. Past the budget no further
+ * cut-off is tried, though the first always is, so one match hashes at most this plus one cut-off's trees.
  */
 const MATCH_BUDGET = 20_000;
 /** Payments confirmed with verifyEvidence, the last listed, in one read. The root match covers the rest. */
@@ -112,11 +116,6 @@ const MAX_CONFIRMED = 100;
 const MAX_LISTED = 50;
 /** The latest settlement time accepted, the end of the year 9999, so a date can always be written. */
 const MAX_SETTLED_AT = 253_402_300_799;
-
-/** How many cut-offs to try for a list of `n`, within MATCH_BUDGET. */
-function cutsFor(n: number): number {
-  return Math.max(1, Math.min(64, Math.floor(MATCH_BUDGET / (2 * Math.max(1, n)))));
-}
 
 /** GET a JSON body, giving up after `timeoutMs` and refusing one larger than `maxBytes`. */
 export async function fetchJsonBounded(url: string, timeoutMs: number, maxBytes: number): Promise<unknown> {
@@ -151,17 +150,8 @@ export async function fetchJsonBounded(url: string, timeoutMs: number, maxBytes:
   }
 }
 
-/** Asks an RPC endpoint which chain it serves, with one eth_chainId call. */
-export async function rpcChainId(rpcUrl: string, timeoutMs = 30_000): Promise<number> {
-  const req = new FetchRequest(rpcUrl);
-  req.timeout = timeoutMs;
-  req.body = { jsonrpc: '2.0', id: 1, method: 'eth_chainId', params: [] };
-  const res = await req.send();
-  res.assertOk();
-  const body = res.bodyJson as { result?: unknown };
-  if (typeof body?.result !== 'string') throw new Error('eth_chainId returned no result');
-  return Number(BigInt(body.result));
-}
+// The verifier asks with it now. Exported here as well, where it was first, so an import from dist/mcp still works.
+export { rpcChainId } from './verifier';
 
 /**
  * What a failed read tells the model: ethers' short message, never the long one. The long message
@@ -413,8 +403,8 @@ export function createTrustServer(options: TrustServerOptions): TrustServer {
     rpcUrl: options.rpcUrl as string,
     addresses, chainId, ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
   });
-  const readChainId = options.readChainId
-    ?? (options.verifier ? undefined : () => rpcChainId(options.rpcUrl as string, options.timeoutMs));
+  // The verifier's own answer, so the server's check and the verifier's are one eth_chainId, not two.
+  const readChainId = options.readChainId ?? (options.verifier ? undefined : () => verifier.getRpcChainId());
   const audience = options.audience ?? null;
   if (audience !== null) {
     // Whatever the challenge format refuses, refuse now rather than on every sigvara_challenge.
@@ -701,19 +691,22 @@ export function createTrustServer(options: TrustServerOptions): TrustServer {
       const confirmed = new Map<number, boolean>();
       // Payments whose outcome the root covers as not reported, though the oracle now lists one the payer signed.
       const readAsUnreported = new Set<number>();
-      const maxCuts = cutsFor(records.length);
+      // One memo for both matches below: a pending root is usually over nearly the payments the finalized one is.
+      const memo = new Map<string, string>();
       if (problems.length) {
         finalized = { root: finalRoot === ZERO_ROOT ? null : finalRoot, reproduced: null,
           detail: 'Not checked: some payments listed cannot be part of any root.' };
       } else if (finalRoot === ZERO_ROOT) {
         finalized = { root: null, reproduced: null, detail: 'No score with an evidence root has been finalized for this agent.' };
       } else {
-        const m = matchEvidenceRoot(records, finalRoot, { leaves, maxCuts, delays });
+        const m = matchEvidenceRoot(records, finalRoot, { leaves, delays, hashBudget: MATCH_BUDGET, memo });
         if (!m) {
           finalized = { root: finalRoot, reproduced: false,
             detail: 'No reading of the payments listed reproduces the finalized root. The oracle no longer lists the set '
               + 'this score was made on, or lists it differently.'
-              + (maxCuts < 64 ? ` With ${records.length} payments listed, only the ${maxCuts} latest settlement cut-offs were tried.` : '') };
+              // The memo was empty before this match, so its size is the pairs the match hashed.
+              + (memo.size > MATCH_BUDGET ? ` With ${records.length} payments listed, the search reached its limit of `
+                + `${MATCH_BUDGET} hashes, so older settlement cut-offs may not have been tried.` : '') };
         } else {
           m.indexes.forEach((i) => covered.add(i));
           if (m.unset) m.indexes.forEach((i) => { if (records[i].outcomeSource === 'payer_signed') readAsUnreported.add(i); });
@@ -759,7 +752,7 @@ export function createTrustServer(options: TrustServerOptions): TrustServer {
           detail: 'Proposed with no evidence root, so it commits to no payments.' };
       } else if (pending.exists) {
         const m = problems.length ? null
-          : matchEvidenceRoot(records, pending.evidenceRoot, { at: Number(pending.proposedAt), leaves, maxCuts, delays, evidenceCut });
+          : matchEvidenceRoot(records, pending.evidenceRoot, { at: Number(pending.proposedAt), leaves, delays, evidenceCut, hashBudget: MATCH_BUDGET, memo });
         pendingResult = { root: pending.evidenceRoot, proposedAt: iso(pending.proposedAt), reproduced: problems.length ? null : !!m };
       }
       const notYetFinalized = problems.length ? null
