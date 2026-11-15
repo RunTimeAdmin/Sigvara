@@ -30,9 +30,28 @@ async function load() {
     X.getJson(`${X.CHECKER}/health`),
     X.getJson(`${X.CHECKER}/divergence`),
   ]);
-  try { await renderOperators(history, { primary, checker }); } catch (e) { setCard("operatorsCard", X.failed("the operators", e)); }
-  try { await renderDivergence(divergence); } catch (e) { setCard("divergenceCard", X.failed("the disagreements", e)); }
+  let bonded = null, disagreed = null;
+  try { bonded = await renderOperators(history, { primary, checker }); } catch (e) { setCard("operatorsCard", X.failed("the operators", e)); }
+  try { disagreed = await renderDivergence(divergence); } catch (e) { setCard("divergenceCard", X.failed("the disagreements", e)); }
+  if (bonded) publish(bonded, history.value.logs, { primary, checker }, disagreed);
   try { renderHistory(history); } catch (e) { setCard("bondHistoryCard", X.failed("the bond history", e)); }
+}
+
+// The room at the top of the page (operators-scene.js) draws from what this page has already
+// read. It is a module, so it may load before or after this.
+function publish({ ops, bondAmount }, logs, health, disagreed) {
+  const healthOf = (h) => (h.status === "fulfilled" && h.value
+    ? { epochMs: Number(h.value.epochMs) || 0, last: Number(h.value.lastSuccessfulEpochMs) || 0, commit: h.value.commit } : null);
+  window.SigvaraOperatorsData = {
+    ops: ops.map((o) => Object.assign(o, { name: nameOf(o) })),
+    bondAmount,
+    deposits: logs.filter((l) => l.name === "BondDeposited" && l.data.length >= 66)
+      .map((l) => ({ operator: X.topicAddr(l.topics[1]), amount: BigInt(X.word(l.data, 0)), time: l.time, tx: l.tx })),
+    health: { primary: healthOf(health.primary), checker: healthOf(health.checker) },
+    divergences: disagreed?.shown ?? [],
+    divergenceTotal: disagreed?.total ?? 0,
+  };
+  document.dispatchEvent(new Event("sigvara-operators-data"));
 }
 
 async function renderOperators(history, health) {
@@ -91,6 +110,8 @@ async function renderOperators(history, health) {
   lastProposals(ops).then((found) => {
     for (const td of cells) {
       const p = found.newest.get(td.getAttribute("data-proposal"));
+      const op = ops.find((o) => o.address === td.getAttribute("data-proposal"));
+      if (op) op.lastProposal = p;
       td.innerHTML = p
         ? `${X.esc(X.fmtWhen(p.at))}<div class="ex-note">${X.txLink(p.tx)}</div>`
         : `<span class="ex-note">${found.since === null ? "none on record" : `none since ${X.esc(X.fmtWhen(found.since))}`}</span>`;
@@ -99,6 +120,7 @@ async function renderOperators(history, health) {
     const note = $("proposalNote");
     if (note && found.tail) note.innerHTML = X.historyNote({ tail: found.tail });
   }).catch((e) => { for (const td of cells) td.innerHTML = X.failed("the proposals", e); });
+  return { ops, bondAmount };
 }
 
 // The newest proposal each operator sent, as { at, tx }, and how far back the search reached:
@@ -181,6 +203,13 @@ async function renderDivergence(divergence) {
   }).join("")}</ul>`;
   if (v.truncated || list.length > DIVERGENCES_SHOWN) html += `<p class="netnote">Newest ${Math.min(list.length, DIVERGENCES_SHOWN)} shown.</p>`;
   setCard("divergenceCard", html);
+  return {
+    total: Number.isFinite(total) ? total : list.length,
+    shown: list.slice(0, DIVERGENCES_SHOWN).map((d) => {
+      const addr = addrOf.get(d.didHash.toLowerCase());
+      return { at: Number(d.at), pendingTotal: Number(d.pendingTotal), ownTotal: Number(d.ownTotal), addr: X.isAddr(addr) && !/^0x0{40}$/.test(addr) ? addr : null };
+    }),
+  };
 }
 
 function renderHistory(history) {
