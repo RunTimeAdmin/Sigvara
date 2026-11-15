@@ -19,7 +19,7 @@
   <link rel="stylesheet" href="assets/style.css?v=integrate1" />
   <link rel="stylesheet" href="assets/app.css?v=ac69814" />
   <link rel="stylesheet" href="assets/epochs.css?v=6081b79" />
-  <link rel="stylesheet" href="assets/explorer.css?v=simview1" />
+  <link rel="stylesheet" href="assets/explorer.css?v=simscene1" />
 </head>
 <body>
 
@@ -55,6 +55,21 @@
     <p class="sim-batches">Batch <a href="simulation" data-batch="1">1</a> · <a href="simulation?batch=2" data-batch="2">2</a>. The second batch drives Base payments, a change of operator, a bond withdrawn and returned, many agents at once, outcomes through CounterAudit and ERC-8004 reviews.</p>
     <div class="card-body"><p class="netnote">Reading…</p></div>
   </section>
+
+  <div class="app-card u-hidden" id="sceneCard">
+    <h2>The payments, replayed</h2>
+    <p class="sub">Each column is a simulated agent and each small sphere a simulated customer's wallet. A moving dot is one payment in the primary oracle's evidence, at the time it settled. A column's height is the payments it had received by then.</p>
+    <div class="sim-scene" id="simScene">
+      <div class="sim-scene-hud"><b id="simSceneDay"></b><span id="simSceneCount"></span></div>
+      <div class="sim-tip u-hidden" id="simTip"></div>
+    </div>
+    <div class="sim-scene-controls">
+      <button type="button" class="sim-btn" id="simPlay" aria-pressed="false">Play</button>
+      <input type="range" id="simScrub" min="0" max="1000" value="1000" aria-label="Moment of the simulation shown" />
+    </div>
+    <div class="sim-legend" id="simSceneLegend"></div>
+    <p class="netnote">Drag to turn it. Point at a column for that agent's numbers, and click to open its score epochs. Height counts payments, not score: the scores are in the cast below. All of it is simulated.</p>
+  </div>
 
   <div class="app-card u-hidden" id="timelineCard">
     <h2>Timeline</h2>
@@ -111,6 +126,7 @@
 
 <script src="assets/did.js?v=32000f8"></script>
 <script src="assets/explorer.js?v=scores1"></script>
-<script src="assets/simulation.js?v=dff7293"></script>
+<script src="assets/simulation.js?v=simscene1"></script>
+<script type="module" src="assets/simulation-scene.js?v=simscene1"></script>
 </body>
 </html>
