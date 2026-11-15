@@ -502,6 +502,29 @@ function renderOperators(didHash, primaryHealth, checkerHealth, divergence, chai
     ${verdict}`);
 }
 
+// The room above the cards (epochs-scene.js) draws what this page has read: `scene` is what to
+// draw, or null for nothing. It is a module, so it may load before or after this.
+function drawScene(scene) {
+  window.SigvaraEpochScene = scene;
+  document.dispatchEvent(new Event("sigvara-epoch-scene"));
+}
+
+// One proposal as a column for the room: its kind, its score where it has one, and what to say of it.
+function epochBar(e, chain) {
+  if (e.zeroed) return { kind: "cleared", tip: `<b>Score zeroed by a slash</b><br>${esc(fmtWhen(e.at))}` };
+  const f = e.fate, head = `Proposed ${esc(fmtWhen(e.proposedAt))}`;
+  if (!f) {
+    const p = chain.status === "fulfilled" ? chain.value.pending : null;
+    return p && p.proposedAt === e.proposedAt
+      ? { kind: "pending", value: p.total, closes: p.finalizableAt, tip: `${head}<br><b>Pending</b>, ${p.total} proposed` }
+      : { kind: "ended", tip: `${head}<br>No longer pending on chain; what ended it is not indexed yet` };
+  }
+  if (f.kind === "finalized") return { kind: "finalized", value: f.total, tip: `${head}<br><b>Finalized at ${f.total}</b> on ${esc(fmtWhen(f.at))}` };
+  if (f.kind === "replaced") return { kind: "ended", tip: `${head}<br>Replaced by a newer proposal on ${esc(fmtWhen(f.at))}, before it was finalized` };
+  if (f.kind === "rejected") return { kind: "rejected", tip: `${head}<br><b>Rejected</b> by the committee on ${esc(fmtWhen(f.at))}` };
+  return { kind: "cleared", tip: `${head}<br>Cleared by a slash on ${esc(fmtWhen(f.at))}` };
+}
+
 // `indexer` names where the history came from, for a proposal the chain no longer holds.
 function epochItem(e, prevRoot, chain, indexer = "The explorer") {
   if (e.zeroed) {
@@ -541,6 +564,7 @@ function epochItem(e, prevRoot, chain, indexer = "The explorer") {
 }
 
 function renderTimeline(history, chain, showAll) {
+  drawScene(null);
   if (history.status === "rejected") return setCard("timelineCard", failed("the explorer's history", history.reason));
   const { logs, truncated } = history.value;
   const epochs = buildEpochs(logs);
@@ -552,8 +576,11 @@ function renderTimeline(history, chain, showAll) {
   const items = [];
   let prevRoot;
   const indexer = history.value.tail?.source === "index" ? "Sigvara's event index" : "The explorer";
+  const bars = [];
   for (const e of epochs) {
-    items.push(epochItem(e, prevRoot, chain, indexer));
+    // Each entry carries an id, so its column in the room can find it.
+    items.push(epochItem(e, prevRoot, chain, indexer).replace("<li class=", `<li id="epoch-${items.length}" class=`));
+    bars.push({ ...epochBar(e, chain), id: `epoch-${bars.length}` });
     if (!e.zeroed) prevRoot = e.root;
   }
   items.reverse();
@@ -567,6 +594,17 @@ function renderTimeline(history, chain, showAll) {
   setCard("timelineCard", html);
   const btn = $("showAllBtn");
   if (btn) btn.onclick = () => guard("timelineCard", () => renderTimeline(history, chain, true));
+  // The same proposals as the list shows, oldest on the left.
+  const c = chain.status === "fulfilled" ? chain.value : null;
+  drawScene({
+    title: "This agent's scores, proposal by proposal",
+    hud: [...(c ? [`Score now ${c.total} / 100`] : []), `${proposals.length} proposal${proposals.length === 1 ? "" : "s"}, ${finalized} finalized`],
+    of: items.length,
+    note: "In order, the newest on the right, not spaced by time. Point at a column, or tap it, to read it; click or tap again to find it in the timeline below. The dust and the reflection in the floor mean nothing.",
+    ends: ["older", "newest"],
+    line: true,
+    bars: bars.slice(-shown.length).map((b) => ({ ...b, tip: b.tip + "<br>Click to read it in the timeline below." })),
+  });
 }
 
 // ---- recent activity across all agents ----
@@ -606,15 +644,32 @@ async function loadRecent() {
     const idents = await X.ethCalls(agents.map(a => ({ to: IDENTITY, data: SEL.identities + pad32(a.didHash) })));
     if (seq !== lookupSeq) return;
     const verb = { ScoreProposed: "proposed", ReputationUpdated: "finalized", ScoreRejected: "rejected", ReputationZeroed: "zeroed by a slash" };
+    const bars = [];
     setCard(card, `<p>Agents with a proposal, finalization or rejection in about the last day, most recent first.</p>
       <ul class="recent">${agents.map((a, i) => {
         const addr = "0x" + strip(word(idents[i], 1)).slice(24);
-        const who = isAddr(addr) && !/^0x0{40}$/.test(addr)
+        const known = isAddr(addr) && !/^0x0{40}$/.test(addr);
+        const who = known
           ? `<a href="?a=${addr}"><code>${short(addr)}</code></a>` : `<code>${esc(short(a.didHash))}</code>`;
+        bars.push({
+          kind: a.score !== null ? "finalized" : a.last.name === "ScoreProposed" ? "pending" : a.last.name === "ScoreRejected" ? "rejected" : "cleared",
+          value: a.score ?? undefined, href: known ? `?a=${addr}` : null,
+          tip: `Agent <span class="sim-tip-addr">${esc(short(known ? addr : a.didHash))}</span><br>${esc(verb[a.last.name])} ${esc(fmtWhen(a.last.time))}`
+            + (a.score === null ? "<br>no score finalized in the last day" : `<br><b>finalized at ${a.score}</b>`) + (known ? "<br>Click to show its epochs." : ""),
+        });
         return `<li>${who}<span>${esc(verb[a.last.name])} ${esc(fmtWhen(a.last.time))}</span>`
           + `<span>${a.score === null ? "" : `finalized at ${a.score}`}</span></li>`;
       }).join("")}</ul>`
       + note);
+    drawScene({
+      title: "Agents scored in the last day",
+      hud: [`${agents.length} agent${agents.length === 1 ? "" : "s"}`],
+      note: "One column an agent, the most recently scored on the right. A stub is an agent with no score finalized in that day. Point at a column, or tap it, to read it; click or tap again to show that agent's epochs. The dust and the reflection in the floor mean nothing.",
+      ends: ["scored earlier", "scored latest"],
+      line: false,
+      of: bars.length,
+      bars: bars.reverse(),
+    });
   } catch (e) {
     if (seq === lookupSeq) setCard(card, failed("recent activity", e));
   }
@@ -631,6 +686,7 @@ async function lookup(addr) {
     window.history.replaceState(null, "", u.toString());
   } catch (_) { /* a shareable URL is a nicety */ }
   $("recentCard").classList.add("u-hidden");
+  drawScene(null);
   for (const id of ["pendingCard", "evidenceCard", "operatorsCard", "timelineCard"]) setCard(id, '<p class="netnote">Reading…</p>');
 
   const [chain, history, evidence, primaryHealth, checkerHealth, divergence] = await Promise.allSettled([

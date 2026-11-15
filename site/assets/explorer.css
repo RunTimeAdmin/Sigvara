@@ -94,7 +94,23 @@
 .sim-tip { position: absolute; transform: translate(-50%, -100%); padding: 8px 10px; border-radius: 8px; background: rgba(9, 11, 22, .92); border: 1px solid var(--sig-line-strong); font-size: 12px; line-height: 1.5; color: var(--sig-text-soft); white-space: nowrap; pointer-events: none; }
 .sim-tip-addr { font-family: var(--sig-font-mono); color: var(--sig-text); }
 /* Operators page room. */
-#opSceneCard, #slSceneCard { width: min(1180px, calc(100vw - 32px)); margin-left: calc((100% - min(1180px, calc(100vw - 32px))) / 2); }
+/* Score epochs page room. */
+.op-scene.ep-scene .sim-tip { bottom: auto; transform: translate(-50%, -100%); text-align: left; width: max-content; max-width: min(320px, calc(100% - 28px)); }
+.op-pending { color: var(--sig-orange); }
+.op-label.num.pending { color: var(--sig-orange); font-weight: 600; }
+.sim-scene.op-scene.ep-scene { height: clamp(290px, 33vw, 400px); }
+.op-label.scale { transform: translate(-50%, -50%); font-size: 12px; color: var(--sig-text-soft); }
+.op-label.scale.under { transform: translate(-50%, 0); }
+.no-line .k-line { display: none; }
+.op-label.num { font-size: 12px; color: var(--sig-text); }
+.sim-key.k-final::before { border-radius: 1px; background: #6fa8ff; width: 7px; height: 12px; }
+.sim-key.k-pending::before { border-radius: 1px; background: var(--sig-orange); width: 7px; height: 12px; }
+.sim-key.k-ended::before { border-radius: 1px; background: #6b7299; width: 9px; height: 4px; }
+.sim-key.k-rejected::before { border-radius: 1px; background: #ff5c6c; width: 9px; height: 4px; }
+.sim-key.k-line::before { border-radius: 2px; background: #c5b7ff; width: 14px; height: 2px; }
+.timeline .ep.flash { outline: 2px solid var(--sig-cyan); outline-offset: 4px; }
+#epSceneCard > .netnote { max-width: 760px; }
+#opSceneCard, #slSceneCard, #epSceneCard { width: min(1180px, calc(100vw - 32px)); margin-left: calc((100% - min(1180px, calc(100vw - 32px))) / 2); }
 #slSceneCard > .netnote { max-width: 760px; }
 /* Slashes page room. */
 .sl-replay { position: absolute; right: 12px; top: 10px; }
@@ -154,7 +170,9 @@
   .sim-tiles { grid-template-columns: repeat(2, 1fr); }
   .sim-scene { height: 340px; }
   .sim-scene.op-scene { height: 430px; }
-  #opSceneCard, #slSceneCard { padding: 16px; }
+  #opSceneCard, #slSceneCard, #epSceneCard { padding: 16px; }
+  .sim-scene.op-scene.ep-scene { height: 340px; }
+  .op-label.num { font-size: 11px; }
   .op-label.small { display: none; }
   .op-label b { font-size: 13px; }
   .sim-agents li { grid-template-columns: 1fr 112px; grid-template-areas: "addr status" "score pays"; gap: 6px 12px; }
