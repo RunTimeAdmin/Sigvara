@@ -1161,6 +1161,9 @@ async function runScanCanary(byAddress, provider) {
   }
 }
 
+// Half of the 20 calls Arc's public RPC answers in one batch (measured 4 Nov 2026), as for payers' standing.
+const SCAN_BLOCKS_PER_BATCH = 10;
+
 async function runPaymentScan(agents) {
   if (!paymentScanCfg.enabled) return null;
   if (!paymentCfg.asset) {
@@ -1226,10 +1229,19 @@ async function runPaymentScan(agents) {
   // The settlement time is the block's, not now. Crediting a back-scanned payment with
   // the current clock would make an old settlement look fresh and defeat the decay that
   // every volume figure depends on.
+  //
+  // Asked SCAN_BLOCKS_PER_BATCH blocks at a time, which ethers sends as one batch, paced as the log reads
+  // are. They went one round trip at a time with no pace, which ran through Arc's bucket of about 60
+  // requests and then crawled on backoff, so payments in enough blocks could keep the scan behind, and a
+  // scan far enough behind holds every agent.
   const times = new Map();
-  for (const n of new Set(credits.map((c) => c.blockNumber))) {
-    const block = await chain.readWithBackoff('payment-scan getBlock', () => provider.getBlock(n));
-    if (block) times.set(n, Number(block.timestamp) * 1000);
+  const blocks = [...new Set(credits.map((c) => c.blockNumber))];
+  for (let i = 0; i < blocks.length; i += SCAN_BLOCKS_PER_BATCH) {
+    if (i > 0) await new Promise((r) => setTimeout(r, paymentScanCfg.paceMs));
+    await Promise.all(blocks.slice(i, i + SCAN_BLOCKS_PER_BATCH).map(async (n) => {
+      const block = await chain.readWithBackoff('payment-scan getBlock', () => provider.getBlock(n));
+      if (block) times.set(n, Number(block.timestamp) * 1000);
+    }));
   }
 
   let credited = 0;
