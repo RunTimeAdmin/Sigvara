@@ -299,7 +299,9 @@ contract ReputationHandler is Test {
             } else {
                 okFinalizeCarried++;
             }
-            delete pend[did];
+            // A finalize clears only the flag. The rest of the proposal stays in the slot until the
+            // next one overwrites it, and the books are compared field by field, so the model keeps it too.
+            pend[did].exists = false;
 
             // A jump in the earned score is released from where the agent stood, and a fall applies at once.
             // Checked in the block of the finalize, when no time has passed to release anything. A handover

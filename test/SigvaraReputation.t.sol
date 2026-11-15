@@ -281,7 +281,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
         vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
         rep.finalizeReputation(DID);
 
-        // Finalizing empties the pending slot, so cover is possible again.
+        // Finalizing clears the slot's `exists` flag, so cover is possible again.
         vm.prank(oracle);
         rep.proposeIfEmpty(DID, maxScore, bytes32(0));
         assertTrue(rep.getPendingScore(DID).exists);
@@ -369,6 +369,86 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
         rep.finalizeReputation(DID);
 
         assertEq(rep.getTotalScore(DID), 100);
+    }
+
+    // A finalize clears only the proposal's `exists` flag. The rest stays in the slot for the next
+    // proposal to overwrite, which costs less than filling zeroed storage. These pin that nothing
+    // acts on what is left, that none of it carries into the next proposal, and what it saves.
+
+    function test_finalizeReputation_leavesNothingPendingToActOn() public {
+        uint256 t0 = vm.getBlockTimestamp();
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, keccak256("evidence"));
+        vm.warp(t0 + CHALLENGE_WINDOW + 1);
+        rep.finalizeReputation(DID);
+
+        SigvaraReputation.PendingScore memory pending = rep.getPendingScore(DID);
+        assertFalse(pending.exists, "the proposal is still pending");
+        assertEq(pending.proposedAt, t0, "the rest of the proposal stays for the next one to overwrite");
+
+        vm.expectRevert(abi.encodeWithSelector(SigvaraReputation.NoScorePending.selector, DID));
+        rep.finalizeReputation(DID);
+
+        vm.expectRevert(abi.encodeWithSelector(SigvaraReputation.NoScorePending.selector, DID));
+        vm.prank(committee);
+        rep.rejectReputation(DID);
+
+        // With its proposer's role gone, the proposal would be a stranded one if it still counted.
+        _revokeOracle(oracle);
+        vm.expectRevert(abi.encodeWithSelector(SigvaraReputation.NoScorePending.selector, DID));
+        vm.prank(stranger);
+        rep.discardStrandedScore(DID);
+    }
+
+    function test_finalizeReputation_theNextProposalCarriesNothingOver() public {
+        SigvaraReputation.ReputationData memory first = maxScore;
+        first.lastUpdated = 12_345;
+        vm.prank(oracle);
+        rep.proposeReputation(DID, first, keccak256("first"));
+        vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
+        rep.finalizeReputation(DID);
+
+        // Another oracle, a day later and under another window, sends zeros wherever the first
+        // proposal had a value, so a field left over from the first would show through.
+        address checker = makeAddr("checker");
+        _grantOracle(checker);
+        vm.prank(admin);
+        rep.setChallengeWindow(2 hours);
+        vm.warp(block.timestamp + 1 days);
+        SigvaraReputation.ReputationData memory second;
+        vm.prank(checker);
+        rep.proposeIfEmpty(DID, second, bytes32(0));
+
+        SigvaraReputation.PendingScore memory pending = rep.getPendingScore(DID);
+        assertTrue(pending.exists);
+        assertEq(pending.proposer, checker, "proposer");
+        assertEq(pending.proposedAt, block.timestamp, "proposedAt");
+        assertEq(pending.finalizableAt, block.timestamp + 2 hours, "finalizableAt");
+        assertEq(pending.evidenceRoot, bytes32(0), "evidenceRoot");
+        assertEq(keccak256(abi.encode(pending.data)), keccak256(abi.encode(second)), "factors and lastUpdated");
+    }
+
+    /// Measured with each call a transaction of its own, as on chain. Inside one transaction every
+    /// slot would already be warm, and each write would be priced against the value the test began
+    /// with. On 15 November 2026 the next proposal used 227,155 gas when a finalize deleted the slot
+    /// and 121,755 with the slot kept; the bound sits between the two.
+    /// forge-config: default.isolate = true
+    /// forge-config: ci.isolate = true
+    function test_finalizeReputation_theNextProposalOverwritesRatherThanRefills() public {
+        SigvaraReputation.ReputationData memory data = maxScore;
+        // The oracle stamps the time it scored, so lastUpdated holds a value like the other fields.
+        data.lastUpdated = block.timestamp;
+        vm.prank(oracle);
+        rep.proposeReputation(DID, data, keccak256("first"));
+        vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
+        rep.finalizeReputation(DID);
+
+        data.feeScore -= 1;
+        data.lastUpdated = block.timestamp;
+        vm.prank(oracle);
+        rep.proposeReputation(DID, data, keccak256("second"));
+        uint256 used = vm.lastCallGas().gasTotalUsed;
+        assertLt(used, 140_000, "the next proposal filled zeroed slots again");
     }
 
     // -------------------------------------------------------------------------

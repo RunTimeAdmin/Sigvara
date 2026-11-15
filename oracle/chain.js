@@ -1000,7 +1000,8 @@ async function finalizeScore(didHash) {
   return (await settle(tx)).hash;
 }
 
-// Returns { exists, proposedAt, finalizableAt, data, evidenceRoot }; proposedAt is 0 when no proposal is pending.
+// Returns { exists, proposedAt, finalizableAt, data, evidenceRoot }. Only exists says whether a proposal is pending:
+// a finalize clears it and leaves the other fields as the finalized proposal had them, so proposedAt is not 0 then.
 async function getPendingScore(didHash) {
   const pending = await readWithBackoff('getPendingScore', () => reputationContract.getPendingScore(didHash));
   // The factors come back too, for checker mode to compare against its own arithmetic.
@@ -1016,9 +1017,9 @@ async function getPendingScore(didHash) {
   const data = {};
   for (const f of SCORE_FACTORS) {
     const v = Number(pending.data?.[f]);
-    // Only meaningful when something is pending. An empty slot decodes to a zeroed
-    // struct that nothing compares against: decideCheckerAction returns 'propose' on
-    // !exists without reading a single factor.
+    // Only meaningful when something is pending. With nothing pending the struct is zeroed,
+    // or still holds the proposal a finalize ended, and nothing compares against it:
+    // decideCheckerAction returns 'propose' on !exists without reading a single factor.
     if (!Number.isFinite(v)) {
       if (!pending.exists) continue;
       throw new Error(`getPendingScore: ${f} did not decode to a number (got ${pending.data?.[f]}); the ReputationData ABI may no longer match the contract`);
@@ -1026,9 +1027,9 @@ async function getPendingScore(didHash) {
     data[f] = v;
   }
   // The deadline the contract fixed when the proposal was made. Zero for a proposal that was already
-  // pending when the field was added, which the contract judges against the live window, and for an
-  // empty slot. A value that does not decode must not read as zero: zero brings back the arithmetic
-  // this replaces (see finalizableAtOf in epoch-policy.js).
+  // pending when the field was added, which the contract judges against the live window, and for a
+  // slot that never held a proposal. A value that does not decode must not read as zero: zero brings
+  // back the arithmetic this replaces (see finalizableAtOf in epoch-policy.js).
   const finalizableAt = Number(pending.finalizableAt ?? 0);
   if (!Number.isFinite(finalizableAt)) {
     throw new Error(`getPendingScore: finalizableAt did not decode to a number (got ${pending.finalizableAt}); the PendingScore ABI may no longer match the contract`);

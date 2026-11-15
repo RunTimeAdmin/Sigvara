@@ -75,7 +75,7 @@ runl R22 $RS $R 'function finalizeReputation(' '(uint8 anchor, uint256 clock) = 
 runl R23 $RS $R 'function finalizeReputation(' 'maturedAt[didHash] = clock;' 'maturedAt.didHash. = clock;' '' 'finalize does not restart the maturity clock'
 runl R24 $RS $R 'function finalizeReputation(' 'maturedScore[didHash] = anchor;' 'maturedScore.didHash. = anchor;' '' 'finalize does not store the anchor'
 runl R25 $RS $R 'function finalizeReputation(' 'data.lastUpdated = pending.proposedAt;' 'data.lastUpdated = pending.proposedAt;' '' 'finalize keeps the date the proposer sent'
-runl R26 $RS $R 'function finalizeReputation(' 'delete pendingScores[didHash];' 'delete pendingScores.didHash.;' '' 'a finalized proposal stays pending'
+runl R26 $RS $R 'function finalizeReputation(' 'pending.exists = false;' 'pending.exists = false;' '' 'a finalized proposal stays pending'
 runl R27 $RS $R 'function finalizeReputation(' 'evidenceRoots[didHash] = root;' 'evidenceRoots.didHash. = root;' '' 'finalize does not store the evidence root'
 runl R28 $RS $R 'function rejectReputation(' 'if (block.timestamp >= finalizableAt)' 'block.timestamp >= finalizableAt' 'false' 'a proposal can be rejected after its window'
 runl R29 $RS $R 'function rejectReputation(' 'onlyRole(SLASHING_COMMITTEE_ROLE)' 'onlyRole(SLASHING_COMMITTEE_ROLE)' '' 'anyone can reject a proposal'
