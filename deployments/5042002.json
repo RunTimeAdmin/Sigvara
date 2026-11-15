@@ -43,7 +43,7 @@
       "reproducedAt": "53d3a89"
     },
     "reputation": {
-      "current": "0x937da57830bFF5f1341b8fd9F3f7D97F48B3bA16",
+      "current": "0xe88A04A33F13860bF92016D21027F43910839441",
       "history": [
         {
           "implementation": "0x87492399E34e5247740d0280C329e7553403404c",
@@ -67,10 +67,16 @@
           "replacedAt": "2026-11-10T14:21:43.061Z",
           "reproducedAt": "dcad617",
           "note": "replaced by the upgrade to 44ff8e8 (a stranded score can be discarded, pull request 255): upgradeToAndCall in block 71720583, tx 0x4a62f68aa4cf33506a4ad84e38b16426215ea103fc95a09bd9b166b212c5474a"
+        },
+        {
+          "implementation": "0x937da57830bFF5f1341b8fd9F3f7D97F48B3bA16",
+          "replacedAt": "2026-11-15T22:46:15.678Z",
+          "reproducedAt": "44ff8e8",
+          "note": "replaced by the upgrade to a101f07 (a finalize leaves the proposal for the next one to overwrite, pull request 316): upgradeToAndCall in block 72484416, tx 0xca9019a10541be620903c0e0ecd81b51bc5ebecc9dfc6708fcde91a19692c31c"
         }
       ],
-      "recordedAt": "2026-11-10T14:21:43.061Z",
-      "reproducedAt": "44ff8e8"
+      "recordedAt": "2026-11-15T22:46:15.678Z",
+      "reproducedAt": "a101f07"
     },
     "staking": {
       "current": "0x347D01d33bc07120c67BCaDB5C32fe0D8AF6C943",
@@ -155,7 +161,7 @@
   "bytecode": {
     "note": "Every contract here, each implementation, each proxy, the SVR token and the reader, is reproduced byte for byte (immutables aside) by building reproducedAt, or the implementation's own reproducedAt where it records one; scripts/check-bytecode.mjs checks it. The tag marks the commit that records this. All are verified on the Arc explorer.",
     "reproducedAt": "44ff8e8",
-    "tag": "arc-testnet-2026-11-10",
-    "checkedAt": "2026-11-10"
+    "tag": "arc-testnet-2026-11-15",
+    "checkedAt": "2026-11-15"
   }
 }
