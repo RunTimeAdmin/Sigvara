@@ -29,7 +29,7 @@ const {
 const { createBondWatch } = require('./bond-watch');
 const { numberSetting } = require('./config');
 const {
-  json, readBody, bodyErrorStatus, readCredentials, identifyCaller, mayAttestUnauthenticated, parseScorePath, parseDidHash,
+  json, readBody, uncaughtReply, readCredentials, identifyCaller, mayAttestUnauthenticated, parseScorePath, parseDidHash,
   rateLimited, clientKey, adminTokenPolicyError, runningCommit,
   parseTrustedProxies, parseRequestTarget, readScopes, mayUse, weakCredentials, MIN_TOKEN_LENGTH, ATTEST_MAX_BODY_SIZE,
 } = require('./http-helpers');
@@ -434,6 +434,10 @@ const NOBODY_NAMED = () => undefined;
 
 // A transaction hash as a caller may send it, in either case.
 const TX_HASH = /^0x[0-9a-fA-F]{64}$/;
+
+// How old a reading of the chain's clock an epoch's per-agent steps and the read routes take: each read it one round
+// trip at a time, against a margin of minutes. The epoch's own reading, at its start, is always fresh.
+const CHAIN_TIME_REUSE_MS = 5_000;
 
 /**
  * How the checker reads a proposal's evidence (evidence-as-of.js). With a payment chain on, at each
@@ -1967,7 +1971,7 @@ async function runEpochInner() {
         // One that starts to count after this evidence time and before the proposal can land: the checker reads the
         // evidence at the proposal's own time, so it would count it where this does not. Proposed next epoch.
         if (!cfg.checkerMode && chosen.some(negativeHold.isPayerNegative) && negativeHold.startingBetween(
-          chosen, evidenceCutMs, (await chain.getLatestBlockTimestamp()) * 1000 + proposeMarginMs, negativeHoldCfg,
+          chosen, evidenceCutMs, (await chain.getLatestBlockTimestamp({ maxAgeMs: CHAIN_TIME_REUSE_MS })) * 1000 + proposeMarginMs, negativeHoldCfg,
         ).length) {
           console.log(`[oracle]   ${didHash.slice(0, 10)}… a payer negative starts to count before a proposal could land, skipping`);
           agentsHeldByNegative++;
@@ -1979,7 +1983,7 @@ async function runEpochInner() {
         // landing after midnight, it was audited against a reading it was never given. So a linked agent
         // whose snapshot would change before its proposal could land is proposed next epoch instead.
         if (!cfg.checkerMode && external.configured() && hasLink(didHash)) {
-          const landsByMs = (await chain.getLatestBlockTimestamp()) * 1000 + proposeMarginMs;
+          const landsByMs = (await chain.getLatestBlockTimestamp({ maxAgeMs: CHAIN_TIME_REUSE_MS })) * 1000 + proposeMarginMs;
           if (reviewers.snapshotOf(Math.floor(scoringNowMs / 1000)) !== reviewers.snapshotOf(Math.floor(landsByMs / 1000))) {
             console.log(`[oracle]   ${didHash.slice(0, 10)}… its external factor's snapshot changes before a proposal could land; proposing next epoch`);
             continue;
@@ -2297,7 +2301,7 @@ async function runEpochInner() {
             console.log(`[oracle]   ${didHash.slice(0, 10)}… a transaction from this wallet has not been seen mined; proposing next epoch`);
             continue;
           }
-          if (cutTooOld((await chain.getLatestBlockTimestamp()) * 1000, evidenceCutMs)) {
+          if (cutTooOld((await chain.getLatestBlockTimestamp({ maxAgeMs: CHAIN_TIME_REUSE_MS })) * 1000, evidenceCutMs)) {
             console.log(`[oracle]   ${didHash.slice(0, 10)}… its evidence was chosen too long ago to propose; proposing next epoch`);
             continue;
           }
@@ -2516,6 +2520,13 @@ function saveSoon() {
 }
 
 // ---- HTTP API --------------------------------------------------------------
+
+// The answer to an error a write route's own checks did not catch (http-helpers.uncaughtReply), with its words logged.
+function answerUncaught(res, err, route) {
+  const reply = uncaughtReply(err);
+  if (reply.log) console.warn(`[oracle] ${route} failed: ${reply.log}`);
+  return json(res, reply.status, reply.body);
+}
 
 // 32MB of serialized evidence responses. The revision token is the payment-event array
 // itself: the store replaces it on every change, so nothing has to remember to
@@ -3853,7 +3864,7 @@ async function handleRequest(req, res) {
       });
     } catch (err) {
       metrics.inc('attestRejectedOther');
-      return json(res, bodyErrorStatus(err), { error: err.message });
+      return answerUncaught(res, err, '/attest');
     }
   }
 
@@ -3965,7 +3976,7 @@ async function handleRequest(req, res) {
     let nowMs = Date.now();
     if (getPaymentEvents(didHash).some(negativeHold.isPayerNegative)) {
       try {
-        nowMs = (await chain.getLatestBlockTimestamp()) * 1000;
+        nowMs = (await chain.getLatestBlockTimestamp({ maxAgeMs: CHAIN_TIME_REUSE_MS })) * 1000;
       } catch { /* this host's clock */ }
     }
     const events = evidenceAt(didHash, paymentChains.cutFor(nowMs, paymentChainsCfg));
@@ -4025,7 +4036,7 @@ async function handleRequest(req, res) {
       if (replyKey) rememberReply(caller, replyKey, { didHash, flags: raised });
       return savedReply(res, durable, { didHash, flags: raised });
     } catch (err) {
-      return json(res, bodyErrorStatus(err), { error: err.message });
+      return answerUncaught(res, err, '/flag');
     }
   }
 
@@ -4070,7 +4081,7 @@ async function handleRequest(req, res) {
       if (replyKey) rememberReply(caller, replyKey, { didHash, ...result });
       return savedReply(res, durable, { didHash, ...result });
     } catch (err) {
-      return json(res, bodyErrorStatus(err), { error: err.message });
+      return answerUncaught(res, err, '/flag/resolve');
     }
   }
 
@@ -4118,7 +4129,7 @@ async function handleRequest(req, res) {
       metrics.inc('linksCreated');
       return savedReply(res, durable, { didHash, agentId: String(agentId), operator, linked: true });
     } catch (err) {
-      return json(res, bodyErrorStatus(err), { error: err.message });
+      return answerUncaught(res, err, '/link');
     }
   }
 
@@ -4249,7 +4260,7 @@ async function handleRequest(req, res) {
       // epoch path removes, in the place people look to explain it.
       //
       // One extra chain read per request, on an endpoint that already makes several.
-      const scoringNowMs = (await chain.getLatestBlockTimestamp()) * 1000;
+      const scoringNowMs = (await chain.getLatestBlockTimestamp({ maxAgeMs: CHAIN_TIME_REUSE_MS })) * 1000;
       const held = evidenceAt(didHash, paymentChains.cutFor(scoringNowMs, paymentChainsCfg));
       const standingsReady = await previewStandingsReady(held, scoringNowMs);
       if (!standingsReady.ready) {

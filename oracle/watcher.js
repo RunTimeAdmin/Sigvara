@@ -37,7 +37,12 @@ const {
   checkerStatus, classifyDivergence, triage, nextAlert, webhookPayload, describeDivergence, trackPollOutcome,
 } = require('./watcher-policy');
 const { redact } = require('./event-index');
-const { wordsOf } = require('./log-spans');
+const { wordsOf, readAnswer } = require('./log-spans');
+
+// The most of an answer this watcher reads, from the checker or a webhook: its /divergence page is 100 records at most.
+// An answer was read whole however long it ran, so a broken or hostile server could fill this process's memory.
+const MAX_ANSWER_BYTES = 1024 * 1024;
+const readCapped = async (res) => (res.body ? (await readAnswer(res.body, MAX_ANSWER_BYTES)).toString('utf8') : '');
 const { readWithBackoff } = require('./read-retry');
 const { rpcProvider } = require('./rpc-provider');
 
@@ -106,7 +111,7 @@ async function getJson(path, { acceptStatus = [] } = {}) {
     signal: AbortSignal.timeout(20_000), redirect: 'error', headers: { 'User-Agent': WATCHER_AGENT },
   });
   if (!res.ok && !acceptStatus.includes(res.status)) throw new Error(`${path} returned ${res.status}`);
-  const body = await res.text();
+  const body = await readCapped(res);
   // Not the parser's message, which quotes the body: what this server sends is not ours to repeat.
   try { return JSON.parse(body); } catch { throw new Error(`${path} did not return JSON`); }
 }
@@ -133,7 +138,7 @@ async function notify(level, title, lines) {
     // payload or a revoked webhook counts as delivered. That is the exact failure this
     // component cannot afford: believing it raised an alarm that nobody heard.
     if (!res.ok) {
-      const detail = await res.text().catch(() => '');
+      const detail = await readCapped(res).catch(() => '');
       console.error(`[watcher] webhook rejected the alert: ${res.status} ${detail.slice(0, 200)}`);
     }
   } catch (err) {
