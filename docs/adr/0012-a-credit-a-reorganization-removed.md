@@ -46,13 +46,18 @@ This makes a removal a consensus failure rather than a routine event, but it sti
 taken back: the person who is alerted needs a way to do it, and a hand edit of both operators' state is the kind
 of step that goes wrong under pressure.
 
-**C. Credit at `finalized`, and end a removed credit from the time it was found. Recommended.**
+**C. Credit at `finalized`, and end a removed credit from the time it was found. Chosen.**
 1. The scored chain credits at its `finalized` block, in the attested path and in the scan (which keeps its
    6-block floor as well). On Arc that is within one block of the head, so an agent sees no delay.
-2. Each epoch re-reads the receipt of every credit not re-read yet whose block is now at or below `finalized`,
-   within a budget and the oldest first, as the refund read does.
-3. A credit whose transaction has no receipt, or whose receipt now sits in another block or no longer holds the
-   credited transfer, gets `removedAt`: the time of the `finalized` block the re-read was made against.
+2. Each epoch reads again every credit not read again yet whose block is now at or below `finalized`, within a
+   budget and the oldest first, as the refund read does. The receipt is read first. Arc's public endpoints serve
+   no receipt for a transaction a few weeks old (measured 14 November 2026), so where there is none the block's
+   list of transactions is read, and the transfer is looked for in that block's logs.
+3. A credit whose receipt now sits in another block or no longer holds the credited transfer, or that has no
+   receipt and whose block no longer lists the transaction, gets `removedAt`: the time of the `finalized` block
+   the re-read was made against. An answer that could be the node's rather than the chain's (a block without its
+   list, or a transaction still in its block whose logs do not show the transfer) removes nothing, and the credit
+   is read again next epoch.
 4. Evidence leaves an event out from `removedAt` on: the proposer's filter and the checker's `endsAt` both read
    it, as they already do for a payer named operator. The event stays in state, so every root committed before
    `removedAt` reproduces. Its payer outcome, positive or negative, ends with it.
@@ -74,12 +79,14 @@ reader and the checker rely on.
 
 ## 5. Consequences
 
-- One receipt read per credit, once.
+- One receipt read per credit, once, or a receipt, a block and a log read where the node has pruned the receipt.
+- `/attest` answers 503, not 402, for a payment whose block is not final yet, so a carrier sends it again.
 - A credit's end time depends on when it was found, not when the block was replaced. A root published in
   between counted it; that is the price of requirement 1, and the next root drops it.
 - A slash already filed on evidence that a removal later changes is still ruled by the committee and the admin
   Safe ([ADR 0005](0005-governance-and-emergency-powers.md)). The committee re-reads the evidence before ruling.
-- The state file grows by one field on a credit that was removed, which should be none.
+- The state file grows by one field per credit, the block it was read again at, and by two more on a credit that
+  was removed, which should be none.
 
 ## 6. What this does not do
 
