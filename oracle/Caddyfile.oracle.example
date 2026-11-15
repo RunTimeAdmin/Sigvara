@@ -79,6 +79,13 @@ oracle.sigvara.xyz {
 		# attestation landed when it did not.
 		header Cache-Control "no-store"
 
+		# Bodies over 64 KB are refused here. The oracle takes 32 KB on /attest and cuts a body still
+		# arriving after 10 s (Sigvara#311); this keeps the bytes off its socket. In this block only,
+		# since this Caddy serves other sites.
+		request_body {
+			max_size 64KB
+		}
+
 		reverse_proxy sigvara-oracle:3030
 	}
 
