@@ -267,3 +267,18 @@ test('watcher: a divergence list cut short is paged once, with the number of rec
     assert.match(alerts.find((a) => a.includes('more disputes than its list shows')), /recorded 250/);
   });
 });
+
+test('watcher: a credit the checker removed after a reorganization is paged once, and a new one again', async () => {
+  let removed = 1;
+  const health = (res) => json(res, { ok: true, timeSinceLastEpochMs: 1000, creditsRemoved: removed });
+  const divergence = (res) => json(res, { mode: 'checker', seesProposals: true, divergences: [] });
+  await withWatcher({ divergence, health }, async ({ alerts }) => {
+    const paged = () => count(alerts, 'credit the chain no longer holds');
+    await until(() => paged() === 1);
+    await settle(500);
+    assert.equal(paged(), 1, 'the same count is not paged again');
+    removed = 2;
+    await until(() => paged() === 2);
+    assert.match(alerts.filter((a) => a.includes('credit the chain no longer holds'))[1], /holds 2 credit\(s\) removed after a reorganization, 1 new/);
+  });
+});

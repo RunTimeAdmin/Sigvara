@@ -77,7 +77,8 @@ The oracle then:
 2. fetches the transaction receipt and looks for transfers of the accepted asset
    to that address,
 3. checks each sender's payment against `PAYMENT_MIN_AMOUNT` (a zero-value transfer
-   never counts) and the age against `PAYMENT_MIN_CONFIRMATIONS`,
+   never counts), the age against `PAYMENT_MIN_CONFIRMATIONS`, and that its block is
+   at or below the chain's `finalized` block,
 4. takes the payer from the transfer log and uses it as the attester identity,
    ignoring anything the caller put in the `attester` field,
 5. records the settlement hash so the same receipt can never be credited twice,
@@ -128,10 +129,21 @@ handle reorgs ([system overview](https://docs.arc.io/arc/concepts/system-overvie
 chain operator's statement and this repository does not test it, so the launch checklist repeats
 the question on mainnet. Where it does not hold, raise `PAYMENT_MIN_CONFIRMATIONS`.
 
-A credit is not taken back: the settlement hash is recorded as used, so a block that was
-reorganized away would leave a credit for a transaction that no longer exists. That is why the
-unattended scan, which credits with nobody watching, stays at least 6 blocks behind the head
-(`PAYMENT_SCAN_CONFIRMATIONS`) whatever the chain.
+A payment is credited only once its block is at or below the chain's `finalized` block, in the
+attested path and in the scan ([ADR 0012](adr/0012-a-credit-a-reorganization-removed.md)). On Arc
+that is within a block of the head. The unattended scan, which credits with nobody watching, also
+stays at least 6 blocks behind the head (`PAYMENT_SCAN_CONFIRMATIONS`) whatever the chain.
+
+The settlement hash is recorded as used and stays so. If a reorganization still removed a credited
+transaction, each epoch reads every credit once more after its block is final: its receipt, or,
+where the node has pruned its receipts, its block's list of transactions and its logs. A credit
+whose receipt is now in another block, no longer holds the credited transfer, or whose block no
+longer lists the transaction, gets `removedAt`, the time of the finalized block it was read against.
+Evidence leaves it out from then on, so every root made before still reproduces, and the hash stays
+used, so a transaction put back in a later block is not credited again. An answer that could be the
+node's rather than the chain's removes nothing; the credit is read again next epoch. `/evidence`
+lists removed credits under `removed`, `/health` counts them as `creditsRemoved`, and the watcher
+alerts when that count grows.
 
 ## Responses
 
@@ -144,7 +156,7 @@ The codes that depend on the payment check are below. The [oracle README](../ora
 | 402 | The payment did not check out. `code` says why |
 | 409 | This settlement was already credited, or it already has an outcome, which is final. For a payer-signed outcome it carries `sameOutcome`, and `outcome_recorded` names the held one (`heldOutcomeHash`) |
 | 502 | The RPC failed. Not a verdict on the payment, retry |
-| 503 | For a payment chain's payment only, and not a verdict either: it is not finalized (`unconfirmed`) or not found yet, or this operator has not read the agent's registration (`agent_not_seen`). Send it again |
+| 503 | Not a verdict either: its block is not final yet (`unconfirmed`), or, for a payment chain's payment, it is not found yet or this operator has not read the agent's registration (`agent_not_seen`). Send it again |
 
 The 502 case matters. A node having a bad minute must not read as a caller trying
 it on, so RPC failures are counted separately from rejected attestations and are

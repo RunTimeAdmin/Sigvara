@@ -355,8 +355,8 @@ function evidenceOrder(a, b) {
 // The last answer for each stored array, per config. For one array the set that counts only grows
 // with the cut-off, so an answer of the same size is the same answer, and handing back the same
 // frozen array lets the evidence cache and the Merkle root cache hit. Not so once a payment is left
-// out for its payer, from a time on: such an answer is kept apart, and handed back only when the
-// list is the same.
+// out for its payer or its removal, from a time on: such an answer is kept apart, and handed back only
+// when the list is the same.
 const memo = new WeakMap();
 const leftOut = new WeakMap();
 
@@ -372,17 +372,23 @@ const leftOut = new WeakMap();
  * operator by `atMs`: `namedAt(payer)` says when (paymentScan.operatorsNamedAt), from the scored chain's
  * changes up to `atMs`, which every operator scoring at that cut-off has read. What counts, and its
  * order, depends only on the cut-off, never on what an operator holds beyond it or when it credited it.
+ * Nor a payment a reorganization removed, from its `removedAt` on (docs/adr/0012-a-credit-a-reorganization-removed.md),
+ * unless `keepRemoved`: a checker auditing a proposal leaves that to the cut-off it tries (evidence-as-of.js).
  */
-function eventsAt(events, atMs, cfg, namedAt = () => undefined) {
+function eventsAt(events, atMs, cfg, namedAt = () => undefined, { keepRemoved = false } = {}) {
   const on = active(cfg);
   const scored = [];
   const fromChains = [];
   let left = 0;
+  const removed = (e) => !keepRemoved && e.removedAt != null && Number(e.removedAt) <= atMs;
   for (const e of events) {
     if (e.chainId == null) {
-      if (!on || Number(e.ts) <= atMs) scored.push(e);
+      if (!on || Number(e.ts) <= atMs) {
+        if (removed(e)) left += 1;
+        else scored.push(e);
+      }
     } else if (eligibleAtMs(e, cfg) <= atMs) {
-      if (namedAt(e.payer) <= atMs) left += 1;
+      if (removed(e) || namedAt(e.payer) <= atMs) left += 1;
       else fromChains.push(e);
     }
   }

@@ -194,6 +194,24 @@ test("a payment chain's payment counts once it is older than the chain's delay",
   assert.ok(Object.isFrozen(got));
 });
 
+test('a payment a reorganization removed counts until its removedAt, with or without a payment chain on (ADR 0012)', () => {
+  const kept = arcEvent(NOW - 2 * HOUR);
+  const removed = Object.freeze({ ...arcEvent(NOW - HOUR), rereadBlock: 9, removedAt: NOW - 10, removedWhy: 'not_in_block' });
+  const events = Object.freeze([kept, removed]);
+  for (const cfg of [pc.readConfig({}, { scoredChainId: ARC }), config()]) {
+    assert.deepEqual(pc.eventsAt(events, NOW - 11, cfg), [kept, removed], 'before it was found');
+    assert.deepEqual(pc.eventsAt(events, NOW - 10, cfg), [kept], 'from when it was found');
+    assert.deepEqual(pc.eventsAt(events, NOW, cfg), [kept]);
+    // A checker auditing a proposal leaves it to each cut-off it tries (evidence-as-of.js).
+    assert.deepEqual(pc.eventsAt(events, NOW, cfg, undefined, { keepRemoved: true }), [kept, removed]);
+  }
+  // An answer kept for a cut-off before the removal is not handed back for one after it.
+  const cfg = config();
+  assert.equal(pc.eventsAt(events, NOW - 11, cfg).length, 2);
+  assert.equal(pc.eventsAt(events, NOW, cfg).length, 1);
+  assert.equal(pc.eventsAt(events, NOW - 11, cfg).length, 2);
+});
+
 test("a payment from a chain this oracle no longer reads, or reads in shadow, does not count", () => {
   const e = baseEvent(NOW - 2 * HOUR);
   const arc = arcEvent(NOW);

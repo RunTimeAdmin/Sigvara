@@ -306,7 +306,8 @@ function pickCanary(eventsByDid, addressOf) {
     if (!recipient) continue;
     for (let i = events.length - 1; i >= 0; i--) {
       const txHash = events[i] && events[i].txHash;
-      if (!txHash) continue;
+      // Not one a reorganization removed (ADR 0012): it is no longer in its block, so the probe could never find it.
+      if (!txHash || events[i].removedAt != null) continue;
       const at = events[i].ts ?? 0;
       if (at > newestAt) {
         newestAt = at;

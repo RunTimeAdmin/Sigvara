@@ -238,7 +238,10 @@ function pruneFlags(minWeight = 0.001, now = Date.now(), halfLifeMs = FLAG_HALF_
 //
 // Version 5 is a file whose replay set has lost the keys of payments a cap dropped (dropFloors). A build before it
 // would credit those a second time. Until the keys outgrow their caps the file stays at 4 or below.
-const STATE_SCHEMA_VERSION = 5;
+//
+// Version 6 is a file holding a payment a reorganization removed (removedAt, ADR 0012). A build before it would keep
+// counting that payment, so it must refuse the file. Without one the file stays at 5 or below.
+const STATE_SCHEMA_VERSION = 6;
 
 function holdsPaymentChainData() {
   if (Object.keys(paymentChainScanState).some((key) => !key.endsWith('/shadow'))) return true;
@@ -248,6 +251,7 @@ function holdsPaymentChainData() {
 
 /** The oldest format that can hold this state (STATE_SCHEMA_VERSION). */
 function schemaVersionFor() {
+  for (const list of paymentEvents.values()) if (list.some((e) => e.removedAt != null)) return 6;
   if (dropFloors.size) return 5;
   if (prunedBefore !== null) return 4;
   for (const list of paymentEvents.values()) if (list.some((e) => e.payerOutcome?.outcome === 2)) return 3;
@@ -563,6 +567,10 @@ function paymentEventError(e) {
   // Present only on a payment that settled on a payment chain (ADR 0009). It goes into the leaf.
   if (e.chainId !== undefined && !(Number.isSafeInteger(e.chainId) && e.chainId > 0)) {
     return `chainId is not a chain id (${JSON.stringify(e.chainId)})`;
+  }
+  // When a reorganization's removal was found (ADR 0012). One that is not a time would read as never removed.
+  if (e.removedAt !== undefined && !Number.isSafeInteger(e.removedAt)) {
+    return `removedAt is not a time (${JSON.stringify(e.removedAt)})`;
   }
   return null;
 }
@@ -1236,6 +1244,43 @@ function setPayerOutcomeCheck(didHash, txHash, payer, chainId, check, refundChec
   return true;
 }
 
+/**
+ * Records that scored-chain payments were read again once their block was final (docs/adr/0012-a-credit-a-reorganization-
+ * removed.md), for one agent and in one copy of its list. Each update names a payment by its hash and payer, and gives
+ * the finalized block it was read against (`rereadBlock`); for one the chain no longer holds, also when that was found
+ * (`removedAt`, that block's time in ms) and why (`removedWhy`). The leaf is unchanged, so a root made before the
+ * removal still reproduces, and the hash stays used, so the payment is never credited again. Returns how many it found.
+ *
+ * @param {Array<{ txHash: string, payer: string, rereadBlock: number, removedAt?: number, removedWhy?: string }>} updates
+ */
+function setRereads(didHash, updates) {
+  const did = String(didHash).toLowerCase();
+  const list = paymentEvents.get(did);
+  if (!list || !updates.length) return 0;
+  const key = (txHash, payer) => `${String(txHash).toLowerCase()}|${String(payer).toLowerCase()}`;
+  const byKey = new Map(updates.map((u) => [key(u.txHash, u.payer), u]));
+  let found = 0;
+  const next = list.map((e) => {
+    const u = e.chainId == null ? byKey.get(key(e.txHash, e.payer)) : undefined;
+    if (!u) return e;
+    found += 1;
+    return Object.freeze({
+      ...e,
+      rereadBlock: u.rereadBlock,
+      ...(Number.isSafeInteger(u.removedAt) ? { removedAt: u.removedAt, removedWhy: String(u.removedWhy) } : {}),
+    });
+  });
+  if (found) paymentEvents.set(did, Object.freeze(next));
+  return found;
+}
+
+/** How many held payments a reorganization removed (ADR 0012). Should be none. */
+function removedCount() {
+  let n = 0;
+  for (const list of paymentEvents.values()) for (const e of list) if (e.removedAt != null) n += 1;
+  return n;
+}
+
 /** The payer-signed outcome this oracle holds for a leg, or null. */
 function payerOutcomeFor(didHash, txHash, payer, chainId = null) {
   const tx = String(txHash).toLowerCase();
@@ -1490,6 +1535,8 @@ module.exports = {
   payerOutcomeFor,
   setRefundCheck,
   setPayerOutcomeCheck,
+  setRereads,
+  removedCount,
   divergences,
   recordDivergence,
   getDivergences,
