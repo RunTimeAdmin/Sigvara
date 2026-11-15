@@ -980,9 +980,9 @@ test('persist: writes the format version and the chain, and load reads the chain
   const r = lastJson(out);
   // Version 2 only once a payment chain's data is held (ADR 0009), see payment-chains.test.js; 3 once a payer's
   // negative is (ADR 0011), below; 4 once a prune has dropped a replay key; 5 once a cap has forgotten dropped keys
-  // (ledger-cap.test.js).
+  // (ledger-cap.test.js); 6 once a reorganization has removed a credit (ADR 0012), below.
   assert.equal(r.version, 1);
-  assert.equal(r.current, 5);
+  assert.equal(r.current, 6);
   assert.equal(r.chainId, 5042);
   assert.equal(r.back, 5042);
 });
@@ -1184,6 +1184,53 @@ test('a final refund read keeps the end of the hold it was read against', () => 
     console.log(JSON.stringify({ partial, final: s.getPaymentEvents(did)[0].refundCheck.holdEndMs ?? null }));
   `);
   assert.deepEqual(JSON.parse(out.trim().split('\n').at(-1)), { partial: null, final: 7 });
+});
+
+// ---- credits read again once final (ADR 0012) ---------------------------------------------------------------------
+
+test('a re-read is recorded on the credit it names, leaf unchanged, and a removal makes the file format 6', () => {
+  const out = inChildWithState(null, `
+    const s = require('./store');
+    const merkle = require('./merkle');
+    const fs = require('fs');
+    const written = () => { s.persist(); return JSON.parse(fs.readFileSync(process.env.ORACLE_STATE_PATH, 'utf8')).schemaVersion; };
+    const did = '0x' + 'aa'.repeat(32), payer = '0x' + '11'.repeat(20);
+    const tx = (n) => '0x' + n.toString(16).padStart(64, '0');
+    s.creditPayment(did, tx(1), '5', payer, null, 1000, null, 10);
+    s.creditPayment(did, tx(2), '7', payer, null, 2000, null, 11);
+    const leaves = s.getPaymentEvents(did).map(merkle.leafFor);
+    const kept = s.setRereads(did, [{ txHash: tx(1), payer, rereadBlock: 90 }]);
+    const before = written();
+    const removed = s.setRereads(did, [{ txHash: tx(2).toUpperCase().replace('0X', '0x'), payer, rereadBlock: 91, removedAt: 5000, removedWhy: 'not_in_block' }]);
+    const after = written();
+    const events = s.getPaymentEvents(did);
+    console.log(JSON.stringify({
+      kept, removed, before, after, count: s.removedCount(),
+      fields: events.map((e) => [e.rereadBlock, e.removedAt ?? null, e.removedWhy ?? null]),
+      sameLeaves: events.map(merkle.leafFor).every((l, i) => l === leaves[i]),
+      stillUsed: s.isCredited(tx(2), did, payer),
+      frozen: Object.isFrozen(events) && events.every(Object.isFrozen),
+    }));
+  `);
+  assert.deepEqual(JSON.parse(out.trim().split('\n').at(-1)), {
+    kept: 1, removed: 1, before: 1, after: 6, count: 1,
+    fields: [[90, null, null], [91, 5000, 'not_in_block']],
+    sameLeaves: true, stillUsed: true, frozen: true,
+  });
+});
+
+test('a removal survives a restart, and a removal time that is not a time drops the payment rather than counting it', () => {
+  const did = '0x' + 'aa'.repeat(32);
+  const event = (n, over) => ({ txHash: '0x' + n.toString(16).padStart(64, '0'), ts: 1000, amount: '5', payer: '0x' + '11'.repeat(20), success: null, blockNumber: 10, ...over });
+  const out = inChildWithState({
+    schemaVersion: 6,
+    paymentEvents: { [did]: [event(1, { rereadBlock: 90, removedAt: 5000, removedWhy: 'other_block' }), event(2, { removedAt: 'soon' })] },
+  }, `
+    const s = require('./store');
+    s.load();
+    console.log(JSON.stringify(s.getPaymentEvents('${did}').map((e) => [Number(e.txHash), e.removedAt ?? null])));
+  `);
+  assert.deepEqual(JSON.parse(out.trim().split('\n').at(-1)), [[1, 5000]]);
 });
 
 // ---- the payment ledger's caps ------------------------------------------------------------------------------

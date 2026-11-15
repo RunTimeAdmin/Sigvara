@@ -78,6 +78,10 @@ const counters = {
   agentsHeldByPayerNegative: 0,
   // Payer negatives an epoch did not reach before its time for reading refunds was spent (index.js settleNegatives).
   payerNegativesUnread: 0,
+  // ADR 0012. Credits read again once their block was final and found gone from the chain: should be zero, and any is an
+  // alert. Credits an epoch did not read again, for want of time or because the reads did not settle it, which count.
+  creditsRemoved: 0,
+  creditsNotReread: 0,
   agentsHeldByLedgerCap: 0,
   // Agents left for the next epoch because this one's proposals (MAX_WRITES_PER_EPOCH) were spent, and agents not
   // proposed because the score on chain is the same and recent enough (SCORE_REFRESH_HOURS). The first should be zero.
@@ -382,6 +386,16 @@ function toPrometheusText(extra = {}) {
   lines.push('# HELP sigvara_oracle_payer_negatives_unread_total Payer negatives an epoch left unread when its time for reading refunds was spent (ADR 0011)');
   lines.push('# TYPE sigvara_oracle_payer_negatives_unread_total counter');
   lines.push(`sigvara_oracle_payer_negatives_unread_total ${counters.payerNegativesUnread}`);
+
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_credits_removed_total Credits read again once final and found gone from the chain (ADR 0012)');
+  lines.push('# TYPE sigvara_oracle_credits_removed_total counter');
+  lines.push(`sigvara_oracle_credits_removed_total ${counters.creditsRemoved}`);
+
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_credits_not_reread_total Credits an epoch did not read again once final, left for the next (ADR 0012)');
+  lines.push('# TYPE sigvara_oracle_credits_not_reread_total counter');
+  lines.push(`sigvara_oracle_credits_not_reread_total ${counters.creditsNotReread}`);
 
   lines.push('');
   lines.push('# HELP sigvara_oracle_agents_held_by_ledger_cap_total Agents left unscored because their payment ledger was at its cap');

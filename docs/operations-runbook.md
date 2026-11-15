@@ -777,3 +777,27 @@ curl -s https://oracle.sigvara.xyz/evidence/<didHash> | jq -c '.evidence[] | sel
 | `sigvara_oracle_agents_held_by_payer_negative_total` rising, or `payer_negative` in `paymentChainHold.reasons` | A negative should count but its refund read is not final, so the agent is held from proposals | It clears once the read finishes |
 
 The first three, from the simulation, were taken on 14 November 2026 and count from 21 November.
+
+## 9. Credits read again once final
+
+A payment is credited only once its block is at or below the chain's `finalized` block, and each epoch
+reads every credit once more after that ([ADR 0012](adr/0012-a-credit-a-reorganization-removed.md)),
+the oldest first, with what the refund reads leave of their ten minutes. On Arc this should never find
+anything. A credit the chain no longer holds gets `removedAt` and leaves the evidence from then on; its
+hash stays used.
+
+The first epochs after the upgrade read the credits made before it, about 2,000 on each operator on
+14 November 2026, half a second apart. Most are older than the node keeps receipts for, so each of
+those costs a block read and a log read as well. Expect `credit(s) not read again this epoch` for a
+few epochs while that backlog drains.
+
+| What it says | What it means | What to do |
+|---|---|---|
+| `REMOVED credit <tx> from <payer> to <didHash> ...`, `sigvara_oracle_credits_removed_total` rising, `creditsRemoved` above 0 in `/health`, or the watcher's "the checker found a credit the chain no longer holds" | A credited transaction is no longer where it was credited: Arc replaced a final block | Treat it as a chain incident. Check the transaction on the explorer and on the other operator (`/evidence/<didHash>`, under `removed`). Both should list it, possibly at different times. Raise `PAYMENT_MIN_CONFIRMATIONS` and `PAYMENT_SCAN_CONFIRMATIONS` on both, and tell the committee if a pending proposal or a filed slash rests on it |
+| `N credit(s) not read again this epoch`, or `sigvara_oracle_credits_not_reread_total` rising | The time ran out, or reads did not settle some credits. They still count | Nothing while a backlog drains. A rise every epoch afterwards means the scored chain's RPC is slow or failing |
+| `credit ... not settled by reading it again: ...` | The node gave an answer that could be its own rather than the chain's, such as a block without its transaction list | It is read again next epoch. If one credit repeats, read its transaction and block on the explorer |
+
+```sh
+curl -s https://oracle.sigvara.xyz/health | jq .creditsRemoved
+curl -s https://oracle.sigvara.xyz/evidence/<didHash> | jq '.removed'
+```

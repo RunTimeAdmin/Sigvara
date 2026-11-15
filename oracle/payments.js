@@ -196,6 +196,20 @@ async function verifyPayment({ provider, cfg }, txHash, payTo) {
       `${confirmations} confirmation(s), need ${cfg.minConfirmations}`
     );
   }
+  // And only once its block is final (docs/adr/0012-a-credit-a-reorganization-removed.md). A credit is never deleted,
+  // so it waits for a block the chain says will not be replaced. On Arc that is within a block of the head.
+  let finalized;
+  try {
+    finalized = await provider.getBlock('finalized');
+  } catch (err) {
+    throw new PaymentError('rpc_error', `could not read the finalized block: ${err.message}`);
+  }
+  if (!finalized || !Number.isInteger(finalized.number)) {
+    throw new PaymentError('rpc_error', 'the finalized block is unavailable');
+  }
+  if (receipt.blockNumber > finalized.number) {
+    throw new PaymentError('unconfirmed', `block ${receipt.blockNumber} is not final yet (finalized is ${finalized.number})`);
+  }
 
   const credits = transfersTo(receipt, cfg.asset, payTo);
   if (credits.length === 0) {

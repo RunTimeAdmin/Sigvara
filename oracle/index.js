@@ -43,6 +43,7 @@ const paymentScan = require('./payment-scan');
 const paymentChains = require('./payment-chains');
 const payerOutcome = require('./payer-outcome');
 const negativeHold = require('./negative-hold');
+const creditReread = require('./credit-reread');
 const metrics = require('./metrics');
 const { readPrivateKey } = require('./secrets');
 
@@ -382,6 +383,8 @@ const {
   forgetAgent,
   setRefundCheck,
   setPayerOutcomeCheck,
+  setRereads,
+  removedCount,
   ATTEST_COOLDOWN_MS,
 } = require('./store');
 
@@ -394,12 +397,15 @@ setLedgerFeeUnits(paymentCfg.feeUnit, paymentChainsCfg.chains);
  * The payments a score made at `atMs` reads: every one on the scored chain, and a payment chain's
  * once it is older than that chain's delay (payment-chains.eventsAt). The proposal, its evidence
  * root, the checker's audit and /score all choose evidence here, so they cannot drift apart. Not a payment
- * chain's from a payer named the agent's operator by `atMs` (operatorNamedAt).
+ * chain's from a payer named the agent's operator by `atMs` (operatorNamedAt), nor one a reorganization
+ * removed by then (ADR 0012) unless `keepRemoved`.
  */
-function evidenceAt(didHash, atMs, namedAt = operatorNamedAt(didHash)) {
+function evidenceAt(didHash, atMs, namedAt = operatorNamedAt(didHash), { keepRemoved = false } = {}) {
   // A payer's "not delivered" reads as not reported until it counts (negative-hold.present), here, so the
   // score, the root and the audit all see it the same way.
-  return negativeHold.present(paymentChains.eventsAt(getPaymentEvents(didHash), atMs, paymentChainsCfg, namedAt), atMs, negativeHoldCfg);
+  return negativeHold.present(
+    paymentChains.eventsAt(getPaymentEvents(didHash), atMs, paymentChainsCfg, namedAt, { keepRemoved }), atMs, negativeHoldCfg,
+  );
 }
 
 /**
@@ -425,14 +431,16 @@ const NOBODY_NAMED = () => undefined;
  * whole-minute cut-off in the half hour before it (payment-chains.auditCuts), since the proposer chose its
  * evidence at one of them and its transaction landed later. A payment chain's payment from a payer named the
  * agent's operator (`namedAt`) stops counting at the cut-off it was named by, which may be after the proposer's.
+ * A payment a reorganization removed stops counting at its `removedAt` (ADR 0012), with a payment chain on or not.
  */
+const removedFrom = (e) => (e.removedAt != null ? Number(e.removedAt) : Infinity);
 const auditOptions = (atMs, namedAt = NOBODY_NAMED) => (paymentChains.active(paymentChainsCfg)
   ? {
     eligibleAt: (e) => paymentChains.eligibleAtMs(e, paymentChainsCfg),
-    endsAt: (e) => (e.chainId == null ? Infinity : namedAt(e.payer) ?? Infinity),
+    endsAt: (e) => Math.min(removedFrom(e), e.chainId == null ? Infinity : namedAt(e.payer) ?? Infinity),
     cuts: paymentChains.auditCuts(atMs, paymentChainsCfg),
   }
-  : {});
+  : { endsAt: removedFrom });
 
 /** Every agent's payments that settled on `chainId`, or on the scored chain when it is null. */
 function eventsOnChain(chainId) {
@@ -495,9 +503,8 @@ function measuredFactorsFor(didHash, now, payerScores = null, held = evidenceAt(
  * at most REFUND_READ_BUDGET_MS an epoch: the most urgent first (negative-hold.readOrder), the deadline checked
  * before each and before every getLogs, and each chain's head read once an epoch.
  */
-async function settleNegatives(agentInfos) {
+async function settleNegatives(agentInfos, deadline = Date.now() + REFUND_READ_BUDGET_MS) {
   let recorded = false;
-  const deadline = Date.now() + REFUND_READ_BUDGET_MS;
   const items = [];
   for (const info of agentInfos) {
     if (info.error || !info.agentAddress) continue;
@@ -584,7 +591,93 @@ async function settleNegatives(agentInfos) {
 }
 
 // How long one epoch spends reading refunds, for every held negative together, before it leaves the rest to the next.
+// Credits read again once final (rereadCredits) have what the refunds leave of it.
 const REFUND_READ_BUDGET_MS = PAYMENT_CHAIN_SCAN_BUDGET_MS;
+
+// Held credits a reorganization removed, for /health and so the watcher: counted when first asked and again after each
+// epoch's re-read, since /health is public and unmetered and a count walks every payment held.
+let removedHeld = null;
+const removedCredits = () => removedHeld ?? (removedHeld = removedCount());
+
+/**
+ * Reads each scored-chain credit once more after its block is final, the oldest first (credit-reread.js,
+ * docs/adr/0012-a-credit-a-reorganization-removed.md), until `deadline`: the time for reading refunds, which go first
+ * because they are due by a set time. A credit the chain no longer holds gets removedAt, the time of the finalized block
+ * it was read against, and evidence leaves it out from then on. One not reached, or that the reads did not settle,
+ * still counts and is read first next epoch. Each read is paced as the scan's are: a backlog can be a receipt, a block
+ * and a log read a credit.
+ */
+async function rereadCredits(agentInfos, deadline) {
+  removedHeld = null;
+  if (!payments.required(paymentCfg) || !paymentCfg.asset) return;
+  const addresses = new Map();
+  for (const info of agentInfos) if (!info.error && info.agentAddress) addresses.set(info.didHash, info.agentAddress);
+  const provider = chain.getProvider();
+  let lastRead = 0;
+  const read = async (label, fn) => {
+    const wait = lastRead + paymentScanCfg.paceMs - Date.now();
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    lastRead = Date.now();
+    return chain.readWithBackoff(label, fn);
+  };
+  let finalized;
+  try {
+    finalized = await read('re-read finalized block', () => provider.getBlock('finalized'));
+  } catch (err) {
+    console.warn(`[oracle] could not read the finalized block, so no credit is read again this epoch: ${err.message}`);
+    return;
+  }
+  if (!finalized || !Number.isInteger(finalized.number) || !Number.isFinite(Number(finalized.timestamp))) {
+    console.warn('[oracle] the finalized block is unavailable, so no credit is read again this epoch');
+    return;
+  }
+  const items = creditReread.toReread(allPaymentEvents(), finalized.number, (did) => addresses.get(did) ?? null);
+  if (!items.length) return;
+  const removedAt = Number(finalized.timestamp) * 1000;
+  const updates = new Map();
+  let reached = 0;
+  let unsure = 0;
+  for (const { didHash, agent, e } of items) {
+    if (Date.now() >= deadline) break;
+    reached += 1;
+    let verdict;
+    try {
+      verdict = await creditReread.reread(e, {
+        agent,
+        asset: paymentCfg.asset,
+        getReceipt: (hash) => read('re-read receipt', () => provider.getTransactionReceipt(hash)),
+        getBlock: (n) => read('re-read block', () => provider.getBlock(n)),
+        getLogs: (filter) => read('re-read getLogs', () => provider.getLogs(filter)),
+      });
+    } catch (err) {
+      verdict = { unsure: err.message };
+    }
+    if (verdict.unsure) {
+      unsure += 1;
+      console.warn(`[oracle]   ${didHash.slice(0, 10)}… credit ${e.txHash.slice(0, 10)}… not settled by reading it again: ${verdict.unsure}`);
+      continue;
+    }
+    const update = { txHash: e.txHash, payer: e.payer, rereadBlock: finalized.number };
+    if (verdict.removed) {
+      Object.assign(update, { removedAt, removedWhy: verdict.removed });
+      metrics.inc('creditsRemoved');
+      console.error(
+        `[oracle] REMOVED credit ${e.txHash} from ${e.payer} to ${didHash} (block ${e.blockNumber}): ${verdict.removed}. ` +
+        `It stops counting from ${new Date(removedAt).toISOString()}, the time of finalized block ${finalized.number}.`,
+      );
+    }
+    if (!updates.has(didHash)) updates.set(didHash, []);
+    updates.get(didHash).push(update);
+  }
+  for (const [didHash, list] of updates) setRereads(didHash, list);
+  removedHeld = null;
+  const left = items.length - reached + unsure;
+  if (left) {
+    console.warn(`[oracle] ${left} credit(s) not read again this epoch (${unsure} unsettled); they count, and go first next epoch`);
+    metrics.inc('creditsNotReread', left);
+  }
+  if (updates.size) persistState();
+}
 
 // Counterparty standing, for the web of trust. Resolved once per epoch per address:
 // an agent's payers repeat across epochs and within one, and each lookup is three
@@ -983,7 +1076,12 @@ async function runPaymentScan(agents) {
   // No further than the registry scan has read, as the link scan (runLinkScan). Transfers are asked for only to
   // the agents it knows, so past it a payment to an agent registered since would be passed over for good.
   const reach = chain.getScanState()?.lastScannedBlock;
-  const to = Math.min(paymentScan.safeHead(head, paymentScanCfg.confirmations), Number.isInteger(reach) ? reach : Infinity);
+  // Nor past the finalized block, as the attested path (ADR 0012). On Arc it is ahead of the safe head anyway.
+  const finalized = await chain.readWithBackoff('payment-scan finalized block', () => provider.getBlock('finalized'));
+  if (!finalized || !Number.isInteger(finalized.number)) throw new Error('the finalized block is unavailable');
+  const to = Math.min(
+    paymentScan.safeHead(head, paymentScanCfg.confirmations), finalized.number, Number.isInteger(reach) ? reach : Infinity,
+  );
   const checkpoint = getPaymentScanState();
   const from = checkpoint && Number.isInteger(checkpoint.lastBlock)
     ? checkpoint.lastBlock + 1
@@ -1560,7 +1658,12 @@ async function runEpochInner() {
 
   // Refund reads for payers' held negatives, before any agent's evidence is chosen (ADR 0011). Also for an agent not
   // read for want of a bond, so that a negative is settled on the same reads whether or not its agent is bonded.
-  await settleNegatives([...agentInfos, ...notRead.map((a) => ({ didHash: a.didHash, agentAddress: a.agentAddress, error: null }))]);
+  const allInfos = [...agentInfos, ...notRead.map((a) => ({ didHash: a.didHash, agentAddress: a.agentAddress, error: null }))];
+  const readDeadline = Date.now() + REFUND_READ_BUDGET_MS;
+  await settleNegatives(allInfos, readDeadline);
+  // Each credit once more now that its block is final (ADR 0012), with the time the refunds left, before any evidence is
+  // chosen.
+  await rereadCredits(allInfos, readDeadline);
 
   // Agents worth writing for, filtered from the phase-1 batch before any further reads.
   const candidates = [];
@@ -1855,10 +1958,10 @@ async function runEpochInner() {
               console.log(`[oracle]   ${didHash.slice(0, 10)}… this operator's scans have not passed the pending proposal's time; checking it next epoch`);
               continue;
             }
-            // Whoever paid: a payer named the operator after the proposer's cut-off still counted for it, so each
-            // cut-off is judged on its own (auditOptions).
+            // Whoever paid, and removed or not: a payer named the operator, or a payment removed, after the proposer's
+            // cut-off still counted for it, so each cut-off is judged on its own (auditOptions).
             asOf = payments.required(paymentCfg)
-              ? evidenceAsOf(evidenceAt(didHash, atProposalMs, NOBODY_NAMED), atProposalMs, freshPending.evidenceRoot ?? null,
+              ? evidenceAsOf(evidenceAt(didHash, atProposalMs, NOBODY_NAMED, { keepRemoved: true }), atProposalMs, freshPending.evidenceRoot ?? null,
                 auditOptions(atProposalMs, operatorNamedAt(didHash)))
               : null;
             // The external factor too, as the primary would have read it at its proposal: same
@@ -2970,7 +3073,26 @@ function buildEvidenceBody(didHash, events) {
       // the payer signed. Served only where publishing is switched on (see payer-outcome.js).
       ...(e.payerOutcome && payerOutcomeCfg.publish ? { payerOutcome: e.payerOutcome } : {}),
     })),
+    // Payments a reorganization removed (ADR 0012): read again once final and no longer on the chain, so they leave
+    // the evidence from `removedAt`. A root made before that still holds them. Absent when there are none.
+    ...removedBody(didHash),
   });
+}
+
+function removedBody(didHash) {
+  const removed = getPaymentEvents(didHash).filter((e) => e.removedAt != null);
+  if (!removed.length) return {};
+  return {
+    removed: removed.map((e) => ({
+      txHash: e.txHash,
+      payer: e.payer,
+      amount: e.amount,
+      settledAt: merkle.settledSeconds(e),
+      blockNumber: e.blockNumber ?? null,
+      removedAt: new Date(e.removedAt).toISOString(),
+      reason: e.removedWhy ?? null,
+    })),
+  };
 }
 
 // The rate-limit bucket for a request: who is asking, and which kind of route. One bucket
@@ -3097,6 +3219,8 @@ async function handleRequest(req, res) {
       stateSource: getLoadReport().source,
       // Payment events held against the caps in store.js, and payments the caps refused since start.
       paymentLedger: ledgerStatus(),
+      // Held credits a reorganization removed (ADR 0012). Should be 0; the watcher alerts when it grows.
+      creditsRemoved: removedCredits(),
       // The chain the RPC was last seen on, and the one this oracle was configured for. Null
       // until the first check, and the expected one is null when EXPECTED_CHAIN_ID is unset.
       chainId: seenChainId,
@@ -3342,8 +3466,11 @@ async function handleRequest(req, res) {
             console.warn(`[oracle] /attest payment check failed for ${didHash}: ${err.message}`);
             return json(res, 502, { error: 'could not read the chain', code: 'rpc_error' });
           }
-          // Not a refusal: a carrier should send it again (CounterAudit's outbox ends delivery on a 4xx).
-          if (pc && NOT_YET.includes(err.code)) return json(res, 503, { error: err.message, code: err.code });
+          // Not a refusal: a carrier should send it again (CounterAudit's outbox ends delivery on a 4xx). On the scored
+          // chain too for a block not final yet (ADR 0012), which a carrier that sends as soon as it settles can meet.
+          if ((pc && NOT_YET.includes(err.code)) || err.code === 'unconfirmed') {
+            return json(res, 503, { error: err.message, code: err.code });
+          }
           return json(res, 402, { error: err.message, code: err.code || 'payment_invalid' });
         }
         // Older than pruning keeps. Its record, and the key that refused it a second time, may be gone, so it is

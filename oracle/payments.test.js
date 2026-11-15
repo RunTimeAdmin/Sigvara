@@ -40,7 +40,9 @@ function transferLog({ asset = ASSET, from = PAYER, to = AGENT, value = 1_000_00
 
 const BLOCK_TS = 1_700_000_000; // seconds
 
-function fakeProvider({ receipt, head = 100, receiptError = null, headError = null, block = { timestamp: BLOCK_TS }, blockError = null }) {
+function fakeProvider({
+  receipt, head = 100, finalized = head, receiptError = null, headError = null, block = { timestamp: BLOCK_TS }, blockError = null,
+}) {
   return {
     getTransactionReceipt: async () => {
       if (receiptError) throw new Error(receiptError);
@@ -50,9 +52,9 @@ function fakeProvider({ receipt, head = 100, receiptError = null, headError = nu
       if (headError) throw new Error(headError);
       return head;
     },
-    getBlock: async () => {
+    getBlock: async (tag) => {
       if (blockError) throw new Error(blockError);
-      return block;
+      return tag === 'finalized' ? { number: finalized, timestamp: BLOCK_TS } : block;
     },
   };
 }
@@ -157,6 +159,18 @@ test('verifyPayment: holds off until the transfer has enough confirmations', asy
   const cfg = { ...CFG, minConfirmations: 6 };
   const provider = fakeProvider({ receipt: { status: 1, blockNumber: 100, logs: [transferLog()] }, head: 102 });
   await assert.rejects(() => verifyPayment({ provider, cfg }, TX, AGENT), e => e.code === 'unconfirmed');
+});
+
+test('verifyPayment: holds off until the block is final, however many confirmations it has (ADR 0012)', async () => {
+  const provider = fakeProvider({ receipt: { status: 1, blockNumber: 99, logs: [transferLog()] }, head: 102, finalized: 98 });
+  await assert.rejects(() => verifyPayment({ provider, cfg: CFG }, TX, AGENT), e => e.code === 'unconfirmed' && /not final yet/.test(e.message));
+  const final = fakeProvider({ receipt: { status: 1, blockNumber: 99, logs: [transferLog()] }, head: 102, finalized: 99 });
+  assert.equal((await verifyPayment({ provider: final, cfg: CFG }, TX, AGENT)).blockNumber, 99);
+});
+
+test('verifyPayment: a node without a finalized block is an RPC failure, not a credit', async () => {
+  const provider = fakeProvider({ receipt: { status: 1, blockNumber: 99, logs: [transferLog()] }, finalized: null });
+  await assert.rejects(() => verifyPayment({ provider, cfg: CFG }, TX, AGENT), e => e.code === 'rpc_error' && /finalized/.test(e.message));
 });
 
 test('verifyPayment: an RPC failure is reported as an RPC failure, not a bad payment', async () => {
@@ -631,7 +645,7 @@ test('verifyPayment: a NaN block timestamp is refused, not stored', async () => 
       }],
     }),
     getBlockNumber: async () => 200,
-    getBlock: async () => ({ timestamp: NaN }),
+    getBlock: async (tag) => (tag === 'finalized' ? { number: 200 } : { timestamp: NaN }),
   };
   await assert.rejects(
     () => verifyPayment({ provider, cfg: { asset: ASSET, minConfirmations: 1, minAmount: 0n } },
@@ -674,7 +688,7 @@ test('both intake paths attribute a multi-sender payment identically', async () 
   const provider = {
     getTransactionReceipt: async () => ({ status: 1, blockNumber: 10, logs }),
     getBlockNumber: async () => 100,
-    getBlock: async () => ({ timestamp: 1_700_000_000 }),
+    getBlock: async (tag) => ({ number: tag === 'finalized' ? 100 : tag, timestamp: 1_700_000_000 }),
   };
 
   const pushed = await verifyPayment(
@@ -819,7 +833,7 @@ test('both intake paths credit the same senders for every shape of transaction',
     const provider = {
       getTransactionReceipt: async () => ({ status: 1, blockNumber: 10, logs }),
       getBlockNumber: async () => 100,
-      getBlock: async () => ({ timestamp: 1_700_000_000 }),
+      getBlock: async (tag) => ({ number: tag === 'finalized' ? 100 : tag, timestamp: 1_700_000_000 }),
     };
     let pushed = [];
     try {

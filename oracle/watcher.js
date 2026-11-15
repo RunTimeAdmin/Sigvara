@@ -88,6 +88,9 @@ let checkerWasOk = true;
 let truncatedRaised = false;
 // Which of checkerStatus's kinds was last paged, so a new cause while not ok is paged too.
 let checkerKind = null;
+// How many credits the checker last said a reorganization removed (ADR 0012), so each new one is paged once. A
+// restart pages what is there once more.
+let removedSeen = 0;
 
 // redirect: 'error'. The checker is somebody else's server, and following a redirect it
 // chooses would let it point this watcher at an address it could not reach itself, such as
@@ -174,6 +177,19 @@ async function poll() {
     await notify('ok', 'checker is back', [`checker: ${cfg.checkerUrl}`]);
     checkerWasOk = true;
     checkerKind = null;
+  }
+
+  // A credit the chain no longer holds once its block was final, which a final chain never does (ADR 0012). Rendered
+  // from a number: nothing the checker writes is quoted.
+  const removed = Number(health?.creditsRemoved);
+  if (Number.isSafeInteger(removed) && removed >= 0) {
+    if (removed > removedSeen) {
+      await notify('alert', 'the checker found a credit the chain no longer holds', [
+        `it holds ${removed} credit(s) removed after a reorganization, ${removed - removedSeen} new`,
+        'Its log says which ("REMOVED credit"), and its /evidence lists them under "removed". Scores leave them out from then on.',
+      ]);
+    }
+    removedSeen = removed;
   }
 
   // What a checker that is not ok still found is relayed all the same: its disputes are the

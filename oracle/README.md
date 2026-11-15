@@ -115,7 +115,7 @@ Health check with operational signals for production alerting.
 }
 ```
 
-Where the state file is, and what went wrong writing it, are in the log and not in this answer. It also carries `writePolicy`, `{ "scoreRefreshHours": 12, "maxWritesPerEpoch": 1000 }`, which both operators must share.
+`creditsRemoved` counts held credits a reorganization removed (ADR 0012); it should be 0, and the watcher alerts when it grows. Where the state file is, and what went wrong writing it, are in the log and not in this answer. It also carries `writePolicy`, `{ "scoreRefreshHours": 12, "maxWritesPerEpoch": 1000 }`, which both operators must share.
 Returns 503 when:
 - State file path is not writable (likely volume mount issue)
 - The last state write failed (`statePersisted: false`)
@@ -356,6 +356,7 @@ This is fine for local testing and worthless as a trust signal in public.
 | 413 | The body is over 1 MB. `/flag`, `/flag/resolve` and `/link` answer the same way |
 | 429 | Cooldown active for this (attester, didHash) — `remainingSeconds` says how long. Applies to callers without a token; a token holder reporting on a verified payment is not throttled |
 | 502 | The RPC failed. Not a verdict on the payment; retry |
+| 503 | `unconfirmed`: the payment's block is not final yet (ADR 0012). Not a verdict; send it again |
 
 The 502 case is counted separately from rejected attestations: a node having a bad
 minute must not read as a caller trying it on.
@@ -1007,7 +1008,7 @@ with it off, the largest factor in the score is a count of HTTP requests.
 | `PAYMENT_VERIFICATION` | `off` | `off` or `required` |
 | `PAYMENT_ASSET` | (empty) | ERC-20 that payments settle in. **Required** when verification is on — a missing value stops the process at startup rather than silently disabling the check |
 | `PAYMENT_MIN_AMOUNT` | `0` | Smallest payment that counts, per sender, in the asset's base units. Stops dust minting attestations. **Must be above 0 when verification is `required`**: the process refuses to start otherwise. A zero-value transfer never counts, whatever this is |
-| `PAYMENT_MIN_CONFIRMATIONS` | `1` | Confirmations before a settlement is accepted |
+| `PAYMENT_MIN_CONFIRMATIONS` | `1` | Confirmations before a settlement is accepted. Its block must also be at or below the chain's `finalized` block (ADR 0012) |
 | `PAYMENT_FEE_UNIT` | `100000000` | Base units of volume per point of `feeScore`. With 6-decimal USDC this is one point per $100, so the 20-point cap lands at $2,000 of settled volume |
 | `PAYMENT_HALF_LIFE_DAYS` | `90` | Days after which a payment counts half. `0` disables decay, which makes the score answer "was this agent ever busy" instead of "is it busy now" |
 | `PAYMENT_MAX_PER_PAYER` | `4` | Most points of `feeScore`, and attestations of weight, any one payer can contribute. At 4, reaching the 20-point cap needs five distinct payers. `0` disables the cap. Separately, `PAYMENT_MAX_EVENTS_PER_AGENT` (25,000) and `PAYMENT_MAX_EVENTS_TOTAL` (150,000) bound the stored ledger, each a whole number from 1 to 500,000. Past either the ledger drops payments by fair share, so an agent is never held for a full ledger: past the total the agents holding the most payments give up the difference, and within an agent the payers holding the most. Each keeps what it holds up to a common level; the odd places go to the lowest agent ids, and among payers to those whose next payment ranks highest. Within a payer a payment without an outcome goes first, then the smallest in fee units, then the oldest, then by transaction hash. So payments into other agents, or from a few wallets, push out their own, not an agent's or a customer's, and both operators keep the same payments whatever order they arrived in. A dropped payment stays credited, and an outcome posted for it later is refused (`payment_dropped`). The dropped payments' keys are bounded by the same caps the same way: an agent past its share forgets its oldest, and from then refuses any payment to it settled no later than the newest it forgot (`settlement_too_old`), which makes the state file format 5. `/health` reports the ledger as `paymentLedger`: `events` and `withOutcome` held, `dropped` and `droppedWithOutcome` since start, `droppedKeys`, and `agentsWithFloor` |
@@ -1037,7 +1038,7 @@ rather than a number it could not stand behind.
 | `PAYMENT_SCAN_ENABLED` | `0` | `1` enables scanning ERC-20 Transfer logs to agent addresses. Off by default because enabling it changes scores: an operator that has been missing payments starts counting them. |
 | `PAYMENT_SCAN_FROM_BLOCK` | `FROM_BLOCK` | First block when there is no checkpoint. |
 | `PAYMENT_SCAN_CHUNK` | `LOG_CHUNK_SIZE` | Blocks per `getLogs` call. |
-| `PAYMENT_SCAN_CONFIRMATIONS` | `6` (floor) | Blocks to stay behind the head. May be raised, not lowered. Deeper than the attested path because a scan credits unattended; a credit records the tx hash as used, so a reorg would strand it. |
+| `PAYMENT_SCAN_CONFIRMATIONS` | `6` (floor) | Blocks to stay behind the head, and never past the `finalized` block. May be raised, not lowered. Deeper than the attested path because a scan credits unattended; a credit records the tx hash as used, so a reorg would strand it until it is read again once final (ADR 0012). |
 | `PAYMENT_SCAN_PACE_MS` | `500` | Milliseconds between `getLogs` calls. Measured, not guessed: both Arc endpoints limit with a bucket of about 60 requests, so back-to-back calls are refused ~60% of the time, 250ms clears the first 60 and then fails every one after, and 500ms sustains 72 of 72. Costs nothing in steady running, where an epoch is one call. `0` opts out. |
 
 When a scan credits nothing, a **canary** runs before that emptiness is believed. It
@@ -1261,7 +1262,7 @@ The oracle persists the following to `ORACLE_STATE_PATH`:
 - **flags**: Per-agent unresolved flag counts
 - **links**: Agent-to-ERC-8004 identity links made with `POST /link`. Links made on chain are in **linkScanState**, with that scan's checkpoint, and come back from the chain if lost
 - **attestCooldowns**: Per-(attester, didHash) last-attestation timestamps
-- **paymentEvents**: Per-agent verified payments, one record each (`txHash`, settlement time, amount, payer, outcome, and `blockNumber` for anything credited since 3 Oct 2026). Stored individually rather than as a running total, because a total cannot be decayed. Records whose weight falls below a thousandth are pruned once per epoch
+- **paymentEvents**: Per-agent verified payments, one record each (`txHash`, settlement time, amount, payer, outcome, and `blockNumber` for anything credited since 3 Oct 2026). Stored individually rather than as a running total, because a total cannot be decayed. Records whose weight falls below a thousandth are pruned once per epoch. A scored-chain payment read again once its block was final carries `rereadBlock`, the finalized block it was read against, and one the chain no longer held also `removedAt` and `removedWhy` (ADR 0012); a file holding a removal is format 6, which an older build refuses
 - **usedPaymentTxs**: Settlements already credited, as `txHash|didHash|payer`, so the same receipt cannot be counted twice for the same agent from the same sender. Keyed by all three because one transaction can pay several agents and can carry several senders, and collapsing either loses what the per-payer cap and the distinct counterparty count read. Shorter keys from before each change are still honoured and block everything below them, since what they omit is not recoverable, so pruning leaves them. Pruning a record drops its full key, and **prunedBefore** keeps the latest cutoff that happened at: no settlement older than pruning keeps, or than that cutoff, is credited by any path
 - **droppedPayments** and **dropFloors**: The keys of payments the ledger caps dropped, with their settlement times, so that a dropped payment is not credited again. They are bounded by the same caps; an agent past its share forgets its oldest, and its floor is the latest settlement time it forgot at, at or before which no payment to it is credited. A file holding a floor is format 5, which an older build refuses
 - **scanState**: The `AgentRegistered` log scan cursor, checkpointed per chunk so a rate-limited scan resumes instead of restarting from `FROM_BLOCK`

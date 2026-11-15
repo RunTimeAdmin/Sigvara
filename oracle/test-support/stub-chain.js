@@ -142,7 +142,16 @@ function linkAt(agentId, block) {
 const provider = {
   getTransactionReceipt: async (hash) => world().receipts[String(hash).toLowerCase()] ?? null,
   getBlockNumber: async () => world().head + moved,
-  getBlock: async (n) => ({ number: n, timestamp: world().blockTimes?.[n] ?? world().nowSec + moved - 60 }),
+  // 'finalized' is the head unless world.finalized holds it back (ADR 0012). A numbered block lists its transactions
+  // only where world.blockTxs[n] says what they are: a world holds payments it has no block for, and a block without its
+  // list reads as unsettled rather than as one that lost them.
+  getBlock: async (n) => (n === 'finalized'
+    ? { number: world().finalized ?? world().head + moved, timestamp: world().nowSec + moved - 60 }
+    : {
+      number: n,
+      timestamp: world().blockTimes?.[n] ?? world().nowSec + moved - 60,
+      ...(world().blockTxs?.[n] ? { transactions: world().blockTxs[n] } : {}),
+    }),
   getLogs: async (filter) => {
     if (filter.fromBlock === filter.toBlock) return world().canaryLogs ?? [];
     return (world().scanLogs ?? []).filter((l) => l.blockNumber >= filter.fromBlock && l.blockNumber <= filter.toBlock);
