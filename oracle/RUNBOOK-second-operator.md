@@ -581,10 +581,11 @@ not announce itself.
 The proposal is live while `block.timestamp < finalizableAt`, which is word 11 of the
 returndata and is fixed when the proposal is made. Where that word is zero or absent (a
 proposal from before it existed, which on the Arc testnet means any made before its upgrade to
-`main`), the rule is `proposedAt + challengeWindow > block.timestamp`. If the
-pending slot is empty, or holds a *different* `proposedAt` than the record, the disputed
+`main`), the rule is `proposedAt + challengeWindow > block.timestamp`. If `exists`
+(word 8) is zero, or the slot holds a *different* `proposedAt` than the record, the disputed
 proposal has already turned over: the record is `superseded`, still visible, no longer
-actionable.
+actionable. A finalize clears only `exists` and leaves the proposal's other words in place,
+so a finalized proposal does not read as an empty slot.
 
 **3. Diff the inputs before blaming either side.** This is the step that decides it.
 
