@@ -33,6 +33,8 @@ const { ethers } = require('ethers');
 const { HEADER, MAX_SKEW_SECONDS, authProblem, readSecret } = require('./signer-auth');
 const { readWithBackoff } = require('./read-retry');
 const { rpcProvider } = require('./rpc-provider');
+const { redact } = require('./event-index');
+const { wordsOf } = require('./log-spans');
 
 const FEEDBACK = new ethers.Interface([
   'function giveFeedback(uint256 agentId, int128 value, uint8 valueDecimals, string tag1, string tag2, string endpoint, string feedbackURI, bytes32 feedbackHash)',
@@ -160,7 +162,7 @@ function signedRecord(file) {
  * within MAX_SKEW_SECONDS of this clock either side, so one stamped ahead of the clock just before a
  * restart can come again until twice that after it.
  */
-function createSigner({ wallet, policy, secret, allowFrom, maxPerHour, chainId, chain, record, log = console.log, now = () => Math.floor(Date.now() / 1000), warmup = 2 * MAX_SKEW_SECONDS }) {
+function createSigner({ wallet, policy, secret, allowFrom, maxPerHour, chainId, chain, record, log = console.log, now = () => Math.floor(Date.now() / 1000), warmup = 2 * MAX_SKEW_SECONDS, said = wordsOf }) {
   const seen = new Map();
   const startedAt = now();
   let busy = Promise.resolve();
@@ -172,7 +174,12 @@ function createSigner({ wallet, policy, secret, allowFrom, maxPerHour, chainId, 
   async function sign(method, params, t) {
     if (t < startedAt + warmup) return { error: `starting; signing from ${warmup} s after start` };
     if (record.since(t) >= maxPerHour) return { error: `no more than ${maxPerHour} signatures an hour` };
-    const state = await chain();
+    let state;
+    try {
+      state = await chain();
+    } catch (err) {
+      throw Object.assign(new Error(said(err)), { code: 'chain_read' });
+    }
     if (method === 'eth_signTransaction') {
       const tx = params[0] ?? {};
       const why = policy.transaction(tx, state);
@@ -225,6 +232,12 @@ function createSigner({ wallet, policy, secret, allowFrom, maxPerHour, chainId, 
       const { result, error } = await done;
       return answer(res, id, result, error);
     } catch (err) {
+      // The node's own words can name the RPC, key and all, so they are logged shortened and without the URL, and the
+      // caller is told only that the read failed. It is the node's trouble, not the request's.
+      if (err.code === 'chain_read') {
+        log(`[signer] chain read failed: ${String(err.message).slice(0, 160)}`);
+        return answer(res, id, null, 'chain read failed');
+      }
       return answer(res, id, null, `bad request: ${err.message}`);
     }
   }
@@ -310,7 +323,8 @@ async function main(argv = process.argv.slice(2), env = process.env) {
   const password = fs.readFileSync(privateFile(cfg.passwordFile), 'utf8').trim();
   const wallet = await ethers.Wallet.fromEncryptedJson(fs.readFileSync(privateFile(cfg.keystore), 'utf8'), password);
   const secret = readSecret(privateFile(cfg.secretFile));
-  const provider = rpcProvider(cfg.rpcUrl, cfg.chainId);
+  // 8 s a request: a publisher waits on each signature, and a node that has not answered by then will not.
+  const provider = rpcProvider(cfg.rpcUrl, cfg.chainId, { timeoutMs: 8_000 });
   // Retried here on a throttle or a timeout: the provider tries nothing again itself (rpc-provider.js).
   const chain = () => readWithBackoff('signer chain', async () => {
     const [pendingNonce, block] = await Promise.all([provider.getTransactionCount(wallet.address, 'pending'), provider.getBlock('latest')]);
@@ -320,6 +334,7 @@ async function main(argv = process.argv.slice(2), env = process.env) {
   const policy = createPolicy({ ...cfg, address: wallet.address });
   const handler = createSigner({
     wallet, policy, secret, allowFrom: cfg.allowFrom, maxPerHour: cfg.maxPerHour, chainId: cfg.chainId, chain, record: signedRecord(cfg.stateFile),
+    said: (err) => redact(wordsOf(err), [cfg.rpcUrl]),
   });
   createServer(handler, cfg.allowFrom).listen(cfg.port, cfg.host, () => {
     console.log(`[signer] ${wallet.address} on ${cfg.host}:${cfg.port}, from ${[...cfg.allowFrom].join(', ')}, at most ${cfg.maxPerHour} an hour`);

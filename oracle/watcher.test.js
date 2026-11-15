@@ -282,3 +282,12 @@ test('watcher: a credit the checker removed after a reorganization is paged once
     assert.match(alerts.filter((a) => a.includes('credit the chain no longer holds'))[1], /holds 2 credit\(s\) removed after a reorganization, 1 new/);
   });
 });
+
+// The watcher read an answer whole however long it ran, so a broken or hostile checker could fill its memory.
+test('watcher: an answer over 1 MiB is refused, not read whole', async () => {
+  const divergence = (res) => json(res, { mode: 'checker', seesProposals: true, divergences: [], pad: 'x'.repeat(2 * 1024 * 1024) });
+  await withWatcher({ divergence }, async ({ alerts }) => {
+    await until(() => alerts.some((a) => a.includes('the checker is not checking')));
+    assert.match(alerts.find((a) => a.includes('the checker is not checking')), /past 1048576 bytes/);
+  });
+});

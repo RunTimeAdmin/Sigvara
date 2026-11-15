@@ -999,3 +999,18 @@ test('isRateLimited and isSlotTaken do not overlap', () => {
   assert.equal(chain.isSlotTaken(taken), true);
   assert.equal(chain.isRateLimited(taken), false);
 });
+
+// An epoch's per-agent steps, /score and /evidence each read the chain's clock one round trip at a time.
+test('getLatestBlockTimestamp reuses a reading up to maxAgeMs old, and reads afresh without one', async () => {
+  let reads = 0;
+  chain.init(CFG, {
+    provider: { getBlock: async (tag) => { assert.equal(tag, 'latest'); reads += 1; return { timestamp: 1000 + reads }; } },
+    identityContract: makeFakeIdentityContract({ events: [] }),
+    reputationContract: makeFakeReputationContract(),
+  });
+  assert.equal(await chain.getLatestBlockTimestamp(), 1001);
+  assert.equal(await chain.getLatestBlockTimestamp({ maxAgeMs: 5_000 }), 1001, 'a reading under 5 s old is reused');
+  assert.equal(reads, 1);
+  assert.equal(await chain.getLatestBlockTimestamp(), 1002, 'without maxAgeMs the chain is read');
+  assert.equal(reads, 2);
+});

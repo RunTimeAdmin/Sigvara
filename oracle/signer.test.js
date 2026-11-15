@@ -137,12 +137,13 @@ test('signedRecord: an hour\'s window, kept across a restart', () => {
 
 // ---- the server, with the publisher and agent-wallet.js as its clients ------------------
 
-async function serve({ allowFrom = new Set(['127.0.0.1']), maxPerHour = 60, warmup = 0, pendingNonce = 4 } = {}) {
+async function serve({ allowFrom = new Set(['127.0.0.1']), maxPerHour = 60, warmup = 0, pendingNonce = 4, chain = null, said = undefined } = {}) {
   const logs = [];
   const state = { pendingNonce };
   const handler = createSigner({
     wallet: KEY, policy, secret: SECRET, allowFrom, maxPerHour, chainId: CHAIN, warmup, record: signedRecord(null), log: (l) => logs.push(l),
-    chain: async () => ({ pendingNonce: state.pendingNonce, time: Math.floor(Date.now() / 1000) }),
+    chain: chain ?? (async () => ({ pendingNonce: state.pendingNonce, time: Math.floor(Date.now() / 1000) })),
+    ...(said ? { said } : {}),
   });
   const server = createServer(handler, allowFrom);
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
@@ -328,4 +329,23 @@ test('readConfig: a cap that does not parse is refused, not read as no cap', () 
   assert.throws(() => readConfig({ ...base, SIGNER_MAX_PER_HOUR: 'lots' }), /SIGNER_MAX_PER_HOUR must be a whole number/);
   assert.throws(() => readConfig({ ...base, SIGNER_ALLOW_FROM: '' }), /SIGNER_ALLOW_FROM is required/);
   assert.throws(() => readConfig({ ...base, SIGNER_AGENT_OWNER: '' }), /SIGNER_AGENT_OWNER is required/);
+});
+
+// The signer answered a failed chain read with the provider's own message, which can hold the RPC URL and its key.
+test('a failed chain read is answered "chain read failed", and logged without the RPC URL', async () => {
+  const { redact } = require('./event-index');
+  const { wordsOf } = require('./log-spans');
+  const RPC = 'https://rpc.example.invalid/v2/very-secret-key';
+  const s = await serve({
+    chain: async () => { throw new Error(`request to ${RPC} failed: socket hang up`); },
+    said: (err) => redact(wordsOf(err), [RPC]),
+  });
+  try {
+    const signer = client(s, fakeProvider(s));
+    await assert.rejects(signer.send('revoke', 7, [7, 1]), (err) => /chain read failed/.test(err.message) && !err.message.includes('very-secret-key'));
+    assert.ok(s.logs.some((l) => l.startsWith('[signer] chain read failed')), s.logs.join(' | '));
+    assert.ok(s.logs.every((l) => !l.includes('very-secret-key')), s.logs.join(' | '));
+  } finally {
+    await s.close();
+  }
 });
