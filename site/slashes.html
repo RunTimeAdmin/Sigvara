@@ -19,7 +19,7 @@
   <link rel="stylesheet" href="assets/style.css?v=integrate1" />
   <link rel="stylesheet" href="assets/app.css?v=ac69814" />
   <link rel="stylesheet" href="assets/epochs.css?v=6081b79" />
-  <link rel="stylesheet" href="assets/explorer.css?v=simview1" />
+  <link rel="stylesheet" href="assets/explorer.css?v=slscene1" />
 </head>
 <body>
 
@@ -52,6 +52,21 @@
   <p class="ep-lede">A slash takes an agent's stake. The slashing committee files it with an evidence hash and a victim, the agent is suspended at once, and the operator has a challenge window to dispute it. An undisputed slash can then be executed by anyone: 75% of the stake is burned and 25% goes to the victim. The committee is paid nothing.</p>
   <p class="netnote">Arc testnet (5042002). Reads only. Proceedings come from Sigvara's event index of the staking and bond contracts, and from the chain for the newest blocks; the evidence from the transaction that filed each slash.</p>
 
+  <div class="app-card u-hidden" id="slSceneCard">
+    <h2>Where each agent slash stands</h2>
+    <div class="sim-scene op-scene sl-scene" id="slScene"></div>
+    <div class="op-keys">
+      <span class="sim-key k-open">A slash, filed and still open</span>
+      <span class="sim-key k-disputed">Amber band: disputed by the operator</span>
+      <span class="sim-key k-dropped">Dropped</span>
+      <span class="sim-key k-vetoed">White halo: dropped by the admin's veto</span>
+      <span class="sim-key k-burn">Executed stake, burned</span>
+      <span class="sim-key k-victim">Executed stake, paid to the victim</span>
+      <span class="sim-key k-filer">Executed stake, paid to the member who filed it (before 2 November 2026)</span>
+    </div>
+    <p class="netnote">Point at a slash to read it, click to find it in the list below. The replay sends each slash from where it was filed to where it stands now. They set off in the order they were filed: it shows order and outcome, not how long anything took. An executed slash's stack is its stake, split to scale. The dust means nothing.</p>
+  </div>
+
   <div class="app-card" id="slashCard">
     <h2>Agent slashes</h2>
     <div class="card-body"><p class="netnote">Reading…</p></div>
@@ -79,6 +94,7 @@
 
 <script src="assets/did.js?v=32000f8"></script>
 <script src="assets/explorer.js?v=scores1"></script>
-<script src="assets/slashes.js?v=sm1"></script>
+<script src="assets/slashes.js?v=slscene1"></script>
+<script type="module" src="assets/slashes-scene.js?v=slscene1"></script>
 </body>
 </html>

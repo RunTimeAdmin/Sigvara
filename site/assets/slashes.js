@@ -84,6 +84,8 @@ async function renderSlashes(staking) {
     + (list.some((p) => p.end?.legacy) ? " Slashes executed before 2 November 2026 paid the member who filed them a quarter of the stake; since then the committee is paid nothing (ADR 0007)." : "")
     + "</p>";
   if (X.simUnknown()) html += '<p class="pill-warn">The list of the testnet simulation\'s agents could not be read, so its agents are not marked as simulated below. Reload to try again.</p>';
+  // What the room at the top of the page (slashes-scene.js) draws from, in the order filed.
+  const drawn = [];
   html += [...list].reverse().map((p) => {
     const addr = addrOf.get(p.didHash);
     const agent = (X.isAddr(addr) && !/^0x0{40}$/.test(addr) ? `<a href="epochs?a=${addr}"><code>${X.short(addr)}</code></a>` : `<code>${X.esc(X.short(p.didHash))}</code>`)
@@ -105,7 +107,14 @@ async function renderSlashes(staking) {
       outcome = `<span class="pill-ok">${p.end.vetoed ? "vetoed" : "dropped"}</span> on ${X.esc(X.fmtWhen(p.end.time))} by ${X.whoIs(p.end.by)}. ${X.txLink(p.end.tx)}`;
       cls = "dropped";
     }
-    return `<div class="ex-proceeding ${cls}">
+    const known = X.isAddr(addr) && !/^0x0{40}$/.test(addr);
+    drawn.unshift({
+      index: list.indexOf(p), agent: X.short(known ? addr : p.didHash), sim: X.simAgent(addr) || null, at: p.at,
+      evidence: ev?.text ?? null, disputed: Boolean(p.disputed), state: !p.end ? "open" : p.end.kind, vetoed: Boolean(p.end?.vetoed), endTime: p.end?.time,
+      burned: p.end?.burned ?? 0n, toVictim: p.end?.toVictim ?? 0n, toReporter: p.end?.toReporter ?? 0n,
+      taken: (p.end?.burned ?? 0n) + (p.end?.toVictim ?? 0n) + (p.end?.toReporter ?? 0n),
+    });
+    return `<div class="ex-proceeding ${cls}" id="proceeding-${list.indexOf(p)}">
       <div class="ep-head"><b>Agent ${agent}</b><span>filed ${X.esc(X.fmtWhen(p.at))} ${X.txLink(p.tx)}</span></div>
       <dl class="kv">
         <dt>Filed by</dt><dd class="prose">${X.whoIs(p.reporter)}, a slashing committee member</dd>
@@ -119,6 +128,9 @@ async function renderSlashes(staking) {
   if (staking.value.truncated) html += '<p class="pill-warn">The explorer has more history than this page reads, so the newest slashes may be missing.</p>';
   html += X.historyNote(staking.value);
   setCard("slashCard", html);
+  // The scene is a module, so it may load before or after this.
+  window.SigvaraSlashData = drawn;
+  document.dispatchEvent(new Event("sigvara-slash-data"));
 }
 
 function renderBondSlashes(bond) {
