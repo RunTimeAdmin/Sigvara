@@ -184,6 +184,21 @@ export function epochProblem(j, staleMs = EPOCH_STALE_MS) {
   return Number.isFinite(since) && since > staleMs ? `no completed epoch for ${Math.round(since / 60000)} minutes` : null;
 }
 
+// The divergence watcher polls the checker every five minutes and names itself, and the checker's /health says when it
+// last did (`watcherSeenMs`). The watcher alerts on changes only, so a stopped one looks like one with nothing to say;
+// this is how it is noticed. Half an hour is six polls missed.
+export const WATCHER_SILENT_MS = 30 * 60_000;
+
+export function watcherProblem(j, nowMs = Date.now(), silentMs = WATCHER_SILENT_MS) {
+  if (!('watcherSeenMs' in j)) return 'it does not say when the watcher last polled it (watcherSeenMs)';
+  if (j.watcherSeenMs == null) {
+    const up = Number(j.uptimeSeconds) * 1000;
+    return Number.isFinite(up) && up > silentMs ? `no watcher has polled it in the ${Math.round(up / 60000)} minutes since it started` : null;
+  }
+  const since = nowMs - Number(j.watcherSeenMs);
+  return Number.isFinite(since) && since > silentMs ? `the watcher last polled it ${Math.round(since / 60000)} minutes ago` : null;
+}
+
 async function checkServices() {
   for (const [name, base] of [['oracle', ORACLE], ['checker', CHECKER]]) {
     try {
@@ -192,6 +207,8 @@ async function checkServices() {
       if (res.status !== 200 || j.ok !== true) fail(`${name}: /health status ${res.status}, ok=${j.ok}`);
       const late = epochProblem(j);
       if (late) fail(`${name}: ${late}`);
+      const silent = name === 'checker' ? watcherProblem(j) : null;
+      if (silent) fail(`checker: ${silent}`);
       if (j.storeWritable === false || j.statePersisted === false) fail(`${name}: state is not being saved`);
     } catch (e) {
       fail(`${name}: /health unreachable or unreadable (${e.message})`);
@@ -242,7 +259,7 @@ async function checkServices() {
       fail(`${host}: certificate check failed (${e.message})`);
     }
   }
-  console.log('services: oracle, checker and event index health, divergence list and certificate expiry checked');
+  console.log('services: oracle, checker and event index health, last watcher poll, divergence list and certificate expiry checked');
   await checkWallets();
 }
 

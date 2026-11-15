@@ -33,8 +33,6 @@ As of 15 November 2026. The SVR token is on Arc mainnet; the registries and the 
 - An oracle operator outside the team. Today the primary and the checker are run by the same party, so the
   checker catches a fault, not a dishonest operator.
 - Moving the testnet compose files to the mainnet pattern (a file secret, read-only, non-root).
-- A way to notice a dead watcher. It alerts on changes only, so a watcher that has stopped looks like one with
-  nothing to report.
 - A wiki pass whenever `main` moves.
 
 ## Phase 1 — Prove the mechanism (testnet, weeks 1–2)

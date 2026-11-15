@@ -347,7 +347,11 @@ Write the verdict in [divergence-log.md](divergence-log.md).
 The checker re-scores each pending proposal and records a divergence when the total, or any one
 factor, differs from the proposal's by more than `DIVERGENCE_TOLERANCE` (3 points). It is served
 at `GET /divergence`, the watcher alerts on it while the proposal can still be rejected, and
-`check-live.mjs services` fails on it in that time. Triage it with
+`check-live.mjs services` fails on it in that time. The watcher alerts on changes only, so a stopped
+one would look like one with nothing to say. It names itself when it polls, the checker's `/health`
+says when it last did (`watcherSeenMs`), and `check-live.mjs services` fails once that is half an hour
+old, or the checker has been up that long with no poll. Restart the watcher on its host
+(`docker compose -f docker-compose.watcher.vps.yml up -d` in `/docker/sigvara-watcher`). Triage it with
 [RUNBOOK-second-operator.md section 9](../oracle/RUNBOOK-second-operator.md#9-when-a-divergence-fires):
 the commits, the record, whether the proposal is still live, then the evidence diff that decides
 it. An outcome one operator holds and the other refused or has not imported yet (section 2), or

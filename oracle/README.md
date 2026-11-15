@@ -115,7 +115,7 @@ Health check with operational signals for production alerting.
 }
 ```
 
-`creditsRemoved` counts held credits a reorganization removed (ADR 0012); it should be 0, and the watcher alerts when it grows. Where the state file is, and what went wrong writing it, are in the log and not in this answer. It also carries `writePolicy`, `{ "scoreRefreshHours": 12, "maxWritesPerEpoch": 1000 }`, which both operators must share.
+`creditsRemoved` counts held credits a reorganization removed (ADR 0012); it should be 0, and the watcher alerts when it grows. A checker also serves `watcherSeenMs`, when the divergence watcher last read its `/divergence` (null since a restart), which the live checks read to notice a stopped watcher. Where the state file is, and what went wrong writing it, are in the log and not in this answer. It also carries `writePolicy`, `{ "scoreRefreshHours": 12, "maxWritesPerEpoch": 1000 }`, which both operators must share.
 Returns 503 when:
 - State file path is not writable (likely volume mount issue)
 - The last state write failed (`statePersisted: false`)
