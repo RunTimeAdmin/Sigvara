@@ -16,15 +16,15 @@ key is [incident-operator-key.md](incident-operator-key.md); bringing up an oper
 | State volume | `sigvara-oracle_oracle_state` | `sigvara-checker_checker_state` |
 | Local port, for `/metrics` | `127.0.0.1:3030` | `127.0.0.1:3031` |
 
-**What runs what, as of 14 November 2026.** Each public `/health` names its own commit, and that is the
+**What runs what, as of 15 November 2026.** Each public `/health` names its own commit, and that is the
 one to trust when this table has gone stale.
 
 | Service | Host | Commit | Since (UTC) |
 |---|---|---|---|
-| Primary oracle | `archipelago-standby` | `ee2d59d` | 14 November, 02:41 |
-| Checker | `packrai-vps` | `ee2d59d` | 14 November, 02:41 |
+| Primary oracle | `archipelago-standby` | `9a55028` | 15 November, 01:34 |
+| Checker | `packrai-vps` | `9a55028` | 15 November, 01:22 |
 | Event index | `archipelago-standby` | `b95f0aa` | 5 November, 13:31 |
-| Watcher | a third host | `aa34cee` | 6 November, 08:37 |
+| Watcher | a third host | `9a55028` | 15 November, 01:35 |
 | Policy signer | `packrai-vps` | `b95f0aa` | 5 November, 13:33 |
 | ERC-8004 publisher | `archipelago-standby` | `e39ff5b` | 5 November, 11:08 |
 | Slash keepers | `archipelago-standby`, `packrai-vps` | `50386ef` | 10 November, 16:39 |
@@ -786,10 +786,14 @@ the oldest first, with what the refund reads leave of their ten minutes. On Arc 
 anything. A credit the chain no longer holds gets `removedAt` and leaves the evidence from then on; its
 hash stays used.
 
-The first epochs after the upgrade read the credits made before it, about 2,000 on each operator on
-14 November 2026, half a second apart. Most are older than the node keeps receipts for, so each of
-those costs a block read and a log read as well. Expect `credit(s) not read again this epoch` for a
-few epochs while that backlog drains.
+The first epochs after the upgrade read the credits made before it, about 1,900 on each operator on
+15 November 2026, a read every half second. The oldest, 160 on the checker, are older than the public
+endpoints keep receipts for, so each of those costs a block read and a log read as well. The checker's
+first epoch read about 850 in its ten minutes and left 1,029 for the next. The primary's read about 160:
+its endpoint answered many reads with `rate limit exceeded` or `internal error`, each retried with backoff
+and, when that ran out, logged as `not settled` and left for the next epoch (27 that epoch). So expect
+`credit(s) not read again this epoch` for an epoch or two on the checker and about half a day on the
+primary. Its scores went out as usual meanwhile: 1 proposed and 4 finalized in that epoch.
 
 | What it says | What it means | What to do |
 |---|---|---|
