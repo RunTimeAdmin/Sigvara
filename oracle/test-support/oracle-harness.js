@@ -259,11 +259,12 @@ async function startOracle({ world, env = {}, files }, binds = 3) {
   // peer is loopback, so the oracle trusts the header, and each call gets a rate-limit bucket
   // of its own; naming a client puts several calls in one bucket on purpose.
   let hop = 0;
-  async function call(method, urlPath, body, token, { client } = {}) {
+  async function call(method, urlPath, body, token, { client, headers: extra = {} } = {}) {
     hop += 1;
     const headers = {
       'content-type': 'application/json',
       'x-forwarded-for': client ?? `10.1.${(hop >> 8) & 255}.${hop & 255}`,
+      ...extra,
     };
     if (token) headers.authorization = `Bearer ${token}`;
     const res = await fetch(`http://127.0.0.1:${port}${urlPath}`, {

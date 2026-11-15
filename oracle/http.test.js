@@ -581,6 +581,30 @@ async function waitFor(predicate, ms) {
   return predicate();
 }
 
+test('a checker says when the watcher last read its list, so a stopped watcher can be noticed from outside', async () => {
+  const checker = await startOracle({ world: new World(), env: CHECKER_ENV });
+  let watcher;
+  try {
+    const seen = async () => (await checker.call('GET', '/health')).body.watcherSeenMs;
+    assert.equal(await seen(), null, 'not since it started');
+    await checker.call('GET', '/divergence');
+    assert.equal(await seen(), null, 'another client reading the list is not the watcher');
+
+    const before = Date.now();
+    watcher = startWatcher({ env: { CHECKER_URL: `http://127.0.0.1:${checker.port}` } });
+    let at = null;
+    for (const end = Date.now() + 15_000; at === null && Date.now() < end;) {
+      await new Promise((r) => setTimeout(r, 150));
+      at = await seen();
+    }
+    assert.ok(at !== null, `the watcher's poll was not recorded:\n${watcher.logs()}`);
+    assert.ok(at >= before, 'recorded at its poll');
+  } finally {
+    if (watcher) await watcher.stop();
+    await checker.stop();
+  }
+});
+
 test('the watcher raises an alert when the checker answers /health but refuses /divergence', async () => {
   const checker = await startOracle({ world: new World(), env: CHECKER_ENV });
   const sink = await webhookSink();

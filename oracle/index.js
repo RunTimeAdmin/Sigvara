@@ -594,6 +594,12 @@ async function settleNegatives(agentInfos, deadline = Date.now() + REFUND_READ_B
 // Credits read again once final (rereadCredits) have what the refunds leave of it.
 const REFUND_READ_BUDGET_MS = PAYMENT_CHAIN_SCAN_BUDGET_MS;
 
+// When the divergence watcher last read /divergence here, in ms, for /health: it alerts on changes only, so this is how
+// a check from outside tells a watcher that stopped from one with nothing to report (scripts/check-live.mjs). It goes
+// by the watcher's User-Agent, which anyone can send, so it can make a stopped watcher look alive but never the reverse.
+// In memory: a restart forgets it until the next poll.
+let watcherSeenAt = null;
+
 // Held credits a reorganization removed, for /health and so the watcher: counted when first asked and again after each
 // epoch's re-read, since /health is public and unmetered and a count walks every payment held.
 let removedHeld = null;
@@ -3221,6 +3227,8 @@ async function handleRequest(req, res) {
       paymentLedger: ledgerStatus(),
       // Held credits a reorganization removed (ADR 0012). Should be 0; the watcher alerts when it grows.
       creditsRemoved: removedCredits(),
+      // A checker's: when the divergence watcher last read its list, in ms, or null since this process started.
+      ...(cfg.checkerMode ? { watcherSeenMs: watcherSeenAt } : {}),
       // The chain the RPC was last seen on, and the one this oracle was configured for. Null
       // until the first check, and the expected one is null when EXPECTED_CHAIN_ID is unset.
       chainId: seenChainId,
@@ -3658,6 +3666,8 @@ async function handleRequest(req, res) {
       return json(res, 404, { error: 'not_a_checker', message: 'This oracle does not run in checker mode.' });
     }
     if (pathname === '/divergence') {
+      // The watcher names itself (oracle/watcher.js), so /health can say when it last read this list.
+      if (String(req.headers['user-agent'] || '').startsWith('sigvara-watcher')) watcherSeenAt = Date.now();
       // Capped. Serialising every agent's full history on an unauthenticated route is
       // CPU and bandwidth an anonymous caller gets to spend 60 times a minute, on the
       // same event loop that serves /attest and runs the epoch timer. Newest first,

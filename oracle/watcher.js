@@ -92,11 +92,18 @@ let checkerKind = null;
 // restart pages what is there once more.
 let removedSeen = 0;
 
+// What this watcher calls itself in each request to the checker. index.js matches the start of it.
+const WATCHER_AGENT = 'sigvara-watcher';
+
 // redirect: 'error'. The checker is somebody else's server, and following a redirect it
 // chooses would let it point this watcher at an address it could not reach itself, such as
 // the cloud metadata service on this host.
 async function getJson(path, { acceptStatus = [] } = {}) {
-  const res = await fetch(`${cfg.checkerUrl}${path}`, { signal: AbortSignal.timeout(20_000), redirect: 'error' });
+  // Named, so the checker can say when this watcher last read its list (its /health `watcherSeenMs`), and a check
+  // from outside can tell a watcher that stopped from one with nothing to report.
+  const res = await fetch(`${cfg.checkerUrl}${path}`, {
+    signal: AbortSignal.timeout(20_000), redirect: 'error', headers: { 'User-Agent': WATCHER_AGENT },
+  });
   if (!res.ok && !acceptStatus.includes(res.status)) throw new Error(`${path} returned ${res.status}`);
   const body = await res.text();
   // Not the parser's message, which quotes the body: what this server sends is not ours to repeat.

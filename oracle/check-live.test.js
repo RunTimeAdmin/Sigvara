@@ -18,6 +18,19 @@ test('the live check reads a missing last epoch as none yet, not as one just now
   assert.match(epochProblem({ timeSinceLastEpochMs: 4 * HOUR, uptimeSeconds: 9 * 3600 }) ?? '', /no completed epoch for 240 minutes/);
 });
 
+test('the live check fails on a watcher that has stopped polling the checker, and not on one just restarted', async () => {
+  const { watcherProblem } = await checkLive();
+  const NOW = 1_800_000_000_000;
+  const MIN = 60_000;
+  assert.equal(watcherProblem({ watcherSeenMs: NOW - 5 * MIN, uptimeSeconds: 9 * 3600 }, NOW), null);
+  assert.match(watcherProblem({ watcherSeenMs: NOW - 45 * MIN, uptimeSeconds: 9 * 3600 }, NOW) ?? '', /the watcher last polled it 45 minutes ago/);
+  // The checker restarted and the watcher has not polled since: fine for a while, then not.
+  assert.equal(watcherProblem({ watcherSeenMs: null, uptimeSeconds: 300 }, NOW), null);
+  assert.match(watcherProblem({ watcherSeenMs: null, uptimeSeconds: 2 * 3600 }, NOW) ?? '', /no watcher has polled it in the 120 minutes since it started/);
+  // A checker that does not report it at all is a failure too, not a pass.
+  assert.match(watcherProblem({ uptimeSeconds: 9 * 3600 }, NOW) ?? '', /does not say when the watcher last polled it/);
+});
+
 test('the live check reads every page of slash filings the event index holds', async () => {
   const { indexLogs } = await checkLive();
   const log = (n) => ({ topics: ['0xtopic', `0x${String(n).padStart(64, '0')}`] });
