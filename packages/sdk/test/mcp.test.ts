@@ -13,6 +13,7 @@ import { signChallenge } from '../src/challenge';
 import { seedToKeyPair, pubKeyToBytes32 } from '../src/keys';
 import { computeDidHash } from '../src/did';
 import { AgentStatus, SlashState } from '../src/types';
+import { ERC20_ABI, IDENTITY_ABI, REPUTATION_ABI, STAKING_ABI } from '../src/abis';
 
 const CHAIN = 5042002;
 const AGENT = '0x00000000000000000000000000000000000000aa';
@@ -464,6 +465,57 @@ describe('the chain check when the server builds its own verifier', () => {
       rpc.close();
     }
   });
+
+  it('asks the RPC for its chain id once, and not with every wave of reads', async () => {
+    // A node holding one Active, bonded agent, which counts what it is asked. Without staticNetwork ethers sent
+    // eth_chainId beside every wave of reads, four in a first sigvara_check_agent, on top of the server's own check.
+    const token = `0x${'44'.repeat(20)}`;
+    const contracts: Record<string, ethers.Interface> = {
+      [ARC_TESTNET.addresses.identity.toLowerCase()]: new ethers.Interface(IDENTITY_ABI),
+      [ARC_TESTNET.addresses.reputation.toLowerCase()]: new ethers.Interface(REPUTATION_ABI),
+      [ARC_TESTNET.addresses.staking.toLowerCase()]: new ethers.Interface(STAKING_ABI),
+      [token]: new ethers.Interface(ERC20_ABI),
+    };
+    const holds: Record<string, unknown[]> = {
+      getIdentity: [['0x00000000000000000000000000000000000000cc', AGENT, `0x${'11'.repeat(32)}`, AgentStatus.Active, 1_700_000_000n]],
+      isActive: [true], hasMinimumStake: [true], getTotalScore: [50], getEarnedScore: [50],
+      getReputation: [[10, 5, 20, 0, 5, 10, BigInt(NOW - 60)]],
+      getStake: [1000n * SVR], minimumStake: [1000n * SVR], getPendingWithdrawal: [0n, 0n],
+      getSlashProposal: [[ethers.ZeroHash, ethers.ZeroAddress, ethers.ZeroAddress, 0n, SlashState.None, '0x', 0n, 0n]],
+      getPendingScore: [[[0, 0, 0, 0, 0, 0, 0n], 0n, false, ethers.ZeroHash, ethers.ZeroAddress, 0n]],
+      svrToken: [token], decimals: [18],
+    };
+    const asked: string[] = [];
+    const answer = (m: { id: unknown; method: string; params: any[] }) => {
+      asked.push(m.method);
+      if (m.method === 'eth_chainId') return { jsonrpc: '2.0', id: m.id, result: ethers.toQuantity(CHAIN) };
+      const iface = contracts[m.params[0].to.toLowerCase()];
+      const fn = iface.parseTransaction({ data: m.params[0].data })!.name;
+      return { jsonrpc: '2.0', id: m.id, result: iface.encodeFunctionResult(fn, holds[fn]) };
+    };
+    const rpc = createServer((req, res) => {
+      let body = '';
+      req.on('data', (d) => { body += d; });
+      req.on('end', () => {
+        const m = JSON.parse(body);
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify(Array.isArray(m) ? m.map(answer) : answer(m)));
+      });
+    });
+    await new Promise<void>((r) => rpc.listen(0, '127.0.0.1', () => r()));
+    const port = (rpc.address() as { port: number }).port;
+    try {
+      const s = createTrustServer({ chainId: CHAIN, addresses: ARC_TESTNET.addresses, rpcUrl: `http://127.0.0.1:${port}`, now: () => NOW });
+      for (let i = 0; i < 2; i++) {
+        const r = await call(s, 'sigvara_check_agent', { agent: DID, threshold: 40 });
+        expect(r.value.decision).toMatchObject({ ok: true });
+      }
+      expect(asked.filter((m) => m === 'eth_chainId')).toHaveLength(1);
+      expect(asked.filter((m) => m === 'eth_call').length).toBeGreaterThan(20);
+    } finally {
+      rpc.close();
+    }
+  });
 });
 
 describe('JSON-RPC edges', () => {
@@ -792,17 +844,28 @@ describe('sigvara_verify_evidence, after review', () => {
   });
 
   it('bounds the work a long list that matches nothing can cause', async () => {
-    const list = Array.from({ length: 2000 }, (_, i) => pay(i, { outcomeSource: 'payer_signed' }));
+    // Newest first, so a lower cut-off leaves out the first payments and moves every pair after them: each cut-off
+    // costs close to two whole trees, the memo saves little, and only the hash budget stops the search. Unbounded,
+    // a list like this took about 25 seconds on the review machine.
+    const list = Array.from({ length: 2000 }, (_, i) => pay(1999 - i, { outcomeSource: 'payer_signed' }));
     const t0 = Date.now();
     const r = await run(chain(`0x${'ab'.repeat(32)}`), answer(list));
     const took = Date.now() - t0;
     expect(r.value.finalized.reproduced).toBe(false);
-    expect(r.value.finalized.detail).toMatch(/only the 5 latest settlement cut-offs were tried/);
-    // Unbounded, this list took about 25 seconds on the review machine; bounded it is a small multiple of one rebuild.
+    expect(r.value.finalized.detail).toMatch(/reached its limit of 20000 hashes/);
     expect(took).toBeLessThan(5_000);
     const over = await run(chain(ZERO_ROOT), answer(Array.from({ length: 2001 }, (_, i) => pay(i))));
     expect(over.isError).toBe(true);
     expect(over.text).toMatch(/more than 2000 payments/);
+  }, 60_000);
+
+  it('reproduces a finalized root ten payments behind a list of 2000', async () => {
+    // A busy agent's finalized root trails the payments its oracle lists. Bounding the number of cut-offs by the
+    // length of the list tried only the five latest at 2000, so this root read as not reproduced.
+    const list = Array.from({ length: 2000 }, (_, i) => pay(i));
+    const r = await run(chain(leafRoot(list.slice(0, 1990))), answer(list));
+    expect(r.value.finalized).toMatchObject({ reproduced: true, covers: 1990, checkedWithContract: 100, confirmedByContract: 100 });
+    expect(r.value.notYetFinalized).toBe(10);
   }, 60_000);
 
   it('reports a time no calendar can write, and a non-hex payer, as payments that cannot be rebuilt', async () => {
