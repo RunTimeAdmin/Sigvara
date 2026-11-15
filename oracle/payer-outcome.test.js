@@ -544,6 +544,22 @@ describe('POST /attest with a payer-signed outcome', () => {
     }
   });
 
+  // A forged signature used to cost the payment's reads, then the head, a block and the payer's code, before its 400.
+  test('a signature that recovers to someone else, from a payer with no code, is refused before the payment is read', async () => {
+    const payer = ethers.Wallet.createRandom();
+    const { agent, txHash } = paid(payer);
+    const receiptReads = () => oracle.calls().filter((c) => c.name === 'receipt' && c.args[0] === txHash.toLowerCase()).length;
+    const forged = await signOutcome(agent.didHash, txHash, payer, { signer: ethers.Wallet.createRandom() });
+    const r = await post(oracle, agent.didHash, txHash, forged);
+    assert.equal(r.status, 400, r.text);
+    assert.equal(r.body.code, 'bad_signature');
+    assert.equal(receiptReads(), 0, 'refused without reading the payment');
+    // The payer's own signature still has the whole check.
+    const own = await post(oracle, agent.didHash, txHash, await signOutcome(agent.didHash, txHash, payer));
+    assert.equal(own.status, 200, own.text);
+    assert.equal(receiptReads(), 1);
+  });
+
   test('refuses a signature dated before settlement or after its deadline', async () => {
     const payer = ethers.Wallet.createRandom();
     const { agent, txHash } = paid(payer);

@@ -37,6 +37,7 @@ const { webhookPayload, trackPollOutcome } = require('./watcher-policy');
 const { redact } = require('./event-index');
 const { wordsOf } = require('./log-spans');
 const { readWithBackoff } = require('./read-retry');
+const { rpcProvider } = require('./rpc-provider');
 
 const STAKING_ABI = [
   'event SlashInitiated(bytes32 indexed didHash, address indexed reporter, address indexed victim, uint256 initiatedAt)',
@@ -406,7 +407,7 @@ async function main() {
     console.error(`[keeper] ${err.message}`);
     process.exit(1);
   }
-  const provider = new ethers.JsonRpcProvider(cfg.rpcUrl);
+  const provider = rpcProvider(cfg.rpcUrl);
   const staking = new ethers.Contract(cfg.staking, STAKING_ABI, provider);
   const wallet = cfg.privateKey ? new ethers.Wallet(cfg.privateKey, provider) : null;
   // Each read through the backoff the oracle uses: a throttle says nothing about a slash. A real

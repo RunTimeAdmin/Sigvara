@@ -727,7 +727,7 @@ test('with no payment chain the order is fixed too, and every stored payment sti
   }
 });
 
-test('when no cut-off matches the root, a checker scores what counted by the newest one a proposer could use', () => {
+test('when no cut-off matches the root, a checker scores what counted by the newest one a proposer could use', async () => {
   const { evidenceAsOf } = require('./evidence-as-of');
   const cfg = config();
   const P = NOW + 25_000;
@@ -735,7 +735,7 @@ test('when no cut-off matches the root, a checker scores what counted by the new
   const pastTheCut = arcEvent(NOW - 30_000); // after the newest cut-off, NOW - 60 s, and before P
   const options = { eligibleAt: (e) => pc.eligibleAtMs(e, cfg), cuts: pc.auditCuts(P, cfg) };
   assert.equal(options.cuts[0], pc.cutFor(P, cfg));
-  const got = evidenceAsOf(pc.eventsAt(Object.freeze([old, pastTheCut]), P, cfg), P, `0x${'ab'.repeat(32)}`, options);
+  const got = await evidenceAsOf(pc.eventsAt(Object.freeze([old, pastTheCut]), P, cfg), P, `0x${'ab'.repeat(32)}`, options);
   assert.equal(got.matchedRoot, false);
   assert.deepEqual(got.events, [old]);
 });
@@ -843,7 +843,7 @@ test('an RPC URL is https, or http only to this host or a private network', () =
   }
 });
 
-test('a score is cut at a whole minute, and a checker finds that cut from the proposal alone', () => {
+test('a score is cut at a whole minute, and a checker finds that cut from the proposal alone', async () => {
   const { evidenceAsOf } = require('./evidence-as-of');
   const cfg = config();
   const C = NOW + 25_000;          // the primary's clock when it scored this agent
@@ -860,15 +860,15 @@ test('a score is cut at a whole minute, and a checker finds that cut from the pr
   const root = merkle.rootFor(proposed);
   const atP = pc.eventsAt(stored, P, cfg);
   assert.equal(atP.length, 3);
-  assert.equal(evidenceAsOf(atP, P, root).matchedRoot, false, 'one cut at the proposal time misses it');
+  assert.equal((await evidenceAsOf(atP, P, root)).matchedRoot, false, 'one cut at the proposal time misses it');
   const options = { eligibleAt: (e) => pc.eligibleAtMs(e, cfg), cuts: pc.auditCuts(P, cfg) };
   assert.equal(options.cuts.length, 29, 'every whole minute in the half hour, from the cut-off of a score made at P');
-  const found = evidenceAsOf(atP, P, root, options);
+  const found = await evidenceAsOf(atP, P, root, options);
   assert.equal(found.matchedRoot, true);
   assert.deepEqual(found.events, [old]);
   // Evidence cut more than half an hour before the proposal is not believed.
   const lagged = merkle.rootFor(pc.eventsAt(Object.freeze([old, arcEvent(T - 40 * 60_000)]), T - 35 * 60_000, cfg));
-  assert.equal(evidenceAsOf(pc.eventsAt(Object.freeze([old, arcEvent(T - 40 * 60_000)]), P, cfg), P, lagged, options).matchedRoot, false);
+  assert.equal((await evidenceAsOf(pc.eventsAt(Object.freeze([old, arcEvent(T - 40 * 60_000)]), P, cfg), P, lagged, options)).matchedRoot, false);
   // And the browser finds it too, from the proposal's time and what /evidence serves.
   const served = (e) => ({ ...(e.chainId != null ? { chainId: e.chainId } : {}), txHash: e.txHash, payer: e.payer, amount: e.amount, settledAt: merkle.settledSeconds(e), success: e.success });
   const evidenceCut = { quantumSeconds: 60, windowSeconds: 1800 };

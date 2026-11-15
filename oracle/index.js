@@ -339,7 +339,7 @@ const {
   resolveFlags,
   links,
   load: loadState,
-  persist: persistState,
+  persist: saveState,
   checkAttestCooldown,
   recordAttestation,
   creditPayment,
@@ -388,6 +388,12 @@ const {
   ATTEST_COOLDOWN_MS,
 } = require('./store');
 
+/** Writes the whole state (store.persist), counted for /metrics. Returns whether it landed. */
+function persistState() {
+  metrics.inc('stateSaves');
+  return saveState();
+}
+
 // No settlement older than pruning keeps is credited, by any path: the same half-life the epoch prunes by.
 setCreditAgeLimit(paymentCfg.halfLifeMs);
 // A full ledger drops its smallest payments first, measured in fee units as the score measures them.
@@ -425,6 +431,9 @@ function operatorNamedAt(didHash) {
 
 // Nobody named: every payment that counts by its time, whoever paid it.
 const NOBODY_NAMED = () => undefined;
+
+// A transaction hash as a caller may send it, in either case.
+const TX_HASH = /^0x[0-9a-fA-F]{64}$/;
 
 /**
  * How the checker reads a proposal's evidence (evidence-as-of.js). With a payment chain on, at each
@@ -2069,7 +2078,7 @@ async function runEpochInner() {
             // Whoever paid, and removed or not: a payer named the operator, or a payment removed, after the proposer's
             // cut-off still counted for it, so each cut-off is judged on its own (auditOptions).
             asOf = payments.required(paymentCfg)
-              ? evidenceAsOf(evidenceAt(didHash, atProposalMs, NOBODY_NAMED, { keepRemoved: true }), atProposalMs, freshPending.evidenceRoot ?? null,
+              ? await evidenceAsOf(evidenceAt(didHash, atProposalMs, NOBODY_NAMED, { keepRemoved: true }), atProposalMs, freshPending.evidenceRoot ?? null,
                 auditOptions(atProposalMs, operatorNamedAt(didHash)))
               : null;
             // The external factor too, as the primary would have read it at its proposal: same
@@ -2485,6 +2494,27 @@ async function runEpochInner() {
   pruneExpiredCooldowns();
 }
 
+/**
+ * A save shared by the writes that arrive together, resolving to whether it landed.
+ *
+ * A save writes the whole state and fsyncs it: about 2.8 s at the ledger's caps (performance review, 15 November).
+ * With one for every accepted /attest, a steady stream of them kept this oracle saving and fell behind. Each write
+ * still answers only after a save that includes it, so a 200 is as durable as it was. The token-only routes (/flag,
+ * /link) keep their own save: their replies are remembered for a retry, and a retry must not land between a change
+ * and its save.
+ */
+const SAVE_WINDOW_MS = 100;
+let nextSave = null;
+function saveSoon() {
+  nextSave ??= new Promise((resolve) => {
+    setTimeout(() => {
+      nextSave = null;
+      resolve(persistState());
+    }, SAVE_WINDOW_MS);
+  });
+  return nextSave;
+}
+
 // ---- HTTP API --------------------------------------------------------------
 
 // 32MB of serialized evidence responses. The revision token is the payment-event array
@@ -2787,14 +2817,14 @@ async function admitPayerOutcome({ didHash, credited, info, signed, packetId = n
   trimLedger(didHash);
   if (filed === 'already_set' || filed === 'outside_window') {
     // Payments credited above stay credited; keep them through a restart.
-    if (credits > 0 && !fromPeer) persistState();
+    if (credits > 0 && !fromPeer) await saveSoon();
     const r = refuse(409, 'outcome_recorded', filed === 'already_set'
       ? 'the payer has already signed an outcome for this payment'
       : 'an outcome recorded for this payment is final', 'attestRejectedPayment');
     return { ...r, body: { ...r.body, ...heldOutcomeReply(didHash, credited.txHash, signed, chainId) } };
   }
   if (filed === 'not_found') {
-    if (credits > 0 && !fromPeer) persistState();
+    if (credits > 0 && !fromPeer) await saveSoon();
     const r = isDropped(credited.txHash, didHash, leg.payer, chainId)
       ? refuse(409, 'payment_dropped', PAYMENT_DROPPED, 'attestRejectedPayment')
       : refuse(409, 'replayed', 'this settlement has already been credited', 'attestRejectedPayment');
@@ -2811,14 +2841,16 @@ async function admitPayerOutcome({ didHash, credited, info, signed, packetId = n
     if (delivered) att.successful++;
   }
   attestations.set(didHash, att);
-  const durable = fromPeer ? true : persistState();
+  // The tally as this outcome left it, since others can move it while the save is waited for.
+  const tally = { ...att };
+  const durable = fromPeer ? true : await saveSoon();
   return {
     status: durable ? 200 : 202,
     metric: durable ? 'attestAccepted' : 'attestAcceptedNotDurable',
     body: {
       didHash,
       attester: leg.payer,
-      ...att,
+      ...tally,
       ...(durable ? {} : { durable: false }),
       payment: { txHash: credited.txHash, amount: leg.amount.toString(), ...(pc ? { chainId } : {}) },
       outcomeRecorded: true,
@@ -3105,18 +3137,11 @@ function outcomeSource(event) {
   return typeof event.success === 'boolean' ? 'credentialed' : null;
 }
 
-/**
- * The /evidence body for an agent, as a JSON string.
- *
- * Built once per (agent, payment set). Everything here is a pure function of `events`,
- * which is why it caches cleanly: the tree, every proof and the serialization are
- * O(E log E) work that does not change until a payment is credited or pruned.
- */
-function buildEvidenceBody(didHash, events) {
-  const tree = merkle.buildTree(events);
-  return JSON.stringify({
+/** What the /evidence body says before its list of payments: the same on every page of an agent's evidence. */
+function evidenceHead(didHash, events, root) {
+  return {
     didHash,
-    evidenceRoot: tree.root,
+    evidenceRoot: root,
     count: events.length,
     // Exactly what the root commits to, in leaf order, so nobody has to read this
     // service's source to know which fields are covered. counterauditPacketId is
@@ -3151,40 +3176,87 @@ function buildEvidenceBody(didHash, events) {
     // proof, and says so in the response. For a payer-signed outcome it can be checked:
     // CounterAudit's public proof names the EIP-712 hash of the outcome it sealed.
     unverifiedFields: ['counterauditPacketId'],
-    // The leaf is derivable from the payment, so a verifier rebuilds it rather than
-    // trusting the one served here; it is included to make that comparison easy.
-    evidence: events.map((e, i) => ({
-      ...(e.chainId != null ? { chainId: e.chainId } : {}),
-      txHash: e.txHash ?? null,
-      payer: e.payer,
-      amount: e.amount,
-      settledAt: merkle.settledSeconds(e),
-      success: e.success,
-      // Who the outcome is the word of (docs/adr/0006-payer-signed-outcomes.md): the payer, by a
-      // signature anyone can check, or a credential holder. null when there is none.
-      outcomeSource: outcomeSource(e),
-      // A payer's "not delivered" (ADR 0011): when it counts from, and the refund that cured it if one did.
-      // `success` above is how it reads in this evidence, null until it counts. Not part of the leaf.
-      ...(e.payerOutcome?.outcome === negativeHold.NOT_DELIVERED ? {
-        payerNegative: {
-          countsFrom: Number.isFinite(negativeHold.countsFromMs(e, negativeHoldCfg))
-            ? new Date(negativeHold.countsFromMs(e, negativeHoldCfg)).toISOString() : null,
-          settled: e.refundCheck?.final === true,
-          refundTx: e.refundCheck?.txHash ?? null,
-        },
-      } : {}),
-      leaf: tree.leaves[i],
-      proof: merkle.proofFor(tree, i),
-      // Not part of the leaf and not verified here. See committedFields and unverifiedFields above.
-      ...(e.packetId ? { counterauditPacketId: e.packetId } : {}),
-      // The payer's signed payload, so a verifier can check that the committed outcome is one
-      // the payer signed. Served only where publishing is switched on (see payer-outcome.js).
-      ...(e.payerOutcome && payerOutcomeCfg.publish ? { payerOutcome: e.payerOutcome } : {}),
-    })),
-    // Payments a reorganization removed (ADR 0012): read again once final and no longer on the chain, so they leave
-    // the evidence from `removedAt`. A root made before that still holds them. Absent when there are none.
-    ...removedBody(didHash),
-  });
+  };
+}
+
+/**
+ * One payment as /evidence lists it, the leaf at `i` of `tree`.
+ *
+ * The leaf is derivable from the payment, so a verifier rebuilds it rather than
+ * trusting the one served here; it is included to make that comparison easy.
+ */
+function evidenceEntry(e, i, tree) {
+  return {
+    ...(e.chainId != null ? { chainId: e.chainId } : {}),
+    txHash: e.txHash ?? null,
+    payer: e.payer,
+    amount: e.amount,
+    settledAt: merkle.settledSeconds(e),
+    success: e.success,
+    // Who the outcome is the word of (docs/adr/0006-payer-signed-outcomes.md): the payer, by a
+    // signature anyone can check, or a credential holder. null when there is none.
+    outcomeSource: outcomeSource(e),
+    // A payer's "not delivered" (ADR 0011): when it counts from, and the refund that cured it if one did.
+    // `success` above is how it reads in this evidence, null until it counts. Not part of the leaf.
+    ...(e.payerOutcome?.outcome === negativeHold.NOT_DELIVERED ? {
+      payerNegative: {
+        countsFrom: Number.isFinite(negativeHold.countsFromMs(e, negativeHoldCfg))
+          ? new Date(negativeHold.countsFromMs(e, negativeHoldCfg)).toISOString() : null,
+        settled: e.refundCheck?.final === true,
+        refundTx: e.refundCheck?.txHash ?? null,
+      },
+    } : {}),
+    leaf: tree.leaves[i],
+    proof: merkle.proofFor(tree, i),
+    // Not part of the leaf and not verified here. See committedFields and unverifiedFields above.
+    ...(e.packetId ? { counterauditPacketId: e.packetId } : {}),
+    // The payer's signed payload, so a verifier can check that the committed outcome is one
+    // the payer signed. Served only where publishing is switched on (see payer-outcome.js).
+    ...(e.payerOutcome && payerOutcomeCfg.publish ? { payerOutcome: e.payerOutcome } : {}),
+  };
+}
+
+// Payments serialized between pauses while a body is built: a few milliseconds of work at a time.
+const EVIDENCE_SLICE = 256;
+// The most payments one page of /evidence lists (?offset=&limit=).
+const EVIDENCE_PAGE_MAX = 1000;
+
+/**
+ * The /evidence body for an agent, as a JSON string.
+ *
+ * Built once per (agent, payment set). Everything here is a pure function of `events`,
+ * which is why it caches cleanly: the tree, every proof and the serialization are
+ * O(E log E) work that does not change until a payment is credited or pruned.
+ *
+ * Built a slice at a time with other work let in between, where it was one JSON.stringify: 2.95 s with the event loop
+ * held for an agent at the cap of 25,000 payments, and /health waited 2.7 s behind one (performance review,
+ * 15 November). The bytes are the ones JSON.stringify gave for the whole object.
+ */
+async function buildEvidenceBody(didHash, events) {
+  // Payments a reorganization removed (ADR 0012): read again once final and no longer on the chain, so they leave
+  // the evidence from `removedAt`. A root made before that still holds them. Absent when there are none.
+  const tail = JSON.stringify(removedBody(didHash));
+  const tree = await merkle.treeOf(events);
+  const head = JSON.stringify(evidenceHead(didHash, events, tree.root));
+  const parts = [head.slice(0, -1), ',"evidence":['];
+  for (let i = 0; i < events.length; i += EVIDENCE_SLICE) {
+    if (i > 0) await new Promise((resolve) => setImmediate(resolve));
+    const slice = [];
+    for (let j = i; j < Math.min(events.length, i + EVIDENCE_SLICE); j += 1) slice.push(JSON.stringify(evidenceEntry(events[j], j, tree)));
+    parts.push((i > 0 ? ',' : '') + slice.join(','));
+  }
+  parts.push(']', tail === '{}' ? '' : `,${tail.slice(1, -1)}`, '}');
+  return parts.join('');
+}
+
+/** Payments `offset` to `offset + limit` of the body, with what the body says before them; `next` is where the next page starts. */
+async function evidencePageBody(didHash, events, offset, limit) {
+  const removed = removedBody(didHash);
+  const tree = await merkle.treeOf(events);
+  const end = Math.min(events.length, offset + limit);
+  const evidence = [];
+  for (let i = offset; i < end; i += 1) evidence.push(evidenceEntry(events[i], i, tree));
+  return JSON.stringify({ ...evidenceHead(didHash, events, tree.root), offset, next: end < events.length ? end : null, evidence, ...removed });
 }
 
 function removedBody(didHash) {
@@ -3526,6 +3598,38 @@ async function handleRequest(req, res) {
           ...heldOutcomeReply(didHash, body.payment.txHash, signedOutcome, settledOn),
         });
       }
+      // A settlement already credited to this agent, offered again with no outcome to add, is refused before any
+      // chain read, as the 409 below refuses it after six. Anyone can copy one from /evidence. Both paths credit
+      // every qualifying sender of a transaction together (planCredits, verifyPayment), so one live credit means
+      // the other legs were credited or refused with it.
+      const offeredTx = typeof body.payment?.txHash === 'string' && TX_HASH.test(body.payment.txHash)
+        ? body.payment.txHash.toLowerCase() : null;
+      if (offeredTx && !signedOutcome && outcome === null && payments.required(paymentCfg)
+        && getPaymentEvents(didHash).some((e) => e.chainId == null && e.txHash === offeredTx && e.removedAt == null)) {
+        metrics.inc('attestRejectedPayment');
+        return json(res, 409, { error: 'this settlement has already been credited', code: 'replayed' });
+      }
+      // A signature that recovers to someone other than the payer, from a payer with no code to vouch for it, is
+      // refused for one read where the checks below take nine. An address with code is asked below, at the block
+      // its answer is pinned to (verifySignature), as before.
+      if (offeredTx && signedOutcome && payments.required(paymentCfg)) {
+        const signedMsg = payerOutcome.message(didHash, offeredTx, signedOutcome);
+        if (!payerOutcome.recover(outcomeDomain(settledOn), signedMsg, signedOutcome.signature).valid) {
+          let code;
+          try {
+            code = await (pc ? paymentChains.boundedProvider(paymentChainProviders.get(pc.chainId)) : chain.getProvider())
+              .getCode(signedOutcome.payer);
+          } catch (err) {
+            metrics.inc('paymentRpcErrors');
+            console.warn(`[oracle] /attest code read failed for ${didHash}: ${pc ? paymentChains.rpcError(err, pc.rpcUrl).message : err.message}`);
+            return json(res, 502, { error: 'could not read the chain', code: 'rpc_error' });
+          }
+          if (!code || code === '0x') {
+            metrics.inc('attestRejectedOther');
+            return json(res, 400, { error: 'the signature is not the payer\'s for this outcome', code: 'bad_signature' });
+          }
+        }
+      }
       // Only needed when payments are off; otherwise it comes from the transfer.
       if (!attester && !payments.required(paymentCfg)) {
         metrics.inc('attestRejectedOther');
@@ -3734,12 +3838,14 @@ async function handleRequest(req, res) {
       // and a restart before then loses it: an attested outcome is on no chain to be found again. Answering 200
       // would tell the submitter it counted for good. 202 says it was taken and is not yet safe, and /health is
       // already unhealthy for the same reason. The submitter must not resend: the payment is credited here.
-      const durable = persistState();
+      // Shared with the writes that arrive with it (saveSoon); the tally is this one's, taken before the wait.
+      const tally = { ...att };
+      const durable = await saveSoon();
       metrics.inc(durable ? 'attestAccepted' : 'attestAcceptedNotDurable');
       return json(res, durable ? 200 : 202, {
         didHash,
         attester,
-        ...att,
+        ...tally,
         ...(durable ? {} : { durable: false }),
         ...(credited
           ? { payment: { txHash: credited.txHash, amount: credited.amount.toString() }, outcomeRecorded }
@@ -3863,7 +3969,27 @@ async function handleRequest(req, res) {
       } catch { /* this host's clock */ }
     }
     const events = evidenceAt(didHash, paymentChains.cutFor(nowMs, paymentChainsCfg));
-    const body = evidenceCache.get(didHash, events, () => buildEvidenceBody(didHash, events));
+    let body;
+    if (url.searchParams.has('offset') || url.searchParams.has('limit')) {
+      // A page of the body, for a verifier that would rather not take one of 40 MB. Asked for by name, so a caller
+      // that asks for neither still gets the whole body, as every client written before pages does.
+      const whole = (name, fallback) => {
+        const raw = url.searchParams.get(name);
+        return raw === null ? fallback : /^\d{1,9}$/.test(raw) ? Number(raw) : NaN;
+      };
+      const offset = whole('offset', 0);
+      const limit = whole('limit', EVIDENCE_PAGE_MAX);
+      if (!Number.isInteger(offset) || !Number.isInteger(limit) || limit < 1 || limit > EVIDENCE_PAGE_MAX) {
+        return json(res, 400, { error: `offset must be a whole number, and limit one from 1 to ${EVIDENCE_PAGE_MAX}` });
+      }
+      body = await evidencePageBody(didHash, events, offset, limit);
+    } else if (events.length === 0) {
+      // Not cached: it costs nothing to build, and one stored for every didHash anyone asked about pushed out the
+      // bodies worth keeping.
+      body = await buildEvidenceBody(didHash, events);
+    } else {
+      body = await evidenceCache.getAsync(didHash, events, () => buildEvidenceBody(didHash, events));
+    }
 
     // Same bytes a miss would have produced, so a hit is indistinguishable to the
     // caller. json() is not used because it would re-serialize what is already a string.

@@ -14,7 +14,8 @@ const STAKE_VIEW_ABI = ['function hasMinimumStake(bytes32 didHash) view returns 
 
 const { SCORE_FACTORS } = require('./epoch-policy');
 const { readSplitting, spanRefused } = require('./log-spans');
-const { isTransientReadError, readWithBackoff, MAX_BATCH_CALLS } = require('./read-retry');
+const { isTransientReadError, readWithBackoff } = require('./read-retry');
+const { rpcProvider } = require('./rpc-provider');
 const reviewers = require('./reviewers');
 const { createFunderReader } = require('./funder-scan');
 
@@ -182,7 +183,7 @@ function init(cfg, deps = {}) {
   cfg_ = cfg;
   txWaitMs = cfg.txWaitMs ?? DEFAULT_TX_WAIT_MS;
   txPollMs = cfg.txPollMs ?? DEFAULT_TX_POLL_MS;
-  provider = deps.provider ?? new ethers.JsonRpcProvider(cfg.rpcUrl, undefined, { batchMaxCount: MAX_BATCH_CALLS });
+  provider = deps.provider ?? rpcProvider(cfg.rpcUrl, cfg.expectedChainId);
   wallet = deps.wallet ?? new CappedWallet(cfg.privateKey, provider, capsFromConfig(cfg));
   identityContract = deps.identityContract ?? new ethers.Contract(cfg.identityAddress, IDENTITY_ABI, provider);
   reputationContract = deps.reputationContract ?? new ethers.Contract(cfg.reputationAddress, REPUTATION_ABI, wallet);

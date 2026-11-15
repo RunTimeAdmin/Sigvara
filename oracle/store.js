@@ -1167,13 +1167,28 @@ function payerOutcomesSince(since, limit) {
     if (acceptedOrder[mid].acceptedAt > since) hi = mid;
     else lo = mid + 1;
   }
+  // Each agent's outcomes by when they were taken, indexed once per page for the agents it names. Looking each
+  // one up with .find made a page cost its size times the agent's events: about 1 s for the last page of 25,000.
+  const indexes = new Map();
+  const outcomeAt = (did, acceptedAt, tx, who) => {
+    let index = indexes.get(did);
+    if (!index) {
+      index = new Map();
+      for (const x of paymentEvents.get(did) ?? []) {
+        if (!x.payerOutcome) continue;
+        const key = `${x.payerOutcome.acceptedAt}|${x.txHash}|${String(x.payer).toLowerCase()}`;
+        // The first, as .find gave.
+        if (!index.has(key)) index.set(key, x);
+      }
+      indexes.set(did, index);
+    }
+    return index.get(`${acceptedAt}|${tx}|${who}`);
+  };
   const outcomes = [];
   let i = lo;
   for (; i < acceptedOrder.length && outcomes.length < limit; i += 1) {
     const { acceptedAt, did, tx, who } = acceptedOrder[i];
-    const e = (paymentEvents.get(did) ?? []).find(
-      (x) => x.txHash === tx && String(x.payer).toLowerCase() === who && x.payerOutcome?.acceptedAt === acceptedAt,
-    );
+    const e = outcomeAt(did, acceptedAt, tx, who);
     if (e) {
       outcomes.push({
         didHash: did,

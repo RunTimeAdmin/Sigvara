@@ -41,22 +41,39 @@ const merkle = require('./merkle');
  *
  * Only the fixed order is read (payment-chains.eventsAt): it is the order every proposal commits to.
  *
+ * Every tree tried shares one memo of pair hashes (merkle.pairOf). Neighbouring cut-offs hold nearly the same payments
+ * in the same order, so their trees share every pair left of where they differ, and each was built whole: a miss at
+ * the cap of 25,000 payments held the event loop for 22 s (performance review, 15 November). A cut-off that counts
+ * the same payments as the one before is skipped, and other work runs between trees.
+ *
  * @param {object[]} events   one agent's payment events, in the fixed order
  * @param {number} atMs       the proposal's time, in ms
  * @param {string|null} committedRoot the proposal's evidenceRoot, or null when it has none
  * @param {{ eligibleAt?: (e: object) => number, endsAt?: (e: object) => number, cuts?: number[] }} [options]
- * @returns {{ events: object[], matchedRoot: boolean }}
+ * @returns {Promise<{ events: object[], matchedRoot: boolean }>}
  */
-function evidenceAsOf(events, atMs, committedRoot, { eligibleAt = (e) => Number(e.ts), endsAt = () => Infinity, cuts = [] } = {}) {
+async function evidenceAsOf(events, atMs, committedRoot, { eligibleAt = (e) => Number(e.ts), endsAt = () => Infinity, cuts = [] } = {}) {
   if (!Number.isFinite(atMs)) throw new TypeError('evidenceAsOf: atMs (ms) is required');
   const countedBy = (list, cut) => list.filter((e) => eligibleAt(e) <= cut && endsAt(e) > cut);
   const committed = typeof committedRoot === 'string' ? committedRoot.toLowerCase() : null;
   if (committed) {
+    const pairs = new Map();
+    // One unset copy of each event, so its leaf is hashed once however many cut-offs hold it.
+    const unsetCopies = new Map();
+    const unsetOf = (e) => {
+      if (!signedAfter(e, atMs)) return e;
+      if (!unsetCopies.has(e)) unsetCopies.set(e, withoutPayerOutcome(e));
+      return unsetCopies.get(e);
+    };
+    let last = null;
     for (const cut of [atMs, ...cuts.filter((c) => c < atMs)]) {
       const set = countedBy(events, cut);
-      if (merkle.rootFor(set).toLowerCase() === committed) return { events: set, matchedRoot: true };
-      const unset = set.map((e) => (signedAfter(e, atMs) ? withoutPayerOutcome(e) : e));
-      if (unset.some((e, i) => e !== set[i]) && merkle.rootFor(unset).toLowerCase() === committed) {
+      if (last && set.length === last.length && set.every((e, i) => e === last[i])) continue;
+      if (last) await new Promise((resolve) => setImmediate(resolve));
+      last = set;
+      if (merkle.rootFor(set, pairs).toLowerCase() === committed) return { events: set, matchedRoot: true };
+      const unset = set.map(unsetOf);
+      if (unset.some((e, i) => e !== set[i]) && merkle.rootFor(unset, pairs).toLowerCase() === committed) {
         return { events: unset, matchedRoot: true };
       }
     }

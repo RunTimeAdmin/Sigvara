@@ -28,6 +28,7 @@ const { ethers } = require('ethers');
 const policy = require('./publisher-policy');
 const { createLinkScanner } = require('./link-scan');
 const signerAuth = require('./signer-auth');
+const { rpcProvider } = require('./rpc-provider');
 
 const REPUTATION_EVENTS = [
   'event ReputationUpdated(bytes32 indexed didHash, uint8 totalScore, uint256 timestamp, bytes32 evidenceRoot)',
@@ -445,7 +446,7 @@ async function main() {
   }
   const chain = require('./chain');
   const external = require('./external');
-  const provider = new ethers.JsonRpcProvider(cfg.rpcUrl);
+  const provider = rpcProvider(cfg.rpcUrl);
   // The chain module's reads, with no key: the provider stands in for its wallet.
   chain.init({ rpcUrl: cfg.rpcUrl, identityAddress: cfg.identityAddress, reputationAddress: cfg.reputation }, { provider, wallet: provider });
   external.init({ externalRpc: cfg.externalRpc, externalIdentity: cfg.identityRegistry, externalReputation: cfg.feedbackRegistry });

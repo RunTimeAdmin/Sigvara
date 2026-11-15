@@ -52,40 +52,64 @@ function createResponseCache({ maxBytes }) {
     }
   }
 
+  // The stored body for this revision, moved to the back of the LRU order, or undefined.
+  function take(key, revision) {
+    const hit = entries.get(key);
+    if (!hit || hit.revision !== revision) return undefined;
+    entries.delete(key);
+    entries.set(key, hit);
+    stats.hits++;
+    return hit.body;
+  }
+
+  function store(key, revision, body) {
+    const bytes = Buffer.byteLength(body);
+    // A stale entry for this key is replaced, not left behind.
+    const old = entries.get(key);
+    if (old) {
+      totalBytes -= old.bytes;
+      entries.delete(key);
+    }
+    // Serve, but do not store, anything that cannot coexist with a useful cache.
+    if (bytes > maxBytes) return;
+    entries.set(key, { revision, body, bytes });
+    totalBytes += bytes;
+    evictTo(maxBytes);
+  }
+
+  // Builds in flight, by key: { revision, body: Promise }.
+  const building = new Map();
+
   return {
     /**
-     * Serialized body for `key`, built by `build()` on a miss.
+     * Serialized body for `key`, built by `build()` on a miss. `build` returns the finished string or a promise of
+     * it, and is called only when needed, so an expensive build is skipped entirely on a hit.
      *
-     * `build` must return the finished string. It is called synchronously and only when
-     * needed, so an expensive build is skipped entirely on a hit.
+     * The body is built without holding the event loop (index.js), so a request can arrive while the same body is
+     * being built. It waits for that build instead of starting its own, which would hold a second copy until sent.
      */
-    get(key, revision, build) {
-      const hit = entries.get(key);
-      if (hit && hit.revision === revision) {
-        // Re-insert to move it to the back of the LRU order.
-        entries.delete(key);
-        entries.set(key, hit);
+    getAsync(key, revision, build) {
+      const hit = take(key, revision);
+      if (hit !== undefined) return Promise.resolve(hit);
+      const pending = building.get(key);
+      if (pending && pending.revision === revision) {
         stats.hits++;
-        return hit.body;
+        return pending.body;
       }
       stats.misses++;
-
-      const body = build();
-      const bytes = Buffer.byteLength(body);
-
-      // A stale entry for this key is replaced, not left behind.
-      if (hit) {
-        totalBytes -= hit.bytes;
-        entries.delete(key);
-      }
-
-      // Serve, but do not store, anything that cannot coexist with a useful cache.
-      if (bytes > maxBytes) return body;
-
-      entries.set(key, { revision, body, bytes });
-      totalBytes += bytes;
-      evictTo(maxBytes);
-      return body;
+      const entry = { revision, body: null };
+      entry.body = Promise.resolve()
+        .then(build)
+        .then((body) => {
+          // Not when a build for a later revision has started since: that one is the body to keep.
+          if (building.get(key) === entry) store(key, revision, body);
+          return body;
+        })
+        .finally(() => {
+          if (building.get(key) === entry) building.delete(key);
+        });
+      building.set(key, entry);
+      return entry.body;
     },
 
     stats() {

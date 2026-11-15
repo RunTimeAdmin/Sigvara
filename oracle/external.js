@@ -25,7 +25,8 @@
 
 const { ethers } = require('ethers');
 const { CAPS } = require('./score-caps');
-const { readWithBackoff, MAX_BATCH_CALLS } = require('./read-retry');
+const { readWithBackoff } = require('./read-retry');
+const { rpcProvider } = require('./rpc-provider');
 const { accountRefused: registryRefused } = require('./payer-outcome');
 
 const ID_ABI = [
@@ -122,7 +123,7 @@ let checkedAt = 0;
 function init(cfg, deps = {}) {
   enabled = !!(cfg.externalRpc && cfg.externalIdentity && cfg.externalReputation);
   if (!enabled) return;
-  provider = deps.provider ?? new ethers.JsonRpcProvider(cfg.externalRpc, undefined, { batchMaxCount: MAX_BATCH_CALLS });
+  provider = deps.provider ?? rpcProvider(cfg.externalRpc);
   idContract = deps.idContract ?? new ethers.Contract(cfg.externalIdentity, ID_ABI, provider);
   repContract = deps.repContract ?? new ethers.Contract(cfg.externalReputation, REP_ABI, provider);
   // A re-init points at a different chain, so anything cached about the old one is a
@@ -152,8 +153,8 @@ async function refreshChainId(maxAgeMs = 0, nowMs = Date.now()) {
 
 async function checkChainId() {
   try {
-    const net = await withTimeout(provider.getNetwork());
-    chainId = Number(net.chainId);
+    // Asked of the node each time: the provider's own network is fixed at its first answer (rpc-provider.js).
+    chainId = Number(BigInt(await withTimeout(provider.send('eth_chainId', []))));
     chainIdError = null;
   } catch (err) {
     chainId = null;

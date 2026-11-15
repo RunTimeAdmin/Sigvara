@@ -68,11 +68,11 @@ test('a payment the oracle could not commit to is refused, not hashed', () => {
   assert.throws(() => explorer.leafOf({ ...e, amount: '-1' }));
 });
 
-test('matchRoot finds the set a proposal committed to, as the checker does', () => {
+test('matchRoot finds the set a proposal committed to, as the checker does', async () => {
   const events = Object.freeze(Array.from({ length: 7 }, (_, i) => stored(i)));
   // A proposal made after the fourth payment settled.
   const atMs = events[3].ts + 30_000;
-  const asOf = evidenceAsOf(events, atMs, null);
+  const asOf = await evidenceAsOf(events, atMs, null);
   const committed = merkle.rootFor(asOf.events);
 
   const list = events.map(served);
@@ -89,7 +89,7 @@ test('matchRoot finds the set a proposal committed to, as the checker does', () 
   assert.equal(explorer.matchRoot(list, merkle.rootFor(events)).events.length, 7);
 });
 
-test('matchRoot reads a payer-signed outcome taken after the proposal as unreported', () => {
+test('matchRoot reads a payer-signed outcome taken after the proposal as unreported', async () => {
   const at = (T0 + 10 * 60) * 1000;
   const late = { acceptedAt: at + 3_600_000 };
   const events = Object.freeze([
@@ -98,7 +98,7 @@ test('matchRoot reads a payer-signed outcome taken after the proposal as unrepor
     stored(2),
   ]);
   // What the proposer had: the signed outcome did not exist yet.
-  const asOf = evidenceAsOf(events, at, merkle.rootFor(events.map((e) => (e.payerOutcome ? Object.freeze({ ...e, success: null, payerOutcome: undefined }) : e))));
+  const asOf = await evidenceAsOf(events, at, merkle.rootFor(events.map((e) => (e.payerOutcome ? Object.freeze({ ...e, success: null, payerOutcome: undefined }) : e))));
   assert.equal(asOf.matchedRoot, true);
   const committed = merkle.rootFor(asOf.events);
 

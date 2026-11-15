@@ -131,6 +131,10 @@ answers 202 with `"durable": false` instead of 200 while a save is failing, and 
 those as `accepted_not_durable`. Pulled payments are found again by the next scan;
 attested outcomes are on chain nowhere, so those do not come back.
 
+A save writes the whole state and fsyncs it, about 2.8 s at the ledger's caps, so `/attest` writes that arrive
+within 100 ms of each other share one, and each is answered after a save that holds it.
+`sigvara_oracle_state_saves_total` counts saves.
+
 `/flag`, `/flag/resolve` and `/link` say the same thing for the same reason: 202 with
 `"durable": false` while a save is failing, counted in
 `sigvara_oracle_writes_not_durable_total`. The change is held in memory and written by the
@@ -471,6 +475,12 @@ evidence nobody can fetch is evidence nobody can audit.
 
 The response names `committedFields` — the exact fields the root commits to, in leaf
 order — so a verifier need not read this source to know what is covered.
+
+The whole list comes in one body: about 32 MB for an agent at the cap of 25,000 payments, 41 MB with
+payer outcomes published. `?offset=N&limit=M`, with M at most 1,000, serves part of it: the same fields,
+then `offset`, `next` (where the next part starts, or null at the end) and those payments with their
+proofs. A body is built a slice at a time, so other requests are answered while it is, and kept until the
+agent's payments change. An agent with no payments is not kept.
 
 Payments are served in the order the root is built over: by settlement time, then transaction and
 payer, with a payment chain's after the scored chain's. Two operators credit the same payments in

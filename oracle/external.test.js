@@ -115,7 +115,7 @@ test('chainState: disabled when the feed is not configured', () => {
 test('chainState: configured but unreachable is NOT reported as configured', async () => {
   // The whole point. Three non-empty strings used to read as success.
   external.init(CFG, {
-    provider: { getNetwork: async () => { throw new Error('ECONNREFUSED'); } },
+    provider: { send: async () => { throw new Error('ECONNREFUSED'); } },
     idContract: {}, repContract: {},
   });
   await external.refreshChainId();
@@ -128,7 +128,7 @@ test('chainState: configured but unreachable is NOT reported as configured', asy
 
 test('chainState: reports the chain it actually reached', async () => {
   external.init(CFG, {
-    provider: { getNetwork: async () => ({ chainId: 5042002n }) },
+    provider: { send: async () => '0x4cef52' },
     idContract: {}, repContract: {},
   });
   await external.refreshChainId();
@@ -140,14 +140,14 @@ test('chainState: a cached id from the old chain does not survive a re-init', as
   // Re-init means the feed was repointed. Reporting the previous chain afterwards is
   // precisely the failure this was written to make visible.
   external.init(CFG, {
-    provider: { getNetwork: async () => ({ chainId: 84532n }) },
+    provider: { send: async () => '0x14a34' },
     idContract: {}, repContract: {},
   });
   await external.refreshChainId();
   assert.strictEqual(external.chainState().chainId, 84532);
 
   external.init(CFG, {
-    provider: { getNetwork: async () => ({ chainId: 5042002n }) },
+    provider: { send: async () => '0x4cef52' },
     idContract: {}, repContract: {},
   });
   assert.strictEqual(external.chainState().status, 'unreachable', 'stale id must be dropped immediately');
@@ -158,7 +158,7 @@ test('chainState: a cached id from the old chain does not survive a re-init', as
 
 test('refreshChainId: never throws, whatever the provider does', async () => {
   external.init(CFG, {
-    provider: { getNetwork: async () => { throw new Error('boom'); } },
+    provider: { send: async () => { throw new Error('boom'); } },
     idContract: {}, repContract: {},
   });
   assert.strictEqual(await external.refreshChainId(), null);
@@ -169,7 +169,7 @@ test('refreshChainId: never throws, whatever the provider does', async () => {
 
 test('refreshChainId: a hung provider does not hang the caller forever', async () => {
   external.init(CFG, {
-    provider: { getNetwork: () => new Promise(() => {}) }, // never settles
+    provider: { send: () => new Promise(() => {}) }, // never settles
     idContract: {}, repContract: {},
   });
   const started = Date.now();
@@ -185,7 +185,7 @@ test('refreshChainId: a second caller waits for the check in flight', async () =
   let release;
   let calls = 0;
   external.init(CFG, {
-    provider: { getNetwork: () => { calls += 1; return new Promise((r) => { release = () => r({ chainId: 5042002n }); }); } },
+    provider: { send: () => { calls += 1; return new Promise((r) => { release = () => r('0x4cef52'); }); } },
     idContract: {}, repContract: {},
   });
   const first = external.refreshChainId();
@@ -200,7 +200,7 @@ test('refreshChainId: a cached id is kept for maxAgeMs, then checked again, and 
   let up = true;
   let calls = 0;
   external.init(CFG, {
-    provider: { getNetwork: async () => { calls += 1; if (!up) throw new Error('ECONNREFUSED'); return { chainId: 5042002n }; } },
+    provider: { send: async () => { calls += 1; if (!up) throw new Error('ECONNREFUSED'); return '0x4cef52'; } },
     idContract: {}, repContract: {},
   });
   await external.refreshChainId();

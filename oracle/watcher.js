@@ -39,6 +39,7 @@ const {
 const { redact } = require('./event-index');
 const { wordsOf } = require('./log-spans');
 const { readWithBackoff } = require('./read-retry');
+const { rpcProvider } = require('./rpc-provider');
 
 const cfg = {
   checkerUrl: (process.env.CHECKER_URL || '').replace(/\/+$/, ''),
@@ -70,7 +71,7 @@ const ABI = [
   'function challengeWindow() view returns (uint256)',
 ];
 
-const provider = new ethers.JsonRpcProvider(cfg.rpcUrl);
+const provider = rpcProvider(cfg.rpcUrl);
 const reputation = new ethers.Contract(cfg.reputationAddress, ABI, provider);
 
 // An error as words that can leave this machine. An ethers error's message holds the whole RPC URL
