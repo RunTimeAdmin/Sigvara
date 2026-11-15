@@ -108,6 +108,7 @@ async function load() {
       // getSlashProposal returns a struct with a bytes field, so it starts with an offset word:
       // didHash, reporter, victim, initiatedAt and state follow, then the evidence's offset.
       a.slash = SLASH_STATE[Number(BigInt(X.word(slash, 5)))] ?? "none";
+      a.slashAt = Number(BigInt(X.word(slash, 4)));
     });
   } catch (e) {
     return setCard("simHero", X.failed("the simulated agents from the chain", e));
@@ -135,11 +136,23 @@ async function load() {
         a.signed = list.filter((e) => e.outcomeSource === "payer_signed" && !e.payerNegative).length;
         a.negatives = list.filter((e) => e.payerNegative).length;
         a.onBase = list.filter((e) => e.chainId != null).length;
+        // What the replay draws: when each payment settled, who paid, on which chain, and whether
+        // the payer reported it as not delivered.
+        a.flow = list.filter((e) => Number.isFinite(e.settledAt) && X.isAddr(e.payer))
+          .map((e) => ({ t: e.settledAt, payer: e.payer.toLowerCase(), base: e.chainId != null, neg: Boolean(e.payerNegative) }));
       } catch (_) { a.payments = null; }
     }));
   }
   renderHero(agents, start, live);
   renderCast(agents, start);
+
+  // The replay (simulation-scene.js) draws from what this page has already read. It is a module,
+  // so it may load before or after this point: it reads the data if it is here, and listens if not.
+  if (start !== null) {
+    const ring = (Array.isArray(sim.ringPayers) ? sim.ringPayers : []).map((p) => String(p).toLowerCase());
+    window.SigvaraSimData = { agents, start, days: DAYS, kinds: KINDS, ringPayers: ring, statusOf };
+    document.dispatchEvent(new Event("sigvara-sim-data"));
+  }
 }
 
 function renderHero(agents, start, live) {

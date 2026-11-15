@@ -86,6 +86,26 @@
 .sim-bar > span { display: block; height: 100%; width: 0; border-radius: inherit; background: var(--sig-gradient-signal); }
 .sim-score-num { min-width: 70px; text-align: right; }
 .sim-pays { color: var(--muted); text-align: right; white-space: nowrap; }
+.sim-scene { position: relative; height: 500px; border-radius: var(--radius); border: 1px solid var(--sig-line); overflow: hidden; background: radial-gradient(120% 90% at 50% 35%, #2a3060 0%, #171b34 70%, var(--sig-bg-soft) 100%); }
+.sim-scene canvas { display: block; width: 100%; height: 100%; touch-action: pan-y; cursor: grab; }
+.sim-scene canvas.pick { cursor: pointer; }
+.sim-scene-hud { position: absolute; left: 14px; top: 12px; display: flex; flex-direction: column; gap: 2px; pointer-events: none; font-size: 13px; color: var(--sig-text-soft); }
+.sim-scene-hud b { font-size: 18px; color: var(--sig-text); letter-spacing: -.01em; }
+.sim-tip { position: absolute; transform: translate(-50%, -100%); padding: 8px 10px; border-radius: 8px; background: rgba(9, 11, 22, .92); border: 1px solid var(--sig-line-strong); font-size: 12px; line-height: 1.5; color: var(--sig-text-soft); white-space: nowrap; pointer-events: none; }
+.sim-tip-addr { font-family: var(--sig-font-mono); color: var(--sig-text); }
+.sim-scene-controls { display: flex; align-items: center; gap: 12px; margin: 12px 0 4px; }
+.sim-btn { min-width: 68px; padding: 7px 14px; border-radius: 999px; border: 1px solid var(--sig-line-strong); background: var(--sig-surface-raised); color: var(--sig-text); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.sim-btn:hover { border-color: var(--sig-cyan); }
+.sim-btn:focus-visible, .sim-scene-controls input:focus-visible { outline: 2px solid var(--sig-cyan); outline-offset: 2px; }
+.sim-scene-controls input[type="range"] { flex: 1; min-width: 0; accent-color: var(--sig-cyan); }
+.sim-key { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--sig-text-soft); white-space: nowrap; }
+.sim-key::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.sim-key.wallet::before { background: #e9e5ff; }
+.sim-key.later::before { background: transparent; border: 1px solid var(--sig-text-soft); width: 10px; height: 6px; }
+.sim-key.ringpay::before { background: #ff6b6b; }
+.sim-key.base::before { background: var(--sig-cyan); }
+.sim-key.neg::before { background: #ff5c5c; }
+.sim-key.slash::before { background: transparent; border: 2px solid #ff3d3d; width: 10px; height: 6px; }
 .sim-watch { margin: 6px 0 12px; padding-left: 18px; font-size: 14px; line-height: 1.6; }
 .sim-watch li { margin-bottom: 8px; }
 
@@ -96,6 +116,7 @@
 
 @media (max-width: 760px) {
   .sim-tiles { grid-template-columns: repeat(2, 1fr); }
+  .sim-scene { height: 340px; }
   .sim-agents li { grid-template-columns: 1fr 112px; grid-template-areas: "addr status" "score pays"; gap: 6px 12px; }
   .sim-agent { grid-area: addr; }
   .sim-status { grid-area: status; justify-self: end; }
