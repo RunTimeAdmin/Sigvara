@@ -9,12 +9,12 @@
     "subfolder": "packages/sdk"
   },
   "websiteUrl": "https://sigvara.xyz",
-  "version": "1.0.0-alpha.20",
+  "version": "1.0.0-alpha.21",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@sigvara/protocol-sdk",
-      "version": "1.0.0-alpha.20",
+      "version": "1.0.0-alpha.21",
       "transport": {
         "type": "stdio"
       }
