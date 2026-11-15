@@ -45,6 +45,9 @@ const counters = {
   writesNotDurable: 0,
   scoreRpcErrors: 0,
   scoreErrors: 0,
+  // /score previews answered 503 because the payers' standings were not read yet. A steady count means requests
+  // are reaching for agents the epoch does not score, or are arriving faster than the epoch reads.
+  scoreStandingsPending: 0,
   // Badges are embedded on pages this oracle does not control, so request volume is
   // set by an agent's audience. The hit ratio is the thing to watch: a falling one
   // means the cache is being missed and every reader is costing two RPC calls.
@@ -291,6 +294,11 @@ function toPrometheusText(extra = {}) {
   lines.push('# HELP sigvara_oracle_score_errors_total /score failures that were not upstream, answered 500');
   lines.push('# TYPE sigvara_oracle_score_errors_total counter');
   lines.push(`sigvara_oracle_score_errors_total ${counters.scoreErrors}`);
+
+  lines.push('');
+  lines.push('# HELP sigvara_oracle_score_standings_pending_total /score previews whose payers\' standings were not read yet, answered 503');
+  lines.push('# TYPE sigvara_oracle_score_standings_pending_total counter');
+  lines.push(`sigvara_oracle_score_standings_pending_total ${counters.scoreStandingsPending}`);
 
   lines.push('');
   lines.push('# HELP sigvara_oracle_badge_requests_total Badge SVG requests');
