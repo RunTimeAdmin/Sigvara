@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Fixed: a refused 402 kept its seller's connection open
+
+`sigvaraX402Fetch` reads a clone of a 402, and a 402 it refuses goes to nobody, so nothing read or cancelled the
+body. A body cut off at the 64 KiB limit then held its connection until the seller or a timeout closed it: against a
+local seller that kept sending, the socket was still open 3 seconds after the refusal. The guard now cancels the
+body on every refusal, a failed chain read included, and that socket closed within a few milliseconds. A 402 that
+passes is left for the client to read, as before.
+
 ## 1.0.0-alpha.21
 
 ### Fixed: `sigvara_verify_evidence` missed a finalized root a few payments behind a long list

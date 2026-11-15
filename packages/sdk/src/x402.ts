@@ -115,27 +115,34 @@ export function sigvaraX402Fetch(
   return async (input, init) => {
     const res = await baseFetch(input, init);
     if (res.status !== 402) return res;
-    const offers = await x402OffersFrom(res);
-    if (!offers) throw new X402SellerRefused('This 402 names no offer that can be read, so its seller cannot be checked.', []);
-    if (offers.length > X402_MAX_OFFERS) {
-      throw new X402SellerRefused(`This 402 makes ${offers.length} offers, more than the ${X402_MAX_OFFERS} checked.`, []);
+    try {
+      const offers = await x402OffersFrom(res);
+      if (!offers) throw new X402SellerRefused('This 402 names no offer that can be read, so its seller cannot be checked.', []);
+      if (offers.length > X402_MAX_OFFERS) {
+        throw new X402SellerRefused(`This 402 makes ${offers.length} offers, more than the ${X402_MAX_OFFERS} checked.`, []);
+      }
+      // Addresses compare without case, so one payee spelled two ways is checked once.
+      const byKey = new Map<string, string>();
+      for (const o of offers) {
+        const p = String(o.payTo ?? '');
+        if (!byKey.has(p.toLowerCase())) byKey.set(p.toLowerCase(), p);
+      }
+      const payees = [...byKey.values()];
+      const verdicts: TrustVerdict[] = [];
+      for (let i = 0; i < payees.length; i += CHECKS_AT_ONCE) {
+        verdicts.push(...await Promise.all(payees.slice(i, i + CHECKS_AT_ONCE).map((p) => trust.check(p))));
+      }
+      const refused = verdicts.filter((v) => !v.ok);
+      if (refused.length > 0) {
+        const named = refused.map((v) => `${v.agent || '(no payTo)'}: ${v.reason}`).join('; ');
+        throw new X402SellerRefused(`Not paying this seller, which lacks standing. ${named}`, refused);
+      }
+      return res;
+    } catch (err) {
+      // Nobody gets a refused 402, so nobody else will read or cancel its body. One cut off at the limit would hold
+      // its connection until the seller or a timeout closed it. A 402 that passes is left for the client to read.
+      await res.body?.cancel().catch(() => {});
+      throw err;
     }
-    // Addresses compare without case, so one payee spelled two ways is checked once.
-    const byKey = new Map<string, string>();
-    for (const o of offers) {
-      const p = String(o.payTo ?? '');
-      if (!byKey.has(p.toLowerCase())) byKey.set(p.toLowerCase(), p);
-    }
-    const payees = [...byKey.values()];
-    const verdicts: TrustVerdict[] = [];
-    for (let i = 0; i < payees.length; i += CHECKS_AT_ONCE) {
-      verdicts.push(...await Promise.all(payees.slice(i, i + CHECKS_AT_ONCE).map((p) => trust.check(p))));
-    }
-    const refused = verdicts.filter((v) => !v.ok);
-    if (refused.length > 0) {
-      const named = refused.map((v) => `${v.agent || '(no payTo)'}: ${v.reason}`).join('; ');
-      throw new X402SellerRefused(`Not paying this seller, which lacks standing. ${named}`, refused);
-    }
-    return res;
   };
 }

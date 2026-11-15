@@ -1061,9 +1061,15 @@ async function getChallengeWindow() {
 // would trigger premature finalize attempts that just revert and waste gas).
 // Retried like every other read: an epoch reads this before anything else, so one throttled
 // answer used to cost the whole epoch.
-async function getLatestBlockTimestamp() {
+// The latest block's time and when it was read. A caller that can use a reading a few seconds old passes `maxAgeMs`:
+// an epoch's per-agent steps and the read routes each asked the chain one round trip at a time.
+let latestBlockTime = null;
+
+async function getLatestBlockTimestamp({ maxAgeMs = 0 } = {}) {
+  if (maxAgeMs > 0 && latestBlockTime && Date.now() - latestBlockTime.atMs <= maxAgeMs) return latestBlockTime.seconds;
   const block = await readWithBackoff('latest block', () => provider.getBlock('latest'));
-  return Number(block.timestamp);
+  latestBlockTime = { seconds: Number(block.timestamp), atMs: Date.now() };
+  return latestBlockTime.seconds;
 }
 
 // ---- Epoch-fee gating (opt-in) --------------------------------------------

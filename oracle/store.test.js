@@ -1288,3 +1288,32 @@ test('a page of outcomes costs its agents\' events once, not once an entry', () 
   // About 1 s with a .find an entry on the machine this was written on, about 10 ms indexed.
   assert.ok(got.ms < 200, `a page of 500 took ${got.ms.toFixed(0)} ms`);
 });
+
+// ---- /health ------------------------------------------------------------------------------------------------------
+
+// /health recounted every payment's outcome on every request: 4 to 19 ms a request at the caps.
+test('the ledger status counts outcomes once a list, and follows a list that changes', () => {
+  const out = inChildWithState(null, `
+    const s = require('./store');
+    const tx = (n) => '0x' + n.toString(16).padStart(64, '0');
+    const did = (a) => '0x' + a.toString(16).padStart(64, '0');
+    const payer = '0x' + '11'.repeat(20);
+    const credits = [];
+    for (let a = 1; a <= 50; a += 1) for (let n = 0; n < 1000; n += 1) {
+      credits.push({ didHash: did(a), txHash: tx(a * 100000 + n), amount: '5', payer, success: n % 2 === 0 ? true : null, ts: 1000 + n });
+    }
+    s.creditPayments(credits);
+    const first = s.ledgerStatus().withOutcome;
+    const t = process.hrtime.bigint();
+    for (let i = 0; i < 200; i += 1) s.ledgerStatus();
+    const ms = Number(process.hrtime.bigint() - t) / 1e6;
+    const signed = { outcome: 1, signedAt: 1, deadline: 9, signature: '0x', signer: 'eoa', checkedAtBlock: 40, checkedAtMs: 4000 };
+    s.recordPayerOutcome(did(7), tx(7 * 100000 + 1), payer, true, signed, { windowMs: 1 });
+    console.log(JSON.stringify({ first, after: s.ledgerStatus().withOutcome, ms }));
+  `);
+  const got = JSON.parse(out.trim().split('\n').at(-1));
+  assert.equal(got.first, 25_000);
+  assert.equal(got.after, 25_001, 'a payment given its outcome is counted');
+  // Recounting 50,000 payments 200 times took about 200 ms where this was written; summing 50 counts, under 5.
+  assert.ok(got.ms < 50, `200 status reads took ${got.ms.toFixed(0)} ms`);
+});

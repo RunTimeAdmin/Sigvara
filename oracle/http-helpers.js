@@ -46,6 +46,15 @@ function bodyErrorStatus(err) {
   return 400;
 }
 
+// What a route answers for an error its own checks did not catch, and what it logs. A body readBody could not take is
+// said as it is. Anything else is answered `bad request`, and its words go only to the log: they can name what a
+// caller should not see, such as a failing node's URL.
+const READ_ERRORS = new Set(['body_too_large', 'body_timeout', 'bad_json']);
+function uncaughtReply(err) {
+  if (err && READ_ERRORS.has(err.code)) return { status: bodyErrorStatus(err), body: { error: err.message }, log: null };
+  return { status: 400, body: { error: 'bad request' }, log: String((err && err.message) || err) };
+}
+
 // req only needs to be an EventEmitter emitting 'data' | 'end' | 'error' and
 // exposing destroy() — a real http.IncomingMessage satisfies this, and so
 // does a plain fake in tests. A declared content-length is read from
@@ -79,7 +88,7 @@ async function readBody(req, maxBodySize = MAX_BODY_SIZE, deadlineMs = BODY_DEAD
     req.on('end', () => {
       clearTimeout(deadline);
       try { resolve(JSON.parse(Buffer.concat(chunks).toString() || '{}')); }
-      catch { reject(new Error('Invalid JSON')); }
+      catch { reject(Object.assign(new Error('Invalid JSON'), { code: 'bad_json' })); }
     });
     req.on('error', (err) => {
       clearTimeout(deadline);
@@ -461,6 +470,7 @@ module.exports = {
   json,
   readBody,
   bodyErrorStatus,
+  uncaughtReply,
   readCredentials,
   identifyCaller,
   mayAttestUnauthenticated,
