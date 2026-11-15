@@ -138,7 +138,14 @@ function renderAgents(history = lastHistory) {
 // ---- the lobby ----
 function renderLobby() {
   $("lobbyCard").classList.remove("u-hidden");
-  Lobby.startLobby($("lobbyRoom"), agents.map((a) => ({ ...characterOf(a), agent: a })), (person) => showInLobby(person.agent));
+  const people = agents.map((a) => ({ ...characterOf(a), agent: a }));
+  const onPick = (person) => showInLobby(person.agent);
+  // The room with depth (lobby-scene.js) is a module and may not have loaded yet, and needs WebGL.
+  // Until it is here, and wherever it cannot run, the flat room stands in.
+  const scene = window.SigvaraLobbyScene;
+  if (scene?.start($("lobbyRoom"), people, onPick)) return;
+  Lobby.startLobby($("lobbyRoom"), people, onPick);
+  if (!scene) document.addEventListener("sigvara-lobby-scene", () => window.SigvaraLobbyScene.start($("lobbyRoom"), people, onPick), { once: true });
 }
 
 function showInLobby(a) {

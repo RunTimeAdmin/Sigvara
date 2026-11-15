@@ -1,8 +1,16 @@
 /* The lobby on the Agents page (lobby.js). The page's column is 760px, too narrow for a room to read
    at a glance, so this one card runs wider, centred on the column. */
-#lobbyCard { width: min(1180px, calc(100vw - 32px)); margin-left: calc((100% - min(1180px, calc(100vw - 32px))) / 2); }
-#lobbyCard > .netnote { max-width: 760px; }
-@media (max-width: 560px) { #lobbyCard { padding: 16px; } }
+#lobbyCard, #agentsCard { width: min(1180px, calc(100vw - 32px)); margin-left: calc((100% - min(1180px, calc(100vw - 32px))) / 2); }
+#lobbyCard > .netnote, #agentsCard .card-body > p { max-width: 760px; }
+.ag-lobby3d { position: relative; }
+.ag-room3d { display: block; width: 100%; height: auto; aspect-ratio: 2.6; min-height: 300px; cursor: default; }
+.ag-room3d.pick { cursor: pointer; }
+.ag-tag3d { position: absolute; transform: translate(-50%, -100%); padding: 3px 9px; border-radius: 999px; background: rgba(9, 11, 22, .9); border: 1px solid var(--sig-line-strong); color: var(--sig-text); font-size: 12px; font-weight: 600; white-space: nowrap; pointer-events: none; }
+.ag-tag3d.picked { border-color: var(--sig-cyan); color: var(--sig-cyan); }
+@media (max-width: 560px) { .ag-room3d { min-height: 340px; } }
+/* Between a phone and a desktop the table is a little too wide for its card: tighten it to fit. */
+@media (max-width: 900px) { #agentsCard .ex-table { font-size: 12px; } #agentsCard .ex-table th, #agentsCard .ex-table td { padding-right: 6px; } #agentsCard .ex-table .btn { padding: 6px 9px; font-size: 12px; } }
+@media (max-width: 560px) { #lobbyCard, #agentsCard { padding: 16px; } }
 .ag-lobby { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 .ag-room { display: block; width: 100%; height: auto; }
 .ag-walker { cursor: pointer; }

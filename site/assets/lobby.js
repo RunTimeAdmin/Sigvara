@@ -208,6 +208,8 @@
     let frame = 0;
     const tick = (t) => {
       frame = 0;
+      // Stops for good once the room has been taken out of the page (lobby-scene.js replaces it).
+      if (!group.isConnected) return;
       if (!visible) { last = null; return; }
       move(t, last === null ? 0 : Math.min(50, t - last));
       last = t;
