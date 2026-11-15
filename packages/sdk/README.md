@@ -500,8 +500,8 @@ contract. The oracle's answer is untrusted:
 - It is read to at most 4 MB, with no redirects followed.
 - It is refused unless it names the agent asked about, or if it lists more than 2,000 payments.
 - Only the fields a leaf commits to, and the oracle's `outcomeSource` label from two fixed values, are returned.
-- Matching a long list tries fewer settlement cut-offs, newest first, so a hostile list costs about a second,
-  not a minute.
+- Matching a root hashes each pair of nodes once across all the settlement cut-offs it tries, and tries no more
+  once it has hashed 20,000, so a hostile list costs about a second, not a minute.
 
 The server is also a module, for a host that runs its own transport:
 
@@ -513,7 +513,8 @@ const reply = await server.handle({ jsonrpc: '2.0', id: 1, method: 'tools/list' 
 ```
 
 Built from `rpcUrl` like this, it checks the chain as the command does. Given a `verifier` of your own, it
-checks the chain only if you also pass `readChainId`.
+checks the chain itself only if you also pass `readChainId`, though a `SigvaraVerifier` built with a `chainId`
+refuses to read from another chain in any case.
 
 ## Links
 

@@ -82,24 +82,30 @@ export function hashPair(a: string, b: string): string {
     : ethers.keccak256(ethers.concat([b, a]));
 }
 
-/** Every layer of the tree, leaves first. Empty for no leaves. */
-export function evidenceLayers(leaves: string[]): string[][] {
+/**
+ * Every layer of the tree, leaves first. Empty for no leaves. `pair` hashes two nodes into their parent, and
+ * must give what hashPair gives: matchEvidenceRoot passes a memo of it.
+ */
+export function evidenceLayers(leaves: string[], pair: (a: string, b: string) => string = hashPair): string[][] {
   if (!leaves.length) return [];
   const layers = [leaves.slice()];
   let level = leaves.slice();
   while (level.length > 1) {
     const next: string[] = [];
-    for (let i = 0; i < level.length; i += 2) next.push(i + 1 < level.length ? hashPair(level[i], level[i + 1]) : level[i]);
+    for (let i = 0; i < level.length; i += 2) next.push(i + 1 < level.length ? pair(level[i], level[i + 1]) : level[i]);
     layers.push(next);
     level = next;
   }
   return layers;
 }
 
-/** The root over these leaves, in order. The zero hash for none, which the contract treats as no root. */
-export function evidenceRoot(leaves: string[]): string {
+/**
+ * The root over these leaves, in order. The zero hash for none, which the contract treats as no root. `pair` is
+ * as for evidenceLayers.
+ */
+export function evidenceRoot(leaves: string[], pair: (a: string, b: string) => string = hashPair): string {
   if (!leaves.length) return ZERO_ROOT;
-  const layers = evidenceLayers(leaves);
+  const layers = evidenceLayers(leaves, pair);
   return layers[layers.length - 1][0];
 }
 
@@ -130,11 +136,20 @@ export interface RootMatch {
  * reproduces it, as the explorer's matchRoot does (site/assets/explorer.js).
  *
  * A proposal commits to the payments settled by the time it was made, and a payer can sign an outcome after
- * that. So the root is tried against every payment, against those counted by each cut-off, and against both
- * with every payer-signed outcome read as not reported. With `at` (a proposal's time, in seconds) only that
- * cut-off is tried. Each try rebuilds a tree, so the work is about (cut-offs tried) times (payments) times two;
- * a caller facing a long list from a source it does not trust lowers `maxCuts`. `leaves`, when given, are the
- * records' leaves as served, already built. Throws if a record cannot be a leaf at all.
+ * that. So the root is tried against every payment, against those counted by each of up to `maxCuts` cut-offs,
+ * and against both with every payer-signed outcome read as not reported. With `at` (a proposal's time, in
+ * seconds) only that cut-off is tried. `leaves`, when given, are the records' leaves as served, already built.
+ * Throws if a record cannot be a leaf at all.
+ *
+ * Neighbouring cut-offs count nearly the same payments in the same order, so their trees share every pair to the
+ * left of where they first differ. Every tree here is hashed through one memo of pairs, so a cut-off costs only
+ * the pairs no tree before it held: on a list in settlement order, whose lower cut-offs leave out its last
+ * payments, at most one a level of each tree, eleven at 2,000 payments. A cut-off that counts the same payments as
+ * the one before it is skipped. `hashBudget` bounds the pairs hashed: once past it no further cut-off is tried,
+ * though the first always is, in full. A caller facing a long list from a source it does not trust sets one, since
+ * a list ordered so that its trees share little costs a whole tree per cut-off. `memo`, when given, is that memo,
+ * so matches over the same list can share it; each pair hashed adds one entry, and only what a call adds counts
+ * against its budget.
  *
  * `delays` (chain id to seconds, as /evidence serves them) says how much later a payment chain's payment enters a
  * score than its settlement. `evidenceCut` (also from /evidence, present when a chain is on) says a proposal's
@@ -145,12 +160,14 @@ export interface RootMatch {
 export function matchEvidenceRoot(
   records: EvidenceRecord[],
   committed: string,
-  { at, maxCuts = 64, leaves, delays = {}, evidenceCut = null }: {
+  { at, maxCuts = 64, leaves, delays = {}, evidenceCut = null, hashBudget = Infinity, memo = new Map<string, string>() }: {
     at?: number;
     maxCuts?: number;
     leaves?: string[];
     delays?: Record<number, number>;
     evidenceCut?: { quantumSeconds: number; windowSeconds: number } | null;
+    hashBudget?: number;
+    memo?: Map<string, string>;
   } = {},
 ): RootMatch | null {
   if (!HASH.test(committed)) return null;
@@ -170,13 +187,27 @@ export function matchEvidenceRoot(
   const cuts = at !== undefined
     ? [Number(at), ...quantized.filter((t) => t < Number(at))]
     : [Infinity, ...[...new Set(counts)].sort((a, b) => b - a).slice(0, maxCuts)];
+  const start = memo.size;
+  const pair = (a: string, b: string) => {
+    const key = a + b;
+    let parent = memo.get(key);
+    if (parent === undefined) memo.set(key, (parent = hashPair(a, b)));
+    return parent;
+  };
+  let tried: number[] | null = null;
   for (const cut of cuts) {
+    // The memo grows by one for each pair hashed. The first cut-off is tried whatever the budget.
+    if (tried && memo.size - start > hashBudget) break;
     const indexes = records.map((_, i) => (counts[i] <= cut ? i : -1)).filter((i) => i >= 0);
+    // The cut-offs only go down, so one that counts as many payments as the last one tried counts the same ones,
+    // whose trees did not match.
+    if (tried && indexes.length === tried.length) continue;
+    tried = indexes;
     const tries: [string[], boolean][] = [[asServed, false]];
     if (indexes.some((i) => signed[i])) tries.push([unsetLeaves, true]);
     for (const [leaves, unset] of tries) {
       const picked = indexes.map((i) => leaves[i]);
-      if (evidenceRoot(picked).toLowerCase() === want) return { indexes, leaves: picked, cut, unset };
+      if (evidenceRoot(picked, pair).toLowerCase() === want) return { indexes, leaves: picked, cut, unset };
     }
   }
   return null;

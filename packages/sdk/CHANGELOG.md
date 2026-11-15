@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.0.0-alpha.21
+
+### Fixed: `sigvara_verify_evidence` missed a finalized root a few payments behind a long list
+
+To bound what a hostile oracle could cost, the tool tried fewer settlement cut-offs as a list grew, five at 2,000
+payments, so a busy agent whose finalized root was ten payments behind its list read as not reproduced. Each
+cut-off rebuilt its tree from nothing, though neighbouring cut-offs share all but a few pairs.
+
+`matchEvidenceRoot` now hashes every tree it tries through one memo of pairs and skips a cut-off that counts the
+same payments as the one before. Its new `hashBudget` limits the pairs it hashes: past it no further cut-off is
+tried, though the first always is. Its new `memo` lets several matches over one list share their work. The tool
+tries up to 64 cut-offs again, within 20,000 hashes, and its finalized and pending matches share one memo. On 2,000
+payments with the root ten behind, the match finds it after 2,064 hashes; the old bound gave up after 11,984, and
+the old code unbounded took 23,933. A list ordered so that its trees share little still stops at the budget, and
+the result says the search reached its limit. `evidenceRoot` and `evidenceLayers` take an optional pair function
+and work as before without one.
+
+### Fixed: the verifier asked the RPC its chain id with every wave of reads
+
+ethers sent `eth_chainId` beside every wave of reads, to notice a node that changes chains: 21 to 29% of the calls
+the SDK made. `SigvaraVerifier` now builds its provider with `staticNetwork` and asks once, before its first read,
+which the new `getRpcChainId` also returns. A verifier given a `chainId` refuses every read from an RPC that serves
+another chain, with a `NETWORK_ERROR` naming both; it used to read whichever chain the URL served. A failed ask is
+asked again on the next read. `sigvara-mcp` takes its own chain check from the verifier, so a first
+`sigvara_check_agent` makes 14 calls, one of them `eth_chainId`, where it made 18 with five of them, and later
+ones do not ask again. `rpcChainId` moved to the verifier and is still exported from `dist/mcp`.
+
 ## 1.0.0-alpha.20
 
 ### Added: the band an agent's score is in

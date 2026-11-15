@@ -1,4 +1,5 @@
 import { ethers, FetchRequest } from 'ethers';
+import type { JsonRpcApiProviderOptions, PerformActionRequest } from 'ethers';
 import { IDENTITY_ABI, REPUTATION_ABI, STAKING_ABI, ERC20_ABI } from './abis';
 
 /** Multicall3, at the address it has on most EVM chains, Arc testnet among them. */
@@ -29,8 +30,64 @@ import type {
  */
 export const DEFAULT_RPC_TIMEOUT_MS = 30_000;
 
+/** Asks an RPC endpoint which chain it serves, with one eth_chainId call. */
+export async function rpcChainId(rpcUrl: string, timeoutMs = 30_000): Promise<number> {
+  const req = new FetchRequest(rpcUrl);
+  req.timeout = timeoutMs;
+  req.body = { jsonrpc: '2.0', id: 1, method: 'eth_chainId', params: [] };
+  const res = await req.send();
+  res.assertOk();
+  const body = res.bodyJson as { result?: unknown };
+  if (typeof body?.result !== 'string') throw new Error('eth_chainId returned no result');
+  return Number(BigInt(body.result));
+}
+
+/**
+ * The provider a verifier reads through: ethers' JsonRpcProvider with staticNetwork, and the node asked its chain
+ * id once, before the first read reaches it.
+ *
+ * Without staticNetwork ethers sends eth_chainId beside every wave of reads, to notice a node that changes chains,
+ * and the 15 November performance review measured that at 21 to 29% of the requests the SDK makes. With it and
+ * nothing more, ethers takes the configured chain on trust, and an RPC URL for another chain, where the same
+ * contracts can sit at the same addresses, would be read as if it were this one. So when a chain is configured,
+ * every read waits for the one answer and is refused if it names another chain.
+ */
+class ChainCheckedProvider extends ethers.JsonRpcProvider {
+  private served?: Promise<number>;
+
+  constructor(connection: FetchRequest, private readonly expectedChainId: number | undefined, options: JsonRpcApiProviderOptions) {
+    super(connection, expectedChainId, { ...options, staticNetwork: true });
+  }
+
+  /** The chain id the node says it serves, asked once. A failed ask is not kept, so the next read asks again. */
+  servedChainId(): Promise<number> {
+    if (!this.served) {
+      const { url, timeout } = this._getConnection();
+      this.served = rpcChainId(url, timeout).catch((err) => {
+        this.served = undefined;
+        throw err;
+      });
+    }
+    return this.served;
+  }
+
+  // Every read reaches the node through here: contract calls, and getCode for Multicall3.
+  override async _perform(req: PerformActionRequest): Promise<any> {
+    if (this.expectedChainId !== undefined) {
+      const served = await this.servedChainId();
+      if (served !== this.expectedChainId) {
+        throw ethers.makeError(
+          `SigvaraVerifier: the RPC serves chain ${served}, but chain ${this.expectedChainId} is configured; nothing was read`,
+          'NETWORK_ERROR', { event: 'chainId' },
+        );
+      }
+    }
+    return super._perform(req);
+  }
+}
+
 export class SigvaraVerifier {
-  private readonly provider: ethers.JsonRpcProvider;
+  private readonly provider: ChainCheckedProvider;
   private readonly addresses: ContractAddresses;
   private _chainId: number | undefined;
 
@@ -49,9 +106,17 @@ export class SigvaraVerifier {
     connection.timeout = timeoutMs;
     // ethers folds what is asked in one tick into one batch, of up to 100 calls by default. Arc's public
     // RPC answers 20 and refuses the rest with a rate limit, so a busy gate would refuse agents over it.
-    this.provider = new ethers.JsonRpcProvider(connection, undefined, { batchMaxCount: 20 });
+    this.provider = new ChainCheckedProvider(connection, config.chainId, { batchMaxCount: 20 });
     this.addresses = config.addresses;
     this._chainId = config.chainId;
+  }
+
+  /**
+   * The chain id the RPC serves, asked with one eth_chainId the first time and kept; a failed ask is asked again.
+   * With a chainId in the config, every read waits for it and is refused when it is another chain.
+   */
+  getRpcChainId(): Promise<number> {
+    return this.provider.servedChainId();
   }
 
   private identity() {
