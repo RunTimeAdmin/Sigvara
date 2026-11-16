@@ -542,6 +542,23 @@ test('a payment made before the agent registered is skipped, so the scan time ca
   assert.equal(out.reasons.before_registration, 1);
 });
 
+test('a payment made before the agent first bonded is skipped by its time, and one at that time counts (ADR 0013)', async () => {
+  const a = agent();
+  const payer = ethers.Wallet.createRandom().address;
+  const provider = fakeChain({
+    logs: [
+      transferLog({ from: payer, to: a.agentAddress, amount: 1_000_000n, block: 1500 }),
+      transferLog({ from: payer, to: a.agentAddress, amount: 2_000_000n, block: 1600 }),
+      transferLog({ from: payer, to: a.agentAddress, amount: 3_000_000n, block: 1700 }),
+    ],
+  });
+  // Bonded at block 1600's time, on the scored chain.
+  const { deps: d, credited } = deps({ provider, agents: [a], bondedAtMs: async () => (1_700_000_000 + 1600) * 1000 });
+  const out = await pc.scanChain(config().chains[0], d);
+  assert.deepEqual(credited.map((c) => c.amount), ['2000000', '3000000']);
+  assert.equal(out.reasons.before_bond, 1);
+});
+
 test("a scan stops before the registry scan's reach, so a payment to an agent registered since is credited later", async () => {
   const known = agent();
   const late = agent();

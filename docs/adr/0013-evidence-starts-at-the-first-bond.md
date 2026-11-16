@@ -1,7 +1,11 @@
 # ADR 0013: An agent's evidence starts at its first bond
 
-**Status:** Accepted · 2026-11-16, the owner's choice of option B (section 3) over a registration fee. Section 4's
-values are proposed. Not built.
+**Status:** Accepted · 2026-11-16, the owner's choice of option B (section 3) over a registration fee. Rollout steps
+1, 2 and 4 are built: `noteBond`, `ACTIVE_AT_REGISTRATION_BEFORE` and the catch-up in `getRegisteredAgents`
+(`oracle/chain.js`), `before_bond` in
+`planCredits` (`oracle/payment-scan.js`) and `scanChain` (`oracle/payment-chains.js`), and `bondedByPayment` and the
+bonded agent list in `oracle/index.js`, tested in `oracle/first-bond.test.js` and beside each. Step 3, both testnet
+operators, is not done yet. Code references in sections 1 and 3 are to main at `9be7aa7`, before the build.
 
 ## 1. Context
 
@@ -34,8 +38,11 @@ values are proposed. Not built.
 - **No payment scan reads past the registry scan.** The scored chain's stops at the last block the registry scan has
   read (`oracle/index.js:1191-1197`), and a payment chain's at that block's time
   (`oracle/payment-chains.js:547-556`). A log the registry scan reads is known before any payment after it is.
-- **Testnet, 16 November 2026.** 47 registrations, 46 with an `Active` log. One never bonded, and no agent left
-  `PendingBond` for `Suspended` first.
+- **Testnet, 16 November 2026.** 47 registrations, 46 with an `Active` log, each within 144 blocks of its
+  registration. The 47th and oldest, the demo agent, registered on 18 September in block 62664031, before the identity
+  proxy moved to the PendingBond implementation in block 62914014 (its `Upgraded` log). The registry of the time made
+  it `Active` at registration, and it is `Active` now with no status log. No agent left `PendingBond` for `Suspended`
+  first.
 
 ## 2. What any answer must keep
 
@@ -53,26 +60,32 @@ come later.
 
 **B. Evidence starts at the first bond. Chosen.**
 1. The registry scan reads `AgentStatusUpdated` beside `AgentRegistered` and `OperatorTransferred`, in the same calls
-   (`oracle/chain.js:270`). An agent's first `Active` log gives it `bondedBlock` and that block's time, `bondedAtMs`,
-   kept on its record and saved with it. A `Slashed` log removes the agent, as the epoch's read of a slashed agent
-   does now (`oracle/index.js:1806-1810`).
+   (`oracle/chain.js:270`). An agent's first `Active` log gives it `bondedBlock`, kept on its record and saved with
+   it. A payment chain's check reads that block's time when it needs it. A registration made while a registry still
+   started agents `Active` is bonded from its own block: on Arc testnet's identity proxy, one before block 62914014.
+   The oracle names that block for that proxy alone; a registry it does not name started every agent at
+   `PendingBond`.
 2. The epoch, the scored chain's payment scan and each payment chain's scan work from agents with a `bondedBlock`. A
    registration that never bonded stays a record in the registry scan, so that its operator history is whole if it
    bonds later, and nothing reads it again. The link scan keeps every registration, since it asks nothing per agent
    (`oracle/index.js:995-1000`).
 3. A payment counts for an agent only from its first bond: on the scored chain from `bondedBlock`, that block
-   included, and on a payment chain from `bondedAtMs` by block time, as `before_registration` works now. An earlier
-   payment is refused as `before_bond` by the scan, by `POST /attest` (402) and by peer import.
+   included, and on a payment chain from that block's time, as `before_registration` works now. An earlier payment is
+   refused as `before_bond` by the scan, by `POST /attest` (402) and by peer import.
 4. `POST /attest` reads the agent at the payment's block, as it does now (`oracle/index.js:2626-2628`). `Active` there
    means it had bonded, and `PendingBond` means `before_bond`. An operator can suspend an agent that never bonded, so
-   a `Suspended` agent is checked against `bondedBlock`, and the answer is 503 until the registry scan has read the
-   payment's block.
+   a `Suspended` agent is checked against `bondedBlock`, and the answer is 503 (`bond_not_seen`) until the registry
+   scan has read the payment's block. A slashed agent is scored no more, so its payments are taken as before. On a
+   payment chain the agent is read as it stands today, so only `PendingBond` answers on its own there.
 5. The rule applies to payments credited from the upgrade on. A credit already held stays, and so do the roots built
    from it.
-6. At its first start with this rule, an operator reads the identity registry's logs again from `FROM_BLOCK`, as a new
-   operator does at its first start, to find the first bonds of the agents it already knows. Reading a registration
-   again starts its record over (`oracle/chain.js:249-252`), and a slashed agent's `Slashed` log removes it again in
-   the same pass, so the pass changes nothing else.
+6. At its first start with this rule, an operator reads the identity registry's status logs once, up to where its
+   registry scan had read, to find the first bonds of the agents it already knows. No agent bonds before it registers,
+   so each read starts at the oldest registration still without a bond and the blocks between are left: on testnet
+   about one read per agent, where reading every 10,000 blocks since the oldest registration would be about 1,000. It
+   reads no registration again, so an agent it had forgotten after a slash does not come back. The scan state saves
+   how far status logs have been read; an earlier build drops that field, and the next start with this rule reads them
+   again and keeps every bond it holds.
 
 **C. Read agents that never bonded less often.** A slower sweep for `PendingBond` agents. It lowers the cost without
 bounding it, and a payment credited late changes when it counts. Rejected.
@@ -81,15 +94,15 @@ bounding it, and a payment credited late changes when it counts. Rejected.
 stake at each payment's block: a read per payment, or the whole stake and minimum history from logs. Rejected for
 B's single fact per agent.
 
-## 4. Parameters to set
+## 4. Parameters
 
-| Parameter | Proposed |
+| Parameter | Set |
 |---|---|
 | What starts an agent's evidence | Its first `AgentStatusUpdated(did, Active)` log |
 | A payment in the bond's own block | Counts, as one in the registration's block does |
 | A payment on a payment chain | Compared by block time with the bond block's time |
 | Credits held at the upgrade | Kept |
-| Refusal code | `before_bond`; `POST /attest` answers 402 |
+| Refusal code | `before_bond`; `POST /attest` answers 402, or 503 with `bond_not_seen` while it cannot tell yet |
 
 ## 5. Consequences
 
@@ -102,8 +115,9 @@ B's single fact per agent.
   (`docs/quickstart.md`, step 5); it will say why.
 - `POST /attest` answers 503 for a payment to a `Suspended` agent until the registry scan has read the payment's
   block, at most an epoch.
-- `/health` reports how many agents are registered and how many have bonded, so the two operators can be compared.
-- The saved state grows by two numbers per bonded agent.
+- `/health` reports how many agents are registered and how many have bonded (`agents`), so the two operators can be
+  compared.
+- The saved state grows by one number per bonded agent, and one for how far status logs have been read.
 
 ## 6. What this does not do
 
@@ -123,9 +137,12 @@ B's single fact per agent.
 
 1. Oracle: option B, with `before_bond` in the scan, `POST /attest`, peer import and each payment chain, and the counts
    on `/health`.
-2. Tests: registrations that never bond add no reads to an epoch; a payment before the bond is refused on every path,
-   and one in the bond's block counts; a `Suspended` agent that never bonded is refused; the first start finds the
-   bonds of agents already known and puts no slashed agent back; a credit held from before the upgrade stays.
+2. Tests: registrations that never bond add no reads to an epoch; a payment before the bond is refused by the scan, a
+   payment chain's scan and `POST /attest`, and one in the bond's block counts; a `Suspended` agent that never bonded
+   is refused, or waited for while unread; the first start finds the bonds of agents already known, once, with a read
+   at each registration rather than across the span, and puts no forgotten agent back; a testnet registration from
+   before PendingBond counts from its block; a credit held from before the upgrade stays. Peer import shares
+   `POST /attest`'s check.
 3. Both Arc testnet operators in one window between epochs (they run at about :57 and :58), as with #301, then their
    `/health` counts compared. Mainnet starts with the rule.
 4. Docs: `docs/payment-backed-attestations.md` (the rule and `before_bond`), `docs/quickstart.md` step 5, and

@@ -115,7 +115,7 @@ Health check with operational signals for production alerting.
 }
 ```
 
-`creditsRemoved` counts held credits a reorganization removed (ADR 0012); it should be 0, and the watcher alerts when it grows. A checker also serves `watcherSeenMs`, when the divergence watcher last read its `/divergence` (null since a restart), which the live checks read to notice a stopped watcher. Where the state file is, and what went wrong writing it, are in the log and not in this answer. It also carries `writePolicy`, `{ "scoreRefreshHours": 12, "maxWritesPerEpoch": 1000 }`, which both operators must share.
+`creditsRemoved` counts held credits a reorganization removed (ADR 0012); it should be 0, and the watcher alerts when it grows. `agents` is `{ registered, bonded }`: the registrations the registry scan holds, and how many have bonded, which are the only ones read and scanned for (ADR 0013); two operators that have read the same blocks report the same. A checker also serves `watcherSeenMs`, when the divergence watcher last read its `/divergence` (null since a restart), which the live checks read to notice a stopped watcher. Where the state file is, and what went wrong writing it, are in the log and not in this answer. It also carries `writePolicy`, `{ "scoreRefreshHours": 12, "maxWritesPerEpoch": 1000 }`, which both operators must share.
 Returns 503 when:
 - State file path is not writable (likely volume mount issue)
 - The last state write failed (`statePersisted: false`)
@@ -355,12 +355,12 @@ This is fine for local testing and worthless as a trust signal in public.
 | 200 | Accepted and saved |
 | 202 | Accepted, but the state file could not be written, so a restart before the next good save loses it. The body has `"durable": false`. Do not resend: it is recorded here, and a resend is refused (409 for a settlement already credited, 429 inside the cooldown). A payer-signed outcome sent again gets a 409 with `sameOutcome: true`, and `durable: false` until a save works. `/health` is 503 until a save works |
 | 400 | Malformed body, unknown agent, or a `success` that is not a boolean |
-| 402 | The payment did not check out; `code` says why (`self_payment`, `no_transfer`, `below_minimum`, `before_registration`, or `settlement_too_old` for one older than pruning keeps, about 897 days at the default half-life, or than the caps keep for that agent) |
+| 402 | The payment did not check out; `code` says why (`self_payment`, `no_transfer`, `below_minimum`, `before_registration`, `before_bond` for one made before the agent's first bond (ADR 0013), or `settlement_too_old` for one older than pruning keeps, about 897 days at the default half-life, or than the caps keep for that agent) |
 | 409 | `replayed`: this settlement was already credited. `outcome_recorded`: it already has an outcome, which is final. `payment_dropped`: it was credited and has since been dropped from the agent's ledger, past its cap while its payer held more than its share, so it can never carry one. For a payer-signed outcome each also carries `sameOutcome`, and `outcome_recorded` the held outcome's `heldOutcomeHash` when the payer signed the outcome held (a token holder's held outcome gives only `sameOutcome: false`) |
 | 413 | The body is over 1 MB. `/flag`, `/flag/resolve` and `/link` answer the same way |
 | 429 | Cooldown active for this (attester, didHash) — `remainingSeconds` says how long. Applies to callers without a token; a token holder reporting on a verified payment is not throttled |
 | 502 | The RPC failed. Not a verdict on the payment; retry |
-| 503 | `unconfirmed`: the payment's block is not final yet (ADR 0012). Not a verdict; send it again |
+| 503 | `unconfirmed`: the payment's block is not final yet (ADR 0012). `bond_not_seen`: the agent left `PendingBond` without a bond this operator has read by the payment, and its registry scan has not read that far yet (ADR 0013). Not a verdict; send it again |
 
 The 502 case is counted separately from rejected attestations: a node having a bad
 minute must not read as a caller trying it on.
@@ -1051,6 +1051,16 @@ rather than a number it could not stand behind.
 | `PAYMENT_SCAN_CONFIRMATIONS` | `6` (floor) | Blocks to stay behind the head, and never past the `finalized` block. May be raised, not lowered. Deeper than the attested path because a scan credits unattended; a credit records the tx hash as used, so a reorg would strand it until it is read again once final (ADR 0012). |
 | `PAYMENT_SCAN_PACE_MS` | `500` | Milliseconds between `getLogs` calls. Measured, not guessed: both Arc endpoints limit with a bucket of about 60 requests, so back-to-back calls are refused ~60% of the time, 250ms clears the first 60 and then fails every one after, and 500ms sustains 72 of 72. Costs nothing in steady running, where an epoch is one call. `0` opts out. |
 
+**Bonded agents only (ADR 0013).** An agent's evidence starts at its first bond: the block of its first
+`AgentStatusUpdated` to `Active`, which the identity registry allows only with the minimum stake. The registry scan
+reads those logs in the calls it makes for registrations, and the epoch, this scan and each payment chain's scan work
+from the agents that have bonded. A registration that never bonds is neither read nor asked for, so it costs an
+operator one log and its record. A payment before the bond is skipped as `before_bond`, and `POST /attest` and the
+peer import refuse it the same way. The bond's own block counts. An agent registered on Arc testnet's identity proxy
+before block 62914014, when the registry still started agents `Active`, counts from its registration. A state saved
+by an earlier build has its status logs read once at the next start, a read at each registration still without a
+bond, and keeps every credit it holds.
+
 When a scan credits nothing, a **canary** runs before that emptiness is believed. It
 re-issues the same filter shape against a settlement already in this operator's state:
 one recipient, one block, one known transaction. A `getLogs` that matches nothing
@@ -1145,6 +1155,8 @@ What differs from the scored chain's scan:
   belong to somebody else here, so its payments are skipped as `contract_recipient`. The code is read
   at the payment's block here and at the block the agent registered in on the scored chain, so the
   answer does not depend on when an operator scanned.
+- **After the first bond, by time.** A payment made before the agent's first bond is skipped as `before_bond`,
+  judged by the bond block's time on the scored chain (ADR 0013).
 - **After registration, by time.** As on the scored chain, a payment made before the agent registered
   is skipped as `before_registration`, so whether it counts cannot depend on when an operator scanned
   its block. Here that goes by the block's time, since the two chains' blocks are unrelated. For the same reason a payer is not judged by the operator of its block, nor by today's: a payment from an address the registry scan holds as named the agent's operator, at registration or by `OperatorTransferred`, by the payment's time is skipped as `self_payment`, and one from an address named later stops counting from that change's block time. A former operator's payment then never counts, however late it is scanned, and two operators leave out the same payments at any cut-off, since each has read the registry past it. `/evidence`, the root and a checker's audit (at each cut-off it tries) all apply this. An outcome on a payment the scan skips this way is refused as `self_payment` too, and a posted one from today's operator as well.

@@ -110,7 +110,7 @@ const bond = await depositStake(signer, didHash, minStake, STAKING_ADDRESS);
 console.log('bond tx:', bond.txHash, bond.approveTxHash ? '(approval sent first)' : '');
 ```
 
-After a few blocks the oracle will detect the `AgentRegistered` event and begin tracking the agent. It will not propose a score until the bond lands. The first one will be low (tenure=0, no payments yet) and grows only as verified, paid work accrues — see the [Reputation Model](reputation-model.md).
+The oracle starts tracking the agent when it reads the bond: an agent's evidence starts at its first bond, so a payment made before the bond does not count ([ADR 0013](adr/0013-evidence-starts-at-the-first-bond.md)). Bond right after registering. The first score will be low (tenure=0, no payments yet) and grows only as verified, paid work accrues (see the [Reputation Model](reputation-model.md)).
 
 ## 6. Verify registration
 

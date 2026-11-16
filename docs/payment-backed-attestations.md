@@ -156,7 +156,7 @@ The codes that depend on the payment check are below. The [oracle README](../ora
 | 402 | The payment did not check out. `code` says why |
 | 409 | This settlement was already credited, or it already has an outcome, which is final. For a payer-signed outcome it carries `sameOutcome`, and `outcome_recorded` names the held one (`heldOutcomeHash`) |
 | 502 | The RPC failed. Not a verdict on the payment, retry |
-| 503 | Not a verdict either: its block is not final yet (`unconfirmed`), or, for a payment chain's payment, it is not found yet or this operator has not read the agent's registration (`agent_not_seen`). Send it again |
+| 503 | Not a verdict either: its block is not final yet (`unconfirmed`), or, for a payment chain's payment, it is not found yet or this operator has not read the agent's registration (`agent_not_seen`), or it has not read far enough to know whether the agent had bonded by then (`bond_not_seen`). Send it again |
 
 The 502 case matters. A node having a bad minute must not read as a caller trying
 it on, so RPC failures are counted separately from rejected attestations and are
@@ -220,6 +220,13 @@ a second wallet, but it raises the floor from free to deliberate.
 agent registered in is rejected with `before_registration`, and the payment scan skips
 it the same way, so whether it counts cannot depend on who reported it or when an
 operator scanned its block. The registration's own block counts.
+
+**A payment before the agent's first bond is refused too.** An agent's evidence starts at
+its first bond, the block in which the identity registry first made it `Active`, which it
+allows only with the minimum stake ([ADR 0013](adr/0013-evidence-starts-at-the-first-bond.md)).
+An earlier payment is rejected with `before_bond` and skipped by the scans, on a payment chain
+by the bond block's time. The bond's own block counts. Registering costs only gas, so the
+oracle does not read or scan for an agent until it has bonded.
 
 **One counterparty's evidence is capped.** Without a cap, a single wallet paying
 ten times is worth exactly as much as ten wallets paying once, so a small ring is

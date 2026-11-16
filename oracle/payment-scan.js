@@ -189,9 +189,14 @@ function decodeTransfer(log, asset) {
  *   @param {bigint} opts.minAmount
  *   @param {(didHash:string) => number|null} [opts.registeredBlockOf] didHash -> the block it
  *          registered in, on the chain these transfers are from
+ *   @param {(didHash:string) => number|null} [opts.bondedBlockOf] didHash -> the block of its first
+ *          bond, on the chain these transfers are from (ADR 0013)
  */
 function planCredits(decoded, opts) {
-  const { didHashOf, operatorOf = () => null, isUsed = () => false, minAmount = 0n, registeredBlockOf = () => null } = opts;
+  const {
+    didHashOf, operatorOf = () => null, isUsed = () => false, minAmount = 0n, registeredBlockOf = () => null,
+    bondedBlockOf = () => null,
+  } = opts;
 
   // (txHash, recipient, sender) -> accumulated
   //
@@ -247,6 +252,10 @@ function planCredits(decoded, opts) {
     // whether it counted would depend on when each one looked. The registration's own block counts.
     const registeredBlock = registeredBlockOf(g.didHash);
     if (Number.isInteger(registeredBlock) && g.blockNumber < registeredBlock) { reject('before_registration'); continue; }
+    // Paid before the agent's first bond, which is where its evidence starts (ADR 0013). The scan asks only for bonded
+    // agents, so these are the blocks between a registration and its bond. The bond's own block counts.
+    const bondedBlock = bondedBlockOf(g.didHash);
+    if (Number.isInteger(bondedBlock) && g.blockNumber < bondedBlock) { reject('before_bond'); continue; }
 
     credits.push({
       didHash: g.didHash,

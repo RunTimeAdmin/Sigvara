@@ -1237,6 +1237,7 @@ async function runPaymentScan(agents) {
     isUsed: (txHash, didHash, payer) => isCredited(txHash, didHash, payer),
     minAmount: paymentCfg.minAmount,
     registeredBlockOf: (didHash) => byDid.get(didHash)?.blockNumber ?? null,
+    bondedBlockOf: (didHash) => byDid.get(didHash)?.bondedBlock ?? null,
   });
 
   // The settlement time is the block's, not now. Crediting a back-scanned payment with
@@ -1351,6 +1352,10 @@ async function runPaymentScan(agents) {
 async function runPaymentChainScans(agents, chains) {
   // When each agent registered, in ms, read once a run (scanChain's before_registration).
   const registered = new Map();
+  // And when it first bonded, its bond block's time (scanChain's before_bond, ADR 0013). An agent with no bond the
+  // registry scan has seen is never handed to a scan, and would count nothing if it were.
+  const bondBlocks = new Map(agents.map((a) => [a.didHash, a.bondedBlock]));
+  const bonded = new Map();
   // The time of the last block the registry scan has read, read once a run: no scan reads a block from then on
   // (scanChain's reachMs). Null before the registry scan has read anything.
   let reachMs;
@@ -1382,6 +1387,13 @@ async function runPaymentChainScans(agents, chains) {
           registeredAtMs: async (didHash) => {
             if (!registered.has(didHash)) registered.set(didHash, Number((await chain.getAgentInfo(didHash)).registeredAt) * 1000);
             return registered.get(didHash);
+          },
+          bondedAtMs: async (didHash) => {
+            if (!bonded.has(didHash)) {
+              const block = bondBlocks.get(didHash);
+              bonded.set(didHash, Number.isInteger(block) ? await chain.blockMs(block) : Infinity);
+            }
+            return bonded.get(didHash);
           },
           // Every error leaves here without the URL, which carries the provider's key (paymentChains.rpcError).
           read: (label, fn) => chain.readWithBackoff(label, () => paymentChains.withDeadline(fn)).catch((err) => { throw paymentChains.rpcError(err, pc.rpcUrl); }),
@@ -1485,7 +1497,7 @@ async function evidenceCutFor() {
     // the list this epoch started from, a payment to an agent registered since would be lost for good.
     let agents = null;
     try {
-      agents = await chain.getRegisteredAgents();
+      agents = (await chain.getRegisteredAgents()).filter(chain.hasBonded);
     } catch (err) {
       console.error(`[oracle] could not read the registry again, so the scans stay where they are: ${err.message}`);
     }
@@ -1561,7 +1573,11 @@ async function runEpochInner() {
     return;
   }
 
-  console.log(`[oracle] ${agents.length} agent(s) found`);
+  // From here on only the agents that have bonded are read or scanned for: an agent's evidence starts at its first
+  // bond (ADR 0013), and a registration costs only gas. The link scan, which asks nothing per agent, takes them all.
+  const registered = agents;
+  agents = registered.filter(chain.hasBonded);
+  console.log(`[oracle] ${registered.length} agent(s) found, ${agents.length} bonded`);
 
   // Each payment chain that is on first (ADR 0009), however long that takes, so that the scored chain's
   // scan stays the last thing read before scoring, as it is with none. runPaymentChainScans logs its own
@@ -1584,7 +1600,7 @@ async function runEpochInner() {
     if (external.chainState().chainId === null) await external.refreshChainId();
     if (onChainLinks()) {
       try {
-        await runLinkScan(agents);
+        await runLinkScan(registered);
       } catch (err) {
         console.error('[oracle] ERC-8004 link scan failed:', err.message);
       }
@@ -2627,6 +2643,34 @@ function agentAtPayment(didHash, credited) {
   return chain.getAgentInfo(didHash, credited.blockNumber);
 }
 
+/**
+ * Whether the agent had bonded by a verified payment, which is where its evidence starts (ADR 0013): 'yes', 'no', or
+ * 'unread' while the registry scan has not read far enough to say. `atPayment` is the agent at the payment's block on
+ * the scored chain, and today on a payment chain. PendingBond answers no on either, since nothing returns to it, and
+ * Active at the payment's block yes. A slashed agent, at the payment or today (`today`), is scored no more, so it is
+ * taken as it was before this rule. Otherwise, an agent its operator suspended without a bond among them, the first
+ * bond the registry scan recorded decides: by block on the scored chain, by that block's time on a payment chain.
+ * Throws when the chain cannot be read.
+ */
+async function bondedByPayment(didHash, credited, atPayment, pc, today) {
+  const status = Number(atPayment.status);
+  if (status === chain.STATUS_PENDING_BOND) return 'no';
+  if (status === chain.STATUS_SLASHED || Number(today?.status) === chain.STATUS_SLASHED) return 'yes';
+  if (!pc && status === chain.STATUS_ACTIVE) return 'yes';
+  const bondedBlock = chain.knownAgent(didHash)?.bondedBlock;
+  const readTo = chain.bondsRead();
+  if (!pc) {
+    if (Number.isInteger(bondedBlock)) return credited.blockNumber >= bondedBlock ? 'yes' : 'no';
+    return Number.isInteger(readTo) && readTo >= credited.blockNumber ? 'no' : 'unread';
+  }
+  if (Number.isInteger(bondedBlock)) return credited.settledAt >= await chain.blockMs(bondedBlock) ? 'yes' : 'no';
+  // Read past the payment's time and no bond found, so none came by then. Blocks of the same second may be unread.
+  return Number.isInteger(readTo) && await chain.blockMs(readTo) > credited.settledAt ? 'no' : 'unread';
+}
+
+const BEFORE_BOND = 'this payment was made before the agent first bonded, which is where its evidence starts';
+const BOND_NOT_SEEN = 'this operator has not yet read whether the agent had bonded by this payment; try again later';
+
 const badSignatures = payerOutcome.badSignatureLimiter();
 
 /** The signing domain of a payment: on the payment chain it settled on, or on the scored chain when that is null. */
@@ -2979,6 +3023,9 @@ async function importOne({ didHash, txHash, chainId, checkedAtBlock, signed, pac
   try {
     if (!pc) atPayment = await agentAtPayment(didHash, credited);
     if (Number(atPayment.registeredAt) === 0) return { kind: 'refused', code: 'before_registration' };
+    const bond = await bondedByPayment(didHash, credited, atPayment, pc, info);
+    if (bond === 'no') return { kind: 'refused', code: 'before_bond' };
+    if (bond === 'unread') return { kind: 'retry', code: 'bond_not_seen' };
   } catch (err) {
     console.warn(`[oracle] payer outcome import: chain read failed for ${didHash}: ${err.message}`);
     return { kind: 'retry', code: 'rpc_error' };
@@ -3436,6 +3483,9 @@ async function handleRequest(req, res) {
       stateSource: getLoadReport().source,
       // Payment events held against the caps in store.js, and payments the caps refused since start.
       paymentLedger: ledgerStatus(),
+      // Registrations the registry scan holds, and how many have bonded, which are the ones read and scanned for
+      // (ADR 0013). Two operators should agree once both have read the same blocks.
+      agents: chain.agentCounts(),
       // Held credits a reorganization removed (ADR 0012). Should be 0; the watcher alerts when it grows.
       creditsRemoved: removedCredits(),
       // A checker's: when the divergence watcher last read its list, in ms, or null since this process started.
@@ -3743,6 +3793,19 @@ async function handleRequest(req, res) {
           metrics.inc('attestRejectedPayment');
           return json(res, 402, { error: 'this payment was made before the agent registered', code: 'before_registration' });
         }
+        let bond;
+        try {
+          bond = await bondedByPayment(didHash, credited, atPayment, pc, info);
+        } catch (err) {
+          metrics.inc('paymentRpcErrors');
+          console.warn(`[oracle] /attest chain read failed for ${didHash}: ${err.message}`);
+          return json(res, 502, { error: 'could not read the chain', code: 'rpc_error' });
+        }
+        if (bond === 'no') {
+          metrics.inc('attestRejectedPayment');
+          return json(res, 402, { error: BEFORE_BOND, code: 'before_bond' });
+        }
+        if (bond === 'unread') return json(res, 503, { error: BOND_NOT_SEEN, code: 'bond_not_seen' });
         // A payer-signed outcome is checked on the signer's own leg (admitPayerOutcome), so an
         // operator's larger leg in the same transaction cannot block its customer's outcome.
         if (!signedOutcome && payments.isSelfPayment(credited.payer, atPayment)) {

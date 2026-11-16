@@ -541,6 +541,14 @@ test('planCredits: defaults credit everything to a known agent', () => {
   assert.deepEqual(skipped.map((s) => s.reason), ['self_payment']);
 });
 
+test('planCredits: a payment before the block of the agent\'s first bond is skipped, and one in it counts (ADR 0013)', () => {
+  const logs = [149, 150, 151].map((block) => transfer(PAYER, AGENT, 500n, { block, tx: `0x${String(block).padStart(64, '0')}` }));
+  const { credits, skipped } = plan(logs, { registeredBlockOf: () => 100, bondedBlockOf: () => 150 });
+  assert.deepEqual(credits.map((c) => c.blockNumber), [150, 151], "the bond's own block counts");
+  assert.deepEqual(skipped.map((s) => s.reason), ['before_bond']);
+  assert.equal(skipped[0].txHash, logs[0].transactionHash);
+});
+
 test('planCredits: a payment before the block the agent registered in is skipped, whenever it is scanned', () => {
   const logs = [99, 100, 101].map((block) => transfer(PAYER, AGENT, 500n, { block, tx: `0x${String(block).padStart(64, '0')}` }));
   const { credits, skipped } = plan(logs, { registeredBlockOf: () => 100 });
