@@ -39,7 +39,7 @@ fails at the fee-estimation step, retry with `--legacy`.
 **Explorer verification.** Every Arc testnet contract, each proxy and the implementation
 behind it, is source-verified on [explorer.testnet.arc.io](https://explorer.testnet.arc.io), and
 each is reproduced byte for byte by a build of the commit `deployments/5042002.json` names
-(`bytecode.reproducedAt`, tagged `arc-testnet-2026-11-15`). See [Verifying the deployed code](#verifying-the-deployed-code)
+(`bytecode.reproducedAt`, tagged `arc-testnet-2026-11-16`). See [Verifying the deployed code](#verifying-the-deployed-code)
 below. Do not add `[etherscan]` entries for `5042` / `5042002` to `foundry.toml` until Foundry
 ships chain metadata for Arc; unknown chain IDs break `forge script`.
 
@@ -665,7 +665,8 @@ Proxy addresses never change; these are the implementations behind them, newest 
 
 | Proxy | Implementation | Released |
 |---|---|---|
-| `identity` | `0xfb54a76f5347d8898e950c1fc3c28e22b0f224af` | 26 Oct, `fdce1a7` (current) |
+| `identity` | `0x6c7aa1a546acf2f495586dcebb7472416c7f8387` | 16 Nov, `949cc17`, `standingOf` returns the three fields the registries use (current) |
+| | `0xfb54a76f5347d8898e950c1fc3c28e22b0f224af` | 26 Oct, `fdce1a7` |
 | | `0xb2616f4a449726b195951b6a576aba6847e174ef` | 19 Sep, operator index |
 | | `0x95d8592e7681550bee0c3e06c275ac1b94c873c6` | 19 Sep, proof of control + PendingBond |
 | | `0x486b1c2230c80a77dbec68835ff5b58eccd164ab` | 18 Sep, operator transfer |
@@ -675,7 +676,8 @@ Proxy addresses never change; these are the implementations behind them, newest 
 | | `0x169f1ada8a3568e229d24e74515b4ef889b8a6bd` | 21 Sep |
 | | `0x3501f936f629dbc2e97ae0717c501456ca8215e0` | 19 Sep, narrowed coupling |
 | | `0x28c23b766c2dabb5f2930905a5eeb660919b71ef` | 19 Sep, PendingBond activation |
-| `reputation` | `0xe88a04a33f13860bf92016d21027f43910839441` | 15 Nov, `a101f07`, a finalize leaves the proposal for the next one to overwrite (current) |
+| `reputation` | `0x461c8f61670c2c24f01ab714818fdada590a3b57` | 16 Nov, `949cc17`, reads the standing alone and checks a proof from calldata (current) |
+| | `0xe88a04a33f13860bf92016d21027f43910839441` | 15 Nov, `a101f07`, a finalize leaves the proposal for the next one to overwrite |
 | | `0x937da57830bff5f1341b8fd9f3f7d97f48b3ba16` | 10 Nov, `44ff8e8`, a stranded score can be discarded |
 | | `0x4bbcb51fa8edac8ab3d3dc9757614b55cffba837`, `0x26cf380314962f0c912b51b40a5c123c0683ac8a` | 5 Nov, `dcad617`, a score's age runs from its proposal; 4 Nov, `f35cbc6`, a finalize keeps the time built up toward the next point |
 | | `0xd23fffa937cfe37bbc6ee1e14c3c844c78bfe3ca` | 26 Oct, `fdce1a7` |
@@ -697,16 +699,16 @@ cast storage <proxy> 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505
 Anyone can check that the code on chain is this repository's, without trusting the explorer:
 
 ```bash
-git checkout arc-testnet-2026-11-15
+git checkout arc-testnet-2026-11-16
 sh scripts/fetch-deps.sh && forge build
 node scripts/check-bytecode.mjs
 ```
 
 `check-bytecode.mjs` reads each proxy, the implementation it runs, the SVR token and the reader (`0x2921b4eE879CdF5793FA273BbDc4E7dF01ABcef8`) from the
 chain, blanks the immutables (a UUPS implementation stores its own address in one), and compares
-the rest with the build, byte for byte, source metadata included. On 15 November 2026, after the
-reputation upgrade, all matched the build of `a101f07` except identity, whose source metadata (not its code) has changed since,
-and staking, whose new source waits for the slash drill to end: both are reported as expected, and `arc-testnet-2026-11-04b` builds staking. Build in an ordinary checkout: a `lib/` that is a symlink or
+the rest with the build, byte for byte, source metadata included. On 16 November 2026, after the
+identity and reputation upgrades, all matched the build of `949cc17` except staking, whose new source waits for the slash drill to end,
+and the reader, whose new source waits for staking's upgrade: both are reported as expected, and `arc-testnet-2026-11-04b` builds staking and `arc-testnet-2026-11-15` the reader. Build in an ordinary checkout: a `lib/` that is a symlink or
 junction changes the source paths solc records, and with them the metadata hash. CI runs the
 same check after every build; when main's sources have moved on since the recorded commit, a
 mismatch is expected and reported as such.

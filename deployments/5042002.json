@@ -31,19 +31,25 @@
   },
   "implementations": {
     "identity": {
-      "current": "0xfB54a76f5347d8898E950C1FC3c28e22B0F224af",
+      "current": "0x6c7Aa1a546AcF2F495586DCEBB7472416C7F8387",
       "history": [
         {
           "implementation": "0xb2616F4a449726b195951B6a576Aba6847e174ef",
           "replacedAt": "2026-10-27T01:19:18.000Z",
           "note": "replaced by the in-place upgrade to fdce1a7: upgradeToAndCall in block 69256838, tx 0xa0708524a15da6d0eddc28adeb8affd2adb87a6145a8712a71ce30c316f10aa1"
+        },
+        {
+          "implementation": "0xfB54a76f5347d8898E950C1FC3c28e22B0F224af",
+          "replacedAt": "2026-11-16T00:06:50.835Z",
+          "reproducedAt": "53d3a89",
+          "note": "replaced by the upgrade to 949cc17 (standingOf, pull request 326): upgradeToAndCall in block 72491463, tx 0xf50a7d568d81416dc98c91d3b8674167abb06d847389678378ce04681b89399f"
         }
       ],
-      "recordedAt": "2026-10-27T01:36:51.565Z",
-      "reproducedAt": "53d3a89"
+      "recordedAt": "2026-11-16T00:06:50.835Z",
+      "reproducedAt": "949cc17"
     },
     "reputation": {
-      "current": "0xe88A04A33F13860bF92016D21027F43910839441",
+      "current": "0x461C8f61670C2c24f01Ab714818FDAdA590A3b57",
       "history": [
         {
           "implementation": "0x87492399E34e5247740d0280C329e7553403404c",
@@ -73,10 +79,16 @@
           "replacedAt": "2026-11-15T22:46:15.678Z",
           "reproducedAt": "44ff8e8",
           "note": "replaced by the upgrade to a101f07 (a finalize leaves the proposal for the next one to overwrite, pull request 316): upgradeToAndCall in block 72484416, tx 0xca9019a10541be620903c0e0ecd81b51bc5ebecc9dfc6708fcde91a19692c31c"
+        },
+        {
+          "implementation": "0xe88A04A33F13860bF92016D21027F43910839441",
+          "replacedAt": "2026-11-16T00:06:50.835Z",
+          "reproducedAt": "a101f07",
+          "note": "replaced by the upgrade to 949cc17 (standingOf and verifyCalldata, pull request 326): upgradeToAndCall in block 72491520, tx 0x0f0ef1e343c30bd05d02f3e5eaf0e47b10ad2ac5e67561966cea85ec1fe1c95d"
         }
       ],
-      "recordedAt": "2026-11-15T22:46:15.678Z",
-      "reproducedAt": "a101f07"
+      "recordedAt": "2026-11-16T00:06:50.835Z",
+      "reproducedAt": "949cc17"
     },
     "staking": {
       "current": "0x347D01d33bc07120c67BCaDB5C32fe0D8AF6C943",
@@ -161,7 +173,7 @@
   "bytecode": {
     "note": "Every contract here, each implementation, each proxy, the SVR token and the reader, is reproduced byte for byte (immutables aside) by building reproducedAt, or the implementation's own reproducedAt where it records one; scripts/check-bytecode.mjs checks it. The tag marks the commit that records this. All are verified on the Arc explorer.",
     "reproducedAt": "44ff8e8",
-    "tag": "arc-testnet-2026-11-15",
-    "checkedAt": "2026-11-15"
+    "tag": "arc-testnet-2026-11-16",
+    "checkedAt": "2026-11-16"
   }
 }
