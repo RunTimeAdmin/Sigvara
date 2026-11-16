@@ -64,12 +64,20 @@ function isTransientReadError(err) {
  * -32005 is the JSON-RPC code providers use for this. ethers wraps it in "could not
  * coalesce error" with the original nested inside, so the string match is doing real work
  * and is not just belt and braces.
+ *
+ * An HTTP 429 arrives in other words. ethers retries one itself until its attempts run out,
+ * and rpc-provider.js allows one, so the error says "exceeded maximum retry limit", and the
+ * 429 survives only in the status of the response ethers escalated ("CLIENT ESCALATED SERVER
+ * ERROR (429 Too Many Requests; ...)"). Read only the short message, it looked like any
+ * other server error, and the checker's node, which answers a burst with a 429, kept the
+ * short schedule (16 November 2026).
  */
 function isRateLimited(err) {
   if (!err) return false;
   const nested = err.error || err.info?.error || {};
   if (nested.code === -32005 || err.code === -32005) return true;
-  return /rate limit|429|too many requests/i.test(
+  if (/\b429\b|too many requests/i.test(String(err.response?.statusMessage ?? ''))) return true;
+  return /rate limit|429|too many requests|exceeded maximum retry limit/i.test(
     String(err.shortMessage || err.message || '')
   );
 }

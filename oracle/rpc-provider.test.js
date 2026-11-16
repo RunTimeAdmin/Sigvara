@@ -86,3 +86,24 @@ test('a request with no answer gives up at its deadline', async () => {
   }
   assert.ok(Date.now() - started < 5_000);
 });
+
+// A real HTTP 429 through the provider. ethers, allowed one try, reports it as "exceeded maximum retry limit", and the
+// 429 is left only in the status of the response it escalated, so a check of the short message alone missed it and the
+// checker's node, which answers a burst with a 429, got four quick tries instead of the rate limit's schedule.
+test('a read refused with HTTP 429 is tried on the rate limit\'s schedule', async () => {
+  const { readWithBackoff, isRateLimited, RATE_LIMIT_ATTEMPTS } = require('./read-retry');
+  const p = rpcProvider(await url, CHAIN_ID);
+  asked.length = 0;
+  mode = 'throttle';
+  let seen;
+  try {
+    await assert.rejects(readWithBackoff('x', () => p.send('eth_blockNumber', []), 4, undefined, { pause: async () => {} }), (err) => {
+      seen = err;
+      return true;
+    });
+  } finally {
+    mode = 'answer';
+  }
+  assert.equal(isRateLimited(seen), true, `${seen.shortMessage}: read as a rate limit`);
+  assert.equal(count('eth_blockNumber'), RATE_LIMIT_ATTEMPTS, 'tried as often as the rate limit allows');
+});
