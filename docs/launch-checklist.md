@@ -4,21 +4,19 @@ Sequenced by gate, not by date. The wider plan, adoption included, is the [roadm
 
 ## Where this stands
 
-As of 15 November 2026. The SVR token is on Arc mainnet; the registries and the oracle run on Arc testnet only. What runs where is in the
+As of 16 November 2026. The SVR token is on Arc mainnet; the registries and the oracle run on Arc testnet only. What runs where is in the
 [runbook](operations-runbook.md). There has been no external audit, and nobody outside the team gates on a score yet.
 
 **In progress, with dates.**
 - The adversarial slash drill: day 7 done on 10 November, day 21 from 24 November 03:45 UTC
   ([slash-drill.md](slash-drill.md), [slash-drill-log.md](slash-drill-log.md)).
 - The slash keepers went live on 5 November. Both hold C, and neither has yet executed a real slash.
-- The publisher has not yet posted through the policy signer's new rule, which requires the feedback hash
-  to match its file. Three earlier real posts all pass it.
 
 **Open before mainnet.**
 - An external audit, and fixing what it finds (Phase 2).
-- The staking half of the contract upgrade batch, on testnet after the drill: a cap on the challenge period
-  below the dispute period, refusing the admin as a slash's victim and a zero-amount withdrawal. The
-  reputation and oracle bond halves went in on 5 November.
+- The staking upgrade, on testnet after the drill: a cap on the challenge period below the dispute period,
+  refusing the admin as a slash's victim and a zero-amount withdrawal, and a bound on slash evidence. A new
+  Reader follows it. The other contracts are upgraded, and [arc.md](arc.md) names each build.
 - The handover: moving testnet roles to a Safe and a timelock, after the drill, since `executeSlash` needs
   the reporter still on the committee.
 - A review of retention by counsel, before public outcome retrieval and peer import on mainnet.

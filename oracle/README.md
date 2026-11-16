@@ -955,7 +955,7 @@ and then its silence means nothing. The slash keeper (`keeper.js`) has its own s
 
 | Variable | Description |
 |----------|-------------|
-| `RPC_URL` | Ethereum JSON-RPC endpoint for the target chain |
+| `RPC_URL` | Ethereum JSON-RPC endpoint for the target chain. A request gives up after 30 s, and ethers does not retry it. Reads are retried by `readWithBackoff`, most of them four tries with waits of 0.5, 1 and 2 s. A refusal for the node's rate limit gets seven, each wait between half and all of a step that doubles to 8 s, so about 24 s at most |
 | `ORACLE_PRIVATE_KEY` | Private key for the oracle wallet (must have ORACLE_ROLE). Required unless `ORACLE_PRIVATE_KEY_FILE` is set |
 | `ORACLE_PRIVATE_KEY_FILE` | Path to a file holding that key, in place of `ORACLE_PRIVATE_KEY`; setting both stops the process. Prefer it in production: an environment variable shows in `docker inspect`, in `/proc/<pid>/environ` and in every child process, while a compose secret mounts the file read-only. A malformed key is refused with a fixed message that never contains the value |
 | `IDENTITY_ADDRESS` | SigvaraIdentity contract address |
@@ -1069,7 +1069,7 @@ A probe without the recipient filter would not do: it proves the asset and chain
 right and then leaves the normal case, this asset moved but not to any of our agents,
 indistinguishable from a broken recipient filter.
 
-A long catch-up is what the pace is for. A cold scan from `FROM_BLOCK` on a chain this fast is hundreds of consecutive calls, and without spacing them the run is a coin flip rather than a wait: `readWithBackoff` allows four attempts, one chunk exhausting them throws out of the scan, the checkpoint is left unadvanced, and the whole range is retried next epoch. At the default pace a 255-call run takes a little over two minutes if nothing is refused, and longer in practice: a read-only probe of exactly that range on 3 Oct 2026 still had 27% of chunks refused at 500ms, because the bucket drains over a run that long even though 72 consecutive calls do not. The scan survives it where that probe would not, since every call goes through `readWithBackoff`. Pacing makes a catch-up finish; it does not make it refusal-free.
+A long catch-up is what the pace is for. A cold scan from `FROM_BLOCK` on a chain this fast is hundreds of consecutive calls, and without spacing them the run is a coin flip rather than a wait: `readWithBackoff` allows four attempts, or seven for a rate limit, one chunk exhausting them throws out of the scan, the checkpoint is left unadvanced, and the whole range is retried next epoch. At the default pace a 255-call run takes a little over two minutes if nothing is refused, and longer in practice: a read-only probe of exactly that range on 3 Oct 2026 still had 27% of chunks refused at 500ms, because the bucket drains over a run that long even though 72 consecutive calls do not. The scan survives it where that probe would not, since every call goes through `readWithBackoff`. Pacing makes a catch-up finish; it does not make it refusal-free.
 
 **Enable it on every operator or on none.** Two operators scanning and one not is the
 same delivery asymmetry this exists to remove, pointed the other way.
