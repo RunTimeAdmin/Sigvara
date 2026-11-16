@@ -447,13 +447,15 @@ test('getRegisteredAgents: follows an operator change, and an agent with none st
   assert.equal(later.operators.length, 4);
 });
 
-test('getRegisteredAgents: asks for both events by their signatures in the contract', async () => {
+test('getRegisteredAgents: asks for all three events by their signatures in the contract', async () => {
   const { ethers } = require('ethers');
   const fs = require('node:fs');
   const path = require('node:path');
   const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'SigvaraIdentity.sol'), 'utf8');
   assert.match(source, /event OperatorTransferred\(bytes32 indexed didHash, address indexed from, address indexed to\);/);
   assert.match(source, /event AgentRegistered\(\s*bytes32 indexed didHash,\s*address indexed operator,\s*address indexed agentAddress,\s*bytes32 ed25519PubKey/);
+  assert.match(source, /event AgentStatusUpdated\(bytes32 indexed didHash, AgentStatus newStatus\);/);
+  assert.match(source, /enum AgentStatus \{ Active, Suspended, Slashed, PendingBond \}/, 'the status numbers chain.js reads');
   chain.reset();
   let asked;
   const fakeIdentity = { filters: {}, queryFilter: async (f) => { asked = f; return []; } };
@@ -466,7 +468,127 @@ test('getRegisteredAgents: asks for both events by their signatures in the contr
   assert.deepEqual(asked, [[
     ethers.id('AgentRegistered(bytes32,address,address,bytes32)'),
     ethers.id('OperatorTransferred(bytes32,address,address)'),
+    ethers.id('AgentStatusUpdated(bytes32,uint8)'),
   ]]);
+});
+
+// ADR 0013: an agent's evidence starts at its first bond, the block of its first AgentStatusUpdated to Active.
+const registeredLog = (n, block) => ({ args: { didHash: `0xdid${n}`, agentAddress: `0xagent${n}`, operator: '0xop' }, blockNumber: block, eventName: 'AgentRegistered' });
+const statusLog = (n, block, newStatus) => ({ args: { didHash: `0xdid${n}`, newStatus: BigInt(newStatus) }, blockNumber: block, eventName: 'AgentStatusUpdated' });
+const bondCfg = { rpcUrl: 'x', privateKey: '0x' + '1'.repeat(64), identityAddress: '0x' + '1'.repeat(40), reputationAddress: '0x' + '2'.repeat(40), fromBlock: 100, logChunkSize: 1000 };
+
+test("getRegisteredAgents: an agent's first Active log is its bond, and a later one changes nothing", async () => {
+  chain.reset();
+  const logs = [
+    registeredLog(1, 110), registeredLog(2, 120),
+    statusLog(1, 130, 0), statusLog(1, 140, 1), statusLog(1, 150, 0),
+    statusLog(2, 160, 1), // suspended by its operator without a bond
+    statusLog(9, 170, 0), // an agent not known here, slashed and forgotten
+  ];
+  const fakeIdentity = { filters: {}, queryFilter: async (_f, a, b) => logs.filter((l) => l.blockNumber >= a && l.blockNumber <= b) };
+  chain.init(bondCfg, { provider: { getBlockNumber: async () => 199 }, wallet: {}, identityContract: fakeIdentity, reputationContract: {} });
+  const agents = await chain.getRegisteredAgents();
+  assert.equal(agents.length, 2, 'a status log names nobody new');
+  assert.equal(agents.find((a) => a.didHash === '0xdid1').bondedBlock, 130);
+  assert.equal(agents.find((a) => a.didHash === '0xdid2').bondedBlock, undefined, 'a suspension is not a bond');
+  assert.deepEqual(agents.filter(chain.hasBonded).map((a) => a.didHash), ['0xdid1']);
+  assert.deepEqual(chain.agentCounts(), { registered: 2, bonded: 1 });
+  assert.equal(chain.bondsRead(), 199);
+  assert.equal(chain.getScanState().bondsReadTo, 199, 'saved with the scan');
+});
+
+test('restoreScanState: a state saved before first bonds were read reads them once, from its oldest registration', async () => {
+  chain.reset();
+  const { ethers } = require('ethers');
+  const logs = [statusLog(1, 130, 0), statusLog(5, 150, 0)]; // 5 was slashed and forgotten before the save
+  const asked = [];
+  const fakeIdentity = {
+    filters: {},
+    queryFilter: async (f, a, b) => { asked.push([f, a, b]); return logs.filter((l) => l.blockNumber >= a && l.blockNumber <= b); },
+  };
+  chain.init(bondCfg, { provider: { getBlockNumber: async () => 199 }, wallet: {}, identityContract: fakeIdentity, reputationContract: {} });
+  assert.equal(chain.restoreScanState({
+    lastScannedBlock: 199,
+    agents: [
+      { didHash: '0xdid1', agentAddress: '0xagent1', operator: '0xop', blockNumber: 110 },
+      { didHash: '0xdid2', agentAddress: '0xagent2', operator: '0xop', blockNumber: 120 },
+    ],
+  }), true);
+  assert.equal(chain.bondsRead(), 109, 'from the block before its oldest registration');
+  const agents = await chain.getRegisteredAgents();
+  assert.deepEqual(asked, [[[[ethers.id('AgentStatusUpdated(bytes32,uint8)')]], 110, 199]], 'status logs alone, up to its cursor');
+  assert.equal(agents.length, 2, 'an agent it had forgotten does not come back');
+  assert.equal(agents.find((a) => a.didHash === '0xdid1').bondedBlock, 130);
+  assert.equal(chain.getScanState().bondsReadTo, 199);
+
+  asked.length = 0;
+  await chain.getRegisteredAgents();
+  assert.equal(asked.length, 0, 'once');
+  // A state saved with the cursor resumes from it.
+  chain.reset();
+  chain.restoreScanState(JSON.parse(JSON.stringify({ lastScannedBlock: 199, bondsReadTo: 199, agents })));
+  assert.equal(chain.bondsRead(), 199);
+  assert.equal(chain.knownAgent('0xdid1').bondedBlock, 130);
+});
+
+test('getRegisteredAgents: the catch-up skips the blocks where no agent still without a bond could have bonded', async () => {
+  chain.reset();
+  const logs = [statusLog(1, 112, 0), statusLog(2, 505, 0)];
+  const asked = [];
+  const fakeIdentity = {
+    filters: {},
+    queryFilter: async (_f, a, b) => { asked.push([a, b]); return logs.filter((l) => l.blockNumber >= a && l.blockNumber <= b); },
+  };
+  chain.init({ ...bondCfg, logChunkSize: 10 }, { provider: { getBlockNumber: async () => 999 }, wallet: {}, identityContract: fakeIdentity, reputationContract: {} });
+  chain.restoreScanState({
+    lastScannedBlock: 999,
+    agents: [
+      { didHash: '0xdid1', agentAddress: '0xagent1', operator: '0xop', blockNumber: 110 },
+      { didHash: '0xdid2', agentAddress: '0xagent2', operator: '0xop', blockNumber: 500 },
+    ],
+  });
+  await chain.getRegisteredAgents();
+  assert.deepEqual(asked, [[110, 119], [500, 509]], 'one read at each registration, not 89 across the span');
+  assert.equal(chain.knownAgent('0xdid1').bondedBlock, 112);
+  assert.equal(chain.knownAgent('0xdid2').bondedBlock, 505);
+  assert.equal(chain.bondsRead(), 999);
+});
+
+test("getRegisteredAgents: on Arc testnet's registry, a registration before PendingBond is bonded from its block", async () => {
+  chain.reset();
+  const TESTNET_IDENTITY = '0x7e3aFC532eE5d922ab3cc3FFb510c7C8151477Dd';
+  const PENDING_BOND_FROM = 62914014;
+  const logs = [
+    registeredLog(1, PENDING_BOND_FROM - 250000), // made Active by the registry of the time, with no status log
+    registeredLog(2, PENDING_BOND_FROM + 1000),
+    statusLog(2, PENDING_BOND_FROM + 1010, 0),
+  ];
+  const asked = [];
+  const fakeIdentity = {
+    filters: {},
+    queryFilter: async (_f, a, b) => { asked.push([a, b]); return logs.filter((l) => l.blockNumber >= a && l.blockNumber <= b); },
+  };
+  const cfg = { ...bondCfg, identityAddress: TESTNET_IDENTITY, fromBlock: PENDING_BOND_FROM - 300000, logChunkSize: 1_000_000 };
+  chain.init(cfg, { provider: { getBlockNumber: async () => PENDING_BOND_FROM + 2000 }, wallet: {}, identityContract: fakeIdentity, reputationContract: {} });
+  await chain.getRegisteredAgents();
+  assert.equal(chain.knownAgent('0xdid1').bondedBlock, PENDING_BOND_FROM - 250000);
+  assert.equal(chain.knownAgent('0xdid2').bondedBlock, PENDING_BOND_FROM + 1010, 'one registered after it waits for its bond');
+
+  // From a state saved before bonds were read: the earlier agent needs no read, so the catch-up starts at the later one.
+  chain.reset();
+  asked.length = 0;
+  chain.init(cfg, { provider: { getBlockNumber: async () => PENDING_BOND_FROM + 2000 }, wallet: {}, identityContract: fakeIdentity, reputationContract: {} });
+  chain.restoreScanState({
+    lastScannedBlock: PENDING_BOND_FROM + 2000,
+    agents: [
+      { didHash: '0xdid1', agentAddress: '0xagent1', operator: '0xop', blockNumber: PENDING_BOND_FROM - 250000 },
+      { didHash: '0xdid2', agentAddress: '0xagent2', operator: '0xop', blockNumber: PENDING_BOND_FROM + 1000 },
+    ],
+  });
+  await chain.getRegisteredAgents();
+  assert.deepEqual(asked, [[PENDING_BOND_FROM + 1000, PENDING_BOND_FROM + 2000]]);
+  assert.equal(chain.knownAgent('0xdid1').bondedBlock, PENDING_BOND_FROM - 250000);
+  assert.equal(chain.knownAgent('0xdid2').bondedBlock, PENDING_BOND_FROM + 1010);
 });
 
 // ---------------------------------------------------------------- didHash derivation --

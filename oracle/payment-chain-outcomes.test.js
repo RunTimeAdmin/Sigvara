@@ -325,6 +325,40 @@ describe('POST /attest for a payment on a payment chain', () => {
     assert.equal(again.body.heldOutcomeHash, r.body.outcomeHash);
   });
 
+  test('refuses a payment from before the agent first bonded, by its time, and waits while that is unread (ADR 0013)', async () => {
+    const { world, agent } = await up();
+    const payer = ethers.Wallet.createRandom();
+    const pay = async () => {
+      const txHash = base.addTx([{ from: payer.address, to: agent.agentAddress, amount: AMOUNT }], FINALIZED - 10);
+      return post(oracle, agent.didHash, txHash, await signOutcome(agent.didHash, txHash, payer));
+    };
+    // Suspended today, so the bond the registry scan recorded decides. Base's payment blocks are two hours old.
+    const BOND = 999_000;
+    const READ_TO = 999_500;
+    world.data.agents[agent.didHash].status = 1;
+    world.data.agents[agent.didHash].bondedBlock = BOND;
+    world.set('blockTimes', { [BOND]: world.data.nowSec - 3_600 });
+    const early = await pay();
+    assert.equal(early.status, 402, early.text);
+    assert.equal(early.body.code, 'before_bond');
+    world.set('blockTimes', { [BOND]: world.data.nowSec - 7_300 });
+    const later = await pay();
+    assert.equal(later.status, 200, later.text);
+
+    // No bond read yet: it waits while the registry scan has read no further than the payment's time, and is refused
+    // once it has read past it.
+    world.data.agents[agent.didHash].bondedBlock = null;
+    world.set('bondsReadTo', READ_TO);
+    world.set('blockTimes', { [READ_TO]: world.data.nowSec - 7_300 });
+    const waiting = await pay();
+    assert.equal(waiting.status, 503, waiting.text);
+    assert.equal(waiting.body.code, 'bond_not_seen');
+    world.set('blockTimes', { [READ_TO]: world.data.nowSec - 100 });
+    const refused = await pay();
+    assert.equal(refused.status, 402, refused.text);
+    assert.equal(refused.body.code, 'before_bond');
+  });
+
   test('counts it in the score once the payment is past the delay', async () => {
     const { agent } = await up();
     const payer = ethers.Wallet.createRandom();

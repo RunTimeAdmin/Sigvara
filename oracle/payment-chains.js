@@ -21,6 +21,8 @@
  *     `before_registration`, as on the scored chain, though by the block's time and not its number,
  *     since a payment chain's blocks are not the scored chain's. Otherwise whether it counted would
  *     depend on whether an operator happened to scan its block before or after the registration.
+ *     Likewise a payment made before the agent's first bond, as `before_bond`, by the bond block's
+ *     time (ADR 0013).
  *   - The agent's own money. Nor can a payment be judged by the operator of its block. A payer named the
  *     agent's operator, at registration or by OperatorTransferred, by the payment's time is skipped as
  *     `self_payment`, and one named later stops counting from the time it was named (eventsAt). Both
@@ -512,6 +514,7 @@ function scanEnd(credits, to, maxReads) {
  *   @param {(credits: Array<{ credit, ts: number }>) => boolean[]} deps.creditAll  credit the step's payments in one call
  *     (store.creditPayments), saying of each whether it was credited; not called in shadow mode
  *   @param {(didHash) => Promise<number>} deps.registeredAtMs  when the agent registered, in ms
+ *   @param {(didHash) => Promise<number>} [deps.bondedAtMs]  when the agent first bonded, in ms (ADR 0013)
  *   @param {Map<string, object[]>} deps.knownOnChain  this chain's payments already held, for the canary
  *   @param {(label, fn) => Promise} deps.read  backoff for one RPC read; its errors must not carry the URL
  *   @param {(ms) => Promise} [deps.sleep]
@@ -520,6 +523,7 @@ function scanEnd(credits, to, maxReads) {
  */
 async function scanChain(chain, deps) {
   const { provider, scoredProvider, agents, state, isCredited, creditAll, registeredAtMs, knownOnChain, read } = deps;
+  const bondedAtMs = deps.bondedAtMs ?? (async () => -Infinity);
 
   const actual = Number(BigInt(await read('payment chain id', () => provider.send('eth_chainId', []))));
   if (actual !== chain.chainId) {
@@ -645,9 +649,11 @@ async function scanChain(chain, deps) {
     else kept.push(c);
   }
   const registered = new Map();
+  const bonded = new Map();
   const named = new Map();
   for (const did of new Set(kept.map((c) => c.didHash))) {
     registered.set(did, await registeredAtMs(did));
+    bonded.set(did, await bondedAtMs(did));
     named.set(did, paymentScan.operatorsNamedAt(byDid.get(did)));
   }
 
@@ -660,6 +666,8 @@ async function scanChain(chain, deps) {
     if (ts === undefined) { unresolved.push(c); continue; }
     const since = registered.get(c.didHash);
     if (!Number.isFinite(since) || ts < since) { skip(c, 'before_registration'); continue; }
+    // Before the agent's first bond, by the bond block's time on the scored chain (ADR 0013), as registration is judged.
+    if (ts < bonded.get(c.didHash)) { skip(c, 'before_bond'); continue; }
     // Paid by an address named the agent's operator by then, at registration or since, and not by today's operator,
     // which differs with how far each operator's registry scan has read. This scan stops before that reach, so
     // every operator knows each change up to the payment. One named later stops counting then (eventsAt).

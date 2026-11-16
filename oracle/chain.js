@@ -5,6 +5,7 @@ const { ethers } = require('ethers');
 const IDENTITY_ABI = [
   'event AgentRegistered(bytes32 indexed didHash, address indexed operator, address indexed agentAddress, bytes32 ed25519PubKey)',
   'event OperatorTransferred(bytes32 indexed didHash, address indexed from, address indexed to)',
+  'event AgentStatusUpdated(bytes32 indexed didHash, uint8 newStatus)',
   'function getIdentity(bytes32 didHash) view returns (tuple(address operator, address agentAddress, bytes32 ed25519PubKey, uint8 status, uint256 registeredAt))',
   'function stakeView() view returns (address)',
   'function computeDidHash(address agentAddress) view returns (bytes32)',
@@ -66,7 +67,16 @@ const REVERT_NAMES = new ethers.Interface(
 );
 
 // AgentStatus enum — must match SigvaraIdentity.sol
+const STATUS_ACTIVE = 0;
 const STATUS_SLASHED = 2;
+const STATUS_PENDING_BOND = 3;
+
+// Identity registries that made a registration Active, before they started agents at PendingBond, and the block that
+// change took effect in. Arc testnet's proxy moved to the PendingBond implementation (0x95d8592e) in block 62914014 on
+// 19 September 2026, with one registration before it. Such an agent was bonded, by the contract of the time, from
+// its registration, with no status log to say so (ADR 0013). A registry not named here started every agent at
+// PendingBond.
+const ACTIVE_AT_REGISTRATION_BEFORE = { '0x7e3afc532ee5d922ab3cc3ffb510c7c8151477dd': 62914014 };
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -175,7 +185,10 @@ let provider, wallet, identityContract, reputationContract, feeContract, cfg_;
 let txWaitMs = DEFAULT_TX_WAIT_MS;
 let txPollMs = DEFAULT_TX_POLL_MS;
 let lastScannedBlock = null;
-let knownAgents = new Map(); // didHash => { didHash, agentAddress, blockNumber }
+// How far status logs have been read for first bonds (ADR 0013). Level with lastScannedBlock except after a state
+// saved before they were read, which getRegisteredAgents catches up first.
+let bondsReadTo = null;
+let knownAgents = new Map(); // didHash => { didHash, agentAddress, blockNumber, bondedBlock? }
 
 // deps lets tests inject fake provider/wallet/contracts instead of connecting
 // to a real RPC. Production usage (index.js) calls init(cfg) with no deps.
@@ -199,6 +212,7 @@ function resetStakeViewCache() { stakeViewContract = undefined; }
 
 function reset() {
   lastScannedBlock = null;
+  bondsReadTo = null;
   knownAgents = new Map();
   // Cleared too: a test that swaps in a different registry must not inherit the
   // previous one's verdict on whether local derivation is safe.
@@ -236,13 +250,23 @@ async function queryWithBackoff(filter, start, end, attempts = 4) {
 /// chain from FROM_BLOCK, which grows without bound and is what tripped the public
 /// RPC's rate limit after a day of blocks had accumulated.
 function getScanState() {
-  return { lastScannedBlock, agents: Array.from(knownAgents.values()) };
+  return { lastScannedBlock, bondsReadTo, agents: Array.from(knownAgents.values()) };
 }
 
 function restoreScanState(state) {
   if (!state || typeof state.lastScannedBlock !== 'number') return false;
   lastScannedBlock = state.lastScannedBlock;
   knownAgents = new Map((state.agents || []).map(a => [a.didHash, a]));
+  // A state saved before status logs were read holds no first bonds. They are read once, from its oldest registration
+  // on, before anything else (getRegisteredAgents). An earlier build drops this field when it saves, and the next start
+  // reads them again; a bond already held is kept.
+  if (Number.isInteger(state.bondsReadTo)) {
+    bondsReadTo = Math.min(state.bondsReadTo, lastScannedBlock);
+  } else {
+    let oldest = Infinity;
+    for (const a of knownAgents.values()) if (Number.isInteger(a.blockNumber)) oldest = Math.min(oldest, a.blockNumber);
+    bondsReadTo = Number.isFinite(oldest) ? Math.min(oldest - 1, lastScannedBlock) : lastScannedBlock;
+  }
   return true;
 }
 
@@ -258,6 +282,33 @@ function noteOperatorChange(e, atMs) {
   agent.operator = e.args.to;
 }
 
+// An agent's first bond (ADR 0013): the block of its first AgentStatusUpdated to Active. The identity registry allows
+// Active only with the minimum stake, whoever asks, and nothing returns to PendingBond, so this is the block the
+// first bond landed in. A later Active, after a suspension, changes nothing.
+function noteBond(e) {
+  if (Number(e.args.newStatus) !== STATUS_ACTIVE) return;
+  const agent = knownAgents.get(e.args.didHash);
+  if (!agent || Number.isInteger(agent.bondedBlock)) return; // slashed and forgotten, or bonded before
+  agent.bondedBlock = e.blockNumber;
+}
+
+/** Whether the registry scan has seen this agent's first bond, which is when its evidence starts (ADR 0013). */
+function hasBonded(agent) {
+  return Number.isInteger(agent?.bondedBlock);
+}
+
+/** How many agents the registry scan holds, and how many of them have bonded, for /health. */
+function agentCounts() {
+  let bonded = 0;
+  for (const agent of knownAgents.values()) if (hasBonded(agent)) bonded += 1;
+  return { registered: knownAgents.size, bonded };
+}
+
+/** The last block whose status logs the registry scan has read, or null before it has read any. */
+function bondsRead() {
+  return bondsReadTo;
+}
+
 async function blockMs(n) {
   const block = await readWithBackoff('registry getBlock', () => provider.getBlock(n));
   if (!block) throw new Error(`the scored chain did not return block ${n}`);
@@ -266,13 +317,36 @@ async function blockMs(n) {
 
 async function getRegisteredAgents() {
   const chunkSize = cfg_.logChunkSize;
-  // Both in one read, in chain order, so a change is applied after the registration it follows.
-  const filter = [[AGENT_REGISTERED_TOPIC, OPERATOR_TRANSFERRED_TOPIC]];
+  // All three in one read, in chain order, so a change or a bond is applied after the registration it follows.
+  const filter = [[AGENT_REGISTERED_TOPIC, OPERATOR_TRANSFERRED_TOPIC, STATUS_TOPIC]];
   const latest = await provider.getBlockNumber();
   const fromBlock = lastScannedBlock !== null ? lastScannedBlock + 1 : cfg_.fromBlock;
   // A change held without its time, from a state an earlier build saved, is given it first.
   for (const agent of knownAgents.values()) {
     for (const o of (agent.operators ?? []).slice(1)) if (!Number.isFinite(o.atMs)) o.atMs = await blockMs(o.fromBlock);
+  }
+  // A registration a registry made Active, before it started agents at PendingBond, is bonded from that block.
+  const activeUntil = ACTIVE_AT_REGISTRATION_BEFORE[String(cfg_.identityAddress).toLowerCase()];
+  const activeAtRegistration = (block) => Number.isInteger(activeUntil) && block < activeUntil;
+  for (const agent of knownAgents.values()) {
+    if (!hasBonded(agent) && activeAtRegistration(agent.blockNumber)) agent.bondedBlock = agent.blockNumber;
+  }
+  // And the first bonds a state saved before they were read lacks (restoreScanState), from status logs alone, before
+  // anything else. No agent bonds before it registers, so each read starts at the oldest registration still without a
+  // bond, or right after the last read when one of those came before it, and the blocks between are left: on Arc
+  // testnet a read or so an agent rather than one per 10,000 blocks since the first. Checkpointed as below. A bond is
+  // applied once, so a chunk read again changes nothing.
+  while (Number.isInteger(bondsReadTo) && Number.isInteger(lastScannedBlock) && bondsReadTo < lastScannedBlock) {
+    let start = Infinity;
+    for (const a of knownAgents.values()) {
+      if (!hasBonded(a) && Number.isInteger(a.blockNumber)) start = Math.min(start, Math.max(a.blockNumber, bondsReadTo + 1));
+    }
+    if (start > lastScannedBlock) { bondsReadTo = lastScannedBlock; break; }
+    const end = Math.min(start + chunkSize - 1, lastScannedBlock);
+    const chunk = await readSplitting((a, b) => queryWithBackoff([[STATUS_TOPIC]], a, b), start, end, { pause: () => sleep(400) });
+    for (const e of chunk) noteBond(e);
+    bondsReadTo = end;
+    if (end < lastScannedBlock) await sleep(400);
   }
 
   if (fromBlock <= latest) {
@@ -286,6 +360,7 @@ async function getRegisteredAgents() {
       }
       for (const e of chunk) {
         if (e.eventName === 'OperatorTransferred') { noteOperatorChange(e, changedAt.get(e.blockNumber)); continue; }
+        if (e.eventName === 'AgentStatusUpdated') { noteBond(e); continue; }
         knownAgents.set(e.args.didHash, {
           didHash: e.args.didHash,
           agentAddress: e.args.agentAddress,
@@ -296,6 +371,7 @@ async function getRegisteredAgents() {
           // a different door.
           operator: e.args.operator,
           blockNumber: e.blockNumber,
+          ...(activeAtRegistration(e.blockNumber) ? { bondedBlock: e.blockNumber } : {}),
         });
       }
       // Checkpoint every chunk, not once at the end. A rate-limited node can stop a
@@ -304,6 +380,7 @@ async function getRegisteredAgents() {
       // FROM_BLOCK, hit the same limit at the same place, and never finished. Chunks
       // are processed in order, so the last completed one is a sound resume point.
       lastScannedBlock = end;
+      bondsReadTo = end;
       if (end < latest) await sleep(400);
     }
   }
@@ -1089,6 +1166,10 @@ module.exports = {
   resetStakeViewCache,
   getRegisteredAgents,
   knownAgent,
+  hasBonded,
+  agentCounts,
+  bondsRead,
+  blockMs,
   getAgentInfo,
   getProvider,
   isBonded,
@@ -1128,5 +1209,7 @@ module.exports = {
   ChainMismatchError,
   FeeCapError,
   TxUnconfirmedError,
+  STATUS_ACTIVE,
   STATUS_SLASHED,
+  STATUS_PENDING_BOND,
 };

@@ -39,10 +39,15 @@
 //     recordExternalReads: record each read of a linked agent's feedback as externalRead
 //     recordExternalRefresh: record each request to check the ERC-8004 registry's chain as externalRefresh
 //     recordEpochReads: record the epoch's batched reads as epochRead, with the time and the agent read
+//     recordScanRecipients: record the recipients each payment-scan getLogs asks for, as scanRecipients
 //     bondLogs:  [{ blockNumber, didHash }] the staking and identity logs that name an agent (a stake deposited
 //                or withdrawn, a slash, a status change), and { blockNumber, minimumStake: true } for a change to
 //                the minimum stake, as readBondChanges finds them (default none)
 //     registryScannedTo: how far the registry scan has read (default: not reported, which reads as the head)
+//     agents[didHash].bondedBlock: the block of the agent's first bond as the registry scan found it (ADR 0013),
+//                null for one that never bonded (default its registeredBlock, so an agent counts from when it
+//                registered, as it did before the rule); the bond block's time is read as any block's is
+//     bondsReadTo: how far the registry scan has read status logs (default registryScannedTo, else the head)
 //     snapshotBlock: the block the snapshot falls in (default `head`)
 //     agents[didHash].operators: [{ fromBlock, operator, atMs }] the agent's operator from each block on, for a
 //                read at a block, and from that block's time, as the registry scan keeps a change (default:
@@ -137,6 +142,9 @@ Date.now = () => hostNow() + hostAhead;
 
 // The entry of a [{ fromBlock, ... }] history in force at `block` (the latest when undefined).
 const asOf = (history, block) => [...history].reverse().find((h) => block === undefined || h.fromBlock <= block);
+// The block an agent's first bond landed in, as the registry scan reports it: its registration block unless the world
+// says otherwise, and null for one that never bonded.
+const bondedBlockOf = (a) => (a?.bondedBlock === undefined ? (a?.registeredBlock ?? 1) : a.bondedBlock);
 // An 8004 agent's owner and `sigvara` value at `block`, from world.linkHistory.
 function linkAt(agentId, block) {
   const history = world().linkHistory?.[String(agentId)];
@@ -168,6 +176,7 @@ const provider = {
     };
   },
   getLogs: async (filter) => {
+    if (world().recordScanRecipients && Array.isArray(filter.topics?.[2])) record('scanRecipients', filter.topics[2]);
     if (filter.fromBlock === filter.toBlock) return world().canaryLogs ?? [];
     return (world().scanLogs ?? []).filter((l) => l.blockNumber >= filter.fromBlock && l.blockNumber <= filter.toBlock);
   },
@@ -209,7 +218,9 @@ const chain = {
       txWaitMs: cfg.txWaitMs, maxFeeGwei: cfg.maxFeeGwei, maxTxCost: cfg.maxTxCost, expectedChainId: cfg.expectedChainId,
     });
   },
+  STATUS_ACTIVE: 0,
   STATUS_SLASHED: 2,
+  STATUS_PENDING_BOND: 3,
   getProvider: () => provider,
   getAgentInfo: async (didHash, blockTag) => {
     if (world().recordEpochReads && blockTag === undefined) record('epochRead', hostNow(), didHash);
@@ -240,6 +251,7 @@ const chain = {
     return [...w.registered, ...(moved ? w.registeredLater ?? [] : [])].map((didHash) => ({
       didHash, agentAddress: w.agents[didHash]?.agentAddress ?? null, blockNumber: w.agents[didHash]?.registeredBlock ?? 1,
       operator: w.agents[didHash]?.operator ?? null, operators: w.agents[didHash]?.operators,
+      bondedBlock: bondedBlockOf(w.agents[didHash]),
     }));
   },
   knownAgent: (didHash) => {
@@ -248,9 +260,18 @@ const chain = {
     const a = w.agents[didHash];
     return {
       didHash, agentAddress: a?.agentAddress ?? null, blockNumber: a?.registeredBlock ?? 1, operator: a?.operator ?? null,
-      operators: a?.operators,
+      operators: a?.operators, bondedBlock: bondedBlockOf(a),
     };
   },
+  hasBonded: (agent) => Number.isInteger(agent?.bondedBlock),
+  agentCounts: () => {
+    const w = world();
+    const registered = w.registered ?? [];
+    return { registered: registered.length, bonded: registered.filter((d) => Number.isInteger(bondedBlockOf(w.agents[d]))).length };
+  },
+  bondsRead: () => world().bondsReadTo ?? world().registryScannedTo ?? world().head + moved,
+  // A block's time where world.blockTimes names it, else 0, so that a default bond comes before every payment.
+  blockMs: async (n) => (world().blockTimes?.[n] ?? 0) * 1000,
   getScanState: () => (world().registryScannedTo === undefined ? null : { lastScannedBlock: world().registryScannedTo, agents: [] }),
   restoreScanState: () => false,
   verifyDidHashDerivation: async () => false,
