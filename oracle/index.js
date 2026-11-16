@@ -23,7 +23,7 @@ const { computeScore } = require('./scoring');
 const {
   decideAction, decideCheckerAction, checkerGraceMs, finalizableAtOf, scoreDivergence,
   epochIntervalError, divergenceToleranceError, DEFAULT_DIVERGENCE_TOLERANCE,
-  mapChunked, chunkForReads, READ_PACE_MS, clockSkewError, scoringIsStale,
+  mapChunked, chunkForReads, READ_PACE_MS, REREAD_PAUSE_MS, clockSkewError, scoringIsStale,
   scoreRefreshSeconds, writeDueAt, writeOrder, DEFAULT_MAX_WRITES_PER_EPOCH,
 } = require('./epoch-policy');
 const { createBondWatch } = require('./bond-watch');
@@ -1761,7 +1761,7 @@ async function runEpochInner() {
   if (bondCheck.error) console.warn(`[oracle] could not read what changed agents' bonds, so every agent is read this epoch: ${bondCheck.error.message}`);
   const notRead = agents.filter((a) => bondWatch.excluded(a.didHash));
   const PHASE_ONE_CHUNK = chunkForReads(gatingActive ? 4 : 3);
-  const agentInfos = await mapChunked(notRead.length ? agents.filter((a) => !bondWatch.excluded(a.didHash)) : agents, PHASE_ONE_CHUNK, async ({ didHash }) => {
+  const readFirst = async ({ didHash }) => {
     try {
       const [info, pending, reputation, covered] = await Promise.all([
         chain.getAgentInfo(didHash),
@@ -1775,7 +1775,17 @@ async function runEpochInner() {
     } catch (err) {
       return { didHash, registeredAt: 0, status: -1, pending: null, reputation: null, covered: false, error: err };
     }
-  }, READ_PACE_MS);
+  };
+  const agentInfos = await mapChunked(notRead.length ? agents.filter((a) => !bondWatch.excluded(a.didHash)) : agents, PHASE_ONE_CHUNK, readFirst, READ_PACE_MS);
+  // An agent whose reads the node refused through every retry is read once more after REREAD_PAUSE_MS, instead of
+  // waiting for the next epoch: a burst of refusals usually passes in seconds. Nothing has been written for it yet.
+  const refused = agentInfos.filter((info) => info.error && chain.isTransientReadError(info.error));
+  if (refused.length) {
+    console.warn(`[oracle] the node refused the first reads of ${refused.length} agent(s); reading them again in ${REREAD_PAUSE_MS / 1000} s`);
+    await new Promise((r) => setTimeout(r, REREAD_PAUSE_MS));
+    const again = new Map((await mapChunked(refused, PHASE_ONE_CHUNK, readFirst, READ_PACE_MS)).map((info) => [info.didHash, info]));
+    agentInfos.forEach((info, i) => { if (again.has(info.didHash)) agentInfos[i] = again.get(info.didHash); });
+  }
 
   // Refund reads for payers' held negatives, before any agent's evidence is chosen (ADR 0011). Also for an agent not
   // read for want of a bond, so that a negative is settled on the same reads whether or not its agent is bonded.
@@ -1822,11 +1832,20 @@ async function runEpochInner() {
   const unbonded = [];
   // The oldest scores on chain first, so the write budget goes to them (writeOrder).
   const queue = writeOrder(candidates);
+  // An agent whose guard read the node refused through every retry goes back on the end of the queue, once, and is read
+  // again after the rest and at least REREAD_PAUSE_MS after the refusal. The guards come before any write for the agent,
+  // so reading it again repeats nothing. Refused a second time, it waits for the next epoch as before.
+  const firstPass = queue.length;
+  const putBack = new Set();
+  let putBackAt = 0;
 
-  for (let c = 0; c < queue.length; c += GUARD_CHUNK) {
-    // The first of these follows the last chunk of phase 1, so it waits too.
-    await new Promise((r) => setTimeout(r, READ_PACE_MS));
-    const chunk = queue.slice(c, c + GUARD_CHUNK);
+  for (let c = 0; c < queue.length;) {
+    // The first of these follows the last chunk of phase 1, so it waits too. A chunk of agents put back waits out the
+    // node's refusals, and no chunk holds both kinds.
+    const again = c >= firstPass;
+    await new Promise((r) => setTimeout(r, again ? Math.max(READ_PACE_MS, putBackAt + REREAD_PAUSE_MS - Date.now()) : READ_PACE_MS));
+    const chunk = queue.slice(c, again ? c + GUARD_CHUNK : Math.min(c + GUARD_CHUNK, firstPass));
+    c += chunk.length;
     // One batch for the whole chunk: ethers folds calls issued in the same tick into a
     // single JSON-RPC request, so this is one round trip rather than 2 x chunk.
     const guards = await Promise.all(chunk.map(async a => {
@@ -1847,6 +1866,13 @@ async function runEpochInner() {
       // The score on chain once this epoch's finalize, if any, has landed: what a new score is compared with (writeDueAt).
       let onChain = reputation;
       if (guardError) {
+        if (chain.isTransientReadError(guardError) && !putBack.has(didHash)) {
+          putBack.add(didHash);
+          putBackAt = Date.now();
+          queue.push(chunk[k]);
+          console.warn(`[oracle]   ${didHash.slice(0, 10)}… the node refused its guard reads (${guardError.code || 'error'}); reading it again after the others`);
+          continue;
+        }
         console.error(`[oracle]   ${didHash.slice(0, 10)}… error: ${guardError.message}`);
         continue;
       }

@@ -973,6 +973,55 @@ test('an agent slashed since the batch read loses its divergence records, as one
   });
 });
 
+// A read the node refused through every retry, as on the checker on 16 November 2026: the guard read of one agent in a
+// chunk of ten ran out of tries and the agent waited an hour. fast-retry.js cuts the epoch's pauses to milliseconds.
+const reads = (calls, didHash) => calls.filter((c) => c.name === 'agentRead' && c.args[0] === didHash).map((c) => c.args[1]);
+const proposed = (calls) => calls.filter((c) => c.name === 'proposeScore').map((c) => c.args[0]);
+
+test('an agent whose guard read the node refuses through every retry is read again after the others, and written', async () => {
+  const world = new World();
+  const refused = world.addRegisteredAgent();
+  const other = world.addRegisteredAgent();
+  // The batch read answers; the guard read just before the write is refused.
+  world.data.agents[refused.didHash].refusedReads = [2];
+  world.flush();
+
+  await inEpoch({ world, env: BASE_ENV, preload: ['fast-retry.js'] }, ({ calls, logs }) => {
+    assert.match(logs, new RegExp(`${refused.didHash.slice(0, 10)}… the node refused its guard reads \\(SERVER_ERROR\\); reading it again after the others`));
+    assert.doesNotMatch(logs, /error: exceeded maximum retry limit/);
+    assert.deepEqual(reads(calls, refused.didHash), [1, 2, 3], 'read a third time');
+    assert.deepEqual(proposed(calls), [other.didHash, refused.didHash], 'and written after the agent beside it');
+  });
+});
+
+test('an agent whose guard read is refused again after the pause waits for the next epoch, put back only once', async () => {
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  world.data.agents[agent.didHash].refusedReads = [2, 3];
+  world.flush();
+
+  await inEpoch({ world, env: BASE_ENV, preload: ['fast-retry.js'] }, ({ calls, logs }) => {
+    assert.equal((logs.match(/the node refused its guard reads/g) || []).length, 1);
+    assert.match(logs, new RegExp(`${agent.didHash.slice(0, 10)}… error: exceeded maximum retry limit`));
+    assert.deepEqual(reads(calls, agent.didHash), [1, 2, 3], 'not read a fourth time');
+    assert.deepEqual(proposed(calls), []);
+  });
+});
+
+test('an agent whose first read the node refuses through every retry is read again after a pause, then written', async () => {
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  world.data.agents[agent.didHash].refusedReads = [1];
+  world.flush();
+
+  await inEpoch({ world, env: BASE_ENV, preload: ['fast-retry.js'] }, ({ calls, logs }) => {
+    assert.match(logs, /the node refused the first reads of 1 agent\(s\); reading them again in 10 s/);
+    assert.doesNotMatch(logs, /error: exceeded maximum retry limit/);
+    assert.deepEqual(reads(calls, agent.didHash), [1, 2, 3], 'the first read again, then the guard read');
+    assert.deepEqual(proposed(calls), [agent.didHash]);
+  });
+});
+
 test('a throttled finalize is counted once, as a throttled finalize, and nothing is proposed over it', async () => {
   const world = new World();
   const agent = world.addRegisteredAgent();

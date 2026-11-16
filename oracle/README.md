@@ -955,7 +955,7 @@ and then its silence means nothing. The slash keeper (`keeper.js`) has its own s
 
 | Variable | Description |
 |----------|-------------|
-| `RPC_URL` | Ethereum JSON-RPC endpoint for the target chain. A request gives up after 30 s, and ethers does not retry it. Reads are retried by `readWithBackoff`, most of them four tries with waits of 0.5, 1 and 2 s. A refusal for the node's rate limit gets seven, each wait between half and all of a step that doubles to 8 s, so about 24 s at most |
+| `RPC_URL` | Ethereum JSON-RPC endpoint for the target chain. A request gives up after 30 s, and ethers does not retry it. Reads are retried by `readWithBackoff`, most of them four tries with waits of 0.5, 1 and 2 s. A refusal for the node's rate limit gets seven, each wait between half and all of a step that doubles to 8 s, so about 24 s at most. An agent whose first read or guard read is still refused is read once more, 10 s later, before anything is written for it, and only then left for the next epoch |
 | `ORACLE_PRIVATE_KEY` | Private key for the oracle wallet (must have ORACLE_ROLE). Required unless `ORACLE_PRIVATE_KEY_FILE` is set |
 | `ORACLE_PRIVATE_KEY_FILE` | Path to a file holding that key, in place of `ORACLE_PRIVATE_KEY`; setting both stops the process. Prefer it in production: an environment variable shows in `docker inspect`, in `/proc/<pid>/environ` and in every child process, while a compose secret mounts the file read-only. A malformed key is refused with a fixed message that never contains the value |
 | `IDENTITY_ADDRESS` | SigvaraIdentity contract address |

@@ -15,6 +15,9 @@
 //     agents:    { "<didhash>": { operator, agentAddress, registeredAt, status, registeredBlock } }
 //                registeredBlock: the block it registered in, before which a read at a block finds no
 //                such agent (default 1)
+//                refusedReads: [n, ...] the reads of the agent at no block (the epoch's first read is 1, its
+//                guard read 2) that the node refuses for its rate limit, as ethers reports a 429 once its
+//                attempts run out (default none)
 //     standing:  { "<address>": hard score of a counterparty }
 //     standingFails: { "<address>": true } counterparties the node cannot answer for: the read is throttled
 //     explodeHealth: when true, the /health route throws
@@ -193,6 +196,8 @@ const provider = {
 const finalizedByOther = new Set();
 // How many times each agent has been read at no block (agents[didHash].slashedFromRead).
 const infoReads = new Map();
+// The same, counted for agents[didHash].refusedReads.
+const refusedCount = new Map();
 // A write the world throttles (world.finalize "throttled"). Only these read as throttled, by the real
 // predicate; a read that fails reaches the oracle as any other error, as it always has here.
 const THROTTLED = Symbol('throttled write');
@@ -214,6 +219,14 @@ const chain = {
       return { operator: ZERO, agentAddress: ZERO, registeredAt: 0, status: 0 };
     }
     const changed = agent.operators && asOf(agent.operators, blockTag);
+    if (blockTag === undefined && agent.refusedReads) {
+      const n = (refusedCount.get(didHash) ?? 0) + 1;
+      refusedCount.set(didHash, n);
+      record('agentRead', didHash, n);
+      if (agent.refusedReads.includes(n)) {
+        throw Object.assign(new Error('exceeded maximum retry limit'), { code: 'SERVER_ERROR', shortMessage: 'exceeded maximum retry limit' });
+      }
+    }
     if (blockTag === undefined && agent.slashedFromRead) {
       const n = (infoReads.get(didHash) ?? 0) + 1;
       infoReads.set(didHash, n);

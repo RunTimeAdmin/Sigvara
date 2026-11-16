@@ -191,12 +191,16 @@ function readCalls(dir) {
 // "epoch done" and then looked for the error logged just before it could fail to find it. In a file the
 // lines stay in the order they were written, and a read sees everything written so far. The file sits
 // beside `dir`, not in it, because a test lists the files in the oracle's own directory.
-function spawnOracle(dir, env) {
+function spawnOracle(dir, env, preload = []) {
   const logFile = `${dir}.log`;
   const fd = fs.openSync(logFile, 'a');
   const child = spawn(
     process.execPath,
-    ['--require', path.join(__dirname, 'stub-chain.js'), path.join(ORACLE_DIR, 'index.js')],
+    [
+      '--require', path.join(__dirname, 'stub-chain.js'),
+      ...preload.flatMap((name) => ['--require', path.join(__dirname, name)]),
+      path.join(ORACLE_DIR, 'index.js'),
+    ],
     { cwd: dir, env, stdio: ['pipe', fd, fd] },
   );
   fs.closeSync(fd);
@@ -220,15 +224,16 @@ function spawnOracle(dir, env) {
  * @param {World}  opts.world
  * @param {object} [opts.env] overrides for the child's environment
  * @param {object} [opts.files] files to put in its directory first, by name
+ * @param {string[]} [opts.preload] more files from test-support/ to load with --require, such as fast-retry.js
  */
-async function startOracle({ world, env = {}, files }, binds = 3) {
+async function startOracle({ world, env = {}, files, preload = [] }, binds = 3) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sigvara-e2e-'));
   const worldFile = path.join(dir, 'world.json');
   world.file = worldFile;
   world.flush();
   seedFiles(dir, files);
   const port = await freePort();
-  const { child, out, exited } = spawnOracle(dir, { ...baseEnv(dir, port, worldFile), ...env });
+  const { child, out, exited } = spawnOracle(dir, { ...baseEnv(dir, port, worldFile), ...env }, preload);
 
   const deadline = Date.now() + 20_000;
   // Its own word first. freePort has to let go of the port to hand it over, and test files run
@@ -251,7 +256,7 @@ async function startOracle({ world, env = {}, files }, binds = 3) {
     await exited;
     out.drop();
     fs.rmSync(dir, { recursive: true, force: true });
-    if (out.log.includes('EADDRINUSE') && binds > 1) return startOracle({ world, env, files }, binds - 1);
+    if (out.log.includes('EADDRINUSE') && binds > 1) return startOracle({ world, env, files, preload }, binds - 1);
     throw new Error(`the oracle did not start (exit ${out.code}):\n${out.log}`);
   }
 
