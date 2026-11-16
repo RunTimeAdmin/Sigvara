@@ -378,8 +378,15 @@ function chunkForReads(readsPerItem) {
 // refused at all. It took 42 seconds rather than 41, because retrying is slower than waiting.
 const READ_PACE_MS = 1_500;
 
+// How long the epoch waits before reading again an agent whose read the node refused through every retry, before
+// anything was written for it. On 16 November 2026 the checker's node refused one chunk of ten guard reads for about
+// 18 s, longer than readWithBackoff's schedule for a rate limit (about 24 s at most, mostly spent waiting), and the
+// one read that ran out cost its agent the hour. Read once more after this pause, it has usually passed; refused
+// again, the agent waits for the next epoch as before.
+const REREAD_PAUSE_MS = 10_000;
+
 module.exports = {
-  decideAction, decideCheckerAction, checkerGraceMs, finalizableAtOf, scoreDivergence, mapChunked, chunkForReads, READ_PACE_MS, scoringIsStale,
+  decideAction, decideCheckerAction, checkerGraceMs, finalizableAtOf, scoreDivergence, mapChunked, chunkForReads, READ_PACE_MS, REREAD_PAUSE_MS, scoringIsStale,
   scoreRefreshSeconds, writeDueAt, writeOrder, DEFAULT_SCORE_REFRESH_HOURS, DEFAULT_MAX_WRITES_PER_EPOCH,
   epochIntervalError, divergenceToleranceError, clockSkewError, MAX_TIMER_MS, MIN_EPOCH_MS,
   SCORE_FACTORS, DEFAULT_DIVERGENCE_TOLERANCE, MAX_DIVERGENCE_TOLERANCE,
