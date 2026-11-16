@@ -500,6 +500,69 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
         staking.initiateSlash(didHash, victim, "");
     }
 
+    /// The evidence points at a package published elsewhere. One byte past the limit is refused, and
+    /// nothing is filed or suspended.
+    function test_initiateSlash_reverts_evidenceOverTheLimit() public {
+        _deposit();
+
+        vm.expectRevert(abi.encodeWithSelector(SigvaraStaking.EvidenceTooLong.selector, 257, 256));
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, new bytes(257));
+
+        assertEq(uint8(staking.slashState(didHash)), uint8(SigvaraStaking.SlashState.None), "nothing filed");
+        assertTrue(identity.isActive(didHash), "the agent was not suspended");
+    }
+
+    /// Evidence of exactly the limit is filed and stored byte for byte.
+    function test_initiateSlash_acceptsEvidenceAtTheLimit() public {
+        _deposit();
+        assertEq(staking.MAX_EVIDENCE_BYTES(), 256);
+
+        bytes memory evidence;
+        for (uint256 i = 0; i < 8; i++) evidence = bytes.concat(evidence, keccak256(abi.encode(i)));
+        assertEq(evidence.length, 256);
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, evidence);
+
+        assertEq(staking.getSlashProposal(didHash).evidenceHash, evidence, "stored verbatim");
+        assertEq(uint8(staking.slashState(didHash)), uint8(SigvaraStaking.SlashState.Pending));
+    }
+
+    /// slashState is the state field of getSlashProposal read alone, so it has to agree with the
+    /// full record in every state a proposal passes through.
+    function test_slashState_matchesTheFullRecordInEveryState() public {
+        _assertSlashState(SigvaraStaking.SlashState.None);
+        _deposit();
+
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "first");
+        _assertSlashState(SigvaraStaking.SlashState.Pending);
+
+        vm.prank(operator);
+        staking.disputeSlash(didHash);
+        _assertSlashState(SigvaraStaking.SlashState.Disputed);
+
+        vm.prank(admin);
+        staking.resolveDispute(didHash, false);
+        _assertSlashState(SigvaraStaking.SlashState.Cancelled);
+
+        // The committee may file again one challenge period after the drop, with new evidence.
+        vm.warp(block.timestamp + CHALLENGE);
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "second");
+        _assertSlashState(SigvaraStaking.SlashState.Pending);
+
+        vm.warp(block.timestamp + CHALLENGE + 1);
+        staking.executeSlash(didHash);
+        _assertSlashState(SigvaraStaking.SlashState.Executed);
+    }
+
+    function _assertSlashState(SigvaraStaking.SlashState expected) internal view {
+        SigvaraStaking.SlashState state = staking.slashState(didHash);
+        assertEq(uint8(state), uint8(staking.getSlashProposal(didHash).state), "matches the full record");
+        assertEq(uint8(state), uint8(expected), "the state the test walked it into");
+    }
+
     // -------------------------------------------------------------------------
     // disputeSlash
     // -------------------------------------------------------------------------
@@ -2138,6 +2201,53 @@ contract SigvaraStakingTest is Test, RegistrationHelper {
         ));
         vm.prank(stranger);
         staking.setMinimumStake(1);
+    }
+
+    // -------------------------------------------------------------------------
+    // Gas: the agent is read through standingOf
+    // -------------------------------------------------------------------------
+
+    // The registry asks the identity registry for the three fields it uses (standingOf), never for the whole
+    // record (getIdentity), whose agent address and Ed25519 key were two cold storage reads it threw away.
+    // Measured on 15 November 2026 as transactions of their own, with getIdentity and then with standingOf:
+    // depositStake 171,937 and 167,035, initiateWithdrawal 132,057 and 127,162, claimWithdrawal 74,185 and
+    // 69,288, disputeSlash 82,204 and 77,307. Checked by the calls made rather than by gas: how a cold read
+    // is counted depends on the toolchain, and CI's measured these reads warm.
+    function _expectOnlyTheStanding() internal {
+        vm.expectCall(address(identity), abi.encodeWithSelector(SigvaraIdentity.getIdentity.selector), 0);
+        vm.expectCall(address(identity), abi.encodeCall(SigvaraIdentity.standingOf, (didHash)));
+    }
+
+    function test_depositStake_readsOnlyTheStanding() public {
+        _expectOnlyTheStanding();
+        vm.prank(operator);
+        staking.depositStake(didHash, MIN_STAKE * 2);
+    }
+
+    function test_initiateWithdrawal_readsOnlyTheStanding() public {
+        _deposit();
+        _expectOnlyTheStanding();
+        vm.prank(operator);
+        staking.initiateWithdrawal(didHash, MIN_STAKE);
+    }
+
+    function test_claimWithdrawal_readsOnlyTheStanding() public {
+        _deposit();
+        vm.prank(operator);
+        staking.initiateWithdrawal(didHash, MIN_STAKE);
+        vm.warp(block.timestamp + UNBONDING);
+        _expectOnlyTheStanding();
+        vm.prank(operator);
+        staking.claimWithdrawal(didHash);
+    }
+
+    function test_disputeSlash_readsOnlyTheStanding() public {
+        _deposit();
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "evidence");
+        _expectOnlyTheStanding();
+        vm.prank(operator);
+        staking.disputeSlash(didHash);
     }
 
     // -------------------------------------------------------------------------

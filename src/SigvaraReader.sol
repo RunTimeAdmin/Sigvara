@@ -111,7 +111,7 @@ contract SigvaraReader is ISigvaraReader {
         t.score = reputation.getTotalScore(didHash);
         t.earned = reputation.getEarnedScore(didHash);
         t.stake = staking.getStake(didHash);
-        t.slash = staking.getSlashProposal(didHash).state;
+        t.slash = staking.slashState(didHash);
         t.collateralized = staking.hasMinimumStake(didHash);
         t.scoreUpdatedAt = reputation.getReputation(didHash).lastUpdated;
     }

@@ -422,6 +422,66 @@ contract SigvaraReaderTest is StackFixture {
         assertFalse(reader.isTrusted(agent, 0));
     }
 
+    /// The reader reads the slash state through staking's slashState, not the whole proposal. Its
+    /// answer has to be the state field of the full record in every state a proposal passes through.
+    function test_trust_slashIsTheFullRecordsStateInEveryState() public {
+        bytes32 didHash = _registerAndBond(agentPk, 2 * MIN_STAKE);
+        _assertSlashMatches(didHash, ISigvaraStaking.SlashState.None);
+
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "first");
+        _assertSlashMatches(didHash, ISigvaraStaking.SlashState.Pending);
+
+        vm.prank(operator);
+        staking.disputeSlash(didHash);
+        _assertSlashMatches(didHash, ISigvaraStaking.SlashState.Disputed);
+
+        vm.prank(admin);
+        staking.resolveDispute(didHash, false);
+        _assertSlashMatches(didHash, ISigvaraStaking.SlashState.Cancelled);
+
+        vm.warp(block.timestamp + SLASH_WINDOW);
+        vm.prank(committee);
+        staking.initiateSlash(didHash, victim, "second");
+        vm.warp(block.timestamp + SLASH_WINDOW + 1);
+        staking.executeSlash(didHash);
+        _assertSlashMatches(didHash, ISigvaraStaking.SlashState.Executed);
+    }
+
+    function _assertSlashMatches(bytes32 didHash, ISigvaraStaking.SlashState expected) internal view {
+        ISigvaraStaking.SlashState slash = reader.trust(agent).slash;
+        assertEq(uint8(slash), uint8(staking.getSlashProposal(didHash).state), "the full record's state");
+        assertEq(uint8(slash), uint8(expected), "the state the test walked it into");
+    }
+
+    /// The reader reads the slash state alone, so neither the rest of the proposal nor the evidence
+    /// the committee filed sets what a trust read costs. Each read is measured as a call of its own.
+    /// On 15 November 2026, copying the whole proposal, a trust read used 86,184 gas with one byte of
+    /// evidence and 104,554 with 256; reading the state alone it used 68,501 with either. The bound
+    /// sits between 68,501 and the cheaper of the two old reads.
+    /// forge-config: default.isolate = true
+    /// forge-config: ci.isolate = true
+    function test_gas_trustCostsTheSameWhateverTheEvidenceLength() public {
+        (address other, uint256 otherPk) = makeAddrAndKey("other agent");
+        bytes32 shortDid = _registerAndBond(agentPk, 2 * MIN_STAKE);
+        bytes32 longDid = _registerAndBond(otherPk, 2 * MIN_STAKE);
+
+        bytes memory longEvidence;
+        uint256 words = staking.MAX_EVIDENCE_BYTES() / 32;
+        for (uint256 i = 0; i < words; i++) longEvidence = bytes.concat(longEvidence, keccak256(abi.encode(i)));
+        vm.prank(committee);
+        staking.initiateSlash(shortDid, victim, hex"01");
+        vm.prank(committee);
+        staking.initiateSlash(longDid, victim, longEvidence);
+
+        reader.trust(agent);
+        uint256 shortGas = vm.lastCallGas().gasTotalUsed;
+        reader.trust(other);
+        uint256 longGas = vm.lastCallGas().gasTotalUsed;
+        assertEq(longGas, shortGas, "the length of the evidence sets the cost of a trust read");
+        assertLt(longGas, 77_000, "the reader copies the whole proposal again");
+    }
+
     function test_trustByDid_matchesTrustByAddress() public {
         bytes32 didHash = _registerAndBond(agentPk, 2 * MIN_STAKE);
         _finalize(didHash, _score40());
@@ -567,5 +627,8 @@ contract SigvaraReaderTest is StackFixture {
         assertEq(a.victim, victim);
         assertEq(uint8(a.state), uint8(ISigvaraStaking.SlashState.Pending));
         assertEq(a.challengeDeadline, a.initiatedAt + SLASH_WINDOW);
+
+        assertEq(uint8(viaInterface.slashState(didHash)), uint8(staking.slashState(didHash)));
+        assertEq(uint8(viaInterface.slashState(didHash)), uint8(a.state));
     }
 }

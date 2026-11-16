@@ -53,9 +53,9 @@ runl R7  $RS $R 'function _propose(' '_requireBondedOracle();' '_requireBondedOr
 # R8 and R10 are expected survivors. A slash zeroes the stake and a slashed agent cannot bond again, and a hash nobody
 # registered holds no stake, so the bond check refuses the same proposals and only the name of the error differs. The
 # invariants check what is refused, not why; E2E.t.sol and SigvaraReputation.t.sol pin the names.
-runl R8  $RS $R 'function _requireScorable(' 'if (id.status == SigvaraIdentity.AgentStatus.Slashed)' 'id.status == SigvaraIdentity.AgentStatus.Slashed' 'false' 'a slashed agent can be scored'
+runl R8  $RS $R 'function _requireScorable(' 'if (status == SigvaraIdentity.AgentStatus.Slashed)' 'status == SigvaraIdentity.AgentStatus.Slashed' 'false' 'a slashed agent can be scored'
 runl R9  $RS $R 'function _requireScorable(' 'if (!stakeView.hasMinimumStake(didHash))' '!stakeView.hasMinimumStake(didHash)' 'false' 'an unbonded agent can be scored'
-runl R10 $RS $R 'function _requireScorable(' 'if (id.registeredAt == 0)' 'id.registeredAt == 0' 'false' 'an unregistered hash can be scored'
+runl R10 $RS $R 'function _requireScorable(' 'if (registeredAt == 0)' 'registeredAt == 0' 'false' 'an unregistered hash can be scored'
 runl R11 $RS $R 'function proposeReputation(' 'onlyRole(ORACLE_ROLE)' 'onlyRole(ORACLE_ROLE)' '' 'anyone can propose'
 runl R12 $RS $R 'function proposeReputation(' 'whenInflowsOpen' 'whenInflowsOpen' '' 'a pause does not stop proposals'
 runl R13 $RS $R 'function proposeIfEmpty(' 'if (existing.exists && _proposerStillAuthorized(existing.proposer))' '_proposerStillAuthorized(existing.proposer)' 'false' 'proposeIfEmpty replaces a live proposal'

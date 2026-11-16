@@ -248,6 +248,12 @@ running older code than the interfaces expect. Registry addresses are in
 `deployments/<chainId>.json`, which does not list a reader. If a registry upgrade ever changes
 a function the reader calls, deploy a new reader.
 
+A reader built from the current source reads the slash state with staking's `slashState`, which
+copies one field where `getSlashProposal` copied the whole proposal and its evidence. A staking
+proxy running code from before that view cannot answer it, and every `trust` call for a
+registered agent would revert, so deploy such a reader only after staking is upgraded, with
+`SMOKE_AGENT` set. The reader already on Arc testnet calls `getSlashProposal`, which stays.
+
 ## Example
 
 [`examples/gated-marketplace/GatedMarketplace.sol`](../examples/gated-marketplace/GatedMarketplace.sol)

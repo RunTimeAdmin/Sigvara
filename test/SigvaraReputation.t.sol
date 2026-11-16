@@ -5,6 +5,7 @@ import "forge-std/Test.sol";
 import "./helpers/RegistrationHelper.sol";
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import "@openzeppelin/contracts/access/IAccessControl.sol";
+import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 import "../src/SigvaraIdentity.sol";
 import "../src/SigvaraReputation.sol";
 
@@ -23,27 +24,19 @@ contract OperatorSetMock is IOperatorSet {
     function isActiveOperator(address who) external view returns (bool) { return active[who]; }
 }
 
-/// An identity registry from before operator transfer: it answers what the bond and
-/// scorability checks need, and has no operatorChangedAt at all.
+/// An identity registry with no operatorChangedAt, as before operator transfer existed: it
+/// answers what the bond and scorability checks read, and nothing else.
 contract LegacyIdentityMock {
     IStakeView public stakeView;
     address private op;
-    address private agent;
 
-    constructor(address stakeView_, address operator_, address agent_) {
+    constructor(address stakeView_, address operator_) {
         stakeView = IStakeView(stakeView_);
         op = operator_;
-        agent = agent_;
     }
 
-    function getIdentity(bytes32) external view returns (SigvaraIdentity.AgentIdentity memory) {
-        return SigvaraIdentity.AgentIdentity({
-            operator: op,
-            agentAddress: agent,
-            ed25519PubKey: bytes32(uint256(1)),
-            status: SigvaraIdentity.AgentStatus.Active,
-            registeredAt: 1
-        });
+    function standingOf(bytes32) external view returns (address, SigvaraIdentity.AgentStatus, uint256) {
+        return (op, SigvaraIdentity.AgentStatus.Active, 1);
     }
 }
 
@@ -58,7 +51,6 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
     address committee = makeAddr("committee");
     address stranger  = makeAddr("stranger");
     address operator  = makeAddr("operator");
-    address agentAddr;
     uint256 agentPk;
 
     // Reputation now rejects writes for a didHash the identity registry does not
@@ -74,7 +66,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
     SigvaraReputation.ReputationData maxScore;
 
     function setUp() public {
-        (agentAddr, agentPk) = makeAddrAndKey("agent");
+        (, agentPk) = makeAddrAndKey("agent");
         identity = SigvaraIdentity(address(new ERC1967Proxy(
             address(new SigvaraIdentity()),
             abi.encodeCall(SigvaraIdentity.initialize, (admin, address(0)))
@@ -449,6 +441,19 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
         rep.proposeReputation(DID, data, keccak256("second"));
         uint256 used = vm.lastCallGas().gasTotalUsed;
         assertLt(used, 140_000, "the next proposal filled zeroed slots again");
+    }
+
+    /// A finalize asks the identity registry for the three fields it uses (standingOf), never for the whole
+    /// record (getIdentity), whose agent address and Ed25519 key were two cold storage reads it threw away. On
+    /// 15 November 2026 a finalize measured on its own used 177,137 gas with getIdentity and 172,236 with
+    /// standingOf. Checked by the calls made rather than by gas, which CI's toolchain counts differently.
+    function test_finalizeReputation_readsOnlyTheStanding() public {
+        vm.prank(oracle);
+        rep.proposeReputation(DID, maxScore, keccak256("evidence"));
+        vm.warp(block.timestamp + CHALLENGE_WINDOW + 1);
+        vm.expectCall(address(identity), abi.encodeWithSelector(SigvaraIdentity.getIdentity.selector), 0);
+        vm.expectCall(address(identity), abi.encodeCall(SigvaraIdentity.standingOf, (DID)));
+        rep.finalizeReputation(DID);
     }
 
     // -------------------------------------------------------------------------
@@ -1416,7 +1421,7 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
     /// revert when the two proxies are a version apart. This is the exact failure
     /// that took every score on Arc testnet unreadable.
     function test_maturity_survivesAnOlderIdentityRegistry() public {
-        LegacyIdentityMock legacy = new LegacyIdentityMock(address(stakeView), operator, agentAddr);
+        LegacyIdentityMock legacy = new LegacyIdentityMock(address(stakeView), operator);
 
         SigvaraReputation old = SigvaraReputation(address(new ERC1967Proxy(
             address(new SigvaraReputation()),
@@ -1530,6 +1535,53 @@ contract SigvaraReputationTest is Test, RegistrationHelper {
         rep.zeroReputation(DID);
         assertEq(rep.evidenceRoots(DID), bytes32(0));
         assertFalse(rep.verifyEvidence(DID, EV_LEAF0, _proof0()));
+    }
+
+    /// verifyEvidence reads the proof from calldata, and MerkleProof.verify, which it called before,
+    /// copies it into memory first. They have to agree on every proof: a genuine one, the same proof
+    /// with any one hash changed, and the same proof offered for another leaf.
+    function testFuzz_evidence_sameVerdictAsTheMemoryVerify(bytes32 leaf, bytes32[] memory hashes, uint256 position)
+        public
+    {
+        // At most sixteen hashes, the depth of a tree of 65,536 payments.
+        bytes32[] memory proof = new bytes32[](hashes.length < 16 ? hashes.length : 16);
+        for (uint256 i = 0; i < proof.length; i++) proof[i] = hashes[i];
+        bytes32 root = MerkleProof.processProof(proof, leaf);
+        vm.assume(root != bytes32(0)); // a zero root verifies nothing, by design
+        _finalizeWithRoot(root);
+
+        assertTrue(rep.verifyEvidence(DID, leaf, proof), "a genuine proof verifies");
+        assertEq(rep.verifyEvidence(DID, leaf, proof), MerkleProof.verify(proof, root, leaf), "genuine");
+
+        bytes32 otherLeaf = keccak256(abi.encode(leaf));
+        assertFalse(rep.verifyEvidence(DID, otherLeaf, proof), "another leaf does not verify");
+        assertEq(
+            rep.verifyEvidence(DID, otherLeaf, proof), MerkleProof.verify(proof, root, otherLeaf), "another leaf"
+        );
+
+        if (proof.length > 0) {
+            proof[position % proof.length] ^= bytes32(uint256(1));
+            assertFalse(rep.verifyEvidence(DID, leaf, proof), "a changed hash does not verify");
+            assertEq(rep.verifyEvidence(DID, leaf, proof), MerkleProof.verify(proof, root, leaf), "a changed hash");
+        }
+    }
+
+    /// An eleven-hash proof, the depth of a tree of 2,048 payments, checked in a call of its own. On
+    /// 15 November 2026 the check used 10,654 gas with the proof copied into memory for
+    /// MerkleProof.verify and 10,411 with verifyCalldata reading it in place; the bound sits between
+    /// the two.
+    /// forge-config: default.isolate = true
+    /// forge-config: ci.isolate = true
+    function test_gas_verifyEvidenceReadsTheProofInPlace() public {
+        bytes32 leaf = keccak256("payment");
+        bytes32[] memory proof = new bytes32[](11);
+        for (uint256 i = 0; i < proof.length; i++) proof[i] = keccak256(abi.encode("sibling", i));
+        _finalizeWithRoot(MerkleProof.processProof(proof, leaf));
+
+        bool verified = rep.verifyEvidence(DID, leaf, proof);
+        uint256 used = vm.lastCallGas().gasTotalUsed;
+        assertTrue(verified, "the proof is genuine");
+        assertLt(used, 10_530, "the proof is copied into memory again");
     }
 
     function test_maturity_rateOfZeroIsRejected() public {

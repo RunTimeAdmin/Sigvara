@@ -657,9 +657,9 @@ contract SigvaraReputation is Initializable, TimelockedGrants, UUPSUpgradeable, 
         SigvaraIdentity registry = identityRegistry;
         if (address(registry) == address(0)) revert IdentityRegistryNotSet();
 
-        SigvaraIdentity.AgentIdentity memory id = registry.getIdentity(didHash);
-        if (id.registeredAt == 0) revert AgentNotRegistered(didHash);
-        if (id.status == SigvaraIdentity.AgentStatus.Slashed) revert AgentSlashed(didHash);
+        (, SigvaraIdentity.AgentStatus status, uint256 registeredAt) = registry.standingOf(didHash);
+        if (registeredAt == 0) revert AgentNotRegistered(didHash);
+        if (status == SigvaraIdentity.AgentStatus.Slashed) revert AgentSlashed(didHash);
 
         IStakeView stakeView = registry.stakeView();
         if (address(stakeView) == address(0)) revert StakeViewNotSet();
@@ -818,7 +818,9 @@ contract SigvaraReputation is Initializable, TimelockedGrants, UUPSUpgradeable, 
     {
         bytes32 root = evidenceRoots[didHash];
         if (root == bytes32(0)) return false;
-        return MerkleProof.verify(proof, root, leaf);
+        // Reads the proof where it lies. verify takes it from memory, so the proof was copied
+        // there first, for the same answer.
+        return MerkleProof.verifyCalldata(proof, root, leaf);
     }
 
     /// @notice The score as computed, before maturity is applied. Max 100.

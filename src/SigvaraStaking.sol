@@ -18,11 +18,11 @@ import "./SigvaraIdentity.sol";
  *         again) into this compile graph for a single `zeroReputation(bytes32)`.
  *
  *         SigvaraIdentity is deliberately NOT narrowed the same way. This contract reads
- *         `AgentIdentity` and compares `AgentStatus` in sixteen places, so an interface
- *         would have to redeclare both. A redeclared enum that drifted from the real one
- *         would not fail to compile; it would silently reinterpret the status of every
- *         live agent, which is the failure this codebase keeps appending storage to avoid.
- *         Sharing one definition is worth the import.
+ *         `AgentStatus` through `standingOf` and compares or sets it in seven places, so
+ *         an interface would have to redeclare the enum. A redeclared enum that drifted
+ *         from the real one would not fail to compile; it would silently reinterpret the
+ *         status of every live agent, which is the failure this codebase keeps appending
+ *         storage to avoid. Sharing one definition is worth the import.
  */
 interface IReputationZero {
     function zeroReputation(bytes32 didHash) external;
@@ -210,6 +210,8 @@ contract SigvaraStaking is
     error SlashCooldownActive(bytes32 didHash, uint256 refileAt);
     /// The admin already ruled against this evidence for this agent. File new evidence.
     error EvidenceAlreadyRejected(bytes32 didHash, bytes32 evidenceKey);
+    /// The evidence is longer than MAX_EVIDENCE_BYTES. File a reference to the package, not the package.
+    error EvidenceTooLong(uint256 provided, uint256 maximum);
     error DisputeResolutionActive(bytes32 didHash, uint256 expiresAt);
     error DisputeResolutionExpired(bytes32 didHash, uint256 expiredAt);
     /// A Pending proposal is still inside the fortnight in which anyone may execute it.
@@ -321,11 +323,12 @@ contract SigvaraStaking is
      *         identity permanently. Slashed agents are terminal and still rejected.
      */
     function depositStake(bytes32 didHash, uint256 amount) external nonReentrant whenInflowsOpen {
-        SigvaraIdentity.AgentIdentity memory id = identityRegistry.getIdentity(didHash);
-        if (id.registeredAt == 0 || id.status == SigvaraIdentity.AgentStatus.Slashed) {
+        (address operator, SigvaraIdentity.AgentStatus status, uint256 registeredAt) =
+            identityRegistry.standingOf(didHash);
+        if (registeredAt == 0 || status == SigvaraIdentity.AgentStatus.Slashed) {
             revert AgentNotActive(didHash);
         }
-        if (id.operator != msg.sender) revert NotOperator(didHash, msg.sender);
+        if (operator != msg.sender) revert NotOperator(didHash, msg.sender);
 
         // Credit what arrived, not what was asked for.
         //
@@ -355,7 +358,7 @@ contract SigvaraStaking is
         // The bond is what activates a new agent. Only from PendingBond: an agent that
         // suspended itself to withdraw, or that the staking core suspended for a
         // pending slash, must not be dragged back to Active by topping up.
-        if (id.status == SigvaraIdentity.AgentStatus.PendingBond
+        if (status == SigvaraIdentity.AgentStatus.PendingBond
             && stakes[didHash].amount >= minimumStake) {
             identityRegistry.updateStatus(didHash, SigvaraIdentity.AgentStatus.Active);
         }
@@ -383,8 +386,9 @@ contract SigvaraStaking is
         if (amount == 0) revert ZeroWithdrawal(didHash);
         if (s.unbondingAmount != 0) revert WithdrawalAlreadyPending(didHash);
 
-        SigvaraIdentity.AgentIdentity memory id = identityRegistry.getIdentity(didHash);
-        if (id.operator != msg.sender) revert NotOperator(didHash, msg.sender);
+        (address operator, SigvaraIdentity.AgentStatus status, uint256 registeredAt) =
+            identityRegistry.standingOf(didHash);
+        if (operator != msg.sender) revert NotOperator(didHash, msg.sender);
 
         // A Pending or Disputed proposal freezes the bond. Disputing must not
         // release it: that is what let an operator cancel every proposal for free
@@ -406,7 +410,7 @@ contract SigvaraStaking is
         // active agent drain its entire backing stake in one step, which the total-balance
         // check in initiateSlash also now guards, but an active agent should never be
         // unbacked to begin with.
-        bool active = id.registeredAt != 0 && id.status == SigvaraIdentity.AgentStatus.Active;
+        bool active = registeredAt != 0 && status == SigvaraIdentity.AgentStatus.Active;
         if (active && remaining < minimumStake) {
             revert InsufficientStake(didHash, remaining, minimumStake);
         }
@@ -436,8 +440,8 @@ contract SigvaraStaking is
         Stake storage s = stakes[didHash];
         if (s.unbondingAmount == 0) revert NoWithdrawalPending(didHash);
 
-        SigvaraIdentity.AgentIdentity memory id = identityRegistry.getIdentity(didHash);
-        if (id.operator != msg.sender) revert NotOperator(didHash, msg.sender);
+        (address operator,,) = identityRegistry.standingOf(didHash);
+        if (operator != msg.sender) revert NotOperator(didHash, msg.sender);
 
         // A queued withdrawal is still slashable. Without this check, safety would
         // depend on unbondingPeriod staying longer than challengePeriod (both are
@@ -472,13 +476,15 @@ contract SigvaraStaking is
      * @notice Committee member initiates a slash proposal.
      * @dev    Suspends the agent immediately to halt activity during the challenge window.
      *         Evidence hash is the keccak256 of the off-chain evidence package (stored
-     *         for auditability; the package itself lives off-chain).
+     *         for auditability; the package itself lives off-chain). It is at most
+     *         MAX_EVIDENCE_BYTES long.
      */
     function initiateSlash(
         bytes32 didHash,
         address victim,
         bytes calldata evidenceHash
     ) external nonReentrant onlyRole(SLASHING_COMMITTEE_ROLE) {
+        if (evidenceHash.length > MAX_EVIDENCE_BYTES) revert EvidenceTooLong(evidenceHash.length, MAX_EVIDENCE_BYTES);
         if (victim == address(0)) revert ZeroAddress();
         // The victim takes 25% of the bond. The committee that files and enforces a slash
         // must not profit from it, so neither the reporter nor any other member can be
@@ -553,8 +559,8 @@ contract SigvaraStaking is
             revert ChallengePeriodExpired(didHash, deadline);
         }
 
-        SigvaraIdentity.AgentIdentity memory id = identityRegistry.getIdentity(didHash);
-        if (id.operator != msg.sender) revert NotOperator(didHash, msg.sender);
+        (address operator,,) = identityRegistry.standingOf(didHash);
+        if (operator != msg.sender) revert NotOperator(didHash, msg.sender);
 
         proposal.state = SlashState.Disputed;
         proposal.disputedAt = block.timestamp;
@@ -842,6 +848,12 @@ contract SigvaraStaking is
     ///         for good.
     uint256 public constant EXECUTION_PERIOD = 14 days;
 
+    /// @notice The most evidence a slash proposal may carry, in bytes. The evidence points at a package
+    ///         published off chain, and ADR 0010 gives it a form (the ground and a sha256 of the package)
+    ///         of about a hundred bytes. It is stored with the proposal, and every read of the whole
+    ///         proposal copies it out, so without a bound its length set the gas of those reads.
+    uint256 public constant MAX_EVIDENCE_BYTES = 256;
+
     /// @notice The challenge period stays shorter than the unbonding period, and setUnbondingPeriod
     ///         holds the same order from the other side. The refile cooldown is one challenge period,
     ///         and a withdrawal queued after a drop stays slashable only because it waits longer than
@@ -890,6 +902,13 @@ contract SigvaraStaking is
 
     function getSlashProposal(bytes32 didHash) external view returns (SlashProposal memory) {
         return slashProposals[didHash];
+    }
+
+    /// @notice Where the latest slash proposal against the agent stands: None if there never was one.
+    /// @dev    The state alone. getSlashProposal copies the whole proposal out of storage, evidence
+    ///         included, and SigvaraReader needs only this on every trust read.
+    function slashState(bytes32 didHash) external view returns (SlashState) {
+        return slashProposals[didHash].state;
     }
 
     // -------------------------------------------------------------------------
