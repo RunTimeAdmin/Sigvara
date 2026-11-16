@@ -103,7 +103,7 @@ cast call 0x3c9c12F27DDCa7048840eE3fbF0CAa1C547D8171 "bondAmount()(uint256)" --r
   refused 19 of 30 with `-32005`, Circle's endpoint refused 20 of 30. Individual calls are
   cheap, about 120ms for a 10,000-block window, so the limit is on request *rate* and not
   on per-call cost. The scanner used to have no pacing between chunks, which made a long
-  catch-up fragile: `scanRange` wraps each call in `readWithBackoff` with four attempts, so
+  catch-up fragile: `scanRange` wrapped each call in `readWithBackoff` with four attempts, so
   a few hundred consecutive chunks would probably exhaust one of them, throw, and leave the
   checkpoint unadvanced for a full retry next epoch.
 
