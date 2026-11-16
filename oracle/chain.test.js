@@ -1014,3 +1014,43 @@ test('getLatestBlockTimestamp reuses a reading up to maxAgeMs old, and reads afr
   assert.equal(await chain.getLatestBlockTimestamp(), 1002, 'without maxAgeMs the chain is read');
   assert.equal(reads, 2);
 });
+
+// The checker's node answers a burst with HTTP 429 and -32005. ethers used to retry that inside each try, for minutes;
+// since rpc-provider.js stopped it, four tries over 3.5 s left 2 to 4 agents an hourly epoch unread (16 November 2026).
+const throttled429 = () => Object.assign(
+  new Error('server response 429 Too Many Requests (responseBody="{\\"jsonrpc\\":\\"2.0\\",\\"error\\":{\\"code\\":-32005,\\"message\\":\\"rate limit exceeded\\"}}")'),
+  { code: 'SERVER_ERROR' },
+);
+
+test('readWithBackoff: a refusal for the rate limit is tried on a longer schedule, its waits jittered and capped', async () => {
+  const waits = [];
+  let calls = 0;
+  const out = await chain.readWithBackoff('x', async () => {
+    if (++calls < 7) throw throttled429();
+    return 'read';
+  }, 4, undefined, { pause: async (ms) => { waits.push(ms); }, random: () => 1 });
+  assert.equal(out, 'read');
+  assert.equal(calls, 7);
+  assert.deepEqual(waits, [500, 1000, 2000, 4000, 8000, 8000], 'doubling to 8 s');
+  const low = [];
+  let tries = 0;
+  await chain.readWithBackoff('x', async () => { if (++tries < 3) throw throttled429(); return 1; },
+    4, undefined, { pause: async (ms) => { low.push(ms); }, random: () => 0 });
+  assert.deepEqual(low, [250, 500], 'each wait at least half its step');
+});
+
+test('readWithBackoff: a rate limit nested as -32005 counts, and the longer schedule still ends', async () => {
+  let calls = 0;
+  const nested = () => Object.assign(new Error('missing revert data'), { code: 'CALL_EXCEPTION', data: null, info: { error: { code: -32005, message: 'rate limit exceeded' } } });
+  await assert.rejects(
+    chain.readWithBackoff('x', async () => { calls += 1; throw nested(); }, 4, undefined, { pause: async () => {} }),
+    /missing revert data/,
+  );
+  assert.equal(calls, 7, 'seven tries, then the failure');
+  let other = 0;
+  await assert.rejects(
+    chain.readWithBackoff('x', async () => { other += 1; throw Object.assign(new Error('boom'), { code: 'SERVER_ERROR' }); }, 4, undefined, { pause: async () => {} }),
+    /boom/,
+  );
+  assert.equal(other, 4, 'any other failure keeps its four tries');
+});

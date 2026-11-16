@@ -638,7 +638,7 @@ async function withKeeperProcess(answer, run) {
   });
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sigvara-keeper-'));
   const url = (s) => `http://127.0.0.1:${s.address().port}`;
-  const child = spawn(process.execPath, ['--require', path.join(__dirname, 'test-support', 'fast-interval.js'), path.join(__dirname, 'keeper.js')], {
+  const child = spawn(process.execPath, ['--require', path.join(__dirname, 'test-support', 'fast-interval.js'), '--require', path.join(__dirname, 'test-support', 'fast-retry.js'), path.join(__dirname, 'keeper.js')], {
     env: {
       ...process.env,
       RPC_URL: `${url(node)}/v2/${RPC_KEY}`,
