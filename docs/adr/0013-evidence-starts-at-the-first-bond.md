@@ -4,8 +4,10 @@
 1, 2 and 4 are built: `noteBond`, `ACTIVE_AT_REGISTRATION_BEFORE` and the catch-up in `getRegisteredAgents`
 (`oracle/chain.js`), `before_bond` in
 `planCredits` (`oracle/payment-scan.js`) and `scanChain` (`oracle/payment-chains.js`), and `bondedByPayment` and the
-bonded agent list in `oracle/index.js`, tested in `oracle/first-bond.test.js` and beside each. Step 3, both testnet
-operators, is not done yet. Code references in sections 1 and 3 are to main at `9be7aa7`, before the build.
+bonded agent list in `oracle/index.js`, tested in `oracle/first-bond.test.js` and beside each. Step 3 is done: both
+Arc testnet operators have run `31ad9bc` since 16 November 2026, 19:20 UTC. Their first epochs found 46 agents and
+46 bonded, the demo agent among them, and neither held a credit from before its agent's first bond (2,582 payments
+each). Code references in sections 1 and 3 are to main at `9be7aa7`, before the build.
 
 ## 1. Context
 
