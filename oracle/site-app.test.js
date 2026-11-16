@@ -193,6 +193,21 @@ test('nothing is sent while the wallet is on another chain', async () => {
   assert.equal(sends(p).length, 0, 'eth_sendTransaction was requested on chain 0x1');
 });
 
+test('a wallet that answers with markup instead of a transaction hash gets none of it into the log', async () => {
+  const page = load({ agents: { [B]: { stake: 2000n * SVR_UNIT } } });
+  const p = wallet();
+  await connected(page, p, B);
+  const request = p.request;
+  p.request = async (args) => {
+    if (args.method !== 'eth_sendTransaction') return request(args);
+    p.calls.push(args);
+    return '0x" onmouseover="alert(1)"><img src=x>';
+  };
+  await assert.rejects(page.ctx.sendTx(STAKING, '0x'), /did not answer with a transaction hash/);
+  assert.doesNotMatch(page.$('log').innerHTML, /<img|onmouseover/);
+  assert.equal(p.calls.filter((c) => c.method === 'eth_getTransactionReceipt').length, 0, 'the receipt was polled for a hash the wallet never gave');
+});
+
 test('a refused network switch is not answered with an add-network prompt, and leaves nothing connected', async () => {
   const page = load({ agents: { [B]: {} } });
   const refused = wallet({ chain: '0x1', switchError: Object.assign(new Error('User rejected the request.'), { code: 4001 }) });

@@ -96,6 +96,9 @@ function logLine(html) {
   el.insertAdjacentHTML("beforeend", (el.childNodes.length ? "\n" : "") + html);
   el.scrollTop = el.scrollHeight;
 }
+// The wallet's answer to eth_sendTransaction comes from the wallet, not from us, so sendTx holds it to a 32-byte hash
+// before it reaches txLink's HTML or the receipt poll (security review, 16 November).
+const isTxHash = (h) => typeof h === "string" && /^0x[0-9a-fA-F]{64}$/.test(h);
 const txLink = (h) => `<a href="${EXPLORER}/tx/${h}" target="_blank" rel="noopener">${h.slice(0, 18)}…</a>`;
 
 // ---- encoding helpers ----
@@ -219,6 +222,9 @@ async function sendTx(to, data) {
     method: "eth_sendTransaction",
     params: [{ from: account, to, data }],
   });
+  if (!isTxHash(hash)) {
+    throw new Error("the wallet did not answer with a transaction hash, so this page cannot follow the transaction. Check the wallet's activity before trying again.");
+  }
   logLine(`tx sent ${txLink(hash)} — waiting…`);
   // Arc produces a block roughly every half second. A flat 2.5s poll added over a second
   // of dead time to every confirmation for nothing, so start at the block interval and
