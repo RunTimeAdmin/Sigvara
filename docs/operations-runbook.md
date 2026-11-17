@@ -423,10 +423,10 @@ visitor behind the proxy shares one limit on new `/events` answers.
 - A container that restarts in a loop: read `docker logs`. The launcher refuses a `SIGVARA_COMMIT`
   that is not 40 hex characters, and a commit it cannot fetch.
 
-**When the Arc explorer recovers.** The pages' fallback still treats the Arc explorer's index as
-stopped at block 70,337,205 (`INDEX_STALLED_AT` in `site/assets/explorer.js`). Once its v2 API
-shows the identity contract's `AgentRegistered` logs in blocks 70,385,000 to 70,388,999, that line
-can go, and the fallback goes back to reading only the newest blocks from the chain.
+**The Arc explorer recovered.** Its index stopped at block 70,337,205 on 2 November 2026, and the
+pages' fallback did not rely on it past that block. On 17 November it held every log of the four
+contracts after it that the event index holds, so the fallback relies on it up to its newest indexed
+log again and reads only the newer blocks from the chain (`tailRange` in `site/assets/explorer.js`).
 
 ## 5. ERC-8004 publisher
 

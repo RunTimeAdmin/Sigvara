@@ -109,11 +109,6 @@
   // How far back the pages read the chain itself when the explorer's index is behind: about 42
   // hours of Arc blocks, at roughly two a second, which is 30 log reads.
   const TAIL_BLOCKS = 300000;
-  // The block the explorer's per-contract index stopped at on 2 November 2026. Its index is not
-  // relied on past it, even once its newest block moves on, because an index that resumes at the
-  // head before it backfills would leave a hole a page could not see. Remove this once the
-  // explorer has been seen to hold the blocks after it.
-  const INDEX_STALLED_AT = 70337205;
   // Reading more than this many blocks (about an hour) from the chain is worth a note on the page.
   const LAG_NOTED = 7200;
   // An event index answering for blocks this far past the RPC's newest (about a minute) is not
@@ -433,15 +428,17 @@
     for (const r of rows) r.timeStamp = at.get(r.blockNumber);
   }
 
-  // Where to read the chain itself: from just past the last block the explorer is relied on for
-  // (its newest, but no later than INDEX_STALLED_AT, which also stands in when it does not say),
-  // or TAIL_BLOCKS back if that is nearer, to the newest block. `missed` is the span between.
+  // Where to read the chain itself: from just past the explorer's newest indexed block, or TAIL_BLOCKS back if that
+  // is nearer, to the newest block. `missed` is the span between. When the explorer does not say how far it has
+  // indexed, the chain is read TAIL_BLOCKS back and `reachUnknown` says so. Its index stopped at block 70337205 on
+  // 2 November 2026 and was not relied on past it until 17 November, when it held every log of the four contracts
+  // after it that Sigvara's event index holds.
   async function tailRange() {
     const [head, latest] = await Promise.all([indexHead(), blockNumber()]);
     const floor = Math.max(0, latest - TAIL_BLOCKS + 1);
-    const trusted = Math.min(head?.block ?? INDEX_STALLED_AT, INDEX_STALLED_AT);
-    const from = Math.max(trusted + 1, floor);
-    return { from, to: latest, indexHead: head, missed: from > trusted + 1 ? [trusted + 1, from - 1] : null };
+    if (!head) return { from: floor, to: latest, indexHead: null, missed: null, reachUnknown: true };
+    const from = Math.max(head.block + 1, floor);
+    return { from, to: latest, indexHead: head, missed: from > head.block + 1 ? [head.block + 1, from - 1] : null };
   }
 
   // The identity, staking and bond contracts' logs in the blocks the explorer is not relied on
@@ -603,10 +600,13 @@
     const head = t.indexHead
       ? ` The explorer's newest log for the reputation contract is in block ${n(t.indexHead.block)}${t.indexHead.time ? ` (${esc(fmtWhen(t.indexHead.time))})` : ""}.` : "";
     if (t.missed) {
-      return `<p class="pill-warn">Blocks ${n(t.missed[0])} to ${n(t.missed[1])} were not read from the chain, and the Arc explorer's index is not relied on for them, so entries from them may be missing. This page reads only the newest ${n(TAIL_BLOCKS)} blocks from the chain itself.${head}</p>`;
+      return `<p class="pill-warn">Blocks ${n(t.missed[0])} to ${n(t.missed[1])} are past the Arc explorer's newest indexed log and further back than the ${n(TAIL_BLOCKS)} blocks this page reads from the chain itself, so entries from them may be missing.${head}</p>`;
+    }
+    if (t.reachUnknown) {
+      return `<p class="pill-warn">The Arc explorer did not say how far its index reaches, so blocks ${n(t.from)} to ${n(t.to)} were read from the chain itself, and entries from earlier blocks it has not indexed may be missing.</p>`;
     }
     if (t.to - t.from + 1 < LAG_NOTED) return "";
-    return `<p class="netnote">Blocks ${n(t.from)} to ${n(t.to)} were read from the chain itself, because the Arc explorer's index is not relied on past block ${n(t.from - 1)}.${head}</p>`;
+    return `<p class="netnote">Blocks ${n(t.from)} to ${n(t.to)} were read from the chain itself, because the Arc explorer's index reaches only block ${n(t.from - 1)}.${head}</p>`;
   }
 
   // ---- evidence: the Merkle root, rebuilt the way oracle/merkle.js builds it ----
