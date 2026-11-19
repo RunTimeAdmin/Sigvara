@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.0.0-alpha.22
 
 ### Fixed: a refused 402 kept its seller's connection open
 
