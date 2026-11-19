@@ -35,6 +35,20 @@
 #   comment below for why the obvious address does not work.
 
 oracle.sigvara.xyz {
+	# A target with "//" in it is refused before anything else. Caddy cleans a path before
+	# matching it, so "//evidence/metrics" passes the /evidence/* matcher below, but the
+	# target is forwarded as sent, and a URL parser reads it as the host "evidence" and the
+	# path "/metrics". The oracle refuses such a target itself (parseRequestTarget in
+	# http-helpers.js); this keeps it off the oracle's socket.
+	#
+	# It works only as the first handle. Handles with named matchers run in the order
+	# written, and only the first that matches runs. A handle on a bare path (`handle /x/*`)
+	# is sorted ahead of every named one, so keep them all named.
+	@doubleslash expression `{http.request.uri.path}.contains("//") || {http.request.orig_uri.path}.contains("//")`
+	handle @doubleslash {
+		respond "Bad request" 400
+	}
+
 	encode gzip
 
 	# Read-only surface, listed explicitly. A path not named here is not proxied, so a
@@ -48,15 +62,6 @@ oracle.sigvara.xyz {
 		# Public and read-only: each outcome verifies on its own. The oracle answers 404 unless
 		# PAYER_OUTCOMES and PAYER_OUTCOMES_PUBLISH are on.
 		path /outcomes
-		# The badge is loaded from pages this operator does not control. It rides the
-		# same block as the other reads because the two headers set below are harmless
-		# to it: an <img> needs no CORS, so the pinned Allow-Origin costs nothing, and
-		# the shorter Cache-Control only sends more requests at the oracle's own cache.
-		#
-		# Cross-Origin-Resource-Policy is the header that actually matters, and it is
-		# not set here, so the oracle's own `cross-origin` reaches the browser. Setting
-		# one here would break the badge everywhere it is meant to work.
-		path /badge/*
 	}
 
 	# /attest is published too, but only POST. Publishing the path does not open the
@@ -136,6 +141,20 @@ oracle.sigvara.xyz {
 		# If this proxy is ever replaced, verify that behaviour rather than assuming it:
 		# trip the limit, then retry with a forged X-Forwarded-For. A 200 means the
 		# limiter is bypassable.
+		reverse_proxy sigvara-oracle:3030
+	}
+
+	# The badge is loaded from pages this operator does not control, so the oracle sets its
+	# own Access-Control-Allow-Origin "*", Cache-Control and Cross-Origin-Resource-Policy
+	# (see `GET /badge/:address.svg` in oracle/README.md). It has a block of its own with no
+	# header lines, because Caddy's `header` adds to what the oracle sends rather than
+	# replacing it: under @public, every badge carried two Allow-Origin and two
+	# Cache-Control headers.
+	@badge {
+		path /badge/*
+	}
+
+	handle @badge {
 		reverse_proxy sigvara-oracle:3030
 	}
 
