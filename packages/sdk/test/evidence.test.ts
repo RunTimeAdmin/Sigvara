@@ -180,7 +180,7 @@ describe('the leaf written out by hand', () => {
     for (let i = 0; i < 200; i++) {
       const r: EvidenceRecord = {
         txHash: ethers.hexlify(ethers.randomBytes(32)),
-        payer: ethers.Wallet.createRandom().address,
+        payer: ethers.getAddress(ethers.hexlify(ethers.randomBytes(20))),
         amount: i % 7 === 0 ? ((1n << 256n) - 1n).toString() : BigInt(ethers.hexlify(ethers.randomBytes(1 + (i % 32)))).toString(),
         settledAt: i % 5 === 0 ? 0 : 1_700_000_000 + i,
         success: [true, false, null][i % 3] as boolean | null,
