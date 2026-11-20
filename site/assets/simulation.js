@@ -21,7 +21,7 @@ const MILESTONES_1 = [
   { day: 10, title: "First slash filed", text: "The committee slashes the first ring agent. Nobody disputes it. A new agent also arrives." },
   { day: 12, title: "Second slash, disputed", text: "The committee slashes the second ring agent. Its operator disputes, and the admin rules." },
   { day: 14, title: "A new agent arrives", text: "" },
-  { day: 17, title: "First slash can be executed", text: "About seven days after filing, the challenge window closes and the simulation executes it." },
+  { day: 17, title: "First slash can be executed", text: "About seven days after filing, the challenge window closes and a slash keeper executes it, ahead of the simulation's own check." },
   { day: 18, title: "The last new agent arrives", text: "" },
   { day: 28, title: "End", text: "The simulation stops by itself. Agents keep their scores." },
 ];

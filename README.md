@@ -280,7 +280,7 @@ All six factors are live. Four things shape what the number actually means:
 
 **Testnet:** `SLASHING_COMMITTEE_ROLE` is held by a single EOA. **Mainnet path:** a 3-of-5 multisig, then UMA OptimisticOracleV3 or Kleros (isolated in the `initiateSlash` / `disputeSlash` interface, replaceable without storage migration).
 
-One slash has been executed end to end on Arc testnet, as a scheduled drill; see [the drill log](docs/slash-drill-log.md). Since 3 November 2026 an adversarial drill has been taking three more agents through every other ending, with each guard checked as it goes; day 0 held every prediction, and it ends on 24 November. Since 5 November 2026 two keepers on separate hosts execute a slash once its window closes, leaving that drill's last agent alone ([runbook, section 7](docs/operations-runbook.md#7-slash-keeper)); neither has had one to execute yet. The lifecycle below is also covered by the E2E suite.
+One slash has been executed end to end on Arc testnet, as a scheduled drill; see [the drill log](docs/slash-drill-log.md). Since 3 November 2026 an adversarial drill has been taking three more agents through every other ending, with each guard checked as it goes; day 0 held every prediction, and it ends on 24 November. Since 5 November 2026 two keepers on separate hosts execute a slash once its window closes, leaving that drill's last agent alone ([runbook, section 7](docs/operations-runbook.md#7-slash-keeper)); the primary keeper executed its first on 19 November 2026, against one of the simulation's ring agents ([transaction](https://explorer.testnet.arc.io/tx/0x801de41e50e7113b23c942265feea145d56f53cae6d8f483c85f9c2d14633337)). The lifecycle below is also covered by the E2E suite.
 
 ### Slash Lifecycle
 

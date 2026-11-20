@@ -10,7 +10,7 @@ As of 16 November 2026. The SVR token is on Arc mainnet; the registries and the 
 **In progress, with dates.**
 - The adversarial slash drill: day 7 done on 10 November, day 21 from 24 November 03:45 UTC
   ([slash-drill.md](slash-drill.md), [slash-drill-log.md](slash-drill-log.md)).
-- The slash keepers went live on 5 November. Both hold C, and neither has yet executed a real slash.
+- The slash keepers went live on 5 November. Both hold C. The primary executed its first real slash on 19 November, against one of the simulation's ring agents.
 
 **Open before mainnet.**
 - An external audit, and fixing what it finds (Phase 2).

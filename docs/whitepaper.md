@@ -500,9 +500,9 @@ Stated because they are true, not because they are solved.
    proposal that won so the loser needs no second call. The checker uses it; the primary
    keeps the replacing entry point, because overwriting its own stale proposal with a
    fresher one is intended rather than a race.
-4. **One slash has been executed in public, as a drill.** It ran against a throwaway agent
-   registered for the purpose, not against a real agent; see
-   [slash-drill-log.md](slash-drill-log.md).
+4. **Slashes have been executed in public only against test agents.** A drill ran one against a
+   throwaway agent ([slash-drill-log.md](slash-drill-log.md)), and on 19 November 2026 a keeper
+   executed one against a simulated ring agent.
 5. **No external audit.** A precondition for mainnet.
 6. **Unreported work is invisible.** Payment verification detects a fabricated or altered
    payment. It cannot detect a real payment nobody submitted.

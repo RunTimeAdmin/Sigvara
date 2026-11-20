@@ -44,7 +44,7 @@ operators register and bond through the published SDK, as an integrator would.
 The ring is the slash target, and the slashes are real proceedings on the real contracts:
 
 - **Day 10:** the committee files a slash against the first ring agent, naming the evidence in plain
-  text. Nobody disputes it, and the simulation executes it once the challenge window closes.
+  text. Nobody disputes it, and it is executed once the challenge window closes: on 19 November 2026 a slash keeper did it before the simulation's own hourly check.
 - **Day 12:** the committee files against the second ring agent. The ring's operator disputes it
   within the hour, and the admin rules.
 
