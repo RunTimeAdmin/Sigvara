@@ -1,6 +1,6 @@
 # Sigvara roadmap
 
-As of 14 November 2026. This is the one list of what comes next. The [launch checklist](launch-checklist.md) holds the detail of each mainnet gate, and [section 8 of the whitepaper](whitepaper.md#8-roadmap) keeps the reasoning behind the main steps.
+As of 21 November 2026. This is the one list of what comes next. The [launch checklist](launch-checklist.md) holds the detail of each mainnet gate, and [section 8 of the whitepaper](whitepaper.md#8-roadmap) keeps the reasoning behind the main steps.
 
 **The goal:** someone outside the team accepts or refuses an agent in production because of its Sigvara score, on mainnet.
 
@@ -14,6 +14,7 @@ As of 14 November 2026. This is the one list of what comes next. The [launch che
 |---|---|
 | Payer outcomes for Base payments are built ([ADR 0009](adr/0009-payments-on-base.md), section 7), and Base Sepolia has counted on both operators since 7 November. Plain transfers and their signed outcomes went through, from a key and from a smart wallet ([simulation.md](simulation.md)). Next, the same from Wallet MCP | A Wallet MCP x402 payment on Base Sepolia is credited by both operators, and a payer outcome signed on Base is accepted by both |
 | A read-only Sigvara plugin for Coinbase's Wallet MCP, once a score describes payments those agents can make | Submitted to `coinbase/agents` |
+| Scores posted to the ERC-8004 registries on Base as well as Arc, the other follow-up [ADR 0009](adr/0009-payments-on-base.md) names, so an agent on Base reads them where it already looks. One more chain for the publisher, and its signer's policy, with no new contract | A score Sigvara posted is live in the Reputation Registry on Base Sepolia |
 | Design partners | One outside team has agreed to gate on a score |
 | The first outside gate in production | Outside consumers reads 1, and [/integrate](https://sigvara.xyz/integrate) says so |
 | Use the partner's numbers: real job sizes set how large a job a bond should back, and the spread of scores on [/status](https://sigvara.xyz/status), measured since 13 November but over simulated agents so far, starts to describe agents in real use | The ratio is chosen from real data |
@@ -54,7 +55,6 @@ Ideas with a place on the list but no work under way. Each moves up when its eve
 | Bond-based eligibility tiers | A partner's job sizes | Docs only. `isTrusted(agent, minScore, minBond)` already does it |
 | The ERC-8004 Validation Registry | A partner or a registry user asks | Publish CounterAudit validations |
 | Evidence bundles, and a `payment_verified` status in the SDK | An integrator wants to re-verify old roots | An ADR on what a bundle holds |
-| A way to notice a dead watcher | Anyone outside relies on its alerts | A heartbeat from the watcher, checked from another host |
 
 ## How a new idea gets on this list
 
