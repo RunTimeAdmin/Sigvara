@@ -632,7 +632,7 @@ during one, so a step with many payments can look stuck for minutes. Also check 
 last block saved. With the chain `on`, an operator whose scan has not reached the chain's delay scores nothing that epoch
 and finalizes nothing, until the scan catches up: `paymentChainHold` on `/health` says so, and
 `sigvara_oracle_epochs_held_by_payment_chain_total` counts it. Both operators reach Base through keyless public
-endpoints, so read this first when a score stops moving. A range the node refuses for its size is halved, so a dense range alone should not stop a scan. If
+endpoints, so read this first when a score stops moving. A range the node refuses for its size is halved, so a dense range alone should not stop a scan. A single block still too big for one agent's address is passed over for that address, with a log line naming the block and the agent, which then gets no credit from that block. If
 the same `(rpc -32005)` or similar repeats at one block, the node may word its refusal in a way `oracle/log-spans.js`
 does not know: add the wording there. Lowering `CHUNK` gets it past the range in the meantime.
 
