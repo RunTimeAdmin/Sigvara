@@ -157,9 +157,22 @@ contract DeployScriptGuardsTest is Test {
         h.checkPeriods(7 days, 21 days, 1 hours - 1);
     }
 
+    /// The unbonding floor (1 day) sits under the challenge floor (3 days), and the unbonding period must be
+    /// the longer, so on mainnet the least unbonding period accepted is the challenge floor plus a second.
     function test_mainnet_acceptsTheFloorsThemselves() public {
         vm.chainId(5042);
-        h.checkPeriods(3 days, 1 days, 1 hours);
+        h.checkPeriods(3 days, 3 days + 1, 1 hours);
+    }
+
+    /// Staking's setters refuse an unbonding period that is not longer than the challenge period; its
+    /// initializers do not, so the script holds a mainnet deployment to the setters' rule.
+    function test_mainnet_refusesUnbondingThatIsNotLongerThanTheChallenge() public {
+        vm.chainId(5042);
+        vm.expectRevert(abi.encodeWithSelector(Deploy.UnbondingNotAfterChallenge.selector, 7 days, 7 days));
+        h.checkPeriods(7 days, 7 days, 6 hours);
+        vm.expectRevert(abi.encodeWithSelector(Deploy.UnbondingNotAfterChallenge.selector, 3 days, 10 days));
+        h.checkPeriods(10 days, 3 days, 6 hours);
+        h.checkPeriods(7 days, 7 days + 1, 6 hours);
     }
 
     function test_testnet_stillAcceptsShortPeriods() public {

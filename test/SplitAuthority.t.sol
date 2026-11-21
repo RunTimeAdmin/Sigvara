@@ -666,6 +666,17 @@ contract SplitAuthorityTest is Test {
             ));
         }
 
+        // 1b. Over seven days, up to 48 hours typed in milliseconds. After the renounce nothing could shorten it
+        //     sooner than the delay itself, so it is refused before. Seven days is still accepted.
+        uint256[2] memory tooLong = [uint256(7 days + 1), 48 hours * 1000];
+        for (uint256 i = 0; i < tooLong.length; i++) {
+            TimelockController t = _timelock(address(safe), tooLong[i], address(0), true);
+            _grantUpgrader(address(t));
+            _renounceIsRefused(s, address(safe), address(t), abi.encodeWithSelector(
+                SplitAuthority.TimelockDelayTooLong.selector, address(t), tooLong[i], 7 days
+            ));
+        }
+
         // 2. The Safe cannot propose to it.
         TimelockController other = _timelock(makeAddr("not the safe"), 48 hours, address(0), true);
         _grantUpgrader(address(other));

@@ -150,6 +150,10 @@ contract SplitAuthority is Script {
     /// The delay phase 2 deploys with unless told otherwise, and the least phase 5 accepts: docs/adr/0005
     /// promises 48 hours of notice, and scripts/check-mainnet.sh compares the live timelock with it.
     uint256 internal constant DEFAULT_MIN_DELAY = 48 hours;
+    /// The most phase 5 accepts. After the renounce, every upgrade waits this long, and so does the `updateDelay`
+    /// that would shorten it, so a delay typed in the wrong unit (48 hours in milliseconds is about five and a
+    /// half years) must stop the renounce rather than outlive it.
+    uint256 internal constant MAX_MIN_DELAY = 7 days;
     /// The Safe threshold below which one owner key acts alone. A Safe can change its own threshold later, so
     /// this is the launch policy (docs/launch-checklist.md) and not a point of no return.
     uint256 internal constant MIN_SAFE_THRESHOLD = 2;
@@ -244,6 +248,7 @@ contract SplitAuthority is Script {
     error TimelockCannotBeProposedTo(address timelock, address safe);
     error TimelockCannotBeCancelledBy(address timelock, address safe);
     error TimelockDelayTooShort(address timelock, uint256 delay, uint256 minimum);
+    error TimelockDelayTooLong(address timelock, uint256 delay, uint256 maximum);
     error TimelockExecutionNotOpen(address timelock);
     error TimelockHasOutsideAdmin(address timelock, address admin);
     error DeployerCanActAlone(address safe);
@@ -740,6 +745,7 @@ contract SplitAuthority is Script {
         address timelock = address(tl);
         uint256 delay = tl.getMinDelay();
         if (delay < DEFAULT_MIN_DELAY) revert TimelockDelayTooShort(timelock, delay, DEFAULT_MIN_DELAY);
+        if (delay > MAX_MIN_DELAY) revert TimelockDelayTooLong(timelock, delay, MAX_MIN_DELAY);
         if (!tl.hasRole(tl.PROPOSER_ROLE(), safe)) revert TimelockCannotBeProposedTo(timelock, safe);
         if (!tl.hasRole(tl.CANCELLER_ROLE(), safe)) revert TimelockCannotBeCancelledBy(timelock, safe);
         // A role granted to address(0) is open to everyone, which is how this timelock spells "anyone may execute".
