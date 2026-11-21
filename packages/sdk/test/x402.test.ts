@@ -127,6 +127,19 @@ describe('sigvaraX402Fetch', () => {
     expect(err.refused).toEqual([]);
   });
 
+  it('refuses a header it cannot read even beside a body it can, as a forgiving decoder could read the header', async () => {
+    // One character outside the base64 alphabet: atob refuses it, while Buffer.from(header, 'base64') skips it and
+    // reads BAD as the payee.
+    const clean = encode({ x402Version: 2, accepts: [offer(BAD)] });
+    const rawHeader = `${clean.slice(0, 8)}.${clean.slice(8)}`;
+    expect(JSON.parse(Buffer.from(rawHeader, 'base64').toString()).accepts[0].payTo).toBe(BAD);
+    const res = required({ rawHeader, body: { accepts: [offer(GOOD)] } });
+    await expect(guarded(res, trustOnly(GOOD))).rejects.toBeInstanceOf(X402SellerRefused);
+    // A header that reads but names no offer is refused the same way.
+    const empty = required({ header: { x402Version: 2 }, body: { accepts: [offer(GOOD)] } });
+    await expect(guarded(empty, trustOnly(GOOD))).rejects.toBeInstanceOf(X402SellerRefused);
+  });
+
   it('rejects when the chain cannot be read, and no client gets the 402', async () => {
     const trust = { check: vi.fn(async (): Promise<TrustVerdict> => { throw new Error('could not read the chain'); }) };
     await expect(guarded(required({ body: { accepts: [offer(GOOD)] } }), trust)).rejects.toThrow('could not read the chain');

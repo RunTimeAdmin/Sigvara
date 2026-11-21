@@ -193,8 +193,8 @@ describe('verifyPaymentOutcome', () => {
     await expect(run({ ...outcomeOf(c), payer: 'nobody' })).rejects.toThrow(TypeError);
     await expect(run({ ...outcomeOf(c), signature: 'ab' })).rejects.toThrow(/signature/);
     await expect(run({ ...outcomeOf(c), signature: '0x' })).rejects.toThrow(/signature/);
-    // The oracle refuses a signature over 4096 bytes before asking anything, so this does too.
-    await expect(run({ ...outcomeOf(c), signature: `0x${'ab'.repeat(4097)}` })).rejects.toThrow(/at most 4096/);
+    // The oracle refuses a signature over 1024 bytes before asking anything, so this does too.
+    await expect(run({ ...outcomeOf(c), signature: `0x${'ab'.repeat(1025)}` })).rejects.toThrow(/at most 1024/);
     await expect(run(undefined)).rejects.toThrow(TypeError);
   });
 });

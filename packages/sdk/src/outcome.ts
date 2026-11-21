@@ -48,8 +48,9 @@ const ERC1271 = new ethers.Interface(['function isValidSignature(bytes32 hash, b
 // secp256k1n / 2: OpenZeppelin refuses a signature with a higher s.
 const HALF_ORDER = BigInt('0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0');
 const BYTES32 = /^0x[0-9a-fA-F]{64}$/;
-// The longest signature an oracle takes. An ERC-1271 one can be longer than 65 bytes (a multisig's), not unboundedly.
-const MAX_SIGNATURE_BYTES = 4096;
+// The longest signature an oracle takes (oracle/payer-outcome.js, 1,024 since 15 November 2026). An ERC-1271 one can be
+// longer than 65 bytes (a multisig's), not unboundedly. A longer one passed here would be refused by every oracle.
+const MAX_SIGNATURE_BYTES = 1024;
 
 /** Which deployment an outcome is signed for: the chain the payment settled on, and its SigvaraReputation proxy. */
 export interface PaymentOutcomeDeployment {
@@ -222,7 +223,7 @@ function accountRefused(err: unknown): boolean {
  * lean on its edges, and the oracle differs the same way: an eth_call is not a static call, so an
  * account that writes storage while answering is accepted here and refused on chain; the call is
  * capped at 2,000,000 gas; its `bytes` argument is padded to a whole word, where OpenZeppelin sends
- * it unpadded; and an empty signature, or one over 4096 bytes, is refused before the account is
+ * it unpadded; and an empty signature, or one over 1024 bytes, is refused before the account is
  * asked (a Safe can approve a message on chain and take an empty signature for it).
  *
  * @throws TypeError when the outcome is not shaped as one or no provider is given, and Error when
