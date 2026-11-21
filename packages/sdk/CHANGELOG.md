@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.0.0-alpha.23
+
+### Fixed: the x402 guard checked only the body when it could not read the header
+
+`x402OffersFrom` skipped a `PAYMENT-REQUIRED` header it could not decode and returned the body's offers alone, so
+`sigvaraX402Fetch` checked only the payees in the body. An x402 v2 client acts on the header, and one whose base64
+decoder is more forgiving than `atob` (Node's `Buffer.from` skips a character outside the alphabet) could read payees
+from it that were never checked. A header that is there but does not decode, or decodes to no offer, now makes
+`x402OffersFrom` return null, and the guard refuses the 402.
+
+### Fixed: `verifyPaymentOutcome` took signatures every oracle refuses
+
+It allowed a signature of up to 4,096 bytes, while the oracles have refused one over 1,024 bytes since 15 November.
+It now refuses one over 1,024 bytes before it asks the account, so an outcome it accepts is one the oracles take.
+
+### Fixed: a DID with a bad checksum threw out of `SigvaraGate.admit`
+
+Such a DID matches the payload's text but cannot be hashed, and `verifySignature` threw on it, so a server behind the
+gate could answer the request with a 500. `verifySignature` now answers false for it before any read, as it does for
+a malformed signature. A failed read of the chain still throws, as documented.
+
 ## 1.0.0-alpha.22
 
 ### Fixed: a refused 402 kept its seller's connection open
