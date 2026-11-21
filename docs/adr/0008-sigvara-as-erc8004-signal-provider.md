@@ -94,8 +94,11 @@ operator wallet.
   owner. The spec asks an agent that gives feedback to use its `agentWallet` as the client
   address, and a consumer can then find the trusted address from the registration alone:
   `getAgentWallet(897764)`.
-- **Not the owner of what it rates.** It owns no ERC-8004 agent and is approved for none, so the
-  spec's self-rating rule never applies. The publisher skips Sigvara's own registration.
+- **Not the owner of what it rates.** It owns no ERC-8004 agent and approves itself for none. An
+  agent's owner can still approve the publisher's address without asking it, and the spec's
+  self-rating rule then refuses its feedback for that agent: the publisher skips that agent and
+  goes on to the rest (`refusedForThisAgent` in `oracle/publisher.js`). It also skips Sigvara's own
+  registration.
 - **Custody.** The key holds only gas, and it is not on the publisher's host. The publisher asks
   an isolated remote signer on a separate host to sign each transaction (backed by a KMS or HSM on mainnet; on testnet `oracle/signer.js` with an encrypted keystore, decision 4),
   so a compromised publisher host can ask for signatures while it is compromised but cannot take

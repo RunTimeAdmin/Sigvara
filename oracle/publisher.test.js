@@ -70,6 +70,11 @@ function setup({ mode = 'shadow', agentWallet = PUBLISHER } = {}) {
       send: async (kind, agentId, args) => {
         w.sends.push({ kind, agentId: String(agentId), args });
         if (w.failNext === kind) { w.failNext = null; throw new Error(`${kind} did not confirm`); }
+        if (w.refuses?.has(String(agentId))) {
+          // As provider.estimateGas reports the registry's refusal: a CALL_EXCEPTION carrying Error(string).
+          const data = new ethers.Interface(['function Error(string)']).encodeFunctionData('Error', ['Self-feedback not allowed']);
+          throw Object.assign(new Error('execution reverted: "Self-feedback not allowed"'), { code: 'CALL_EXCEPTION', data });
+        }
         const list = (w.feedback[agentId] ??= []);
         const entry = { value: BigInt(args[1]), valueDecimals: 0n, tag1: args[3], tag2: args[4], isRevoked: false };
         if (kind === 'post' && w.lateNext) {
@@ -607,6 +612,23 @@ test('a failed send stops the run, before the next agent\'s revoke goes out', as
   await publisher.runOnce();
   assert.deepEqual(kinds(w), ['post']);
   assert.ok(state().pending[did(1)] && state().pending[did(2)] && state().pending[did(3)]);
+});
+
+test("the registry refusing one 8004 agent skips that agent, and the run goes on to the others", async () => {
+  // Agent 7's owner approved the publisher, so EIP-8004 refuses the publisher's feedback for it, every run.
+  const { w, publisher, state } = setup({ mode: 'live' });
+  addAgents(w);
+  w.refuses = new Set(['7']);
+  await publisher.runOnce();
+  assert.deepEqual(w.sends.map((s) => `${s.kind} ${s.agentId}`), ['post 7', 'post 8', 'post 9']);
+  assert.ok(state().pending[did(1)], 'the refused agent is tried again next run');
+  assert.ok(!state().pending[did(2)] && !state().pending[did(3)], 'the others are published');
+  // A refusal with no reason is how Arc's node shows a rate limit: that still stops the run.
+  const second = setup({ mode: 'live' });
+  addAgents(second.w);
+  second.deps.signer.send = async () => { throw Object.assign(new Error('missing revert data'), { code: 'CALL_EXCEPTION', data: null }); };
+  await second.publisher.runOnce();
+  assert.ok(second.state().pending[did(2)], 'stopped at the first agent');
 });
 
 test('a balance that falls below the floor mid-run stops it', async () => {

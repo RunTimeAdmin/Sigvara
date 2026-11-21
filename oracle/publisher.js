@@ -171,6 +171,11 @@ function createPublisher({ cfg, chain, scanner, reads, signer, state, log = cons
 
     let txs = 0;
     const sendFailed = (err) => Object.assign(err, { sendFailed: true });
+    // The registry refusing this one 8004 agent: the estimate reverted with a reason. EIP-8004 refuses feedback from an
+    // address the agent's owner approved, and an owner can approve the publisher without asking it. Unlike a balance,
+    // fee, signer or node failure, the next agent's send would not fail the same way, so it does not stop the run.
+    // A revert with no data ("missing revert data") is how Arc's node shows a rate limit, so it is not one of these.
+    const refusedForThisAgent = (err) => err?.code === 'CALL_EXCEPTION' && /^0x[0-9a-f]{8}/i.test(String(err.data ?? ''));
     // Sends one agent's revokes and post, or, when not sending, records them. Every transaction
     // counts against the per-run cap and is preceded by a balance check. Returns false when the
     // cap would be passed, and nothing is sent for that agent.
@@ -188,7 +193,13 @@ function createPublisher({ cfg, chain, scanner, reads, signer, state, log = cons
       const send = async (kind, args) => {
         if (await reads.balance() < cfg.minBalance) throw sendFailed(new Error('the publisher\'s balance fell below the floor'));
         txs += 1;
-        try { return await signer.send(kind, agentId, args); } catch (err) { throw sendFailed(err); }
+        try {
+          return await signer.send(kind, agentId, args);
+        } catch (err) {
+          // Refused at the estimate, so nothing was sent, and it takes nothing from the run's cap.
+          if (refusedForThisAgent(err)) { txs -= 1; throw err; }
+          throw sendFailed(err);
+        }
       };
       for (const index of plan.revoke) {
         const tx = await send('revoke', [agentId, index]);
@@ -272,7 +283,8 @@ function createPublisher({ cfg, chain, scanner, reads, signer, state, log = cons
         done();
       } catch (err) {
         // Left pending, and tried again next run. A failed send stops the run: the next agent's
-        // would most likely fail the same way, after its revoke had already gone out.
+        // would most likely fail the same way, after its revoke had already gone out. A refusal
+        // for this agent alone (refusedForThisAgent) goes on to the next.
         log(`[publisher] ${didHash.slice(0, 10)}… not published this run: ${err.message}`);
         if (err.sendFailed) break;
       }
