@@ -34,7 +34,7 @@ node --test
 
 ```bash
 # From the repo root
-docker compose -f docker-compose.oracle.yml up -d
+docker compose --project-directory . -f deploy/docker-compose.oracle.yml up -d
 ```
 
 The compose file mounts `oracle_state` volume to `/data` for persistence. The HTTP port is published as `127.0.0.1:3030` (localhost only), so nothing reaches the service without a reverse proxy in front of it.
@@ -902,7 +902,7 @@ theoretical.
 CHECKER_URL=https://checker.example RPC_URL=https://rpc.drpc.testnet.arc.io REPUTATION_ADDRESS=0x6603C96275e85F724Cdf74666b399365e4cA29ed node watcher.js
 ```
 
-Or `docker compose -f docker-compose.watcher.yml up -d --build` from the repo root.
+Or `docker compose --project-directory . -f deploy/docker-compose.watcher.yml up -d --build` from the repo root.
 
 **It re-reads the chain before alerting.** The checker records what it saw when it saw
 it. By the time the watcher polls, the disputed proposal may have been finalized,
@@ -1294,7 +1294,7 @@ The oracle persists the following to `ORACLE_STATE_PATH`:
 
 Writes are atomic (temp file + rename, with an `fsync` before the rename so a crash cannot leave an atomically-renamed empty file). `/health` reports both whether the path is writable and whether the last write actually succeeded, and returns 503 on either. The two are not the same check: the first writes a few bytes to a test file, which passes while a real state file fails for want of space.
 
-The file is written in pieces of about 1 MB (`state-serialize.js`) instead of being built as one string. The bytes are identical to `JSON.stringify` of the same state, so nothing that reads the file changes. What changes is memory: building the whole text and then a second copy for the write meant a save needed many times the size of the file. Measured on Node 20 in an otherwise idle process, the peak of one save went from 449 MB to 189 MB with 100,000 payments (a 38 MB file), from 700 MB to 280 MB with 200,000, and from 1,628 MB to 395 MB with 400,000. `docker-compose.mainnet.yml` limits the container to 768 MB, which the old save would have passed at roughly 225,000 payments. Save time is unchanged at 100,000 payments and 12 to 26 percent lower beyond that. Size the container for the peak of a save, not the size of the file.
+The file is written in pieces of about 1 MB (`state-serialize.js`) instead of being built as one string. The bytes are identical to `JSON.stringify` of the same state, so nothing that reads the file changes. What changes is memory: building the whole text and then a second copy for the write meant a save needed many times the size of the file. Measured on Node 20 in an otherwise idle process, the peak of one save went from 449 MB to 189 MB with 100,000 payments (a 38 MB file), from 700 MB to 280 MB with 200,000, and from 1,628 MB to 395 MB with 400,000. `deploy/docker-compose.mainnet.yml` limits the container to 768 MB, which the old save would have passed at roughly 225,000 payments. Save time is unchanged at 100,000 payments and 12 to 26 percent lower beyond that. Size the container for the peak of a save, not the size of the file.
 
 Payment events are immutable once stored. `store.js` freezes each one when it is created, replaced or loaded, and `merkle.js` relies on that to cache each leaf and each agent's root by identity: an epoch in which an agent's evidence has not changed reuses its root instead of hashing every payment again. Code that changed a stored event in place would now throw. Replace the event with a new one instead, as `setPaymentOutcome` does.
 

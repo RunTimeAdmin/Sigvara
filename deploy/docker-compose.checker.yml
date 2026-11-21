@@ -5,7 +5,7 @@
 # sharing a host and a chain view with what it checks mostly proves the code is
 # deterministic. See "Running a second operator" in oracle/README.md.
 #
-#   docker compose -f docker-compose.checker.yml up -d --build
+#   docker compose --project-directory . -f deploy/docker-compose.checker.yml up -d --build   (from the repo root)
 #
 # Its .env must set ORACLE_MODE=checker and its own ORACLE_PRIVATE_KEY. The wallet
 # needs its own bond on SigvaraOracleBond and its own ORACLE_ROLE; it is a distinct

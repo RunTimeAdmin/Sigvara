@@ -253,7 +253,7 @@ with one key share a nonce and would serialise against each other, and an operat
 where both members are the same address is a set of one wearing two hats.
 
 Record the address. The private key goes straight into the checker's environment file (step 6: `.env` for
-`docker-compose.checker.vps.yml`, `oracle/.env.checker` for `docker-compose.checker.yml`) and
+`deploy/docker-compose.checker.vps.yml`, `oracle/.env.checker` for `deploy/docker-compose.checker.yml`) and
 nowhere else.
 
 ## 2. Fund it for gas
@@ -401,7 +401,7 @@ Set `PAYER_OUTCOMES`, `PAYER_OUTCOMES_PUBLISH` and `PAYER_OUTCOMES_PEERS` as the
 **There are two compose files and they are not interchangeable.** Picking the wrong one
 is the most likely way to waste an afternoon here.
 
-`docker-compose.checker.vps.yml` is the one you almost certainly want. It has no build
+`deploy/docker-compose.checker.vps.yml` is the one you almost certainly want. It has no build
 stage; it fetches the one commit named by `SIGVARA_COMMIT` in `.env` (the full 40-character
 hash of a commit on `main` that you have read; use the primary's) from GitHub inside the
 container on every start, the same way the primary is deployed. Nothing on the host to check
@@ -413,7 +413,7 @@ cd /docker/sigvara-checker && chmod 600 .env && docker compose -f docker-compose
 docker compose -f docker-compose.checker.vps.yml logs --tail=30 checker
 ```
 
-`docker-compose.checker.yml` builds from `./oracle` and needs a repository checkout on the
+`deploy/docker-compose.checker.yml` builds from `./oracle` and needs a repository checkout on the
 host. Use it only if you actually have one.
 
 `up -d` on first run, after any `.env` change, and to deploy: change `SIGVARA_COMMIT`, then
@@ -760,7 +760,7 @@ would pass in both cases and test nothing, which is how a check quietly stops ch
 ```bash
 mkdir -p /docker/sigvara-watcher && cd /docker/sigvara-watcher
 # <COMMIT> is the SIGVARA_COMMIT you deploy, not "main". Read both files before you use them.
-curl -sO https://raw.githubusercontent.com/RunTimeAdmin/Sigvara/<COMMIT>/docker-compose.watcher.vps.yml
+curl -sO https://raw.githubusercontent.com/RunTimeAdmin/Sigvara/<COMMIT>/deploy/docker-compose.watcher.vps.yml
 curl -s -o .env https://raw.githubusercontent.com/RunTimeAdmin/Sigvara/<COMMIT>/oracle/.env.watcher.example
 chmod 600 .env
 sed -i 's|^CHECKER_URL=.*|CHECKER_URL=https://checker.<domain>|' .env

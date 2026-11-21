@@ -2,7 +2,7 @@
 
 The event index holds every log the four Sigvara contracts have emitted on the Arc testnet (identity, reputation, staking and the oracle bond) since they were deployed, and serves them over HTTP. The explorer pages on sigvara.xyz (agents, operators, slashes and score epochs) and the score report on the status page read their history from it.
 
-Code: `oracle/indexer.js` (the service) and `oracle/event-index.js` (what it accepts and answers), tested by `oracle/indexer.test.js` and `oracle/event-index.test.js`. Deploy: `docker-compose.indexer.vps.yml`.
+Code: `oracle/indexer.js` (the service) and `oracle/event-index.js` (what it accepts and answers), tested by `oracle/indexer.test.js` and `oracle/event-index.test.js`. Deploy: `deploy/docker-compose.indexer.vps.yml`.
 
 ## Why it exists
 
@@ -78,7 +78,7 @@ The live one runs on `archipelago-standby` since 3 November 2026; where everythi
 do when its `/health` fails, is [operations-runbook.md, section 4](operations-runbook.md#4-event-index).
 To run one, on a host with a TLS proxy, in `/docker/sigvara-index`:
 
-1. Copy `docker-compose.indexer.vps.yml` there. Put `SIGVARA_COMMIT=<a commit on main>` in `.env`.
+1. Copy `deploy/docker-compose.indexer.vps.yml` there. Put `SIGVARA_COMMIT=<a commit on main>` in `.env`.
 2. Put the RPC URL in `./rpc_url`, one line, mode 600. For Alchemy that is `https://arc-testnet.g.alchemy.com/v2/<key>`, from an Alchemy app with Arc testnet enabled. It reaches the container as a compose secret, never as an environment variable, and the index never logs or serves it (`readRpcUrl`, `redact`).
 3. Run `docker compose -f docker-compose.indexer.vps.yml up -d`. The log says `[deploy] running <hash>`, then `[indexer] caught up: <n> logs through block <n>` within a minute or two.
 4. Point `index.sigvara.xyz` at the host and proxy it to `127.0.0.1:3040`. With Caddy:

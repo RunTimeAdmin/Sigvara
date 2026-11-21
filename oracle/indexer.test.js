@@ -250,7 +250,7 @@ test('indexer: refuses an RPC on another chain, and a bad URL without printing i
 // checkout's directory, where the copied files are not, and the container restarted in a loop on
 // MODULE_NOT_FOUND: the tests above run indexer.js directly and never saw it.
 test('docker-compose.indexer.vps.yml copies every file the indexer loads, and starts it where they are', () => {
-  const yml = fs.readFileSync(path.join(__dirname, '..', 'docker-compose.indexer.vps.yml'), 'utf8');
+  const yml = fs.readFileSync(path.join(__dirname, '..', 'deploy', 'docker-compose.indexer.vps.yml'), 'utf8');
   const cp = yml.match(/cp ((?:\/src\/oracle\/[\w.-]+\.js )+)\/app\//);
   assert.ok(cp, 'the compose file copies the indexer into /app');
   const copied = new Set(cp[1].trim().split(/\s+/).map((p) => path.basename(p)));
@@ -489,6 +489,6 @@ test('indexer: refuses a TRUSTED_PROXIES it cannot read', async () => {
 });
 
 test('docker-compose.indexer.vps.yml passes TRUSTED_PROXIES through', () => {
-  const yml = fs.readFileSync(path.join(__dirname, '..', 'docker-compose.indexer.vps.yml'), 'utf8');
+  const yml = fs.readFileSync(path.join(__dirname, '..', 'deploy', 'docker-compose.indexer.vps.yml'), 'utf8');
   assert.match(yml, /^\s*TRUSTED_PROXIES: \$\{TRUSTED_PROXIES:-\}$/m);
 });

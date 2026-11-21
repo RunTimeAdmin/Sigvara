@@ -391,7 +391,7 @@ limited to ten history requests an hour per visitor.
 |---|---|
 | Public URL | `https://index.sigvara.xyz` (`/events`, `/health`) |
 | Host and directory | `archipelago-standby`, `/docker/sigvara-index` |
-| Files there | `docker-compose.yml` (the repository's `docker-compose.indexer.vps.yml`, unchanged), `docker-compose.override.yml` (joins the `sigvara-web` network), `.env` (`SIGVARA_COMMIT` and `TRUSTED_PROXIES`, the `sigvara-web` subnet), `rpc_url` (the RPC URL with its key, root, mode 600) |
+| Files there | `docker-compose.yml` (the repository's `deploy/docker-compose.indexer.vps.yml`, unchanged), `docker-compose.override.yml` (joins the `sigvara-web` network), `.env` (`SIGVARA_COMMIT` and `TRUSTED_PROXIES`, the `sigvara-web` subnet), `rpc_url` (the RPC URL with its key, root, mode 600) |
 | Container | `sigvara-index`, listening on `127.0.0.1:3040` |
 | State volume | `sigvara-index_index_data` (the index; a restart resumes from it) |
 | Proxy | the `index.sigvara.xyz` block in `/opt/countersig/Caddyfile`, which passes only `GET`, `HEAD` and `OPTIONS` on `/events` and `/health` to `sigvara-index:3040` |
@@ -403,7 +403,7 @@ steady state: it stays that far behind the finalized head), `logs`, `maxLogs`, `
 with any URL removed, and `commit`. On the box, `docker logs sigvara-index` shows `[deploy] running <commit>` and
 `[indexer] caught up`.
 
-**Redeploying.** Copy `docker-compose.indexer.vps.yml` from the commit being deployed over
+**Redeploying.** Copy `deploy/docker-compose.indexer.vps.yml` from the commit being deployed over
 `docker-compose.yml`, checking its sha256 against git; leave the override in place. Set
 `SIGVARA_COMMIT` in `.env` to that commit and run `docker compose up -d`. A plain restart does not
 read `.env` again. Keep `TRUSTED_PROXIES` in `.env` at the `sigvara-web` subnet: without it, every
@@ -437,7 +437,7 @@ Sigvara's own registration (agent 897764). The design and David's decisions are 
 
 | | |
 |---|---|
-| Where | The primary's host, `/docker/sigvara-publisher`, from `docker-compose.publisher.vps.yml` and `oracle/.env.publisher.example`. One copy only, never on the checker. |
+| Where | The primary's host, `/docker/sigvara-publisher`, from `deploy/docker-compose.publisher.vps.yml` and `oracle/.env.publisher.example`. One copy only, never on the checker. |
 | Container | `sigvara-publisher` |
 | State volume | `sigvara-publisher_publisher_state` (`/data/publisher-state.json`: the score-event and link scan positions, what is pending, and what was posted to which 8004 agent). The positions can be rebuilt from the chain; the record of where each score went cannot, and without it a score left on an 8004 agent that is no longer linked is not revoked. Back it up with the oracle state (section 1). |
 | Key | None on this host. In live mode the policy signer (`oracle/signer.js`) on `packrai-vps` signs at `PUBLISH_SIGNER_URL`. On testnet its key is an encrypted keystore there (David, 3 November 2026); mainnet needs a KMS or HSM behind it |
@@ -451,7 +451,7 @@ below are done is `the registration's agentWallet is 0x18CB...4811, not the publ
 **Going live**, in this order. Each step is David's go.
 
 1. Set up the signer on `packrai-vps`, in `/docker/sigvara-signer`, from
-   `docker-compose.signer.vps.yml` and `oracle/.env.signer.example`:
+   `deploy/docker-compose.signer.vps.yml` and `oracle/.env.signer.example`:
    - Make `secrets/` with `umask 077`, owned by uid 10001 (the user the signer runs as; no account
      on the host has it, where uid 1000 is `ubuntu`) with mode 0700, and in it `password` and
      `hmac-secret` (each `openssl rand -hex 32`), owned by uid 10001 with mode 0400. The signer
@@ -652,7 +652,7 @@ a fortnight after the deadline anyone may let the slash lapse with `expireSlash`
 
 | | |
 |---|---|
-| Where | Two copies, on separate hosts. The primary on `archipelago-standby` and the backup on `packrai-vps`, each in `/docker/sigvara-keeper`, from `docker-compose.keeper.vps.yml` and `oracle/.env.keeper.example` |
+| Where | Two copies, on separate hosts. The primary on `archipelago-standby` and the backup on `packrai-vps`, each in `/docker/sigvara-keeper`, from `deploy/docker-compose.keeper.vps.yml` and `oracle/.env.keeper.example` |
 | Container | `sigvara-keeper` |
 | State volume | `sigvara-keeper_keeper_state` (`/data/keeper-state.json`: the scan position, the slashes open and what has been alerted). It can be rebuilt from the chain, starting at `KEEPER_FROM_BLOCK` |
 | Key | Its own on each host, in `.env`, mode 0600. It holds no role and only a little gas: `executeSlash` is open to anyone, so all it can lose is that gas |

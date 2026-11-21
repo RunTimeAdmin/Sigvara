@@ -397,7 +397,7 @@ test('a good run after the failure alert says the keeper is running again, once'
 // the file early in every run, so its age said nothing about a run finishing: a keeper whose every run
 // failed after the scan stayed healthy.
 test('the keeper healthcheck reads when a run last finished, not when the file was last written', () => {
-  const compose = fs.readFileSync(path.join(__dirname, '..', 'docker-compose.keeper.vps.yml'), 'utf8');
+  const compose = fs.readFileSync(path.join(__dirname, '..', 'deploy', 'docker-compose.keeper.vps.yml'), 'utf8');
   const script = JSON.parse(`"${compose.match(/\["CMD", "node", "-e", "(.+)"\]/)[1]}"`);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sigvara-keeper-health-'));
   try {

@@ -8,7 +8,7 @@
 # reads as "nothing to report". The whole point of the component is that silence means
 # something, so it has to be able to outlive what it monitors.
 #
-#   docker compose -f docker-compose.watcher.yml up -d --build
+#   docker compose --project-directory . -f deploy/docker-compose.watcher.yml up -d --build   (from the repo root)
 #
 # It holds no private key, mounts no state and signs nothing. Every action is a read or
 # a notification, so a compromised watcher can lie to you but cannot touch the protocol.

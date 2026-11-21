@@ -125,7 +125,7 @@ B's single fact per agent.
 
 - It does not make registrations free to keep. At about 800 bytes each, a few hundred thousand that never bond, on the
   order of 2,000 USDC of gas, would still fill the 768 MiB the mainnet compose file allows
-  (`docker-compose.mainnet.yml:47`). Keeping a compact record, or none, for an agent that never bonded is the next
+  (`deploy/docker-compose.mainnet.yml:47`). Keeping a compact record, or none, for an agent that never bonded is the next
   step. It is not part of this ADR.
 - It does not bound bonds reused across agents. An operator can bond an agent, suspend it, withdraw after the
   unbonding period and bond the next, and each stays in the scans. That costs the minimum stake for one unbonding
