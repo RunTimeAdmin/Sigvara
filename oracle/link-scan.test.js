@@ -70,3 +70,35 @@ test('a span refused in each node\'s own words is halved, on the scan and on wha
     answered.forEach(([from], i) => { if (i > 0) assert.equal(from, answered[i - 1][1] + 1, 'with no block left out'); });
   }
 });
+
+test('of the logs one 8004 agent emits in one block only the last is checked, so a burst costs one read', async () => {
+  // Block 100: fifty claims on 8004 agent 7 naming other agents, then the operator's for did(1), which is what
+  // agent 7 names at the block's end. Block 101: a claim, then a log that clears the key, so nothing from it holds.
+  const logs = [];
+  for (let i = 0; i < 50; i++) logs.push({ agentId: 7n, value: did(1000 + i), blockNumber: 100, logIndex: i });
+  logs.push({ agentId: 7n, value: did(1), blockNumber: 100, logIndex: 50 });
+  logs.push({ agentId: 7n, value: did(2), blockNumber: 101, logIndex: 0 });
+  logs.push({ agentId: 7n, value: '0x', blockNumber: 101, logIndex: 1 });
+  let infoReads = 0;
+  let state = null;
+  const scanner = createLinkScanner({
+    chain: {
+      readWithBackoff: (_label, fn) => fn(),
+      isTransientReadError: () => false,
+      getAgentInfo: async () => { infoReads += 1; return { operator: OPERATOR }; },
+    },
+    external: {
+      latestBlock: async () => 120,
+      readLinkLogs: async () => logs,
+      ownerAt: async () => OPERATOR,
+      // What agent 7 names as of each block's end: did(1) after block 100, nothing after block 101.
+      claimHolds: async (_agentId, _key, didHash, _operator, block) => block === 100 && didHash === did(1),
+    },
+    fromBlock: 90, chunkSize: 1000,
+    getState: () => state, setState: (s) => { state = s; }, persist: () => {},
+  });
+  assert.equal(await scanner.scan(), 1);
+  assert.equal(infoReads, 1, 'one read for the burst, and none for a block whose last log claims nothing');
+  assert.deepEqual(state.claims, { [did(1)]: [{ agentId: '7', block: 100, logIndex: 50 }] });
+  assert.deepEqual(state.cursor, { block: 121, logIndex: 0 });
+});

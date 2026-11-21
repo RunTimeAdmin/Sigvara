@@ -550,6 +550,24 @@ test('a link that moves to another 8004 agent waits for the daily refresh', asyn
   assert.deepEqual(w.sends.map((s) => `${s.kind} ${s.agentId}`), ['post 7', 'revoke 7', 'post 8']);
 });
 
+test('a link moved with a score update the same day comes down at once, and goes up on the new 8004 agent the next day', async () => {
+  const { w, publisher, state } = setup({ mode: 'live' });
+  await publisher.runOnce();
+  // Later the same UTC day the agent links a fresh 8004 agent, and a score update names it. The day limit
+  // holds for the Sigvara agent too, so moving the link does not buy a second post today.
+  w.head = 140;
+  w.links[did(1)] = '8';
+  w.spendable[did(1)] = 55;
+  w.events.push({ kind: 'updated', didHash: did(1), block: 130, logIndex: 0, txHash: null });
+  await publisher.runOnce();
+  assert.deepEqual(w.sends.map((s) => `${s.kind} ${s.agentId}`), ['post 7', 'revoke 7'], 'no post to 8 today');
+  assert.ok(state().pending[did(1)], 'kept for the next day');
+  nextDay(w, 160);
+  await publisher.runOnce();
+  assert.deepEqual(w.sends.map((s) => `${s.kind} ${s.agentId}`), ['post 7', 'revoke 7', 'post 8']);
+  assert.deepEqual(liveValues(w, '8'), [55n]);
+});
+
 test('a link found is saved before the run reads anything else', async () => {
   const { w, publisher, deps } = setup({ mode: 'live' });
   // A store that keeps copies, as the state file does, so a run that fails keeps only what it saved.
