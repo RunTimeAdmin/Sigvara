@@ -600,11 +600,11 @@ Everything below runs offline, with no deployed contracts, except three fork sui
 
 | Suite | Count | Command |
 |---|---|---|
-| Contracts: unit, fuzz, E2E, upgrade, deploy-script, handover and 22 invariants | 815 | `forge test` |
-| Oracle | 1559 | `cd oracle && node --test` |
-| SDK | 392 | `cd packages/sdk && npx vitest run` |
+| Contracts: unit, fuzz, E2E, upgrade, deploy-script, handover and 22 invariants | 816 | `forge test` |
+| Oracle | 1570 | `cd oracle && node --test` |
+| SDK | 394 | `cd packages/sdk && npx vitest run` |
 
-Counts are individual tests, so each of the 22 invariants counts once. The contracts were counted on 15 November 2026, the SDK on 15 November and the oracle on 16 November. Without a fork URL, 803 of the contract tests run and 12 skip. Run after `npm run build`, 383 of the SDK's 392 pass and 9 skip: the 8 integration tests, which need a live deployment, and one check that runs only in CI. Without a build, the 9 built-package tests skip too. Vitest strips types without checking them, so `npm run typecheck` in `packages/sdk` checks the tests against the SDK's types as well as the sources. [`scripts/mutation`](scripts/mutation/README.md) holds the harnesses that measure whether these tests would catch a deliberate break in the contracts or deploy scripts.
+Counts are individual tests, so each of the 22 invariants counts once. The oracle and SDK were counted on 21 November 2026, and the contracts on 15 November plus the one test #346 added. Without a fork URL, 804 of the contract tests run and 12 skip. Run after `npm run build`, 385 of the SDK's 394 pass and 9 skip: the 8 integration tests, which need a live deployment, and one check that runs only in CI. Without a build, the 9 built-package tests skip too. Vitest strips types without checking them, so `npm run typecheck` in `packages/sdk` checks the tests against the SDK's types as well as the sources. [`scripts/mutation`](scripts/mutation/README.md) holds the harnesses that measure whether these tests would catch a deliberate break in the contracts or deploy scripts.
 
 Merges to `main` carry `[skip ci]`, to save CI minutes, so the push to `main` does not run the suites again. A change to code runs them on its pull request and merges only once every job there has passed; a docs-only change is checked locally with `node scripts/check-docs.mjs`. Each is checked against the `main` its branch started from, so two changes merged close together can still break `main`. That happened once, on 11 November 2026, and the next merge fixed it. The rule that every job must pass dates from 14 November 2026: before it, #281, #282 and #288 merged with their oracle job failing, and #283 and #297 fixed the tests that failed. On 13 November the oracle and SDK suites were run on `main` at `eaccb91` and passed.
 
