@@ -81,8 +81,11 @@ function createLinkScanner({ chain, external, fromBlock, chunkSize, getState, se
    * push its operator's out of the list. Read as of the log's block, every reader decides the same.
    *
    * Anyone can also post such logs in bulk to slow the scan. With `known`, the set of registered
-   * didHashes, one naming any other agent costs no read; and the checkpoint moves after every log,
-   * so a scan cut short resumes where it stopped.
+   * didHashes, one naming any other agent costs no read. Of the logs one 8004 agent emits in one
+   * block only the last is checked, since a claim holds by what that agent names as of the block's
+   * end: the earlier ones could not hold, whatever they name, so a burst in one block costs one
+   * read and the links found are the same. The checkpoint moves after every log, so a scan cut
+   * short resumes where it stopped.
    */
   async function scan({ known = null, upTo = Infinity, onClaim = null } = {}) {
     const state = getState() ?? { cursor: null, claims: {} };
@@ -93,9 +96,16 @@ function createLinkScanner({ chain, external, fromBlock, chunkSize, getState, se
     let found = 0;
     try {
       await eachLinkSpan(state.cursor.block, to, async (logs, end) => {
+        // A span holds whole blocks, so each agent's last log in a block is among these.
+        const lastInBlock = new Map();
+        for (const log of logs) {
+          const key = `${log.agentId} ${log.blockNumber}`;
+          if (!(lastInBlock.get(key)?.logIndex > log.logIndex)) lastInBlock.set(key, log);
+        }
         for (const log of logs) {
           if (linkClaims.isBefore(log, state.cursor)) continue;
-          const claim = linkClaims.claimFromLog(log);
+          const last = lastInBlock.get(`${log.agentId} ${log.blockNumber}`) === log;
+          const claim = last ? linkClaims.claimFromLog(log) : null;
           if (claim && (!known || known.has(claim.didHash)) && await claimMadeByOperator(claim, cache)) {
             linkClaims.addClaim(state.claims, claim);
             found++;

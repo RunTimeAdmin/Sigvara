@@ -70,7 +70,7 @@ const RUN = Object.freeze({ SHADOW: 'shadow', LIVE: 'live', BLOCKED: 'blocked' }
 function createPublisher({ cfg, chain, scanner, reads, signer, state, log = console.log }) {
   const blank = () => ({
     mode: cfg.mode, eventCursor: null, pending: {}, tracked: [], lastRefreshDay: null,
-    posted: {}, postedBy: {}, shadowPosted: {}, shadowPostedBy: {}, shadow: [],
+    posted: {}, postedBy: {}, postDay: {}, shadowPosted: {}, shadowPostedBy: {}, shadowPostDay: {}, shadow: [],
   });
   // Folds the reputation events since the last run into `pending`, newest per agent.
   async function foldEvents(s, head) {
@@ -153,6 +153,9 @@ function createPublisher({ cfg, chain, scanner, reads, signer, state, log = cons
     const recording = run !== RUN.BLOCKED;
     const posted = simulating ? s.shadowPosted : s.posted;
     const postedBy = simulating ? s.shadowPostedBy : s.postedBy;
+    // The UTC day each Sigvara agent was last posted, wherever it went. `posted` keeps the day by 8004 agent, and a
+    // link moved to a fresh 8004 agent has none there, so the daily limit is checked against both.
+    const postDay = simulating ? s.shadowPostDay : s.postDay;
 
     // Every link up to the read block must be known, or an agent could be posted to the wrong id.
     if (!scanner.covers(head)) {
@@ -248,7 +251,10 @@ function createPublisher({ cfg, chain, scanner, reads, signer, state, log = cons
             if (plan.revoke.length || plan.post) {
               if (!(await apply(prev, plan, entry, postArgsFor(prev, 0, fileFor(prev, didHash, 0, earned, why))))) break;
             }
-            if (recording && plan.post) posted[prev] = { didHash, day: today, value: 0, block: head };
+            if (recording && plan.post) {
+              posted[prev] = { didHash, day: today, value: 0, block: head };
+              postDay[didHash] = today;
+            }
           }
           if (recording) delete postedBy[didHash];
         }
@@ -257,7 +263,10 @@ function createPublisher({ cfg, chain, scanner, reads, signer, state, log = cons
         if (agentId === undefined) { skip('not linked on chain'); continue; }
         if (agentId === sigvaraAgent) { skip("Sigvara's own registration"); continue; }
         if (allowed && !allowed.has(agentId)) { skip('not on PUBLISH_ALLOW_AGENT_IDS'); continue; }
-        if (!policy.mayPostNow(posted[agentId]?.day, readAt.time, zeroed)) continue; // tomorrow
+        // Once a day for the 8004 agent and once a day for this Sigvara agent: a link moved with a score update takes the
+        // score down from the old 8004 agent above at once, but does not buy a second post the same day.
+        if (!policy.mayPostNow(posted[agentId]?.day, readAt.time, zeroed)
+          || !policy.mayPostNow(postDay[didHash], readAt.time, zeroed)) continue; // tomorrow
 
         const spendable = Number(await reads.spendable(didHash, head));
         const earned = Number(await reads.earned(didHash, head));
@@ -279,6 +288,7 @@ function createPublisher({ cfg, chain, scanner, reads, signer, state, log = cons
         if (recording && plan.post) {
           posted[agentId] = { didHash, day: today, value: spendable, block: head };
           postedBy[didHash] = agentId;
+          postDay[didHash] = today;
         }
         done();
       } catch (err) {

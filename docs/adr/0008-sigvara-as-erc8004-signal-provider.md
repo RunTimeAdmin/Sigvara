@@ -126,7 +126,7 @@ operator wallet.
   is a reason to look, and so is an agent's first link found on chain. The spendable score also changes with time alone, as a rise is released
   over days, and no event announces that, so once per UTC day the publisher reads the spendable
   score of every linked agent again. If it has not moved since the last post, nothing is sent. A
-  backlog collapses to the newest reading per agent.
+  backlog collapses to the newest reading per agent. The limit holds for the Sigvara agent as well as the 8004 agent: when an agent's link has moved, its score comes down from the old 8004 agent when the agent is next read, and goes up on the new one no sooner than the UTC day after its last post.
 
 ### Gas and failures
 
