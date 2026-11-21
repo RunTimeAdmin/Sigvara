@@ -13,8 +13,8 @@
 > [launch checklist](launch-checklist.md#where-this-stands). The mainnet-readiness work of
 > 22 October (split upgrade and admin authority, the guardian pause, launch floors and ceilings,
 > reader freshness) is recorded in [ADR 0005](adr/0005-governance-and-emergency-powers.md), the
-> [launch checklist](launch-checklist.md), the README's
-> [access control summary](../README.md#access-control-summary) and, for the reader,
+> [launch checklist](launch-checklist.md), the overview's
+> [access control summary](overview.md#access-control-summary) and, for the reader,
 > the [integration guide](integration.md), not here.
 >
 > The body below is left as written on 17 September and is **not** a current statement

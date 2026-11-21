@@ -53,7 +53,7 @@ is what makes the resolution clean.
 > transfer, the stake view, the pause guardian and timelocked role grants),
 > `script/Deploy.s.sol` deploys it for mainnet, and every agent is still keyed by its
 > `didHash`. Read "legacy" above as the direction of travel, not the current state. The
-> README's contracts table describes what runs.
+> contracts table in [docs/overview.md](../overview.md#deployed-contracts-arc-testnet) describes what runs.
 
 - The read and write bridges to 8004 already exist: the oracle reads 8004
   feedback for `externalScore`, and CounterAudit publishes outcomes to the 8004

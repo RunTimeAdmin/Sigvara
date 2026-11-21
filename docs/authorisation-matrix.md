@@ -68,7 +68,7 @@ and an upgrade does not rewrite role administrators. On them `DEFAULT_ADMIN_ROLE
 above do not constrain the testnet. For a mainnet deployment, `scripts/check-mainnet.sh` reads the
 administrators of the staking-core, committee and slasher roles and fails unless each is
 `UPGRADER_ROLE`. Who holds each role today is in the
-README's [Access Control Summary](../README.md#access-control-summary).
+[Access Control Summary](overview.md#access-control-summary) of the protocol overview.
 
 ## SigvaraIdentity
 

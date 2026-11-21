@@ -13,7 +13,7 @@ Runtime dependencies are `ethers` v6 and `tweetnacl`. Node 18 or newer.
 Use 1.0.0-alpha.12 or later. On 1.0.0-alpha.9 and earlier an agent object carries its secret key in an
 ordinary property, so `JSON.stringify(agent)` or logging one includes it; never log or serialize an
 agent from those versions. If one was logged, serialized or sent to an error reporter, treat its key as
-exposed and rotate it ([Key Rotation](https://github.com/RunTimeAdmin/Sigvara#key-rotation)).
+exposed and rotate it ([Key Rotation](https://github.com/RunTimeAdmin/Sigvara/blob/main/docs/overview.md#key-rotation)).
 
 > **Upgrading from 1.0.0-alpha.11:** `agent.signChallenge` is removed. It signed whatever it was
 > handed, so a verifier could get an agent to sign a challenge naming a different verifier and
