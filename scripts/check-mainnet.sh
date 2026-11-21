@@ -19,6 +19,7 @@
 #              check_treasury, check_treasury_queue)
 #   SAFE       the admin Safe        (check_authority, check_timelock, check_treasury, check_safes, check_holders)
 #   TIMELOCK   the timelock          (check_authority, check_timelock, check_treasury, check_holders, check_timelock_queue)
+#   LOCK       the treasury SVR lock in docs/token.md    (check_treasury)
 # check_safes also reads SAFE_OWNERS, COMMITTEE_OWNERS and SAFE_THRESHOLD, which must be
 # copied from what the signers see on their own devices (see that function).
 # RPC defaults to the arc_mainnet alias in foundry.toml.
@@ -243,6 +244,9 @@ check_treasury() {
     echo "FAIL  the treasury is the upgrade timelock: payments would share its queue"; FAIL=1
   else echo "ok    the treasury is not the upgrade timelock"; fi
   timelock_policy $TREASURY treasury
+  # The lock pays everything it holds to its owner from 9 May 2027, and its ownership moves in one step, so
+  # whoever owns it decides where the treasury's SVR goes. docs/token.md says the treasury does.
+  expect "the SVR lock's owner is the treasury" "$TREASURY" "$(val "$LOCK" 'owner()(address)')"
   summary treasury
 }
 

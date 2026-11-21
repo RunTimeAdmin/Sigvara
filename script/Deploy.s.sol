@@ -103,6 +103,7 @@ contract Deploy is Script {
     error BondTokenInvalid(address token);
     error PeriodBelowFloor(string name, uint256 value, uint256 floor);
     error AboveCeiling(string name, uint256 value, uint256 ceiling);
+    error UnbondingNotAfterChallenge(uint256 unbondingPeriod, uint256 challengePeriod);
     error DefaultAmountOnMainnet(string name, uint256 value);
     error BelowMainnetTarget(string name, uint256 value, uint256 target);
     error GuardianNotSet();
@@ -268,6 +269,9 @@ contract Deploy is Script {
         if (scoreWindow > MAX_CHALLENGE_WINDOW) {
             revert AboveCeiling("SCORE_CHALLENGE_WINDOW", scoreWindow, MAX_CHALLENGE_WINDOW);
         }
+        // The order staking's setters keep (setChallengePeriod, setUnbondingPeriod) and its initializers do not:
+        // a withdrawal queued after a dropped slash must still be queued when the committee may file again.
+        if (unbondPeriod <= period) revert UnbondingNotAfterChallenge(unbondPeriod, period);
     }
 
     /// @dev Mainnet only, like the periods: the contract refuses a rate above its ceiling itself, and
