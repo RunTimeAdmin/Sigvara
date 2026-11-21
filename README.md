@@ -29,7 +29,7 @@ That agent is our demo agent. On 21 November 2026:
 | Payments | 11 settled on chain since 18 September, from 9 different payers, every one marked delivered |
 | `isTrusted(agent, 40, 1,000 SVR)` | `true` |
 
-Every payment behind the score is [published](https://oracle.sigvara.xyz/evidence/0x8414ce0bf4f1e1695193623e0a656a9439e356f8bed0b8bf249b179fe77c7e19), so you can redo the arithmetic, and [this page](https://sigvara.xyz/epochs?a=0xCc52Cd92963f8A86d04dB29a4810d1e01D193910) shows how the score got there. A score under about 60 says little on its own: read [what a fake score costs](docs/whitepaper.md#53-what-a-fake-score-costs) before you pick a threshold.
+Every payment behind the score is [published](https://oracle.sigvara.xyz/evidence/0x8414ce0bf4f1e1695193623e0a656a9439e356f8bed0b8bf249b179fe77c7e19), so you can redo the arithmetic, and [this page](https://sigvara.xyz/epochs?a=0xCc52Cd92963f8A86d04dB29a4810d1e01D193910) shows how the score got there. 46 is a short record: 11 payments in six weeks. A score under about 60 says little on its own, and no agent can pass 70 today, since two of the six factors need ERC-8004 feedback that no agent has yet. Read [what a fake score costs](docs/whitepaper.md#53-what-a-fake-score-costs) before you pick a threshold.
 
 ## How it works
 
@@ -43,7 +43,7 @@ flowchart LR
 ## Where it stands
 
 - Runs on Arc testnet. We run both oracle operators.
-- Not audited yet. To report a problem, see [SECURITY.md](SECURITY.md).
+- Not audited yet: the [roadmap](docs/roadmap.md#mainnet) puts an external audit after the staking upgrade. To report a problem, see [SECURITY.md](SECURITY.md).
 - Slashing has been tested live on testnet: [the drill log](docs/slash-drill-log.md).
 
 ## Read more

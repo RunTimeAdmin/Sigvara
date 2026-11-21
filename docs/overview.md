@@ -777,7 +777,7 @@ require(ISigvaraReader(READER).isTrusted(agent, 40), "agent not in good standing
 | Candidates | Proof of personhood for reviewers · Solana payments · bond-based eligibility tiers · the ERC-8004 Validation Registry · evidence bundles · a way to notice a dead watcher | A named event for each |
 | New ideas | Whose problem is it, what changes at the gate, which decision does it touch, what is the smallest version, what starts it | Five questions in the [roadmap](roadmap.md#how-a-new-idea-gets-on-this-list) |
 
-The token-launch contract set (fixed-supply `SVR`, vesting, public sale) and the earlier tokenomics and oracle-first direction docs live under [`archive/token-launch/`](../archive/token-launch/). They are out of the build; SVR will launch through Tolly rather than these contracts.
+The token-launch contract set (fixed-supply `SVR`, vesting, public sale) and the earlier tokenomics and oracle-first direction docs live under [`docs/archive/token-launch/`](archive/token-launch/). They are out of the build; SVR will launch through Tolly rather than these contracts.
 
 ---
 

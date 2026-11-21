@@ -8,12 +8,12 @@
 > those match what runs today. The same holds for the interfaces, flows and SDK examples
 > in §3, §4, §7, §8 and §9: function signatures, events, the status enum, the challenge
 > payload format and the order of registration and staking have all changed. For those,
-> [`src/`](src/) and [`packages/sdk/`](packages/sdk/) are the reference.
+> [`src/`](../../src/) and [`packages/sdk/`](../../packages/sdk/) are the reference.
 >
-> For current behaviour see [README](README.md),
-> [docs/reputation-model.md](docs/reputation-model.md),
-> [docs/payment-backed-attestations.md](docs/payment-backed-attestations.md) and
-> [docs/architecture.md](docs/architecture.md). Where this document and those disagree,
+> For current behaviour see [README](../../README.md),
+> [docs/reputation-model.md](../reputation-model.md),
+> [docs/payment-backed-attestations.md](../payment-backed-attestations.md) and
+> [docs/architecture.md](../architecture.md). Where this document and those disagree,
 > those are right.
 
 ## 1. Executive Summary

@@ -190,6 +190,8 @@ const known = new Map(
 function docFiles() {
   const out = [];
   const walk = dir => {
+    // Superseded material, kept for its history, says things that were true once.
+    if (dir === join('docs', 'archive')) return;
     if (!existsSync(join(root, dir))) return;
     for (const e of readdirSync(join(root, dir), { withFileTypes: true })) {
       if (e.isDirectory()) walk(join(dir, e.name));
