@@ -413,3 +413,47 @@ test('end to end: when the registry\'s chain cannot be read, the epoch scores no
   assert.equal(scores, null, 'nothing proposed');
   assert.match(logs, /registry's chain could not be read/);
 });
+
+test('end to end: a check of the registry\'s chain that fails mid-epoch does not unlink the agents after it', async () => {
+  // Two agents, each linked on chain to its own 8004 agent and reviewed by the same five paid reviewers. Any GET
+  // /health can start a fresh check of the registry's chain, and one refused eth_chainId makes it report no chain.
+  // That happens here during the first proposal, which takes four seconds.
+  const w = new World();
+  const [a, b] = [w.addRegisteredAgent(), w.addRegisteredAgent()];
+  const head = w.data.head;
+  const reviewers = Array.from({ length: 5 }, () => wallet().toLowerCase());
+  const paidMs = snapshotOf(w.data.nowSec) * 1000 - 3_600_000;
+  let n = 0;
+  const eventsFor = () => reviewers.map((payer) => ({
+    payer, ts: paidMs, amount: '1000000', txHash: `0x${(++n).toString(16).padStart(64, '0')}`,
+  }));
+  w.set('externalOwns', true);
+  w.set('externalChainId', 5042);
+  w.set('externalFeedback', reviewers.map((client) => ({ client, value: 100, tag: 'quality' })));
+  w.set('reviewers', Object.fromEntries(reviewers.map((r) => [r, {
+    registered: true, operator: wallet(), status: 0, registeredAt: w.data.nowSec - 365 * 86_400, matured: 60, bonded: true,
+  }])));
+  w.set('funders', Object.fromEntries(reviewers.map((r) => [r, wallet().toLowerCase()])));
+  w.set('linkLogs', [
+    { agentId: '7', value: a.didHash, blockNumber: head - 50, logIndex: 0 },
+    { agentId: '8', value: b.didHash, blockNumber: head - 49, logIndex: 0 },
+  ]);
+  w.set('linkHistory', {
+    7: [{ fromBlock: head - 60, owner: a.operator, value: '0x' }, { fromBlock: head - 50, owner: a.operator, value: a.didHash }],
+    8: [{ fromBlock: head - 60, owner: b.operator, value: '0x' }, { fromBlock: head - 49, owner: b.operator, value: b.didHash }],
+  });
+  w.set('proposeDelayMs', 4000);
+  const files = { 'state.json': JSON.stringify({ schemaVersion: 1, paymentEvents: { [a.didHash]: eventsFor(), [b.didHash]: eventsFor() } }) };
+  const oracle = await startOracle({ world: w, files, env: { ORACLE_ADMIN_TOKEN: ADMIN, EXTERNAL_LINK_FROM_BLOCK: String(head - 100) } });
+  try {
+    const proposals = () => oracle.calls().filter((c) => c.name === 'proposeScore');
+    for (let i = 0; i < 600 && proposals().length < 1; i++) await sleep(50);
+    assert.ok(proposals().length >= 1, `no proposal started:\n${oracle.logs()}`);
+    w.set('externalChainId', null); // the registry's chain, as a failed check leaves it
+    for (let i = 0; i < 600 && proposals().length < 2; i++) await sleep(50);
+    const scores = proposals().map((c) => c.args[1]?.externalScore);
+    assert.deepEqual(scores, [MAX_EXTERNAL_SCORE, MAX_EXTERNAL_SCORE], 'both scored with the links the epoch found');
+  } finally {
+    await oracle.stop();
+  }
+});

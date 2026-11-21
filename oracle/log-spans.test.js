@@ -130,6 +130,15 @@ test('readSplitting: a single block still refused is thrown, as the node said it
   assert.ok(asked.some(([a, b]) => a === 3 && b === 3), 'it got that far');
 });
 
+test('readSplitting: a single block still refused goes to atOneBlock, whose answer stands for it', async () => {
+  const refusal = refusals.elysium();
+  const { read } = node({ 3: 30 }, 20, () => refusal);
+  const seen = [];
+  const logs = await readSplitting(read, 1, 4, { atOneBlock: (block, err) => { seen.push([block, err]); return ['3.passed']; } });
+  assert.deepEqual(seen, [[3, refusal]]);
+  assert.deepEqual(logs, ['1.0', '2.0', '3.passed', '4.0'], 'the blocks around it are read as before');
+});
+
 test('readSplitting: any other failure is thrown at once, with no smaller read', async () => {
   for (const refuse of [refusals.rateLimited, refusals.http429, () => new Error('connect ECONNREFUSED')]) {
     const { asked, read } = node({}, 0, refuse);
