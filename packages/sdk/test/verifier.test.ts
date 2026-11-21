@@ -29,6 +29,13 @@ describe('verifySignature pre-chain guards', () => {
     expect(await verifier.verifySignature(DID_B, c.payload, SIG, 300, AUD)).toBe(false);
   });
 
+  it('refuses a DID whose address has a bad checksum, instead of throwing', async () => {
+    // Mixed case with one letter's case flipped: the payload names it, the hash cannot be taken.
+    const did = 'did:sigvara:5042002:0xAbCdEf0000000000000000000000000000000001';
+    const c = generateChallenge(did, AUD);
+    expect(await verifier.verifySignature(did, c.payload, '1'.repeat(80), 300, AUD)).toBe(false);
+  });
+
   it('rejects an expired challenge (replay past its TTL)', async () => {
     // A v2 payload for this DID and this audience, so that only its age can refuse it.
     const staleTs = Math.floor(Date.now() / 1000) - 3600;

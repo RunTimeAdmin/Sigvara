@@ -83,7 +83,9 @@ const offersIn = (required: unknown): X402Offer[] | null => {
 /**
  * Every offer a 402 makes, from its header and its body, or null when neither can be read, or when either is
  * larger than `X402_MAX_BYTES`: an oversized part is refused rather than skipped, since a client may act on it.
- * Reads a clone, so the response can still be read by whoever gets it next.
+ * A header that is there but names no offer this can read is null too, for the same reason: an x402 v2 client
+ * acts on the header, and one with a more forgiving base64 decoder could read payees from it that were never
+ * checked. Reads a clone, so the response can still be read by whoever gets it next.
  */
 export async function x402OffersFrom(res: Response): Promise<X402Offer[] | null> {
   const found: X402Offer[] = [];
@@ -91,9 +93,14 @@ export async function x402OffersFrom(res: Response): Promise<X402Offer[] | null>
   if (header) {
     // Base64 is four characters for three bytes.
     if (header.length > Math.ceil(X402_MAX_BYTES / 3) * 4) return null;
+    let fromHeader: X402Offer[] | null;
     try {
-      found.push(...(offersIn(decodeHeader(header)) ?? []));
-    } catch { /* a header that does not decode offers nothing */ }
+      fromHeader = offersIn(decodeHeader(header));
+    } catch {
+      return null;
+    }
+    if (!fromHeader) return null;
+    found.push(...fromHeader);
   }
   const text = await boundedText(res.clone());
   if (text === null) return null;

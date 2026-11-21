@@ -402,6 +402,15 @@ export class SigvaraVerifier {
     // callers using it directly.
     if (signatureBase58.length < 64 || signatureBase58.length > 88) return false;
 
+    // A DID whose address has a bad checksum matches the payload's text and still cannot be hashed. Like a
+    // malformed signature below, it proves nothing: false, before the read, and not an exception for a gate to
+    // turn into a 500. The hash is pure, so a failed read of the chain still throws, as documented.
+    try {
+      await this.didHashFromDid(did);
+    } catch {
+      return false;
+    }
+
     const identity = await this.getIdentity(did);
     if (identity.registeredAt === 0n) return false;
     if (identity.ed25519PubKey === ethers.ZeroHash) return false;
