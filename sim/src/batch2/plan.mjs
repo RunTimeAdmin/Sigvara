@@ -102,8 +102,11 @@ export function planHour(cast, seed, h, { negativesFrom = NEGATIVES_FROM } = {})
   }
 
   // The handover. Before it, the operator-to-be buys from the agent like anyone (counted); on its day
-  // the agent changes hands; after it, the former and the new operator both pay it, and the oracle
-  // must refuse both as self_payment, on Arc and on Base.
+  // the agent changes hands; after it, the former and the new operator both pay it on Arc and on Base.
+  // The oracle must refuse the new operator's as self_payment on both chains. On Arc a payer is judged
+  // by the operator at the payment's block, so the former's counts as a customer's; on Base an address
+  // that has been the operator is the agent's own, so the former's is refused too and the new
+  // operator's earlier Base payments stop counting at the handover (docs/payment-backed-attestations.md).
   const ho = live.get(cast.handover.agent);
   if (ho && day >= HANDOVER.newBuyerFrom && day <= HANDOVER.newBuyerTo && at(day, 12)) {
     for (const chain of ['arc', 'base']) job(cast.handover.to, ho, chain, { delivered: true, post: true, tag: 'buyer-before-handover' });

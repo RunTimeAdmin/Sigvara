@@ -49,7 +49,8 @@ export const RING_PAYERS = 6;
 export const RING_COVER = 0.3;
 
 // The handover agent changes operator on this day. handover-new pays it as a customer before; both
-// the former and the new operator pay it after, which the oracle must refuse as self_payment.
+// the former and the new operator pay it after. The oracle refuses the new operator's payments as
+// self_payment, and the former's only on Base (plan.mjs says why).
 export const HANDOVER = { day: 9, newBuyerFrom: 4, newBuyerTo: 8, selfPayFrom: 10 };
 
 // The bonding agent suspends and withdraws its whole bond, then bonds again and returns to Active.

@@ -101,7 +101,7 @@
     <div class="card-body">
       <ul class="sim-watch">
         <li><b>Base payments count.</b> Agents paid in USDC on Base Sepolia should climb like steady agents on Arc. Each payment shows in the agent's evidence with its chain.</li>
-        <li><b>An operator's own money does not count.</b> After the handover, payments from the former and the new operator should be refused, on both chains.</li>
+        <li><b>An operator's own money does not count.</b> After the handover, the new operator's payments should be refused on both chains. On Arc a payment is judged by who ran the agent at its block, so the former operator's count as a customer's. On Base an address that has run the agent stays its own: the former's payments are refused too, and the new operator's earlier ones stop counting at the handover.</li>
         <li><b>A bond that leaves and comes back.</b> The bonding agent is suspended with no bond for three days, then Active again.</li>
         <li><b>Reviews count by funder.</b> Five reviewers funded from one wallet should count as one, and one funded by the reviewed agents' own operator not at all.</li>
         <li><b>Every number can be checked.</b> Open an agent on the <a href="agents">Agents</a> page and press <i>Check evidence</i> to recompute its score's evidence yourself.</li>
@@ -126,7 +126,7 @@
 
 <script src="assets/did.js?v=32000f8"></script>
 <script src="assets/explorer.js?v=nopin1"></script>
-<script src="assets/simulation.js?v=keeper1"></script>
+<script src="assets/simulation.js?v=handover1"></script>
 <script type="module" src="assets/simulation-scene.js?v=simscene1"></script>
 </body>
 </html>

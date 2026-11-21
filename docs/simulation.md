@@ -234,9 +234,13 @@ counting from 21 November, at 04:04, 05:05 and 06:00 UTC.
   climb like steady agents'. Each Base payment is in its agent's evidence with `chainId` 84532.
 - **Handover:** from day 4 to day 8 the wallet that will take the agent over pays it as a customer,
   and those payments count. On day 9 it accepts the agent. From day 10 the former and the new
-  operator each pay it once a day on each chain, with a signed outcome, and both operators should
-  refuse every one as `self_payment`: the former was named the operator at registration and the new
-  one by `OperatorTransferred`, both before paying. The new operator's earlier payments keep counting.
+  operator each pay it once a day on each chain, with a signed outcome. The two chains judge a payer
+  differently ([counterparty checks](payment-backed-attestations.md#counterparty-checks)). On Arc it
+  is judged against the operator at the payment's block, so both operators should refuse the new
+  operator's payments as `self_payment` and count the former operator's, which are now a customer's,
+  and the new operator's earlier Arc payments keep counting. On Base an address that has been the
+  operator is the agent's own, so both should refuse both as `self_payment`, and the new operator's
+  earlier Base payments stop counting from the handover's block time.
 - **Bonding:** while it is suspended with no active bond, the agent is left out of the per-epoch
   reads, and it is read again when it bonds and returns to Active.
 - **Burst:** eight registrations and bonds in one day, on top of the first batch's agents, without
