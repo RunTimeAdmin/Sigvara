@@ -8,7 +8,7 @@
 // block is the caller's choice (`atOneBlock`), because only the caller knows what it can do without.
 //
 // No dependencies: the indexer runs with no node_modules, from the files
-// docker-compose.indexer.vps.yml names.
+// deploy/docker-compose.indexer.vps.yml names.
 
 // The node's own words. ethers nests them under `error`, or under `info.error` for a call it turned into
 // "missing revert data", in a message that also holds the request, and the request can say anything:
