@@ -35,7 +35,7 @@ const MILESTONES_2 = [
   { day: 4, title: "A future operator buys", text: "The wallet that will take over the handover agent pays it as a customer, through day 8." },
   { day: 6, title: "An agent leaves its bond", text: "The bonding agent suspends itself and withdraws its whole bond." },
   { day: 9, title: "Handover and return", text: "The handover agent changes operator. The bonding agent bonds again and is Active." },
-  { day: 10, title: "Operators pay their own agent", text: "The former and the new operator pay the handover agent every day. Neither payment should count." },
+  { day: 10, title: "Former and new operator pay", text: "Both pay the handover agent every day on each chain. The new operator's payments should not count, nor the former's on Base. On Arc the former is now a customer, so its payments count." },
   { day: 10, title: "Unrefunded failures count", text: "The first reports end their hold. One the agent refunded in full never counts. A partial refund, a refund from another wallet or a late one leaves it to count." },
   { day: 21, title: "Reviewers pay", text: "Six first-batch agents, now over 30 days old, are funded and pay the reviewed agents." },
   { day: 22, title: "Reviews posted", text: "They rate the reviewed agents on ERC-8004. Five share a funder; the sixth was funded by the reviewed agents' operator." },
@@ -53,7 +53,7 @@ const KINDS_1 = [
 const KINDS_2 = [
   { key: "base", pill: "steady", label: "Paid on Base", expect: "Paid only in USDC on Base Sepolia, settled the way x402 settles. Their scores should climb like any steady agent's." },
   { key: "dual", pill: "steady", label: "Paid on both", expect: "Paid in SVR on Arc and in USDC on Base Sepolia. Payments on both chains should count." },
-  { key: "handover", pill: "mediocre", label: "Handover", expect: "Changes operator on day 9. Payments from its former and its new operator after that should not count." },
+  { key: "handover", pill: "mediocre", label: "Handover", expect: "Changes operator on day 9. After that the new operator's payments should not count, nor the former's on Base. On Arc the former pays as a customer, and that counts." },
   { key: "bonding", pill: "mediocre", label: "Leaves and returns", expect: "Withdraws its whole bond on day 6 and bonds again on day 9." },
   { key: "burst", pill: "steady", label: "Burst", expect: "Eight agents registering on one day, delivering about 85% of jobs." },
   { key: "reviewed", pill: "steady", label: "Reviewed", expect: "Linked to ERC-8004 and rated on day 22. The five reviewers that share a funder should count as one, and the sixth not at all." },
