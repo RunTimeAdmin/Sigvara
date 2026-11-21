@@ -43,7 +43,7 @@ const { ethers } = require('ethers');
 // TRANSFER_TOPIC, Transfer(address indexed from, address indexed to, uint256 value): one
 // definition, shared with the attested path, rather than a copy that could drift.
 const { countsAsPayment, TRANSFER_TOPIC } = require('./payments');
-const { readSplitting } = require('./log-spans');
+const { readSplitting, spanRefused } = require('./log-spans');
 
 /**
  * Recipients per getLogs call.
@@ -438,15 +438,45 @@ function operatorsNamedAt(agent) {
  * A span the node refuses for its size is halved (log-spans.js). The filter is only the
  * asset and the recipients, so anyone can fill a span with transfers to an agent, and
  * planCredits drops the worthless ones only once they have been read.
+ *
+ * A single block the node still refuses is asked for again in halves of the recipients, down
+ * to one address. One address that alone has more transfers in one block than an answer may
+ * hold is passed over and handed to `onSkip({ block, recipient })`. Anyone can send a block of
+ * zero-value transfers to any agent, so without this one block stopped the scan for good, and
+ * on a payment chain every agent's epoch with it; what the pass costs is that one agent's
+ * payments in that one block.
  */
 async function scanRange(
-  { readLogs, asset, paceMs = DEFAULT_SCAN_PACE_MS, sleep = wait },
+  { readLogs, asset, paceMs = DEFAULT_SCAN_PACE_MS, sleep = wait, onSkip = () => {} },
   recipients, fromBlock, toBlock, chunkSize,
 ) {
+  const readFor = (batch, from, to) =>
+    readLogs({ address: asset, topics: [TRANSFER_TOPIC, null, batch.map(pad)], fromBlock: from, toBlock: to });
+  const oneBlock = async (batch, block) => {
+    if (batch.length === 1) {
+      onSkip({ block, recipient: batch[0] });
+      return [];
+    }
+    const mid = Math.ceil(batch.length / 2);
+    const logs = [];
+    for (const part of [batch.slice(0, mid), batch.slice(mid)]) {
+      await sleep(paceMs);
+      let got;
+      try {
+        got = await readFor(part, block, block);
+      } catch (err) {
+        if (!spanRefused(err)) throw err;
+        got = await oneBlock(part, block);
+      }
+      for (const log of got) logs.push(log);
+    }
+    // In the block's own order, as one answer for the whole batch would have had them.
+    return logs.sort((x, y) => Number(x.index ?? x.logIndex ?? 0) - Number(y.index ?? y.logIndex ?? 0));
+  };
+
   const out = [];
   let first = true;
   for (const batch of recipientBatches(recipients)) {
-    const topics = [TRANSFER_TOPIC, null, batch.map(pad)];
     for (const [start, end] of blockRanges(fromBlock, toBlock, chunkSize)) {
       // Between calls, never before the first or after the last: a steady scan is a single
       // call an epoch and must not pay for a limit it cannot reach. Counted across
@@ -455,8 +485,8 @@ async function scanRange(
       if (!first) await sleep(paceMs);
       first = false;
       const logs = await readSplitting(
-        (a, b) => readLogs({ address: asset, topics, fromBlock: a, toBlock: b }),
-        start, end, { pause: () => sleep(paceMs) },
+        (a, b) => readFor(batch, a, b),
+        start, end, { pause: () => sleep(paceMs), atOneBlock: (block) => oneBlock(batch, block) },
       );
       // One at a time: a flooded span can hold more logs than a call can take as arguments.
       for (const log of logs) out.push(log);

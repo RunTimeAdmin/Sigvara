@@ -577,6 +577,12 @@ async function settleNegatives(agentInfos, deadline = Date.now() + REFUND_READ_B
         epochMs: cfg.epochMs,
         deadline,
       });
+      if (check.passedOver) {
+        console.error(
+          `[oracle]   ${info.didHash.slice(0, 10)}… payer negative on ${e.txHash.slice(0, 10)}…: block(s) ${check.passedOver.join(', ')} ` +
+          'hold more matching transfers than one answer takes; read as holding no refund',
+        );
+      }
       // A final read keeps the end of the hold it was read against.
       const kept = check.final ? { ...check, holdEndMs: negativeHold.holdEndMs(e, negativeHoldCfg) } : check;
       recorded = setRefundCheck(info.didHash, e.txHash, e.payer, e.chainId ?? null, kept) || recorded;
@@ -942,10 +948,16 @@ async function externalScoreOf(didHash, { operator, agentAddress }, nowMs, event
 
 // ---- Links made on chain (link-claims.js) ------------------------------------
 
+// The registry's chain as this epoch found it when it checked it, and undefined outside an epoch. Read
+// once, so that a check failing halfway through the epoch, which any GET /health may start, cannot turn
+// the links made on chain into no links for every agent after it and score those without the factor.
+let epochFeedChainId;
+
 // Whether the ERC-8004 registry is on the chain this oracle scores, so that its reads can be
 // pinned to this chain's snapshot block.
 function externalOnThisChain() {
-  return verifiedChainId !== null && external.chainState().chainId === verifiedChainId;
+  const feed = epochFeedChainId !== undefined ? epochFeedChainId : external.chainState().chainId;
+  return verifiedChainId !== null && feed === verifiedChainId;
 }
 
 // Whether EXTERNAL_LINK_FROM_BLOCK asks for links made on chain to be read.
@@ -1101,6 +1113,7 @@ async function runEpoch() {
     metrics.inc('epochsFailed');
   } finally {
     epochRunning = false;
+    epochFeedChainId = undefined;
   }
 }
 
@@ -1225,7 +1238,13 @@ async function runPaymentScan(agents) {
     // reacts to being refused. Backoff is in readLogs above; this stops provoking the
     // refusal in the first place, and only applies between calls, so a steady one-chunk
     // epoch pays nothing for it.
-    { readLogs, asset: paymentCfg.asset, paceMs: paymentScanCfg.paceMs },
+    {
+      readLogs, asset: paymentCfg.asset, paceMs: paymentScanCfg.paceMs,
+      onSkip: ({ block, recipient }) => console.error(
+        `[oracle] payment scan: block ${block} holds more transfers to ${recipient} than one answer takes; ` +
+        'passed over, so that agent gets no credit from that block',
+      ),
+    },
     [...byAddress.values()].map((a) => a.agentAddress),
     from, to, paymentScanCfg.chunkSize,
   );
@@ -1720,7 +1739,8 @@ async function runEpochInner() {
   // The same when the registry's chain cannot be read at all: this oracle cannot tell whether it
   // is this one, and so whether the other operator is reading links it is not.
   let linksUnchecked = new Set();
-  if (linksOnChain() && external.chainState().chainId === null) {
+  epochFeedChainId = external.chainState().chainId;
+  if (linksOnChain() && epochFeedChainId === null) {
     console.error("[oracle] the ERC-8004 registry's chain could not be read, so neither could its links; scoring nothing this epoch");
     metrics.inc('epochsFailed');
     return;

@@ -166,6 +166,32 @@ test('a scan behind by more than one step catches up within the epoch, a step at
   assert.equal(ev.body.evidence.length, 1);
 });
 
+test('one Base block holding more transfers to an agent than an answer takes is passed over, and the epoch still scores', async () => {
+  const world = new World();
+  const agent = world.addRegisteredAgent();
+  const now = world.data.nowSec;
+  // 10,001 zero-value transfers to the agent in one block, as a loop of transfer(agent, 0) sends them: one more than
+  // fewLogs takes in one answer. Before, the scan failed at that block every epoch, and every agent's epoch with it.
+  const floodBlock = FINALIZED - 200;
+  const from = wallet();
+  const flood = Array.from({ length: 10_001 }, (_, i) => ({
+    ...transfer({ from, to: agent.agentAddress, amount: 0n, block: floodBlock }),
+    transactionHash: ethers.id('flood'), logIndex: hex(i),
+  }));
+  base = await startBase({
+    blockTime: (n) => (n === FINALIZED ? now - 900 : now - 7200),
+    logs: [...flood, transfer({ from: wallet(), to: agent.agentAddress, amount: 3_000_000n, block: FINALIZED - 100 })],
+  });
+  oracle = await startOracle({ world, env: env(base.url) });
+  await waitFor(/\[oracle\] epoch done/);
+  assert.match(oracle.logs(), new RegExp(`payment chain ${BASE}: block ${floodBlock} holds more transfers to ${agent.agentAddress}`, 'i'));
+  assert.doesNotMatch(oracle.logs(), /scoring nothing this epoch/);
+  const health = await oracle.call('GET', '/health');
+  assert.equal(health.body.paymentChains[0].lastBlock, FINALIZED);
+  const ev = await oracle.call('GET', `/evidence/${agent.didHash}`);
+  assert.equal(ev.body.evidence.length, 1, 'the real payment after the flooded block counted');
+});
+
 test('a catch-up stops at its time budget and carries on next epoch, with what it has done saved', async () => {
   const world = new World();
   const agent = world.addRegisteredAgent();

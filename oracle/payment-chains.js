@@ -577,6 +577,10 @@ async function scanChain(chain, deps) {
       asset: chain.asset,
       paceMs: chain.paceMs,
       ...(deps.sleep ? { sleep: deps.sleep } : {}),
+      onSkip: ({ block, recipient }) => console.error(
+        `[oracle] payment chain ${chain.chainId}: block ${block} holds more transfers to ${recipient} than one answer takes; ` +
+        'passed over, so that agent gets no credit from that block',
+      ),
     },
     [...byAddress.values()].map((a) => a.agentAddress),
     from, to, chain.chunkSize,
@@ -667,7 +671,8 @@ async function scanChain(chain, deps) {
     const since = registered.get(c.didHash);
     if (!Number.isFinite(since) || ts < since) { skip(c, 'before_registration'); continue; }
     // Before the agent's first bond, by the bond block's time on the scored chain (ADR 0013), as registration is judged.
-    if (ts < bonded.get(c.didHash)) { skip(c, 'before_bond'); continue; }
+    // Written to fail closed, as the line above does: a bond time that is not a number holds the payment back.
+    if (!(ts >= bonded.get(c.didHash))) { skip(c, 'before_bond'); continue; }
     // Paid by an address named the agent's operator by then, at registration or since, and not by today's operator,
     // which differs with how far each operator's registry scan has read. This scan stops before that reach, so
     // every operator knows each change up to the payment. One named later stops counting then (eventsAt).

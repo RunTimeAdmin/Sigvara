@@ -22,6 +22,7 @@
  */
 const { ethers } = require('ethers');
 const { TRANSFER_TOPIC } = require('./payments');
+const { readSplitting, spanRefused } = require('./log-spans');
 
 const NOT_DELIVERED = 2;
 const DAY_MS = 86_400_000;
@@ -145,6 +146,12 @@ function readBudget(e, cfg, { from, headBlock, headMs, chunk, epochMs }) {
  *
  * A read that fails returns what it read before the failure, with the error, so the next one goes on from there.
  *
+ * A span the node refuses for its size is halved (log-spans.js), and a single block it still refuses is passed over
+ * as holding no refund and named in `passedOver`. Anyone who can move the agent's tokens at zero value, or the payer
+ * in its own payment's block, can fill a span with transfers this filter matches; a span asked again and again would
+ * keep the negative from settling for good, and the agent from being scored. A real refund is missed only when it
+ * shares a block with more matching transfers than one answer takes.
+ *
  * @param {object} e  the payment event, with its payerOutcome and any earlier refundCheck
  * @param {object} io
  * @param {(filter: object) => Promise<object[]>} io.getLogs
@@ -158,7 +165,7 @@ function readBudget(e, cfg, { from, headBlock, headMs, chunk, epochMs }) {
  * @param {number} [io.maxReads]  by default MAX_READS_PER_EPOCH, or readBudget's when `epochMs` is given
  * @param {number} [io.epochMs]  how often the oracle reads, for readBudget
  * @param {number} [io.deadline]  this host's time to stop reading by
- * @returns {Promise<{ final: boolean, refunded: boolean|null, readThroughBlock: number, txHash?: string, blockNumber?: number, error?: Error }>}
+ * @returns {Promise<{ final: boolean, refunded: boolean|null, readThroughBlock: number, txHash?: string, blockNumber?: number, passedOver?: number[], error?: Error }>}
  */
 async function readRefund(e, cfg, { getLogs, blockMs, asset, agent, headBlock, headMs: knownHeadMs, chunk, paceMs = 0, maxReads, epochMs, deadline = Infinity }) {
   const end = holdEndMs(e, cfg);
@@ -168,6 +175,10 @@ async function readRefund(e, cfg, { getLogs, blockMs, asset, agent, headBlock, h
   let from = Number.isSafeInteger(earlier?.readThroughBlock) ? earlier.readThroughBlock + 1 : paidBlock;
   const before = from - 1;
   const topics = [TRANSFER_TOPIC, pad(agent), pad(e.payer)];
+  // The node's filter is not taken on trust: a log from anyone else, or to anyone else, refunds nothing.
+  const [fromAgent, toPayer] = [topics[1].toLowerCase(), topics[2].toLowerCase()];
+  const passedOver = [];
+  const withPassedOver = (result) => (passedOver.length ? { ...result, passedOver } : result);
   let reads = 0;
   let through = before;
   let passedEnd = false;
@@ -176,16 +187,24 @@ async function readRefund(e, cfg, { getLogs, blockMs, asset, agent, headBlock, h
     const budget = maxReads ?? (epochMs ? readBudget(e, cfg, { from, headBlock, headMs, chunk, epochMs }) : MAX_READS_PER_EPOCH);
     while (from <= headBlock && reads < budget && Date.now() < deadline) {
       const to = Math.min(headBlock, from + chunk - 1);
-      const logs = await getLogs({ address: asset, topics, fromBlock: from, toBlock: to });
+      const logs = await readSplitting(
+        (a, b) => getLogs({ address: asset, topics, fromBlock: a, toBlock: b }),
+        from, to,
+        {
+          pause: paceMs ? () => sleep(paceMs) : undefined,
+          atOneBlock: (block) => { passedOver.push(block); return []; },
+        },
+      );
       reads += 1;
       const ordered = [...logs].sort((a, b) => (a.blockNumber - b.blockNumber) || ((a.index ?? a.logIndex ?? 0) - (b.index ?? b.logIndex ?? 0)));
       for (const log of ordered) {
         if (String(log.address).toLowerCase() !== String(asset).toLowerCase()) continue;
+        if (String(log.topics?.[1]).toLowerCase() !== fromAgent || String(log.topics?.[2]).toLowerCase() !== toPayer) continue;
         if (BigInt(log.data) < amount) continue;
         // After the payment means in a later block: blocks share whole-second times, so the time cannot tell.
         if (!(log.blockNumber > paidBlock)) continue;
         if ((await blockMs(log.blockNumber)) > end) continue;
-        return { final: true, refunded: true, readThroughBlock: log.blockNumber, txHash: log.transactionHash, blockNumber: log.blockNumber };
+        return withPassedOver({ final: true, refunded: true, readThroughBlock: log.blockNumber, txHash: log.transactionHash, blockNumber: log.blockNumber });
       }
       through = to;
       from = to + 1;
@@ -194,17 +213,25 @@ async function readRefund(e, cfg, { getLogs, blockMs, asset, agent, headBlock, h
       if (paceMs && from <= headBlock && reads < budget) await sleep(paceMs);
     }
     if (passedEnd) {
-      const own = await getLogs({ address: asset, topics: [TRANSFER_TOPIC, pad(e.payer), pad(agent)], fromBlock: paidBlock, toBlock: paidBlock });
-      if (!own.some((l) => String(l.transactionHash).toLowerCase() === String(e.txHash).toLowerCase())) {
+      let own;
+      try {
+        own = await getLogs({ address: asset, topics: [TRANSFER_TOPIC, pad(e.payer), pad(agent)], fromBlock: paidBlock, toBlock: paidBlock });
+      } catch (err) {
+        // Refused for its size, this very filter matched more transfers from the payer to the agent in that block than
+        // one answer takes, so the node answers it there. The payer chooses its payment's block, and could fill it.
+        if (!spanRefused(err)) throw err;
+        own = null;
+      }
+      if (own && !own.some((l) => String(l.transactionHash).toLowerCase() === String(e.txHash).toLowerCase())) {
         // The node did not find the payment with the same filter, so what it found above proves nothing.
-        return { final: false, refunded: null, readThroughBlock: before, error: new Error(`the same filter did not find the payment itself in block ${paidBlock}`) };
+        return withPassedOver({ final: false, refunded: null, readThroughBlock: before, error: new Error(`the same filter did not find the payment itself in block ${paidBlock}`) });
       }
     }
   } catch (error) {
-    return { final: false, refunded: null, readThroughBlock: through, error };
+    return withPassedOver({ final: false, refunded: null, readThroughBlock: through, error });
   }
   // Settled as not refunded only once the read has reached a block at or past the hold's end.
-  return { final: passedEnd, refunded: passedEnd ? false : null, readThroughBlock: through };
+  return withPassedOver({ final: passedEnd, refunded: passedEnd ? false : null, readThroughBlock: through });
 }
 
 /**

@@ -3,7 +3,9 @@
 // How much a payment chain's endpoint can make the oracle read. Its answer is read only up to 8 MiB, and a
 // log read is taken only up to 10,000 logs, before anything in it is used. Past either, a log read is asked
 // for in halves, as a span the endpoint refused is, and any other read fails with that error. A block that
-// stays too big fails the scan, so its cursor never moves past blocks it has not read.
+// stays too big for one agent's address is passed over for that address, and the log says so: anyone can
+// fill a block with transfers to an agent, and a scan that failed there failed there for good, holding every
+// agent's epoch.
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -116,7 +118,7 @@ function scan({ chain, provider }, a, state, credited) {
   });
 }
 
-test('a getLogs answer past 8 MiB is asked for in halves, and a block that stays past it fails the scan where it is', async () => {
+test('a getLogs answer past 8 MiB is asked for in halves, and a block that stays past it for one address is passed over', async () => {
   const a = agent();
   const FLOOD = 1250;
   const held = [transferLog(a.agentAddress, 1_000_000n, 1150), transferLog(a.agentAddress, 2_000_000n, 1300)];
@@ -135,23 +137,27 @@ test('a getLogs answer past 8 MiB is asked for in halves, and a block that stays
     assert.equal(credited[0].blockNumber, 1150);
     assert.equal(out.state.lastBlock, 1199, 'every block up to the cursor was read');
 
-    // The next scan reaches FLOOD, which is too big even alone. It fails, so the cursor stays at 1199 and the
-    // payment after FLOOD waits for a later scan instead of being passed over.
+    // The next scan reaches FLOOD, which is too big even alone, and the agent's is the only address asked for.
+    // FLOOD is passed over for that address, and the payment after it is credited.
     e.head.finalized = 1399;
     // On a new provider: ethers answers the same request from its cache for 250 ms, and on a fast runner this scan
-    // asks for the finalized block inside that, so it saw 1199 again, scanned nothing and did not fail.
+    // asks for the finalized block inside that, so it saw 1199 again and scanned nothing.
     const fresh = { ...e, provider: pc.providerFor(e.chain) };
+    const logged = [];
+    const consoleError = console.error;
+    console.error = (...args) => logged.push(args.join(' '));
+    let next;
     try {
-      await assert.rejects(scan(fresh, a, out.state, credited), (err) => {
-        assert.match(err.message, /an answer past 8388608 bytes/);
-        assert.ok(!err.message.includes('SECRET-KEY'));
-        return true;
-      });
+      next = await scan(fresh, a, out.state, credited);
     } finally {
+      console.error = consoleError;
       fresh.provider.destroy();
     }
-    assert.deepEqual(e.asked.at(-1), [FLOOD, FLOOD], 'asked for FLOOD alone before giving up');
-    assert.equal(credited.length, 1, 'nothing past FLOOD was credited');
+    assert.ok(e.asked.some(([from, to]) => from === FLOOD && to === FLOOD), 'asked for FLOOD alone first');
+    assert.ok(logged.some((line) => line.includes(`block ${FLOOD} holds more transfers to ${a.agentAddress}`)), 'and said it passed it over');
+    assert.ok(!logged.join('\n').includes('SECRET-KEY'));
+    assert.deepEqual(credited.map((c) => c.blockNumber), [1150, 1300], 'the payment after FLOOD is credited');
+    assert.equal(next.state.lastBlock, 1399);
   } finally {
     e.close();
   }

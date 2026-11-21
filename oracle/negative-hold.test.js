@@ -253,3 +253,52 @@ test("a read given its head block's time asks the node for logs before anything 
   // Without headMs its first call is the head's block, which an epoch now reads once a chain (index.js settleNegatives).
   assert.equal(calls[0], 'getLogs');
 });
+
+// A node that refuses an answer over `max` logs, as Arc refuses one over 20,000 and a payment chain's transport one
+// over 8 MiB. Anyone who can move the agent's tokens at zero value can fill a span with matching transfers.
+function cappedNode(logs, max) {
+  const n = node(logs);
+  return async (filter) => {
+    const found = await n.getLogs(filter);
+    if (found.length > max) throw new Error('request exceeded max allowed range: query exceeds max results 20000');
+    return found;
+  };
+}
+
+test('a span flooded past what one answer takes is read in halves, so a full refund after it still cures', async () => {
+  const e = negative();
+  const dust = Array.from({ length: 30 }, (_, i) => transfer({ amount: 0n, block: 300 + (i % 3), tx: ethers.id(`dust-${i}`) }));
+  const refund = transfer({ amount: 1_000_000n, block: 5_000, tx: '0x' + 'ab'.repeat(32) });
+  const getLogs = cappedNode([paid(e), ...dust, refund], 20);
+  const check = await hold.readRefund(e, cfg, { getLogs, blockMs, asset: ASSET, agent: AGENT, headBlock: blockAt(END) + 10, chunk: 2_000 });
+  assert.equal(check.final, true);
+  assert.equal(check.refunded, true);
+  assert.equal(check.blockNumber, 5_000);
+  assert.equal(check.passedOver, undefined, 'no single block held more than one answer takes');
+});
+
+test('a single block flooded past what one answer takes is passed over, and the read goes on to settle', async () => {
+  const e = negative();
+  const dust = Array.from({ length: 21 }, (_, i) => transfer({ amount: 0n, block: 300, tx: ethers.id(`dust-${i}`) }));
+  // The payer can fill its own payment's block too, which the closing check reads with the filter turned round.
+  const ownDust = Array.from({ length: 21 }, (_, i) => transfer({ from: PAYER, to: AGENT, amount: 0n, block: PAID_BLOCK, tx: ethers.id(`own-${i}`) }));
+  const headBlock = blockAt(END) + 10;
+  // One read reaches the hold's end with spans this long; the flooded block is found by halving inside the first.
+  const unrefunded = await hold.readRefund(e, cfg, { getLogs: cappedNode([paid(e), ...dust, ...ownDust], 20), blockMs, asset: ASSET, agent: AGENT, headBlock, chunk: 100_000 });
+  assert.equal(unrefunded.final, true, 'settled, not left open for good');
+  assert.equal(unrefunded.refunded, false);
+  assert.deepEqual(unrefunded.passedOver, [300]);
+
+  const refund = transfer({ amount: 1_000_000n, block: 6_000, tx: '0x' + 'cd'.repeat(32) });
+  const refunded = await hold.readRefund(e, cfg, { getLogs: cappedNode([paid(e), ...dust, refund], 20), blockMs, asset: ASSET, agent: AGENT, headBlock, chunk: 2_000 });
+  assert.equal(refunded.refunded, true, 'a refund in a later block is found');
+});
+
+test('a log the node returns from or to someone else refunds nothing, whatever its filter did', async () => {
+  const e = negative();
+  const headBlock = blockAt(END) + 10;
+  const stranger = transfer({ from: STRANGER, to: PAYER, amount: 1_000_000n, block: 400 });
+  const unfiltered = async (filter) => (filter.topics[1] === pad(AGENT) ? [stranger] : [paid(e)]);
+  const check = await hold.readRefund(e, cfg, { getLogs: unfiltered, blockMs, asset: ASSET, agent: AGENT, headBlock, chunk: 100_000 });
+  assert.equal(check.refunded, false);
+});

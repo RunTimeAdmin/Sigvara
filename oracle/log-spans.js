@@ -2,8 +2,10 @@
 
 // What a log scan does when a node refuses a read for how much it asked. Asking for the same span
 // again gets the same answer, so one span holding too many logs stopped a scan until someone changed
-// its settings, and anyone can put logs in a span. Halving always gets there: a single block holds far
-// fewer logs than any of these limits.
+// its settings, and anyone can put logs in a span. Halving gets there unless a single block holds more
+// than the limit, which a chain with room for tens of millions of gas a block allows (Base: about 4,000
+// gas a zero-value USDC transfer from a loop, so 10,000 logs fit in one block). What to do with such a
+// block is the caller's choice (`atOneBlock`), because only the caller knows what it can do without.
 //
 // No dependencies: the indexer runs with no node_modules, from the files
 // docker-compose.indexer.vps.yml names.
@@ -58,20 +60,24 @@ async function readAnswer(chunks, maxBytes) {
 
 /**
  * The logs of blocks [from, to] from `read(a, b)`, in block order, halving any span it refuses. A
- * single block it still refuses is thrown, and so is any other failure: there is nothing smaller to
- * ask for. `pause` runs before each smaller read, so a run of refusals keeps to the caller's pace.
- * `join` is for a read that answers with something other than an array.
+ * single block it still refuses goes to `atOneBlock(block, err)`, whose answer stands for that block;
+ * by default it is thrown, since there is nothing smaller to ask for. Any other failure is thrown.
+ * `pause` runs before each smaller read, so a run of refusals keeps to the caller's pace. `join` is for
+ * a read that answers with something other than an array.
  */
-async function readSplitting(read, from, to, { tooBig = spanRefused, pause = async () => {}, join = (l, r) => l.concat(r) } = {}) {
+async function readSplitting(read, from, to, {
+  tooBig = spanRefused, pause = async () => {}, join = (l, r) => l.concat(r), atOneBlock = (block, err) => { throw err; },
+} = {}) {
   try {
     return await read(from, to);
   } catch (err) {
-    if (from >= to || !tooBig(err)) throw err;
+    if (!tooBig(err)) throw err;
+    if (from >= to) return atOneBlock(from, err);
     const mid = from + Math.floor((to - from) / 2);
     await pause();
-    const left = await readSplitting(read, from, mid, { tooBig, pause, join });
+    const left = await readSplitting(read, from, mid, { tooBig, pause, join, atOneBlock });
     await pause();
-    const right = await readSplitting(read, mid + 1, to, { tooBig, pause, join });
+    const right = await readSplitting(read, mid + 1, to, { tooBig, pause, join, atOneBlock });
     return join(left, right);
   }
 }

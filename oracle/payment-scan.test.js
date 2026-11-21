@@ -847,6 +847,31 @@ test('scanRange: a span the node refuses for its size is read in halves, and not
   assert.ok(paced.length > 0 && paced.every((ms) => ms === 7), 'the smaller reads keep to the pace');
 });
 
+test('scanRange: one address with more transfers in one block than an answer takes is passed over, and only it', async () => {
+  // Block 5 holds 11 transfers to `a` (zero-value, anyone can send them) and one real payment to `b`. The node
+  // refuses any answer over 10 logs, as fewLogs refuses one over MAX_LOGS. Block 6 has a payment to `a`.
+  const [a, b] = [addr('a'), addr('b')];
+  const to = (who) => ethers.zeroPadValue(who, 32).toLowerCase();
+  const logs = [
+    ...Array.from({ length: 11 }, (_, i) => ({ blockNumber: 5, logIndex: i, topics: [null, null, to(a)] })),
+    { blockNumber: 5, logIndex: 11, topics: [null, null, to(b)] },
+    { blockNumber: 6, logIndex: 0, topics: [null, null, to(a)] },
+  ];
+  const readLogs = async (f) => {
+    const wanted = new Set(f.topics[2].map((t) => t.toLowerCase()));
+    const found = logs.filter((l) => l.blockNumber >= f.fromBlock && l.blockNumber <= f.toBlock && wanted.has(l.topics[2]));
+    if (found.length > 10) throw refusals.elysium();
+    return found;
+  };
+  const skips = [];
+  const out = await scan.scanRange(
+    { readLogs, asset: ASSET, sleep: async () => {}, onSkip: (s) => skips.push(s) },
+    [a, b], 0, 9, 10,
+  );
+  assert.deepEqual(skips, [{ block: 5, recipient: a }]);
+  assert.deepEqual(out.map((l) => [l.blockNumber, l.logIndex]), [[5, 11], [6, 0]], "b's payment in that block and a's in the next still count");
+});
+
 test('scanRange: a rate limit is not halved, and fails the scan as it did', async () => {
   let calls = 0;
   const readLogs = async () => { calls += 1; throw refusals.rateLimited(); };
