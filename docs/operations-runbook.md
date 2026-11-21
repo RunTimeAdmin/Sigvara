@@ -16,17 +16,17 @@ key is [incident-operator-key.md](incident-operator-key.md); bringing up an oper
 | State volume | `sigvara-oracle_oracle_state` | `sigvara-checker_checker_state` |
 | Local port, for `/metrics` | `127.0.0.1:3030` | `127.0.0.1:3031` |
 
-**What runs what, as of 17 November 2026.** Each public `/health` names its own commit, and that is the
+**What runs what, as of 21 November 2026.** Each public `/health` names its own commit, and that is the
 one to trust when this table has gone stale.
 
 | Service | Host | Commit | Since (UTC) |
 |---|---|---|---|
-| Primary oracle | `archipelago-standby` | `31ad9bc` | 16 November, 19:20 |
-| Checker | `packrai-vps` | `31ad9bc` | 16 November, 19:20 |
+| Primary oracle | `archipelago-standby` | `59b0600` | 21 November, 15:26 |
+| Checker | `packrai-vps` | `59b0600` | 21 November, 15:26 |
 | Event index | `archipelago-standby` | `b95f0aa` | 5 November, 13:31 |
 | Watcher | a third host | `8f7b6bc` | 17 November, 19:38 |
 | Policy signer | `packrai-vps` | `8f7b6bc` | 17 November, 19:38 |
-| ERC-8004 publisher | `archipelago-standby` | `8f7b6bc` | 17 November, 19:39 |
+| ERC-8004 publisher | `archipelago-standby` | `59b0600` | 21 November, 15:27 |
 | Slash keepers | `archipelago-standby`, `packrai-vps` | `8f7b6bc` | 17 November, 19:40 |
 
 Open items are listed in the [launch checklist](launch-checklist.md#where-this-stands).
