@@ -26,7 +26,7 @@ one to trust when this table has gone stale.
 | Event index | `archipelago-standby` | `b95f0aa` | 5 November, 13:31 |
 | Watcher | a third host | `8f7b6bc` | 17 November, 19:38 |
 | Policy signer | `packrai-vps` | `8f7b6bc` | 17 November, 19:38 |
-| ERC-8004 publisher | `archipelago-standby` | `59b0600` | 21 November, 15:27 |
+| ERC-8004 publisher | `archipelago-standby` | `acf8206` | 21 November, 16:31 |
 | Slash keepers | `archipelago-standby`, `packrai-vps` | `8f7b6bc` | 17 November, 19:40 |
 
 Open items are listed in the [launch checklist](launch-checklist.md#where-this-stands).
