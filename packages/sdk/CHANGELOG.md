@@ -383,7 +383,7 @@ Moving to this release stops the leak. It does not undo a copy that already exis
 1.0.0-alpha.9 or earlier was ever logged, serialized, sent to an error reporter or attached to a bug
 report, treat that agent's key as exposed: anyone who can read that copy can sign as the agent until the
 key is rotated. Suspend the agent, rotate its public key on chain and reinstate it, as
-[Key Rotation](https://github.com/RunTimeAdmin/Sigvara#key-rotation) describes.
+[Key Rotation](https://github.com/RunTimeAdmin/Sigvara/blob/main/docs/overview.md#key-rotation) describes.
 
 ### Changed: `SigvaraGate` also checks the bond held now
 
