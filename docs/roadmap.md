@@ -55,6 +55,7 @@ Ideas with a place on the list but no work under way. Each moves up when its eve
 | Bond-based eligibility tiers | A partner's job sizes | Docs only. `isTrusted(agent, minScore, minBond)` already does it |
 | The ERC-8004 Validation Registry | A partner or a registry user asks | Publish CounterAudit validations |
 | Evidence bundles, and a `payment_verified` status in the SDK | An integrator wants to re-verify old roots | An ADR on what a bundle holds |
+| Bonded score challenges: anyone who posts a bond can contest a proposed score during its 6-hour window, and is paid if the contest holds. Today only the committee can reject a proposal, and the checker that recomputes it is run by the team too | Outside consumers reaches 1, or a wrong score is finalized that the checker missed | An ADR on the challenger's bond, who rules a contest, and where a reward comes from. It touches the committee's sole power to reject ([ADR 0005](adr/0005-governance-and-emergency-powers.md)) and the rule that nobody profits from a slash |
 
 ## How a new idea gets on this list
 
