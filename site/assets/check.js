@@ -56,24 +56,64 @@
     });
   }
 
+  /* The words beside the badge come from the badge. The oracle answers 200 with a picture that says
+   * "unavailable" when it cannot read the chain or is metering a burst, and that loads like any
+   * other image, so the page used to call it "Live". The badge is fetched once as text, shown
+   * exactly as it came (img-src allows data:), and its own aria-label decides the state. */
+  var badgeSeq = 0;
+  function loadBadge(url) {
+    var seq = ++badgeSeq;
+    /* Cache-bust per check so a visitor who just registered is not shown the browser's
+     * copy of "not registered" from five minutes ago. The oracle's own cache still
+     * protects the chain from the traffic. */
+    fetch(url + '?t=' + Date.now(), { cache: 'no-store' })
+      .then(function (res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.text();
+      })
+      .then(function (svg) {
+        if (seq !== badgeSeq) return; // a newer check owns the card
+        var said = (svg.match(/aria-label="sigvara: ([^"]*)"/) || [])[1] || '';
+        badgeImg.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+        show(badgeImg, true);
+        show(badgeFallback, false);
+        if (!said || said === 'unavailable') {
+          $('resultState').textContent = 'Unavailable';
+          $('reading').textContent = 'The oracle could not read this score just now. The score is still on chain; try again in a minute.';
+          return;
+        }
+        $('resultState').textContent = 'Live';
+        /* The badge carries the verdict; naming it again in prose would be a second source
+         * of truth that can disagree with the picture beside it. This says where it came
+         * from instead. */
+        $('reading').textContent = 'Read from the spendable on-chain score, not from this oracle’s pending proposal.';
+      })
+      .catch(function () {
+        if (seq !== badgeSeq) return;
+        $('resultState').textContent = 'Unavailable';
+        $('reading').textContent = '';
+        show(badgeImg, false);
+        show(badgeFallback, true);
+      });
+  }
+
   function check(a) {
     var url = badgeUrl(a);
 
     show(resultCard, true);
     show(embedCard, true);
     show(badgeFallback, false);
-    show(badgeImg, true);
+    // Hidden until this check's badge arrives, so the previous agent's is never shown under this one.
+    show(badgeImg, false);
     $('resultTitle').textContent = a.slice(0, 6) + '…' + a.slice(-4);
     $('resultState').textContent = 'Reading the chain';
     $('reading').textContent = '';
 
-    /* Cache-bust per check so a visitor who just registered is not shown the browser's
-     * copy of "not registered" from five minutes ago. The oracle's own cache still
-     * protects the chain from the traffic. */
-    badgeImg.src = url + '?t=' + Date.now();
+    loadBadge(url);
     badgeImg.alt = 'Sigvara score badge for ' + a;
 
-    $('evidenceLink').href = ORACLE + '/evidence/';
+    // The agent's own evidence. The oracle keys it by didHash, which did.js derives from the address.
+    $('evidenceLink').href = ORACLE + '/evidence/' + window.SigvaraDid.computeDidHash(a, 5042002).toLowerCase();
     $('explorerLink').href = EXPLORER + '/address/' + a;
     $('epochsLink').href = 'epochs?a=' + a;
 
@@ -88,15 +128,6 @@
       window.history.replaceState(null, '', u.toString());
     } catch (e) { /* a shareable URL is a nicety, never a reason to fail the check */ }
   }
-
-  badgeImg.addEventListener('load', function () {
-    $('resultState').textContent = 'Live';
-    /* The badge carries the verdict; naming it again in prose would be a second source
-     * of truth that can disagree with the picture beside it. This says where it came
-     * from instead. */
-    $('reading').textContent = 'Read from the spendable on-chain score, not from this oracle’s pending proposal.';
-    show(badgeFallback, false);
-  });
 
   badgeImg.addEventListener('error', function () {
     $('resultState').textContent = 'Unavailable';

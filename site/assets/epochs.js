@@ -463,7 +463,12 @@ function renderOperators(didHash, primaryHealth, checkerHealth, divergence, chai
     // read, a thrown error) still completes and writes nothing for it. So no entry is never shown
     // as a pass.
     const notAPass = "No entry is not a confirmation: a run that could not score this agent leaves none either.";
-    if (!p) {
+    // A chain read that failed says nothing about what is pending: "nothing is pending" would be a
+    // fact this page does not have.
+    const unread = chain.status !== "fulfilled";
+    if (unread) {
+      verdict = "<p>The chain could not be read just now, so this page cannot tell whether a proposal is pending, or which of the checker's entries are about it. Reload to try again.</p>";
+    } else if (!p) {
       verdict = "<p>Nothing is pending, so there is nothing for the checker to check right now.</p>";
     } else if (OPERATORS[p.proposer.toLowerCase()] === "checker") {
       verdict = "<p>The checker made this proposal itself, which it does only when the primary has gone quiet. No second operator has checked it.</p>";
@@ -488,7 +493,7 @@ function renderOperators(didHash, primaryHealth, checkerHealth, divergence, chai
     const mineSet = new Set(mine);
     const earlier = list.filter(d => !mineSet.has(d));
     if (earlier.length) {
-      verdict += `<p class="netnote">${earlier.length} earlier disagreement${earlier.length === 1 ? "" : "s"} for this agent: `
+      verdict += `<p class="netnote">${earlier.length} ${unread ? "" : "earlier "}disagreement${earlier.length === 1 ? "" : "s"} for this agent: `
         + earlier.slice(0, 5).map(d => `${esc(fmtWhen(Math.floor(Number(d.at) / 1000)))} (${Number(d.pendingTotal)} proposed, ${Number(d.ownTotal)} by the checker)`).join("; ")
         + `. Outcomes are written up in <a href="${SOURCE}/blob/main/docs/divergence-log.md" target="_blank" rel="noopener">the divergence log</a>.</p>`;
     }
@@ -514,7 +519,8 @@ function epochBar(e, chain) {
   if (e.zeroed) return { kind: "cleared", tip: `<b>Score zeroed by a slash</b><br>${esc(fmtWhen(e.at))}` };
   const f = e.fate, head = `Proposed ${esc(fmtWhen(e.proposedAt))}`;
   if (!f) {
-    const p = chain.status === "fulfilled" ? chain.value.pending : null;
+    if (chain.status !== "fulfilled") return { kind: "unknown", tip: `${head}<br>Pending or ended: the chain could not be read just now to say which` };
+    const p = chain.value.pending;
     return p && p.proposedAt === e.proposedAt
       ? { kind: "pending", value: p.total, closes: p.finalizableAt, tip: `${head}<br><b>Pending</b>, ${p.total} proposed` }
       : { kind: "ended", tip: `${head}<br>No longer pending on chain; what ended it is not indexed yet` };
@@ -534,7 +540,9 @@ function epochItem(e, prevRoot, chain, indexer = "The explorer") {
   let outcome, cls;
   if (!f) {
     const p = chain.status === "fulfilled" ? chain.value.pending : null;
-    if (p && p.proposedAt === e.proposedAt) {
+    if (chain.status !== "fulfilled") {
+      outcome = "Pending or ended: the chain could not be read just now to say which.";
+    } else if (p && p.proposedAt === e.proposedAt) {
       const left = p.finalizableAt - Math.floor(Date.now() / 1000);
       outcome = `Pending, ${p.total} proposed. ` + (left > 0 ? `Finalizable from ${esc(fmtWhen(p.finalizableAt))}.` : "Finalizable now.");
     } else {

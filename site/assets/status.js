@@ -39,8 +39,23 @@
     text: `Your browser could not read it: ${X.esc(read.reason?.name === "AbortError" ? "timed out" : read.reason?.message ?? read.reason)}.`,
   });
 
-  // An operator's /health. It answers 503 when it is unhealthy, with the reason in the body.
-  function assessOracle(read) {
+  // The divergence watcher polls the checker every five minutes, and the checker's /health says when it
+  // last did. A stopped watcher alerts on nothing, so this is how it shows; the live checks fail the
+  // checker on the same rule (scripts/check-live.mjs, watcherProblem): half an hour is six polls missed.
+  const WATCHER_SILENT_MS = 30 * 60 * 1000;
+  function watcherProblem(v, now = Date.now()) {
+    if (!("watcherSeenMs" in v)) return "It does not say when the divergence watcher last polled it.";
+    if (v.watcherSeenMs == null) {
+      const up = Number(v.uptimeSeconds) * 1000;
+      return Number.isFinite(up) && up > WATCHER_SILENT_MS ? `No divergence watcher has polled it in the ${Math.round(up / 60000)} minutes since it started.` : null;
+    }
+    const since = now - Number(v.watcherSeenMs);
+    return Number.isFinite(since) && since > WATCHER_SILENT_MS ? `The divergence watcher last polled it ${Math.round(since / 60000)} minutes ago.` : null;
+  }
+
+  // An operator's /health. It answers 503 when it is unhealthy, with the reason in the body. The
+  // checker is also held to its watcher's polls.
+  function assessOracle(read, { checker = false } = {}) {
     if (read.status === "rejected") return noAnswer(read);
     const v = bodyOf(read);
     const last = Number(v.lastSuccessfulEpochMs), since = Number(v.timeSinceLastEpochMs);
@@ -58,6 +73,8 @@
       ? `Last epoch finished ${ago(since)} ago, at ${X.esc(X.fmtWhen(Math.floor(last / 1000)))}, ${every}.`
       : `No epoch has finished since it started ${ago(Number(v.uptimeSeconds) * 1000 || 0)} ago, ${every}.`);
     if (v.epochRunning === true) said.push("One is running now.");
+    const watcher = checker && state !== "down" ? watcherProblem(v) : null;
+    if (watcher) { state = "attention"; said.push(watcher); }
     if (v.commit) said.push(`Runs ${X.commitLink(v.commit)}.`);
     // For the room (status-scene.js): the one fact in a few words, and the measure against its limits.
     return {
@@ -186,7 +203,7 @@
       ]);
       render([
         { name: "Primary oracle", kind: "primary", href: `${X.PRIMARY}/health`, ...assessOracle(primary) },
-        { name: "Checker", kind: "checker", href: `${X.CHECKER}/health`, ...assessOracle(checker) },
+        { name: "Checker", kind: "checker", href: `${X.CHECKER}/health`, ...assessOracle(checker, { checker: true }) },
         { name: "Disagreements", kind: "divergence", href: "operators", ...assessDivergence(divergence) },
         { name: "Event index", kind: "index", href: `${X.INDEX}/health`, ...assessIndex(index, head) },
         { name: "Arc testnet RPC", kind: "chain", ...assessChain(head) },
