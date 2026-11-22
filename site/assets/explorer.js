@@ -103,6 +103,8 @@
   // The explorer's getLogs returns at most this many rows. A full page means there may be more.
   const EXPLORER_PAGE = 1000;
   const LOGS_TTL_MS = 10 * 60 * 1000;
+  // How much older than the chain tail an explorer answer may be before the two can leave a gap.
+  const STALE_PAIR_MS = 60 * 1000;
   const EXPLORER_TIMEOUT_MS = 60000;
   // The RPC answers eth_getLogs over at most this many blocks, inclusive.
   const LOG_SPAN = 10000;
@@ -260,9 +262,12 @@
   // costs it more: it refuses a batch of four, so those go three at a time, a second apart.
   const RPC_BATCH = 10;
   const pause = (ms) => new Promise((r) => setTimeout(r, ms));
-  async function rpcMany(calls, { batch = RPC_BATCH, gap = 150 } = {}) {
+  // `isCurrent`, when given, is asked before each batch: a read for a lookup the visitor has moved
+  // on from stops there rather than holding the RPC, and the page-wide log queue, for its rest.
+  async function rpcMany(calls, { batch = RPC_BATCH, gap = 150, isCurrent = null } = {}) {
     const out = new Array(calls.length);
     for (let start = 0; start < calls.length; start += batch) {
+      if (isCurrent && !isCurrent()) throw new Error("superseded");
       if (start) await pause(gap);
       let pending = calls.slice(start, start + batch).map((c, k) => start + k);
       for (let attempt = 0; pending.length; attempt++) {
@@ -369,15 +374,23 @@
 
   // An answer kept in the tab for ten minutes, because the explorer allows ten requests an hour
   // and the RPC's log reads are slow. A read that fails is not kept. Storage can be missing or
-  // refuse a write; then every call asks again.
-  async function cached(key, read) {
+  // refuse a write; then every call asks again. Callers that ask for a key while its read is out
+  // share that read: the status page starts three history reads at once, and each used to run the
+  // same chain read when the event index was down. A hit older than `notBefore` (ms) is not used.
+  const reading = new Map();
+  async function cached(key, read, notBefore = 0) {
     try {
       const hit = JSON.parse(sessionStorage.getItem(key));
-      if (hit && Date.now() - hit.at < LOGS_TTL_MS && hit.value !== undefined) return hit.value;
+      if (hit && Date.now() - hit.at < LOGS_TTL_MS && hit.at >= notBefore && hit.value !== undefined) return hit.value;
     } catch (_) { /* no cache */ }
-    const value = await read();
-    try { sessionStorage.setItem(key, JSON.stringify({ at: Date.now(), value })); } catch (_) { /* no cache */ }
-    return value;
+    if (reading.has(key)) return reading.get(key);
+    const run = (async () => {
+      const value = await read();
+      try { sessionStorage.setItem(key, JSON.stringify({ at: Date.now(), value })); } catch (_) { /* no cache */ }
+      return value;
+    })();
+    reading.set(key, run);
+    try { return await run; } finally { reading.delete(key); }
   }
 
   // The newest block the explorer has indexed, as { block, time }, or null when it does not say.
@@ -406,12 +419,12 @@
   // Logs from the chain itself over blocks [from, to], read in spans the RPC accepts, as rows
   // shaped like the explorer's (its hex timeStamp included unless `times` is false), so both go
   // through the same parsing. `topics` is an eth_getLogs topic filter, or null for none.
-  async function chainLogs(addresses, topics, from, to, { times = true } = {}) {
+  async function chainLogs(addresses, topics, from, to, { times = true, isCurrent = null } = {}) {
     const hex = (n) => "0x" + n.toString(16);
     const spans = [];
     for (let end = to; end >= from; end -= LOG_SPAN) spans.push([Math.max(from, end - LOG_SPAN + 1), end]);
     const filter = (a, b) => ({ address: addresses, ...(topics ? { topics } : {}), fromBlock: hex(a), toBlock: hex(b) });
-    const got = await queued(() => rpcMany(spans.map(([a, b]) => ["eth_getLogs", [filter(a, b)]]), { batch: 3, gap: 1000 }));
+    const got = await queued(() => rpcMany(spans.map(([a, b]) => ["eth_getLogs", [filter(a, b)]]), { batch: 3, gap: 1000, isCurrent }));
     if (!got.every(Array.isArray)) throw new Error("a log read came back malformed");
     const rows = got.flat().filter((r) => r && typeof r === "object" && !r.removed);
     // Arc's RPC gives each log its block's time; addTimes covers one that does not.
@@ -447,20 +460,22 @@
   // filter on the fifteen topics the pages read "requested range too large" over any span.
   function chainTail() {
     return cached("sigvara-explorer:tail", async () => {
+      const readAt = Date.now();
       const range = await tailRange();
       const rows = range.from <= range.to ? await chainLogs([IDENTITY, STAKING, ORACLE_BOND], null, range.from, range.to) : [];
-      return { ...range, rows };
+      return { ...range, rows, readAt };
     });
   }
 
   // One contract's logs for one event set, from the explorer, as it answers them. A full page is
   // continued from its last block, because the explorer has no cursor. Kept in the tab apart
   // from the chain's tail, so a page is never older than the older of the two.
-  function explorerLogs(address, wanted) {
+  function explorerLogs(address, wanted, notBefore = 0) {
     const key = `sigvara-explorer-logs:${address.toLowerCase()}:${wanted.map((e) => e.topic).join(",")}`;
-    return cached(key, () => explorerPages(address, wanted));
+    return cached(key, () => explorerPages(address, wanted), notBefore);
   }
   async function explorerPages(address, wanted) {
+    const readAt = Date.now();
     const rows = [];
     let from = 0, more = false;
     for (let page = 0; page < 10; page++) {
@@ -476,7 +491,7 @@
       if (!more) break;
       from = parseInt(j.result[j.result.length - 1].blockNumber, 16);
     }
-    return { rows, more };
+    return { rows, more, readAt };
   }
 
   /**
@@ -486,7 +501,7 @@
    * does not answer, so a page can fall back to the explorer; a chain read that fails is reported
    * in `tail.error` instead. `tail` says how the chain filled in, for historyNote.
    */
-  async function indexLogs(addresses, { topic0 = null, topic1 = null, fromBlock = null } = {}) {
+  async function indexLogs(addresses, { topic0 = null, topic1 = null, fromBlock = null, isCurrent = null } = {}) {
     const q = new URLSearchParams({ address: addresses.join(",") });
     if (topic0) q.set("topic0", topic0.join(","));
     if (topic1) q.set("topic1", topic1);
@@ -529,7 +544,7 @@
     const tail = { source: "index", from, to: latest, missed: from > want ? [want, from - 1] : null, indexHead };
     let rows = [];
     try {
-      if (from <= latest) rows = await chainLogs(addresses, topics, from, latest);
+      if (from <= latest) rows = await chainLogs(addresses, topics, from, latest, { isCurrent });
     } catch (e) {
       tail.error = String(e?.message ?? e);
     }
@@ -546,10 +561,15 @@
     try {
       ({ rows, tail: how } = await indexLogs([address], { topic0: wanted.map((e) => e.topic) }));
     } catch (indexError) {
-      const [indexed, tail] = await Promise.all([
+      const [first, tail] = await Promise.all([
         explorerLogs(address, wanted),
         chainTail().catch((e) => ({ error: String(e?.message ?? e), rows: [] })),
       ]);
+      // The tail starts past the explorer's newest indexed block as it was when the tail was read.
+      // An explorer answer cached well before that ends earlier, and the blocks between would be
+      // in neither, with no warning: read the explorer again in that case.
+      const indexed = Number(tail.readAt) - Number(first.readAt ?? 0) > STALE_PAIR_MS
+        ? await explorerLogs(address, wanted, tail.readAt) : first;
       rows = [...indexed.rows, ...tail.rows];
       more = indexed.more;
       const { rows: _, ...rest } = tail;

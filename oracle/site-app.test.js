@@ -49,7 +49,7 @@ function element(id) {
  * transaction is confirmed. `rpc` replaces the stub RPC's fetch. Every timer the page sets fires at once,
  * and `waits` records the delay it asked for. `downloads` holds each link the page clicked to save a file.
  */
-function load({ agents = {}, hold = () => null, receipt = () => ({ status: '0x1', blockNumber: '0x10' }), rpc = null } = {}) {
+function load({ agents = {}, hold = () => null, receipt = () => ({ status: '0x1', blockNumber: '0x10' }), rpc = null, balances = {}, holdCall = () => null, fail = () => null } = {}) {
   const els = new Map();
   const $ = (id) => { if (!els.has(id)) els.set(id, element(id)); return els.get(id); };
   const byDid = new Map(Object.entries(agents).map(([addr, s]) => [didOf(addr), { addr, ...s }]));
@@ -72,7 +72,9 @@ function load({ agents = {}, hold = () => null, receipt = () => ({ status: '0x1'
       case SEL.inflowsPausedUntil: return `0x${w(0)}`;
       case SEL.symbol: return `0x${w(32)}${w(3)}${Buffer.from('SVR').toString('hex').padEnd(64, '0')}`;
       case SEL.decimals: return `0x${w(18)}`;
-      case SEL.balanceOf: case SEL.claimable: case SEL.allowance: return `0x${w(0)}`;
+      // A balance by the account it is asked for (the last 40 hex digits of the calldata).
+      case SEL.balanceOf: return `0x${w(balances[`0x${data.slice(-40)}`] ?? 0n)}`;
+      case SEL.claimable: case SEL.allowance: return `0x${w(0)}`;
       case SEL.registrationDigest: return `0x${w(0xd16e57)}`;
       default: throw new Error(`no stub for ${sel} on ${to}`);
     }
@@ -80,7 +82,11 @@ function load({ agents = {}, hold = () => null, receipt = () => ({ status: '0x1'
   const batches = [];
   const fetch = async (_url, init) => {
     const body = JSON.parse(init.body);
-    const one = (r) => ({ jsonrpc: '2.0', id: r.id, result: answer(r.params[0]) });
+    // `fail(selector)` may name an error the node answers that call with.
+    const one = (r) => {
+      const message = fail(r.params[0].data.slice(0, 10));
+      return message ? { jsonrpc: '2.0', id: r.id, error: { code: -32603, message } } : { jsonrpc: '2.0', id: r.id, result: answer(r.params[0]) };
+    };
     if (Array.isArray(body)) {
       batches.push(body);
       const gate = hold(`0x${body[0].params[0].data.slice(10, 74)}`);
@@ -91,6 +97,8 @@ function load({ agents = {}, hold = () => null, receipt = () => ({ status: '0x1'
       const result = await receipt(body.params[0], ++receiptReads);
       return { json: async () => ({ jsonrpc: '2.0', id: body.id, result }) };
     }
+    const gate = holdCall(body.params?.[0]?.data ?? '');
+    if (gate) await gate;
     return { json: async () => one(body) };
   };
   let receiptReads = 0;
@@ -126,7 +134,7 @@ const neverAnswers = (_url, init) => new Promise((_, reject) => {
  * or accounts does. `connect` may return a promise eth_requestAccounts waits on; `sign(n)` answers the
  * nth personal_sign, and throws to refuse it.
  */
-function wallet({ chain = ARC, account = OPERATOR, switchError = null, addSwitches = true, connect = () => null, sign = () => `0x${'11'.repeat(65)}` } = {}) {
+function wallet({ chain = ARC, account = OPERATOR, switchError = null, addSwitches = true, connect = () => null, sign = () => `0x${'11'.repeat(65)}`, send = () => null } = {}) {
   let signs = 0;
   const p = {
     chain, account, calls: [], handlers: {}, sent: 0,
@@ -140,7 +148,7 @@ function wallet({ chain = ARC, account = OPERATOR, switchError = null, addSwitch
         case 'eth_chainId': return p.chain;
         case 'wallet_switchEthereumChain': if (switchError) throw switchError; p.chain = ARC; return null;
         case 'wallet_addEthereumChain': if (addSwitches) p.chain = ARC; return null;
-        case 'eth_sendTransaction': return `0x${w(++p.sent)}`;
+        case 'eth_sendTransaction': { const gate = send(p.sent + 1); if (gate) await gate; return `0x${w(++p.sent)}`; }
         // The page reads receipts from Arc's RPC. A wallet asked anyway answers as one whose node is down.
         case 'eth_getTransactionReceipt': throw new Error('the wallet could not reach its node');
         default: throw new Error(`no stub for ${method}`);
@@ -404,4 +412,59 @@ test('a refused signature and a second Register keep one key file, and register 
   assert.ok(register, 'the registration was sent');
   const pubKey = register.params[0].data.slice(74, 138);
   assert.ok(page.downloads[0].download.endsWith(`-${pubKey.slice(0, 8)}.txt`), 'the key registered is the one in the file');
+});
+
+// ---- what a refresh may decide ----------------------------------------------------------
+
+test('a balance read for the previous account does not land after the account changed', async () => {
+  let release;
+  const held = new Promise((r) => { release = r; });
+  let holding = false;
+  const page = load({
+    agents: { [B]: {} },
+    balances: { [OPERATOR]: 7n * SVR_UNIT, [C]: 3n * SVR_UNIT },
+    holdCall: (data) => (holding && data.startsWith(SEL.balanceOf) && data.endsWith(OPERATOR.slice(2)) ? held : null),
+  });
+  const p = wallet();
+  await connected(page, p, B);
+  holding = true;
+  const old = page.ctx.refreshSvrBalance(); // asked for OPERATOR, answered late
+  p.account = C;
+  await page.ctx.walletChanged('Test wallet');
+  await idle();
+  assert.match(page.$('svrBal').textContent, /^3 /);
+  release();
+  await old;
+  await idle();
+  assert.match(page.$('svrBal').textContent, /^3 /, "the previous account's balance did not replace this one's");
+});
+
+test('a lookup while the faucet prompt is open does not leave the faucet off after a refusal', async () => {
+  let refuse;
+  const asking = new Promise((_, reject) => { refuse = reject; });
+  asking.catch(() => {});
+  const page = load({ agents: { [B]: { stake: 1000n * SVR_UNIT } } });
+  const p = wallet({ send: () => asking });
+  await connected(page, p, B);
+  const run = page.$('faucetBtn').onclick();
+  await idle();
+  assert.equal(page.$('faucetBtn').disabled, true, 'off while it runs');
+  await page.ctx.lookup(); // sets the bond card's buttons, not the faucet
+  refuse(Object.assign(new Error('User rejected the request.'), { code: 4001 }));
+  await run;
+  await idle();
+  assert.equal(page.$('faucetBtn').disabled, false, 'the faucet is usable again');
+});
+
+test('an optional read that fails for a reason other than a revert is not read as a contract without it', async () => {
+  // inflowsPausedUntil is optional because the September contracts lack it, and lacking it reverts. A
+  // node error says nothing about the contract: taking it for "absent" would show Register during a pause.
+  const page = load({ fail: (sel) => (sel === SEL.inflowsPausedUntil ? 'internal error' : null) });
+  await connected(page, wallet(), OPERATOR);
+  assert.match(page.$('log').innerHTML, /lookup failed: internal error/);
+  assert.doesNotMatch(page.$('regStatus').innerHTML, /Register this agent/);
+
+  const reverts = load({ fail: (sel) => (sel === SEL.inflowsPausedUntil ? 'execution reverted' : null) });
+  await connected(reverts, wallet(), OPERATOR);
+  assert.match(reverts.$('regStatus').innerHTML, /Register this agent/, 'a revert is still read as absent');
 });

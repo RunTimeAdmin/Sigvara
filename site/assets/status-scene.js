@@ -255,6 +255,8 @@ function start(host, data) {
       state.className = pillOf(row);
       fact.textContent = row.fact ?? "";
     });
+    // A tooltip that is open says what was just read, not what was read when it opened.
+    show(hovered ?? held);
     dirty = true;
   }
   const reading = () => { const s = hud.querySelector("span"); if (s) s.textContent = "reading…"; };

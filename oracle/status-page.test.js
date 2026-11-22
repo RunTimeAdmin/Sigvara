@@ -186,3 +186,50 @@ test('a checker whose divergence watcher stopped polling needs attention, as the
   // The primary has no watcher, and is not held to one.
   assert.equal(assessOracle(answered(health())).state, 'ok');
 });
+
+test('the status page reads past the browser cache, and the next minute rewrites only what changed', async () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const vm = require('node:vm');
+  const X = require('../site/assets/explorer.js');
+  const source = fs.readFileSync(path.join(__dirname, '..', 'site', 'assets', 'status.js'), 'utf8');
+  let writes = 0;
+  let html = '';
+  const dds = new Map();
+  const time = { textContent: '' };
+  const body = {
+    set innerHTML(v) { writes++; html = v; },
+    get innerHTML() { return html; },
+    querySelector: (sel) => {
+      const kind = /data-kind="(\w+)"/.exec(sel)?.[1];
+      if (kind) { if (!dds.has(kind)) dds.set(kind, { innerHTML: '' }); return dds.get(kind); }
+      return sel.includes('checked') ? time : null;
+    },
+  };
+  let ago = 20 * 60 * 1000;
+  const inits = [];
+  const answer = (url) => (url.endsWith('/divergence') ? { divergences: [], total: 0, tolerance: 5, seesProposals: true }
+    : url.includes('index') ? { ok: true }
+    : { ok: true, epochMs: HOUR, uptimeSeconds: 7200, lastSuccessfulEpochMs: Date.now() - ago, timeSinceLastEpochMs: ago, storeWritable: true, statePersisted: true, epochRunning: false, commit: 'a'.repeat(40), watcherSeenMs: Date.now() });
+  const intervals = [];
+  const listeners = {};
+  const ctx = vm.createContext({
+    window: { SigvaraExplorer: { ...X, blockNumber: async () => 100 }, addEventListener: (t, fn) => { listeners[`window:${t}`] = fn; } },
+    document: { querySelector: (sel) => (sel === '#statusCard .card-body' ? body : null), addEventListener: (t, fn) => { listeners[`document:${t}`] = fn; }, dispatchEvent() {}, hidden: false },
+    Event: class { constructor(type) { this.type = type; } },
+    fetch: async (url, init) => { inits.push(init); return { status: 200, json: async () => answer(String(url)) }; },
+    AbortController, setTimeout, clearTimeout,
+    setInterval: (fn) => { intervals.push(fn); return 1; },
+  });
+  vm.runInContext(source, ctx);
+  for (let i = 0; i < 30; i++) await new Promise(setImmediate);
+  assert.equal(writes, 1, 'the card is drawn once');
+  assert.ok(inits.length >= 4 && inits.every((i) => i.cache === 'no-store'), 'every read skips the browser cache');
+  assert.equal(typeof listeners['document:visibilitychange'], 'function', 'a tab shown again can read again');
+  ago = 25 * 60 * 1000; // a minute later the last epoch is further back
+  intervals[0]();
+  for (let i = 0; i < 30; i++) await new Promise(setImmediate);
+  assert.equal(writes, 1, 'the card was not rewritten');
+  assert.match(dds.get('primary')?.innerHTML ?? '', /25/, "the primary's line was");
+  assert.match(time.textContent, /^Checked /);
+});

@@ -168,18 +168,18 @@ async function blockNumber() {
 // this tab for a few minutes and a reload does not spend another. Storage can be missing or
 // refuse a write; then every lookup asks again.
 const HISTORY_TTL_MS = 10 * 60 * 1000;
-async function agentHistory(didHash) {
+async function agentHistory(didHash, isCurrent = null) {
   try {
-    const { rows, tail } = await X.indexLogs([REPUTATION], { topic0: EVENTS.map(e => e.topic), topic1: didHash });
+    const { rows, tail } = await X.indexLogs([REPUTATION], { topic0: EVENTS.map(e => e.topic), topic1: didHash, isCurrent });
     // An answer about another agent is not this one's history.
     return { logs: mergeLogs(rows.map(parseLog).filter(Boolean), []).filter(l => l.didHash === didHash), truncated: false, tail };
   } catch (indexError) {
-    return explorerHistory(didHash, String(indexError?.message ?? indexError));
+    return explorerHistory(didHash, String(indexError?.message ?? indexError), isCurrent);
   }
 }
 
 // The same history from the Arc explorer, when the event index does not answer.
-async function explorerHistory(didHash, indexError) {
+async function explorerHistory(didHash, indexError, isCurrent = null) {
   const key = `sigvara-epochs:${didHash}`;
   try {
     const hit = JSON.parse(sessionStorage.getItem(key));
@@ -187,7 +187,7 @@ async function explorerHistory(didHash, indexError) {
   } catch (_) { /* no cache */ }
   const [indexed, tail] = await Promise.all([
     explorerLogs({ topic1: didHash }),
-    X.tailRange().then(async (range) => ({ ...range, logs: await chainHistory(didHash, range.from, range.to) }))
+    X.tailRange().then(async (range) => ({ ...range, logs: await chainHistory(didHash, range.from, range.to, isCurrent) }))
       .catch((e) => ({ error: String(e?.message ?? e), logs: [] })),
   ]);
   const { logs, ...how } = tail;
@@ -201,9 +201,9 @@ async function explorerHistory(didHash, indexError) {
 // The reputation contract's logs over blocks [from, to], read from the chain and parsed like the
 // explorer's, oldest first. `didHash` narrows them to one agent. ScoreProposed and ReputationUpdated carry their
 // block's time; only the other two need it read.
-async function chainHistory(didHash, from, to) {
+async function chainHistory(didHash, from, to, isCurrent = null) {
   const topics = [EVENTS.map(e => e.topic), ...(didHash ? [didHash] : [])];
-  const rows = from <= to ? await X.chainLogs([REPUTATION], topics, from, to, { times: false }) : [];
+  const rows = from <= to ? await X.chainLogs([REPUTATION], topics, from, to, { times: false, isCurrent }) : [];
   const timed = new Set(EVENTS.filter(e => e.name === "ScoreRejected" || e.name === "ReputationZeroed").map(e => e.topic));
   await X.addTimes(rows.filter(r => timed.has(String(r?.topics?.[0]).toLowerCase())));
   const logs = rows.map(parseLog).filter(Boolean);
@@ -359,7 +359,20 @@ function renderAgent(addr, didHash, chain) {
   $("agentInfo").classList.remove("u-hidden");
 }
 
+// The time left in an open challenge window, kept current while the page is open: the room above
+// counts it down on its own, and a figure fixed when the card was drawn soon disagreed with it.
+let windowTicker = null;
+function tickWindows() {
+  const now = Math.floor(Date.now() / 1000);
+  for (const el of document.querySelectorAll("[data-until]")) {
+    const left = Number(el.dataset.until) - now;
+    el.textContent = left > 0 ? `${fmtDuration(left)} left` : "now closed";
+  }
+}
+
 function renderPending(chain) {
+  clearInterval(windowTicker);
+  windowTicker = null;
   if (chain.status === "rejected") return setCard("pendingCard", failed("the chain", chain.reason));
   const p = chain.value.pending, now = Math.floor(Date.now() / 1000);
   if (!p) {
@@ -374,9 +387,10 @@ function renderPending(chain) {
       <dt>Proposed at</dt><dd>${esc(fmtWhen(p.proposedAt))}</dd>
       <dt>Evidence root</dt><dd>${rootCode(p.root)}</dd>
       <dt>Challenge window</dt><dd class="prose">${open
-        ? `<span class="pill-warn">open</span> until ${esc(fmtWhen(p.finalizableAt))} (${esc(fmtDuration(p.finalizableAt - now))} left). Until then the committee can reject it.`
+        ? `<span class="pill-warn">open</span> until ${esc(fmtWhen(p.finalizableAt))} (<span data-until="${Number(p.finalizableAt)}">${esc(fmtDuration(p.finalizableAt - now))} left</span>). Until then the committee can reject it.`
         : `<span class="pill-ok">closed</span> at ${esc(fmtWhen(p.finalizableAt))}. Anyone can call <code>finalizeReputation</code> now, and the oracle does on its next epoch.`}</dd>
     </dl>`);
+  if (open) windowTicker = setInterval(tickWindows, 30000);
 }
 
 function renderEvidence(didHash, evidence, chain) {
@@ -576,7 +590,10 @@ function renderTimeline(history, chain, showAll) {
   if (history.status === "rejected") return setCard("timelineCard", failed("the explorer's history", history.reason));
   const { logs, truncated } = history.value;
   const epochs = buildEpochs(logs);
-  if (!epochs.length) return setCard("timelineCard", "<p>No proposal has been made for this agent yet.</p>");
+  // What may be missing is said here too: a history the chain could not fill in can read as none.
+  const notes = (truncated ? '<p class="pill-warn">The explorer has more history than this page reads, so the newest entries may be missing.</p>' : "")
+    + X.historyNote(history.value);
+  if (!epochs.length) return setCard("timelineCard", "<p>No proposal has been made for this agent yet.</p>" + notes);
   const proposals = epochs.filter(e => !e.zeroed);
   const finalized = proposals.filter(e => e.fate?.kind === "finalized").length;
   // Each proposal's root is compared with the one before it, so the marker shows where the set
@@ -597,8 +614,7 @@ function renderTimeline(history, chain, showAll) {
     + `<ol class="timeline">${shown.join("")}</ol>`;
   if (shown.length < items.length) html += `<button class="btn btn-secondary btn-sm" id="showAllBtn" type="button">Show all ${items.length}</button>`;
   // Pages are read oldest first, so what a cut-off loses is the newest.
-  if (truncated) html += '<p class="pill-warn">The explorer has more history than this page reads, so the newest entries may be missing.</p>';
-  html += X.historyNote(history.value);
+  html += notes;
   setCard("timelineCard", html);
   const btn = $("showAllBtn");
   if (btn) btn.onclick = () => guard("timelineCard", () => renderTimeline(history, chain, true));
@@ -629,11 +645,11 @@ async function loadRecent() {
     const floor = Math.max(0, head - RECENT_BLOCKS + 1);
     let logs, note;
     try {
-      const { rows, tail } = await X.indexLogs([REPUTATION], { topic0: EVENTS.map(e => e.topic), fromBlock: floor });
+      const { rows, tail } = await X.indexLogs([REPUTATION], { topic0: EVENTS.map(e => e.topic), fromBlock: floor, isCurrent: () => seq === lookupSeq });
       logs = mergeLogs(rows.map(parseLog).filter(Boolean), []);
       note = X.historyNote({ tail });
     } catch (_) {
-      logs = await chainHistory(null, floor, head);
+      logs = await chainHistory(null, floor, head, () => seq === lookupSeq);
       note = '<p class="netnote">Read from the chain itself, because Sigvara\'s event index did not answer.</p>';
     }
     if (seq !== lookupSeq) return;
@@ -685,8 +701,14 @@ async function loadRecent() {
 
 // ---- lookup ----
 let lookupSeq = 0;
+// The address whose lookup is running. The same address submitted again meanwhile is that lookup,
+// not a new one: with the event index down, each would spend one of the explorer's ten an hour.
+let lookingUp = null;
 async function lookup(addr) {
+  if (lookingUp === addr.toLowerCase()) return;
+  lookingUp = addr.toLowerCase();
   const seq = ++lookupSeq;
+  const current = () => seq === lookupSeq;
   const didHash = SigvaraDid.computeDidHash(addr, CHAIN_ID).toLowerCase();
   try {
     const u = new URL(window.location.href);
@@ -696,16 +718,22 @@ async function lookup(addr) {
   $("recentCard").classList.add("u-hidden");
   drawScene(null);
   for (const id of ["pendingCard", "evidenceCard", "operatorsCard", "timelineCard"]) setCard(id, '<p class="netnote">Reading…</p>');
+  // The agent block names the agent being looked up from the start, rather than the previous one
+  // until every read is back.
+  $("didStr").textContent = `did:sigvara:${CHAIN_ID}:${addr}`;
+  $("didHash").textContent = didHash;
+  for (const id of ["status", "score", "finalRoot"]) $(id).textContent = "Reading…";
 
   const [chain, history, evidence, primaryHealth, checkerHealth, divergence] = await Promise.allSettled([
     readChain(didHash),
-    agentHistory(didHash),
+    agentHistory(didHash, current),
     getJson(`${PRIMARY}/evidence/${didHash}`),
     getJson(`${PRIMARY}/health`),
     getJson(`${CHECKER}/health`),
     getJson(`${CHECKER}/divergence/${didHash}`),
   ]);
   if (seq !== lookupSeq) return; // a newer lookup started while this one was reading
+  lookingUp = null;
   try {
     renderAgent(addr, didHash, chain);
   } catch (e) {

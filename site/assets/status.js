@@ -160,22 +160,44 @@
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), READ_TIMEOUT_MS);
     try {
-      const res = await fetch(url, { signal: ctl.signal });
+      // Not from the browser's cache: the proxy lets /health be kept for 30 seconds, and a reload
+      // inside that would show the previous answer as "Checked" now.
+      const res = await fetch(url, { signal: ctl.signal, cache: "no-store" });
       return { httpStatus: res.status, body: await res.json().catch(() => null) };
     } finally {
       clearTimeout(timer);
     }
   }
 
+  // What the card last showed: its outline (the headline's state, the note, each row's name) and
+  // each row's line. The card is rewritten only when the outline changes. Otherwise only the rows
+  // whose line changed are, and the time: rewriting the whole card every minute took keyboard focus
+  // off a link in it, and made a screen reader read all of it again.
+  let shown = null;
   function render(rows) {
     const worst = overall(rows);
     const link = (r) => (r.href ? `<a href="${r.href}"${r.href.startsWith("http") ? ' target="_blank" rel="noopener"' : ""}>${r.name}</a>` : r.name);
-    document.querySelector("#statusCard .card-body").innerHTML =
-      `<p><b class="${STATES[worst].pill}">${HEADLINES[worst]}</b> `
-      + `<span class="netnote">Checked ${X.esc(X.fmtWhen(Math.floor(Date.now() / 1000)))}. Reads again every minute while this tab is open.</span></p>`
-      + (rows.some((r) => r.state === "unreachable")
-        ? '<p class="netnote">No answer can be your connection rather than the service, so try the link from elsewhere before calling it an outage.</p>' : "")
-      + `<dl class="kv">${rows.map((r) => `<dt>${link(r)}</dt><dd class="prose"><span class="${STATES[r.state].pill}">${r.label ?? STATES[r.state].label}</span> ${r.text}</dd>`).join("")}</dl>`;
+    const checked = `Checked ${X.fmtWhen(Math.floor(Date.now() / 1000))}. Reads again every minute while this tab is open.`;
+    const lines = rows.map((r) => `<span class="${STATES[r.state].pill}">${r.label ?? STATES[r.state].label}</span> ${r.text}`);
+    const outline = `${worst}|${rows.some((r) => r.state === "unreachable")}|${rows.map((r) => `${r.kind}:${link(r)}`).join("|")}`;
+    const body = document.querySelector("#statusCard .card-body");
+    if (!shown || shown.outline !== outline) {
+      body.innerHTML =
+        `<p><b class="${STATES[worst].pill}">${HEADLINES[worst]}</b> `
+        + `<span class="netnote" data-part="checked" aria-live="off">${X.esc(checked)}</span></p>`
+        + (rows.some((r) => r.state === "unreachable")
+          ? '<p class="netnote">No answer can be your connection rather than the service, so try the link from elsewhere before calling it an outage.</p>' : "")
+        + `<dl class="kv">${rows.map((r, i) => `<dt>${link(r)}</dt><dd class="prose" data-kind="${r.kind}">${lines[i]}</dd>`).join("")}</dl>`;
+    } else {
+      rows.forEach((r, i) => {
+        if (lines[i] === shown.lines[i]) return;
+        const dd = body.querySelector(`dd[data-kind="${r.kind}"]`);
+        if (dd) dd.innerHTML = lines[i];
+      });
+      const time = body.querySelector('[data-part="checked"]');
+      if (time) time.textContent = checked;
+    }
+    shown = { outline, lines };
     // The room above (status-scene.js) draws the same judgement. It is a module, so it may load
     // before or after this.
     const epochs = { of: EPOCHS_DOWN, marks: [[1, "next epoch due"], [EPOCHS_LATE, "late from here"], [EPOCHS_DOWN, "down from here"]] };
@@ -209,11 +231,14 @@
         { name: "Arc testnet RPC", kind: "chain", ...assessChain(head) },
       ]);
     } catch (e) {
+      shown = null;
       document.querySelector("#statusCard .card-body").innerHTML = X.failed("the services", e);
     } finally {
       reading = false;
+      lastRead = Date.now();
     }
   }
+  let lastRead = 0;
 
   if (typeof module !== "undefined" && module.exports) {
     module.exports = { assessOracle, assessIndex, assessDivergence, assessChain, overall };
@@ -221,5 +246,9 @@
   if (typeof document !== "undefined") {
     refresh();
     setInterval(() => { if (!document.hidden) refresh(); }, REFRESH_MS);
+    // A hidden tab skips its minute's read, and a page brought back from the back-forward cache
+    // shows the reading it left with: both read again on return when that reading is old.
+    document.addEventListener("visibilitychange", () => { if (!document.hidden && Date.now() - lastRead > REFRESH_MS) refresh(); });
+    root.addEventListener?.("pageshow", (e) => { if (e.persisted) refresh(); });
   }
 })(typeof window !== "undefined" ? window : globalThis);

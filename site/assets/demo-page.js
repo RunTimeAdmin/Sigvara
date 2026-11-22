@@ -40,8 +40,17 @@ function renderCard() {
 var seen = 0;
 function renderLog() {
   var list = $('log');
-  if (sim.events.length === 0) { list.innerHTML = '<li class="log-empty">Nothing yet. Start with step 01.</li>'; seen = 0; return; }
-  if (seen === 0) list.innerHTML = '';
+  if (sim.events.length === 0) {
+    // After Clear the log can hold revert lines and nothing else, and those stay. The placeholder
+    // is only for a log with nothing in it, and once an agent exists it says the log was cleared.
+    if (!list.querySelector('li:not(.log-empty)')) {
+      list.innerHTML = '<li class="log-empty">' + (sim.agent ? 'Log cleared.' : 'Nothing yet. Start with step 01.') + '</li>';
+    }
+    seen = 0;
+    return;
+  }
+  var placeholder = list.querySelector('.log-empty');
+  if (placeholder) placeholder.remove();
   for (; seen < sim.events.length; seen++) {
     var e = sim.events[seen];
     var args = Object.keys(e.args).map(function (k) {
@@ -142,8 +151,14 @@ function verifyWith(sigBytes, label) {
   out('outVerify', line(label, r.ok ? 'valid' : 'invalid', r.ok ? 'ok' : 'bad') + line('reason', r.reason) + line('status', sim.agent.status) + line('score', score + ' vs threshold ' + t + ' → ' + (meets ? 'meets' : 'below'), meets ? 'ok' : 'warn') + line('decision', decision ? 'route the task' : 'refuse', decision ? 'ok' : 'bad'));
   if (decision) { setStep(4, 'done'); unlock(6); }
 }
-$('btnVerify').addEventListener('click', function () { attempt(function () { verifyWith(b58decode(signature), 'signature'); }, 'outVerify'); });
-$('btnTamper').addEventListener('click', function () { attempt(function () { var b = b58decode(signature); b[0] ^= 1; verifyWith(b, 'tampered signature'); }, 'outVerify'); });
+// The signature's bytes, once there is one: decoding a signature that was never made threw a
+// TypeError before verifyWith could say what was missing.
+function signedBytes() {
+  if (!challenge || !signature) throw new Error('issue and sign a challenge first');
+  return b58decode(signature);
+}
+$('btnVerify').addEventListener('click', function () { attempt(function () { verifyWith(signedBytes(), 'signature'); }, 'outVerify'); });
+$('btnTamper').addEventListener('click', function () { attempt(function () { var b = signedBytes(); b[0] ^= 1; verifyWith(b, 'tampered signature'); }, 'outVerify'); });
 function b58decode(s) {
   var A = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz', bytes = [0];
   for (var i = 0; i < s.length; i++) { var c = A.indexOf(s[i]); if (c < 0) throw new Error('bad base58'); for (var j = 0; j < bytes.length; j++) { c += bytes[j] * 58; bytes[j] = c & 0xff; c >>= 8; } while (c > 0) { bytes.push(c & 0xff); c >>= 8; } }
@@ -178,14 +193,14 @@ $('btnRead').addEventListener('click', function () {
   }, 'outRead');
 });
 $('btnReset').addEventListener('click', function () {
-  sim.reset(); challenge = null; signature = null; seen = 0;
+  sim.reset(); challenge = null; signature = null; seen = 0; $('log').innerHTML = '';
   ['outRegister', 'outStake', 'outScore', 'outVerify', 'outSlash', 'outRead'].forEach(function (id) { out(id, ''); });
   [2, 3, 4, 5, 6].forEach(function (n) { setStep(n, 'locked'); });
   setStep(1, 'active'); $('btnRegister').disabled = false;
   refresh();
   document.querySelector('.step[data-step="1"]').scrollIntoView({ behavior: 'smooth', block: 'start' });
 });
-$('btnClearLog').addEventListener('click', function () { sim.events = []; seen = 0; renderLog(); });
+$('btnClearLog').addEventListener('click', function () { sim.events = []; seen = 0; $('log').innerHTML = ''; renderLog(); });
 
 // A reload can bring back form state the simulator does not have: a browser that restores forms
 // (Firefox does) keeps Register disabled and each slider where it was, while the simulator starts

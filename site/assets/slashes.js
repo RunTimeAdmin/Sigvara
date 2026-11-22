@@ -67,13 +67,14 @@ function evidenceFrom(input) {
 async function renderSlashes(staking) {
   if (staking.status === "rejected") return setCard("slashCard", X.failed("the staking contract's history from the explorer", staking.reason));
   const list = buildProceedings(staking.value.logs);
-  // Both cards read the same blocks from the chain, so the note on how is given once, here.
+  // Each card says how its own history was read: the bond card's is a separate read, and its tail
+  // can fail or fall short on its own.
   if (!list.length) return setCard("slashCard", "<p>No slash has been filed on this deployment.</p>" + X.historyNote(staking.value));
 
   const hashes = [...new Set(list.map((p) => p.didHash))];
   const [idents, txs] = await Promise.all([
     X.ethCalls(hashes.map((h) => ({ to: X.IDENTITY, data: X.SEL.identities + X.pad32(h) }))),
-    X.rpcMany(list.map((p) => ["eth_getTransactionByHash", [p.tx]])).catch(() => list.map(() => null)),
+    X.rpcMany(list.map((p) => ["eth_getTransactionByHash", [p.tx]])).catch((e) => ({ failed: String(e?.message ?? e) })),
   ]);
   const addrOf = new Map(hashes.map((h, i) => [h, X.wordAddr(idents[i], 1)]));
 
@@ -90,10 +91,13 @@ async function renderSlashes(staking) {
     const addr = addrOf.get(p.didHash);
     const agent = (X.isAddr(addr) && !/^0x0{40}$/.test(addr) ? `<a href="epochs?a=${addr}"><code>${X.short(addr)}</code></a>` : `<code>${X.esc(X.short(p.didHash))}</code>`)
       + (X.simAgent(addr) ? ` <span class="ex-note">simulated: ${X.esc(X.simAgent(addr))}</span>` : "");
-    const ev = evidenceFrom(txs[list.indexOf(p)]?.input);
+    const tx = Array.isArray(txs) ? txs[list.indexOf(p)] : undefined;
+    const ev = evidenceFrom(tx?.input);
     const evidence = ev
       ? (ev.text ? `“${X.esc(ev.text)}”` : `<code class="ex-evidence" title="${X.esc(ev.hex)}">${X.esc(ev.len === 32 ? X.short(ev.hex) : ev.hex)}</code>`)
         + (ev.len === 32 ? " (a 32-byte hash of an evidence package kept off chain)" : "")
+      : txs?.failed ? `could not be read just now (${X.esc(txs.failed)}). Reload to try again`
+      : tx == null ? "not read: the RPC did not return the transaction that filed it"
       : "not readable from the transaction that filed it";
     let outcome, cls;
     if (!p.end) {
@@ -136,11 +140,13 @@ async function renderSlashes(staking) {
 function renderBondSlashes(bond) {
   if (bond.status === "rejected") return setCard("bondSlashCard", X.failed("the bond contract's history from the explorer", bond.reason));
   const slashes = bond.value.logs.filter((l) => l.name === "OperatorSlashed").reverse();
-  if (!slashes.length) return setCard("bondSlashCard", "<p>No operator bond has been slashed.</p>");
+  const notes = (bond.value.truncated ? '<p class="pill-warn">The explorer has more history than this page reads, so the newest slashes may be missing.</p>' : "")
+    + X.historyNote(bond.value);
+  if (!slashes.length) return setCard("bondSlashCard", "<p>No operator bond has been slashed.</p>" + notes);
   setCard("bondSlashCard", `<ul class="pay-list ex-history">${slashes.map((l) => {
     const w = words(l);
     return `<li><span>${X.esc(X.fmtWhen(l.time))}</span><span>${X.whoIs(X.topicAddr(l.topics[1]))}</span><span>${X.esc(X.fmtSvr(w[0]))} taken, ${X.esc(X.fmtSvr(w[1]))} left${w[2] ? ", demoted" : ""}. No evidence is recorded.</span><span>${X.txLink(l.tx)}</span></li>`;
-  }).join("")}</ul>`);
+  }).join("")}</ul>` + notes);
 }
 
 load();

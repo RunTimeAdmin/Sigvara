@@ -150,19 +150,24 @@
     check(a);
   });
 
+  var resets = new WeakMap();
   document.addEventListener('click', function (e) {
     var btn = e.target.closest('.copy-btn');
     if (!btn) return;
     var text = $(btn.getAttribute('data-copy')).textContent;
-    var done = function () {
-      var was = btn.textContent;
-      btn.textContent = 'Copied';
-      setTimeout(function () { btn.textContent = was; }, 1400);
+    /* The label to come back to is kept on the button the first time. Read at each click, a second
+     * click while "Copied" showed kept "Copied" for good. */
+    var label = btn.getAttribute('data-label') || btn.textContent;
+    btn.setAttribute('data-label', label);
+    var flash = function (say, ms) {
+      btn.textContent = say;
+      clearTimeout(resets.get(btn));
+      resets.set(btn, setTimeout(function () { btn.textContent = label; }, ms));
     };
     if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(done, function () { btn.textContent = 'Press Ctrl+C'; });
+      navigator.clipboard.writeText(text).then(function () { flash('Copied', 1400); }, function () { flash('Press Ctrl+C', 4000); });
     } else {
-      btn.textContent = 'Press Ctrl+C';
+      flash('Press Ctrl+C', 4000);
     }
   });
 

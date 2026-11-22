@@ -285,7 +285,7 @@ function init(data, card) {
     camera.position.set(Math.cos(azimuth) * camera.userData.dist * Math.cos(ELEVATION), camera.userData.dist * Math.sin(ELEVATION) + camera.userData.lookY, Math.sin(azimuth) * camera.userData.dist * Math.cos(ELEVATION));
     camera.lookAt(0, camera.userData.lookY, 0);
     renderer.render(scene, camera);
-    if (hovered) placeTip();
+    if (hovered) { fillTip(hovered); placeTip(); }
   }
 
   function resize() {
@@ -358,19 +358,29 @@ function init(data, card) {
     tip.style.left = `${((top.x + 1) / 2) * holder.clientWidth}px`;
     tip.style.top = `${((1 - top.y) / 2) * holder.clientHeight}px`;
   }
+  // The tooltip's lines for the hovered column at the replay's present moment. It is filled again
+  // as the replay plays, so its count keeps up with the column it is on; only a change is written.
+  let tipKey = "";
+  function fillTip(s) {
+    const shown = Math.min(t, tEnd), n = countUpTo(s.times, shown);
+    const key = `${s.a.address}|${n}|${fmtDay(shown)}`;
+    if (key === tipKey) return;
+    tipKey = key;
+    const line = (text, cls) => { const el = document.createElement("div"); el.textContent = text; if (cls) el.className = cls; return el; };
+    tip.replaceChildren(
+      line(X.short(s.a.address), "sim-tip-addr"),
+      line(`${kindOf.get(s.a.profile)?.label ?? s.a.profile} · ${data.statusOf(s.a, start)[1]} today`),
+      line(`${n.toLocaleString("en-US")} ${n === 1 ? "payment" : "payments"} by ${fmtDay(shown)}`),
+      line(`Earned score today: ${s.a.earned}`));
+  }
   function setHover(s) {
     if (s === hovered) return;
     hovered = s;
     canvas.classList.toggle("pick", Boolean(s));
     tip.classList.toggle("u-hidden", !s);
     if (s) {
-      const shown = Math.min(t, tEnd), n = countUpTo(s.times, shown);
-      const line = (text, cls) => { const el = document.createElement("div"); el.textContent = text; if (cls) el.className = cls; return el; };
-      tip.replaceChildren(
-        line(X.short(s.a.address), "sim-tip-addr"),
-        line(`${kindOf.get(s.a.profile)?.label ?? s.a.profile} · ${data.statusOf(s.a, start)[1]} today`),
-        line(`${n.toLocaleString("en-US")} ${n === 1 ? "payment" : "payments"} by ${fmtDay(shown)}`),
-        line(`Earned score today: ${s.a.earned}`));
+      tipKey = "";
+      fillTip(s);
       placeTip();
     }
     dirty = true;

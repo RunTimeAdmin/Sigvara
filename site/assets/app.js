@@ -63,6 +63,10 @@ let tokenAddr = SVR, tokenSymbol = "tokens", tokenDecimals = 18n;
 // and can't add custom chains). Discover every injected wallet and let the user
 // pick instead of trusting whoever won the injection race.
 let wallet = null;
+// How often a refresh has set each button, by id (see busy()).
+const buttonSets = new Map();
+const setButtons = (...ids) => { for (const id of ids) buttonSets.set(id, (buttonSets.get(id) ?? 0) + 1); };
+const STAKE_BUTTONS = ["bondBtn", "unbondBtn", "claimBtn", "disputeBtn", "suspendBtn", "reactivateBtn"];
 const discovered = new Map(); // uuid -> {info, provider}
 window.addEventListener("eip6963:announceProvider", (e) => discovered.set(e.detail.info.uuid, e.detail));
 window.dispatchEvent(new Event("eip6963:requestProvider"));
@@ -182,8 +186,10 @@ async function rpcBatch(calls) {
     if (!r || r.error) {
       const msg = r?.error?.message ?? "missing result in batch";
       // An optional read is for something only newer contracts have. Its absence is an
-      // answer (null); a rate limit is not, and must not pass for "the contract lacks it".
-      if (c.optional && r && !/rate limit/i.test(msg)) return null;
+      // answer (null), and a contract without the function answers with a revert. Any other
+      // error (a rate limit, a node that failed) says nothing about the contract, and must not
+      // pass for "the contract lacks it", which would hide a pause.
+      if (c.optional && r && /revert/i.test(msg)) return null;
       throw new Error(msg);
     }
     return r.result;
@@ -291,6 +297,7 @@ function showWallet(name, chain) {
 // The wallet switched chain or account. The pill says where it is now, and the agent is read again
 // so the bond card's buttons are for the account now connected.
 async function walletChanged(name) {
+  const before = account;
   try {
     const [chain, accounts] = await Promise.all([
       wallet.request({ method: "eth_chainId" }),
@@ -301,6 +308,18 @@ async function walletChanged(name) {
     else { wallet = null; $("walletStatus").textContent = "not connected"; }
   } catch (e) {
     logLine(`<span class="pill-err">${esc(name)}: ${esc(e.message)}</span>`);
+  }
+  if (account !== before) {
+    // The balance and proceeds on screen were read for the previous account.
+    $("svrBal").textContent = "…";
+    $("proceeds").textContent = "…";
+    setButtons("proceedsBtn");
+    $("proceedsBtn").disabled = true;
+    if (!account) {
+      const off = ["depositBtn", "withdrawBtn", "faucetBtn"];
+      setButtons(...off);
+      off.forEach(id => $(id).disabled = true);
+    }
   }
   refreshSvrBalance();
   refreshProceeds();
@@ -355,9 +374,9 @@ async function connectWith(c) {
     watch(c);
     showWallet(c.name, chain);
     // Deposits and withdrawals need a fee registry; the faucet does not.
-    buttonsSet++;
-    (FEES_LIVE ? ["depositBtn", "withdrawBtn", "faucetBtn"] : ["faucetBtn"])
-      .forEach(id => $(id).disabled = false);
+    const enable = FEES_LIVE ? ["depositBtn", "withdrawBtn", "faucetBtn"] : ["faucetBtn"];
+    setButtons(...enable);
+    enable.forEach(id => $(id).disabled = false);
     if (!$("agentAddr").value) $("agentAddr").value = account;
     refreshSvrBalance();
     refreshProceeds();
@@ -368,7 +387,7 @@ async function connectWith(c) {
     wallet = null;
     account = null;
     $("walletStatus").textContent = "not connected";
-    buttonsSet++;
+    setButtons("depositBtn", "withdrawBtn", "faucetBtn", "proceedsBtn");
     for (const id of ["depositBtn", "withdrawBtn", "faucetBtn", "proceedsBtn"]) $(id).disabled = true;
     // The note on custom networks only where the failure was about the chain, not after a refusal.
     const msg = String(e?.message ?? e).replace(/\.$/, "");
@@ -381,8 +400,10 @@ async function connectWith(c) {
 }
 
 async function refreshSvrBalance() {
-  if (!account) return;
-  const bal = BigInt(await rpcRead(tokenAddr, SEL.balanceOf + encAddr(account)));
+  const a = account;
+  if (!a) return;
+  const bal = BigInt(await rpcRead(tokenAddr, SEL.balanceOf + encAddr(a)));
+  if (a !== account) return; // read for an account no longer connected
   $("svrBal").textContent = formatUnits(bal) + " " + tokenSymbol;
 }
 
@@ -490,8 +511,8 @@ async function lookup() {
     // agent, not for the address now in the box. Leave nothing live until a lookup succeeds.
     currentDidHash = null;
     stakeCtx = null;
-    buttonsSet++;
-    for (const id of ["bondBtn", "unbondBtn", "claimBtn", "disputeBtn", "suspendBtn", "reactivateBtn"]) $(id).disabled = true;
+    setButtons(...STAKE_BUTTONS);
+    for (const id of STAKE_BUTTONS) $(id).disabled = true;
     $("stakeNote").textContent = "The lookup failed, so the card may still show the previous agent. Look up again.";
   }
 }
@@ -575,7 +596,7 @@ function renderStake({ ident, stakeRaw, minStakeRaw, pendWRaw, slashRaw, unbondR
   const paused           = stakePausedUntil > now;
 
   stakeCtx = { staked, minStake, pendAmt, claimAt, isOperator, frozen, statusNum, registered };
-  buttonsSet++;
+  setButtons(...STAKE_BUTTONS);
 
   $("stakeAmt").innerHTML = !registered ? "&mdash;"
     : `${formatUnits(staked)} ${esc(tokenSymbol)} ` + (staked >= minStake
@@ -636,6 +657,9 @@ function renderStake({ ident, stakeRaw, minStakeRaw, pendWRaw, slashRaw, unbondR
   $("disputeBtn").disabled    = !(isOperator && slashState === 1 && now <= deadline);
   $("suspendBtn").disabled    = !(canWrite && statusNum === 0 && !frozen);
   $("reactivateBtn").disabled = !(canWrite && statusNum === 1 && !suspendedBySlash && staked >= minStake);
+  // A button whose flow is still running stays off: the flow drops a second click, and an enabled
+  // button that does nothing reads as broken.
+  for (const id of STAKE_BUTTONS) if (inFlight.has(id)) $(id).disabled = true;
   void why;
 }
 
@@ -723,13 +747,15 @@ async function setStatus(code, verb) {
 // Slash proceeds belong to the connected wallet (a victim or a reporter), not to the looked-up
 // agent, so they have their own read and their own button.
 async function refreshProceeds() {
-  if (!account) return;
+  const a = account;
+  if (!a) return;
   try {
-    const owed = BigInt(await rpcRead(STAKING, SEL.claimable + encAddr(account)));
+    const owed = BigInt(await rpcRead(STAKING, SEL.claimable + encAddr(a)));
+    if (a !== account) return; // read for an account no longer connected
     $("proceeds").textContent = `${formatUnits(owed)} ${tokenSymbol}`;
-    buttonsSet++;
+    setButtons("proceedsBtn");
     $("proceedsBtn").disabled = owed === 0n;
-  } catch (e) { $("proceeds").textContent = "unavailable"; }
+  } catch (e) { if (a === account) $("proceeds").textContent = "unavailable"; }
 }
 async function claimProceeds() {
   try {
@@ -905,9 +931,9 @@ async function faucet() {
 }
 
 // One run of each write flow at a time. A second click while the first waited on the wallet started
-// a second approve and deposit. The button is off while its flow runs; afterwards it stays as the
-// flow's own refresh set it (buttonsSet counts those), or comes back on when nothing refreshed it.
-let buttonsSet = 0;
+// a second approve and deposit. The button is off while its flow runs; afterwards it stays as a
+// refresh set it meanwhile (setButtons counts those, button by button), or comes back on when
+// nothing did. One counter for every button let any refresh decide for buttons it never touched.
 const inFlight = new Set();
 // Look up is off while any flow runs, so the card keeps showing the agent the wallet is signing for.
 let running = 0;
@@ -915,7 +941,7 @@ function busy(id, flow) {
   return async () => {
     if (inFlight.has(id)) return;
     inFlight.add(id);
-    const seen = buttonsSet;
+    const seen = buttonSets.get(id) ?? 0;
     $(id).disabled = true;
     if (running++ === 0) $("lookupBtn").disabled = true;
     try {
@@ -923,7 +949,7 @@ function busy(id, flow) {
     } finally {
       inFlight.delete(id);
       if (--running === 0) $("lookupBtn").disabled = false;
-      if (buttonsSet === seen) $(id).disabled = false;
+      if ((buttonSets.get(id) ?? 0) === seen) $(id).disabled = false;
     }
   };
 }
