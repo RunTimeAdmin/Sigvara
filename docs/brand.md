@@ -98,7 +98,7 @@ Use a system sans stack for the primary interface. This keeps the site fast and 
 
 ```css
 :root {
-  --sig-font-sans: Inter, ui-sans-serif, system-ui, -apple-system,
+  --sig-font-sans: ui-sans-serif, system-ui, -apple-system,
     BlinkMacSystemFont, "Segoe UI", sans-serif;
   --sig-font-mono: "SFMono-Regular", Consolas,
     "Liberation Mono", monospace;
@@ -121,24 +121,14 @@ code,
 
 | Role | Desktop | Mobile | Weight | Letter spacing |
 | --- | --- | --- | --- | --- |
-| Hero title | `clamp(48px, 7vw, 86px)` | `clamp(47px, 15vw, 72px)` | 750 | `-0.065em` |
-| Section title | `clamp(30px, 4vw, 48px)` | `32–40px` | 700 | `-0.055em` |
-| Card title | `17px` | `17px` | 700 | `-0.02em` |
+| Hero title | `clamp(48px, 7vw, 86px)` | `clamp(47px, 15vw, 72px)` | 750 | `-0.01em` |
+| Section title | `clamp(30px, 4vw, 48px)` | `32–40px` | 700 | `-0.01em` |
+| Card title | `17px` | `17px` | 700 | `-0.01em` |
 | Lead paragraph | `clamp(17px, 2vw, 20px)` | `17px` | 400 | normal |
 | Body | `14–15px` | `14px` | 400 | normal |
 | Metadata | `10–12px` | `10–12px` | 500–700 | `.08–.14em` |
 
-Headlines should be compact and confident. Body copy should remain readable and should not use the violet gradient. Use the gradient only for short emphasis, a key phrase, or a primary signal.
-
-```css
-.sig-gradient-text {
-  color: var(--sig-violet-bright);
-  background: var(--sig-gradient-signal);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-```
+Headlines should be short and confident, in solid text. Every heading uses the same tracking, `-0.01em`. Keep the violet gradient for signals such as score bars, status indicators and the primary action. Do not use it on words in a headline or in body copy.
 
 ## 4. Logo and avatar system
 

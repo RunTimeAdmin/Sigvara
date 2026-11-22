@@ -631,3 +631,47 @@ test('the demo says what is missing when Verify is pressed before anything was s
   assert.match($('outVerify').innerHTML, /issue and sign a challenge first/);
   assert.doesNotMatch($('outVerify').innerHTML, /Cannot read properties/);
 });
+
+test('no heading is drawn in gradient text or tracked tighter than -0.01em, and no stylesheet asks for Inter', () => {
+  const site = path.join(__dirname, '..', 'site');
+  const files = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (/\.(html|css)$/.test(entry.name)) files.push(full);
+    }
+  };
+  walk(site);
+  const read = (ext) => files.filter((f) => f.endsWith(ext)).map((f) => [path.relative(site, f), fs.readFileSync(f, 'utf8')]);
+  const sheets = read('.css');
+  const pages = read('.html');
+  assert.ok(sheets.length > 0 && pages.length > 0);
+
+  // Each rule as [file, selector, body]; a rule inside @media is matched on its own.
+  const rules = sheets.flatMap(([name, css]) =>
+    [...css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => [name, m[1].trim(), m[2]]));
+  const isHeading = (selector) => selector.split(',').some((s) => /^h[1-3](?![\w-])/.test(s.trim().split(/[\s>+~]+/).pop()));
+
+  const clipped = new Set();
+  for (const [name, selector, body] of rules) {
+    if (/background-clip:\s*text/.test(body)) {
+      assert.doesNotMatch(selector, /\bh[1-3]\b/, `${name}: ${selector} clips a gradient to heading text`);
+      for (const [, cls] of selector.matchAll(/\.([\w-]+)/g)) clipped.add(cls);
+    }
+    for (const [decl] of body.matchAll(/(?:font|font-family|--[\w-]*font[\w-]*)\s*:[^;]*/g)) {
+      assert.doesNotMatch(decl, /\bInter\b/, `${name}: ${selector}`);
+    }
+    if (isHeading(selector)) {
+      const tracking = body.match(/letter-spacing:\s*(-?[\d.]+)em/);
+      if (tracking) assert.ok(Number(tracking[1]) >= -0.01, `${name}: ${selector} is tracked at ${tracking[1]}em`);
+    }
+  }
+  for (const [name, html] of pages) {
+    for (const [heading] of html.matchAll(/<(h[1-3])\b[^>]*>[\s\S]*?<\/\1>/g)) {
+      for (const [, list] of heading.matchAll(/class="([^"]*)"/g)) {
+        for (const cls of list.split(/\s+/)) assert.ok(!clipped.has(cls), `${name}: ${heading}`);
+      }
+    }
+  }
+});
