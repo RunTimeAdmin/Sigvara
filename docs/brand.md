@@ -96,10 +96,20 @@ Keep the strongest color concentration near the hero or active state. Do not pla
 
 Use a system sans stack for the primary interface. This keeps the site fast and makes the brand portable across documentation, dashboards, and wallets.
 
+Headings (h1 to h3) are set in Public Sans ExtraBold, the only font file the site serves: `site/assets/fonts/PublicSans-ExtraBold.woff2`, from the official Public Sans repository, under the SIL Open Font License (`OFL.txt` beside it). Every page preloads it, and the system stack shows until it arrives. Body copy, labels and buttons stay in the system stack. Do not load a font from another host: the CSP allows fonts from this site only (`font-src 'self'`).
+
 ```css
+@font-face {
+  font-family: "Public Sans";
+  src: url("fonts/PublicSans-ExtraBold.woff2") format("woff2");
+  font-weight: 800;
+  font-display: swap;
+}
+
 :root {
   --sig-font-sans: ui-sans-serif, system-ui, -apple-system,
     BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --sig-font-display: "Public Sans", var(--sig-font-sans);
   --sig-font-mono: "SFMono-Regular", Consolas,
     "Liberation Mono", monospace;
 }
@@ -108,6 +118,11 @@ body {
   font-family: var(--sig-font-sans);
   color: var(--sig-text);
   -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3 {
+  font-family: var(--sig-font-display);
+  font-weight: 800;
 }
 
 code,
@@ -121,9 +136,9 @@ code,
 
 | Role | Desktop | Mobile | Weight | Letter spacing |
 | --- | --- | --- | --- | --- |
-| Hero title | `clamp(48px, 6vw, 78px)` | `clamp(47px, 15vw, 72px)` | 750 | `-0.01em` |
-| Section title | `clamp(30px, 4vw, 48px)` | `32–40px` | 700 | `-0.01em` |
-| Card title | `17px` | `17px` | 700 | `-0.01em` |
+| Hero title | `clamp(48px, 6vw, 78px)` | `clamp(40px, 12.5vw, 72px)` | 800 | `-0.01em` |
+| Section title | `clamp(30px, 4vw, 48px)` | `32–40px` | 800 | `-0.01em` |
+| Card title | `17px` | `17px` | 800 | `-0.01em` |
 | Lead paragraph | `clamp(17px, 2vw, 20px)` | `17px` | 400 | normal |
 | Body | `14–15px` | `14px` | 400 | normal |
 | Metadata | `10–12px` | `10–12px` | 500–700 | `.08–.14em` |

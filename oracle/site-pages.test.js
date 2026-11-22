@@ -632,20 +632,25 @@ test('the demo says what is missing when Verify is pressed before anything was s
   assert.doesNotMatch($('outVerify').innerHTML, /Cannot read properties/);
 });
 
-test('no heading is drawn in gradient text or tracked tighter than -0.01em, and no stylesheet asks for Inter', () => {
-  const site = path.join(__dirname, '..', 'site');
-  const files = [];
+const SITE = path.join(__dirname, '..', 'site');
+
+// Every file under site/ with the given extension, as [path relative to site/ with forward slashes, text].
+function siteFiles(ext) {
+  const out = [];
   const walk = (dir) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) walk(full);
-      else if (/\.(html|css)$/.test(entry.name)) files.push(full);
+      else if (entry.name.endsWith(ext)) out.push([path.relative(SITE, full).split(path.sep).join('/'), fs.readFileSync(full, 'utf8')]);
     }
   };
-  walk(site);
-  const read = (ext) => files.filter((f) => f.endsWith(ext)).map((f) => [path.relative(site, f), fs.readFileSync(f, 'utf8')]);
-  const sheets = read('.css');
-  const pages = read('.html');
+  walk(SITE);
+  return out;
+}
+
+test('no heading is drawn in gradient text or tracked tighter than -0.01em, and no stylesheet asks for Inter', () => {
+  const sheets = siteFiles('.css');
+  const pages = siteFiles('.html');
   assert.ok(sheets.length > 0 && pages.length > 0);
 
   // Each rule as [file, selector, body]; a rule inside @media is matched on its own.
@@ -674,4 +679,32 @@ test('no heading is drawn in gradient text or tracked tighter than -0.01em, and 
       }
     }
   }
+});
+
+test('every font a stylesheet names is a file in site/, and pages preload only those fonts, in a way the stylesheet can reuse', () => {
+  const faces = new Set();
+  for (const [name, css] of siteFiles('.css')) {
+    for (const [face] of css.matchAll(/@font-face\s*\{[^}]*\}/g)) {
+      for (const [, url] of face.matchAll(/url\(\s*["']?([^"')]+)["']?\s*\)/g)) {
+        assert.doesNotMatch(url, /^([a-z][\w+.-]*:)?\/\//i, `${name}: ${url} is not on this site, and the CSP allows fonts from this site only`);
+        const file = path.posix.join(path.posix.dirname(name), url.split(/[?#]/)[0]);
+        assert.ok(fs.existsSync(path.join(SITE, file)), `${name}: ${url} is not a file in site/`);
+        faces.add(file);
+      }
+    }
+  }
+  assert.ok(faces.size > 0);
+  let preloads = 0;
+  for (const [name, html] of siteFiles('.html')) {
+    for (const [link] of html.matchAll(/<link\b[^>]*\brel="preload"[^>]*>/g)) {
+      if (!/\bas="font"/.test(link)) continue;
+      // Fonts are fetched in CORS mode, so a preload without crossorigin is not reused and the font downloads twice.
+      assert.match(link, /\scrossorigin\b/, `${name}: ${link}`);
+      const href = link.match(/\bhref="([^"]+)"/)[1];
+      const file = href.startsWith('/') ? href.slice(1) : path.posix.join(path.posix.dirname(name), href);
+      assert.ok(faces.has(file), `${name}: preloads ${href}, which no stylesheet's @font-face names`);
+      preloads++;
+    }
+  }
+  assert.ok(preloads > 0);
 });
