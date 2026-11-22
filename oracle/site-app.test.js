@@ -28,6 +28,7 @@ const SEL = {
   getStake: '0xe765c122', minimumStake: '0xec5ffac2', getPendingWithdrawal: '0xd0fe00db', getSlashProposal: '0xc984f6f8',
   unbondingPeriod: '0x6cf6d675', slashSuspended: '0x72657d89', DISPUTE_RESOLUTION_PERIOD: '0xf0d1dc00', inflowsPausedUntil: '0xeed6e97a',
   symbol: '0x95d89b41', decimals: '0x313ce567', balanceOf: '0x70a08231', claimable: '0x402914f5', allowance: '0xdd62ed3e',
+  registrationDigest: '0x9aad085f',
 };
 
 function element(id) {
@@ -43,10 +44,12 @@ function element(id) {
 
 /**
  * The page, loaded. `agents` maps an address to its chain state; `hold(did)` may return a promise the
- * RPC waits on before it answers a lookup of that agent, or rejects with. `rpc` replaces the stub RPC's
- * fetch. Every timer the page sets fires at once, and `waits` records the delay it asked for.
+ * RPC waits on before it answers a lookup of that agent, or rejects with. `receipt(hash, n)` is what the
+ * RPC answers to the page's nth receipt read (it may return a promise, or throw); by default every
+ * transaction is confirmed. `rpc` replaces the stub RPC's fetch. Every timer the page sets fires at once,
+ * and `waits` records the delay it asked for. `downloads` holds each link the page clicked to save a file.
  */
-function load({ agents = {}, hold = () => null, rpc = null } = {}) {
+function load({ agents = {}, hold = () => null, receipt = () => ({ status: '0x1', blockNumber: '0x10' }), rpc = null } = {}) {
   const els = new Map();
   const $ = (id) => { if (!els.has(id)) els.set(id, element(id)); return els.get(id); };
   const byDid = new Map(Object.entries(agents).map(([addr, s]) => [didOf(addr), { addr, ...s }]));
@@ -70,6 +73,7 @@ function load({ agents = {}, hold = () => null, rpc = null } = {}) {
       case SEL.symbol: return `0x${w(32)}${w(3)}${Buffer.from('SVR').toString('hex').padEnd(64, '0')}`;
       case SEL.decimals: return `0x${w(18)}`;
       case SEL.balanceOf: case SEL.claimable: case SEL.allowance: return `0x${w(0)}`;
+      case SEL.registrationDigest: return `0x${w(0xd16e57)}`;
       default: throw new Error(`no stub for ${sel} on ${to}`);
     }
   };
@@ -83,11 +87,20 @@ function load({ agents = {}, hold = () => null, rpc = null } = {}) {
       if (gate) await gate;
       return { json: async () => body.map(one) };
     }
+    if (body.method === 'eth_getTransactionReceipt') {
+      const result = await receipt(body.params[0], ++receiptReads);
+      return { json: async () => ({ jsonrpc: '2.0', id: body.id, result }) };
+    }
     return { json: async () => one(body) };
   };
+  let receiptReads = 0;
+  const downloads = [];
   const waits = [];
   const ctx = vm.createContext({
-    document: { getElementById: $, createElement: () => element(null), querySelector: () => null, querySelectorAll: () => [] },
+    document: {
+      getElementById: $, querySelector: () => null, querySelectorAll: () => [],
+      createElement: () => { const el = element(null); el.click = () => { if (el.download) downloads.push(el); }; return el; },
+    },
     window: { addEventListener() {}, dispatchEvent() {} },
     Event: class { constructor(type) { this.type = type; } },
     SigvaraDid: Did,
@@ -96,9 +109,11 @@ function load({ agents = {}, hold = () => null, rpc = null } = {}) {
     clearTimeout: clearImmediate,
     AbortController,
     console,
+    // What registering needs from the browser: Ed25519 keys, a file to save, and base64.
+    crypto: globalThis.crypto, Blob, URL, btoa,
   });
   vm.runInContext(SOURCE, ctx, { filename: 'app.js' });
-  return { ctx, $, batches, waits, get: (name) => vm.runInContext(name, ctx) };
+  return { ctx, $, batches, waits, downloads, get: (name) => vm.runInContext(name, ctx) };
 }
 
 // A node that accepts the connection and never answers: the request ends only if the page aborts it.
@@ -106,20 +121,28 @@ const neverAnswers = (_url, init) => new Promise((_, reject) => {
   init.signal?.addEventListener('abort', () => reject(new DOMException('This operation was aborted', 'AbortError')));
 });
 
-/** An EIP-1193 wallet. `chain` can be changed under the page, as a user switching networks does. */
-function wallet({ chain = ARC, account = OPERATOR, switchError = null, addSwitches = true } = {}) {
+/**
+ * An EIP-1193 wallet. `chain` and `account` can be changed under the page, as a user switching networks
+ * or accounts does. `connect` may return a promise eth_requestAccounts waits on; `sign(n)` answers the
+ * nth personal_sign, and throws to refuse it.
+ */
+function wallet({ chain = ARC, account = OPERATOR, switchError = null, addSwitches = true, connect = () => null, sign = () => `0x${'11'.repeat(65)}` } = {}) {
+  let signs = 0;
   const p = {
-    chain, calls: [], handlers: {}, sent: 0,
+    chain, account, calls: [], handlers: {}, sent: 0,
     on(event, fn) { this.handlers[event] = fn; },
     async request({ method, params }) {
       p.calls.push({ method, params });
       switch (method) {
-        case 'eth_requestAccounts': case 'eth_accounts': return [account];
+        case 'eth_requestAccounts': { const gate = connect(); if (gate) await gate; return [p.account]; }
+        case 'eth_accounts': return [p.account];
+        case 'personal_sign': return sign(++signs);
         case 'eth_chainId': return p.chain;
         case 'wallet_switchEthereumChain': if (switchError) throw switchError; p.chain = ARC; return null;
         case 'wallet_addEthereumChain': if (addSwitches) p.chain = ARC; return null;
         case 'eth_sendTransaction': return `0x${w(++p.sent)}`;
-        case 'eth_getTransactionReceipt': return { status: '0x1', blockNumber: '0x10' };
+        // The page reads receipts from Arc's RPC. A wallet asked anyway answers as one whose node is down.
+        case 'eth_getTransactionReceipt': throw new Error('the wallet could not reach its node');
         default: throw new Error(`no stub for ${method}`);
       }
     },
@@ -269,4 +292,116 @@ test('a read the RPC never answers fails after 20 seconds with a message, rather
   await idle();
   assert.match(page.$('log').innerHTML, /lookup failed: the RPC did not answer within 20 seconds/);
   assert.deepEqual(page.waits, [20000, 20000], 'one 20 s limit on each request');
+});
+
+// ---- confirmations, the agent a flow is for, connecting and registering -----------------------
+
+test('a receipt read that fails is asked again, so a confirmed bond is reported as confirmed', async () => {
+  // The RPC drops the first receipt read. The wallet's own node is down too, and the page must not need it.
+  const page = load({
+    agents: { [B]: { stake: 1000n * SVR_UNIT } },
+    receipt: (_hash, n) => { if (n === 1) throw new Error('rate limit exceeded'); return { status: '0x1', blockNumber: '0x10' }; },
+  });
+  const p = wallet();
+  await connected(page, p, B);
+  page.$('stakeAmount').value = '5';
+  await page.$('bondBtn').onclick();
+  await idle();
+  assert.equal(sends(p).length, 2, 'one approve and one deposit');
+  assert.equal((page.$('log').innerHTML.match(/confirmed/g) || []).length, 2);
+  assert.doesNotMatch(page.$('log').innerHTML, /pill-err/);
+  assert.equal(p.calls.filter((c) => c.method === 'eth_getTransactionReceipt').length, 0, 'the receipt was asked of the wallet');
+});
+
+test('a transaction Arc has not confirmed is reported as not confirmed yet, after the card is read again', async () => {
+  const page = load({ agents: { [B]: { stake: 1000n * SVR_UNIT } }, receipt: () => null });
+  const p = wallet();
+  await connected(page, p, B);
+  page.$('stakeAmount').value = '5';
+  const before = page.batches.length;
+  await page.$('bondBtn').onclick();
+  await idle();
+  assert.equal(sends(p).length, 1, 'nothing was sent after a transaction that was not seen');
+  assert.match(page.$('log').innerHTML, /Arc has not confirmed this transaction yet/);
+  assert.doesNotMatch(page.$('log').innerHTML, /timed out waiting for receipt/);
+  assert.ok(page.batches.length > before, 'the agent was read again before the message');
+});
+
+test('Approve and Bond deposits for the agent it started with, whatever is looked up meanwhile', async () => {
+  let release;
+  const held = new Promise((r) => { release = r; });
+  const page = load({
+    agents: { [A]: { stake: 1000n * SVR_UNIT }, [B]: { stake: 1000n * SVR_UNIT } },
+    receipt: async (_hash, n) => { if (n === 1) await held; return { status: '0x1', blockNumber: '0x10' }; },
+  });
+  const p = wallet();
+  await connected(page, p, A);
+  page.$('stakeAmount').value = '5';
+  const run = page.$('bondBtn').onclick();
+  await idle();
+  assert.equal(page.$('lookupBtn').disabled, true, 'Look up is off while the flow runs');
+  // A lookup still happens, as one after a wallet event does.
+  page.$('agentAddr').value = B;
+  await page.ctx.lookup();
+  assert.equal(page.get('currentDidHash').toLowerCase(), didOf(B), 'the card shows B');
+  release();
+  await run;
+  await idle();
+  const [, deposit] = sends(p);
+  assert.ok(deposit, 'the deposit was sent');
+  assert.equal(`0x${deposit.params[0].data.slice(10, 74)}`, didOf(A), 'the deposit is for the agent the flow started with');
+  assert.equal(page.$('lookupBtn').disabled, false);
+});
+
+test('an account switched in the wallet during Approve and Bond stops the deposit', async () => {
+  let release;
+  const held = new Promise((r) => { release = r; });
+  const page = load({
+    agents: { [B]: { stake: 1000n * SVR_UNIT } },
+    receipt: async (_hash, n) => { if (n === 1) await held; return { status: '0x1', blockNumber: '0x10' }; },
+  });
+  const p = wallet();
+  await connected(page, p, B);
+  page.$('stakeAmount').value = '5';
+  const run = page.$('bondBtn').onclick();
+  await idle();
+  p.account = C;
+  release();
+  await run;
+  await idle();
+  assert.equal(sends(p).length, 1, 'only the approve went out');
+  assert.match(page.$('log').innerHTML, /not the one this action started with/);
+});
+
+test('a second Connect while the wallet is still asking is ignored, and the first one connects', async () => {
+  let approve;
+  const asking = new Promise((r) => { approve = r; });
+  const page = load({ agents: { [B]: {} } });
+  const p = wallet({ connect: () => asking });
+  page.$('agentAddr').value = B;
+  const c = { name: 'Test wallet', provider: p };
+  const first = page.ctx.connectWith(c);
+  await page.ctx.connectWith(c);
+  approve();
+  await first;
+  await idle();
+  assert.equal(p.calls.filter((x) => x.method === 'eth_requestAccounts').length, 1);
+  assert.equal(page.get('account'), OPERATOR);
+  assert.match(page.$('walletStatus').innerHTML, /on 5042002/);
+});
+
+test('a refused signature and a second Register keep one key file, and register its key', async () => {
+  const page = load(); // the connected account itself, not registered yet
+  const p = wallet({ sign: (n) => { if (n === 1) throw Object.assign(new Error('User rejected the request.'), { code: 4001 }); return `0x${'11'.repeat(65)}`; } });
+  await connected(page, p, OPERATOR);
+  await page.$('regBtn').onclick();
+  await idle();
+  assert.match(page.$('log').innerHTML, /User rejected the request/);
+  await page.$('regBtn').onclick();
+  await idle();
+  assert.equal(page.downloads.length, 1, 'one key file for the agent');
+  const [register] = sends(p);
+  assert.ok(register, 'the registration was sent');
+  const pubKey = register.params[0].data.slice(74, 138);
+  assert.match(page.downloads[0].download, new RegExp(`-${pubKey.slice(0, 8)}\.txt$`), 'the key registered is the one in the file');
 });

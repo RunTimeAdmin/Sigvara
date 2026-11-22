@@ -201,9 +201,10 @@ async function getChallengeWindow() {
 }
 // The wallet's chain and account as they are now, not as they were at connect. A wallet can switch
 // either at any time, and the same calldata sent on another chain goes to whatever lives at these
-// addresses there, so every send and signature checks first.
-async function ensureArc() {
-  if (!wallet || !account) throw new Error("Connect a wallet first.");
+// addresses there, so every send and signature checks first. `from` is the account the action started
+// with: an account switched in the wallet while it ran changes `account`, and must stop the action.
+async function ensureArc(from = account) {
+  if (!wallet || !from) throw new Error("Connect a wallet first.");
   const [chain, accounts] = await Promise.all([
     wallet.request({ method: "eth_chainId" }),
     wallet.request({ method: "eth_accounts" }),
@@ -211,16 +212,23 @@ async function ensureArc() {
   if (String(chain).toLowerCase() !== CHAIN_HEX) {
     throw new Error(`the wallet is on chain ${parseInt(chain, 16)}, not Arc testnet (${CHAIN_ID}). Switch it back to Arc testnet; nothing was sent.`);
   }
-  if (!Array.isArray(accounts) || String(accounts[0]).toLowerCase() !== account.toLowerCase()) {
-    throw new Error("the wallet's account is not the one this page connected. Connect again; nothing was sent.");
+  if (!Array.isArray(accounts) || String(accounts[0]).toLowerCase() !== from.toLowerCase()) {
+    throw new Error("the wallet's account is not the one this action started with. Connect again; nothing was sent.");
   }
 }
 
-async function sendTx(to, data) {
-  await ensureArc();
+// A receipt as Arc's RPC has it, or null while the transaction is not in a block.
+async function receiptOf(hash) {
+  const j = await rpcPost({ jsonrpc: "2.0", id: 1, method: "eth_getTransactionReceipt", params: [hash] });
+  if (j?.error) throw new Error(j.error.message);
+  return j?.result ?? null;
+}
+
+async function sendTx(to, data, from = account) {
+  await ensureArc(from);
   const hash = await wallet.request({
     method: "eth_sendTransaction",
-    params: [{ from: account, to, data }],
+    params: [{ from, to, data }],
   });
   if (!isTxHash(hash)) {
     throw new Error("the wallet did not answer with a transaction hash, so this page cannot follow the transaction. Check the wallet's activity before trying again.");
@@ -230,17 +238,26 @@ async function sendTx(to, data) {
   // of dead time to every confirmation for nothing, so start at the block interval and
   // widen only if the transaction is genuinely slow. Same 60-attempt ceiling, which now
   // spans longer in wall clock than it used to rather than less.
+  //
+  // The receipt comes from Arc's RPC, not through the wallet. Once sent, the transaction is Arc's:
+  // the wallet may have switched network (it would ask the other chain), been locked, or have its own
+  // node refuse a read, and none of that says anything about the transaction. A read that fails is
+  // asked again at the next try.
   let wait = 500;
   for (let i = 0; i < 60; i++) {
     await new Promise(r => setTimeout(r, wait));
     if (wait < 2500) wait = Math.min(2500, wait * 1.5);
-    const rec = await wallet.request({ method: "eth_getTransactionReceipt", params: [hash] });
+    let rec;
+    try { rec = await receiptOf(hash); } catch (_) { continue; }
     if (rec) {
       if (rec.status === "0x1") { logLine(`<span class="pill-ok">confirmed</span> in block ${parseInt(rec.blockNumber, 16)}`); return; }
       throw new Error("transaction reverted");
     }
   }
-  throw new Error("timed out waiting for receipt");
+  // Not seen is not failed. The card is read again first, so it shows what the chain holds now
+  // rather than what it held before the send, and the buttons follow that.
+  await Promise.allSettled([currentAgent ? lookup() : null, refreshSvrBalance(), refreshProceeds()]);
+  throw new Error("Arc has not confirmed this transaction yet. It may still go through: check it with the link above before trying again.");
 }
 
 // ---- wallet ----
@@ -300,29 +317,41 @@ function watch(c) {
   p.on("accountsChanged", changed);
 }
 
+// One connection attempt at a time. A second click while the wallet's prompt is open is refused by the
+// wallet (-32002), and that refusal used to tear down the attempt the user was about to approve.
+let connecting = false;
 async function connectWith(c) {
+  if (connecting) {
+    logLine("The wallet is already asking to connect. Answer it there.");
+    return;
+  }
+  connecting = true;
+  // The attempt works on its own provider and account, and the page takes them only once it succeeds.
+  const p = c.provider;
   try {
-    wallet = c.provider;
-    const accounts = await wallet.request({ method: "eth_requestAccounts" });
-    account = accounts[0];
-    let chain = await wallet.request({ method: "eth_chainId" });
+    const accounts = await p.request({ method: "eth_requestAccounts" });
+    const acct = Array.isArray(accounts) ? accounts[0] : null;
+    if (!acct) throw new Error("the wallet gave no account");
+    let chain = await p.request({ method: "eth_chainId" });
     if (chain !== CHAIN_HEX) {
       try {
-        await wallet.request({ method: "wallet_switchEthereumChain", params: [{ chainId: CHAIN_HEX }] });
+        await p.request({ method: "wallet_switchEthereumChain", params: [{ chainId: CHAIN_HEX }] });
       } catch (e) {
         // Only a wallet that does not know the chain is asked to add it. A refusal (4001) or any
         // other error is the answer, not a reason for a second prompt.
         if (!unknownChain(e)) throw e;
-        await wallet.request({ method: "wallet_addEthereumChain", params: [{
+        await p.request({ method: "wallet_addEthereumChain", params: [{
           chainId: CHAIN_HEX, chainName: "Arc Testnet",
           nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
           rpcUrls: [RPC], blockExplorerUrls: [EXPLORER],
         }]});
       }
       // Some wallets add a chain without switching to it, so what counts is where the wallet is now.
-      chain = await wallet.request({ method: "eth_chainId" });
+      chain = await p.request({ method: "eth_chainId" });
       if (String(chain).toLowerCase() !== CHAIN_HEX) throw new Error(`the wallet is still on chain ${parseInt(chain, 16)}, not Arc testnet`);
     }
+    wallet = p;
+    account = acct;
     watch(c);
     showWallet(c.name, chain);
     // Deposits and withdrawals need a fee registry; the faucet does not.
@@ -334,11 +363,20 @@ async function connectWith(c) {
     refreshProceeds();
     lookup();
   } catch (e) {
-    // Nothing from the attempt stays: an account without its wallet would read as connected.
+    // Nothing from the attempt stays: an account without its wallet would read as connected. The
+    // buttons that act for the connected account go off with it.
     wallet = null;
     account = null;
     $("walletStatus").textContent = "not connected";
-    logLine(`<span class="pill-err">${esc(c.name)}: ${esc(e.message)} — this chain needs a wallet that supports custom networks (MetaMask does; Phantom does not).</span>`);
+    buttonsSet++;
+    for (const id of ["depositBtn", "withdrawBtn", "faucetBtn", "proceedsBtn"]) $(id).disabled = true;
+    // The note on custom networks only where the failure was about the chain, not after a refusal.
+    const msg = String(e?.message ?? e).replace(/\.$/, "");
+    const hint = unknownChain(e) || /chain/i.test(msg)
+      ? ". This chain needs a wallet that supports custom networks (MetaMask does, Phantom does not)." : ".";
+    logLine(`<span class="pill-err">${esc(c.name)}: ${esc(msg)}${hint}</span>`);
+  } finally {
+    connecting = false;
   }
 }
 
@@ -601,24 +639,35 @@ function renderStake({ ident, stakeRaw, minStakeRaw, pendWRaw, slashRaw, unbondR
   void why;
 }
 
+// The agent and account a write action is for, fixed when it starts. A lookup that finishes while the
+// wallet is open, or an account switched in the wallet, changes the card; it must not change what the
+// action goes on to sign.
+async function target() {
+  if (!wallet || !account) throw new Error("Connect a wallet first.");
+  if (!currentDidHash) await lookup();
+  if (!currentDidHash) throw new Error("Look up an agent first.");
+  return { did: currentDidHash, agent: currentAgent, from: account };
+}
+const forAgent = (agent) => `${agent.slice(0, 6)}…${agent.slice(-4)}`;
+
 async function bondStake() {
   try {
-    if (!currentDidHash) await lookup();
+    const { did, agent, from } = await target();
     const amt = parseUnits($("stakeAmount").value);
-    const allowance = BigInt(await rpcRead(tokenAddr, SEL.allowance + encAddr(account) + encAddr(STAKING)));
+    const allowance = BigInt(await rpcRead(tokenAddr, SEL.allowance + encAddr(from) + encAddr(STAKING)));
     if (allowance < amt) {
       logLine(`approving ${formatUnits(amt)} ${esc(tokenSymbol)} for the staking contract…`);
-      await sendTx(tokenAddr, SEL.approve + encAddr(STAKING) + encUint(amt));
+      await sendTx(tokenAddr, SEL.approve + encAddr(STAKING) + encUint(amt), from);
     }
-    logLine(`bonding ${formatUnits(amt)} ${esc(tokenSymbol)}…`);
-    await sendTx(STAKING, SEL.depositStake + pad32(currentDidHash) + encUint(amt));
+    logLine(`bonding ${formatUnits(amt)} ${esc(tokenSymbol)} to ${forAgent(agent)}…`);
+    await sendTx(STAKING, SEL.depositStake + pad32(did) + encUint(amt), from);
     await Promise.all([lookup(), refreshSvrBalance()]);
   } catch (e) { logLine(`<span class="pill-err">${esc(e.message)}</span>`); }
 }
 
 async function beginUnbond() {
   try {
-    if (!currentDidHash) await lookup();
+    const { did, agent, from } = await target();
     const amt = parseUnits($("stakeAmount").value);
     // Said before the wallet opens, not after. The tokens are locked for the unbonding
     // period once this is sent: it is the least reversible thing the page can do.
@@ -636,26 +685,26 @@ async function beginUnbond() {
       }
       logLine('<span class="pill-warn">this takes the bond below the minimum, so the agent cannot be reactivated until it is bonded back to the minimum</span>');
     }
-    logLine(`starting unbonding of ${formatUnits(amt)} ${esc(tokenSymbol)}…`);
-    await sendTx(STAKING, SEL.initiateWithdrawal + pad32(currentDidHash) + encUint(amt));
+    logLine(`starting unbonding of ${formatUnits(amt)} ${esc(tokenSymbol)} from ${forAgent(agent)}…`);
+    await sendTx(STAKING, SEL.initiateWithdrawal + pad32(did) + encUint(amt), from);
     await lookup();
   } catch (e) { logLine(`<span class="pill-err">${esc(e.message)}</span>`); }
 }
 
 async function claimUnbond() {
   try {
-    if (!currentDidHash) await lookup();
-    logLine("claiming unbonded stake…");
-    await sendTx(STAKING, SEL.claimWithdrawal + pad32(currentDidHash));
+    const { did, agent, from } = await target();
+    logLine(`claiming unbonded stake of ${forAgent(agent)}…`);
+    await sendTx(STAKING, SEL.claimWithdrawal + pad32(did), from);
     await Promise.all([lookup(), refreshSvrBalance()]);
   } catch (e) { logLine(`<span class="pill-err">${esc(e.message)}</span>`); }
 }
 
 async function disputeSlash() {
   try {
-    if (!currentDidHash) await lookup();
+    const { did, from } = await target();
     logLine("disputing the slash proposal (the bond stays frozen and the admin has to rule on it)…");
-    await sendTx(STAKING, SEL.disputeSlash + pad32(currentDidHash));
+    await sendTx(STAKING, SEL.disputeSlash + pad32(did), from);
     await lookup();
   } catch (e) { logLine(`<span class="pill-err">${esc(e.message)}</span>`); }
 }
@@ -664,9 +713,9 @@ async function disputeSlash() {
 // and reactivate it only with the minimum bonded and no slash proposal behind the suspension.
 async function setStatus(code, verb) {
   try {
-    if (!currentDidHash) await lookup();
-    logLine(`${verb} the agent…`);
-    await sendTx(IDENTITY, SEL.updateStatus + pad32(currentDidHash) + encUint(BigInt(code)));
+    const { did, agent, from } = await target();
+    logLine(`${verb} ${forAgent(agent)}…`);
+    await sendTx(IDENTITY, SEL.updateStatus + pad32(did) + encUint(BigInt(code)), from);
     await lookup();
   } catch (e) { logLine(`<span class="pill-err">${esc(e.message)}</span>`); }
 }
@@ -709,6 +758,8 @@ async function pendingNote(raw) {
 }
 
 // ---- actions ----
+// The identity key made for each agent on this page: its public half and its file's name.
+const sessionKeys = new Map();
 async function registerAgentFlow() {
   try {
     if (!wallet || !account) { logLine('<span class="pill-err">Connect a wallet first.</span>'); return; }
@@ -726,64 +777,96 @@ async function registerAgentFlow() {
       return;
     }
 
-    logLine("generating Ed25519 identity keypair in your browser…");
-    let kp;
-    try {
-      kp = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
-    } catch (_) {
-      logLine('<span class="pill-err">This browser cannot generate Ed25519 keys — use the SDK flow in the Quickstart instead.</span>');
+    const agent = currentAgent, did = currentDidHash, from = account;
+    // Registered meanwhile, from another tab or the SDK? Then there is nothing to sign and no key to make.
+    const ident = await rpcRead(IDENTITY, SEL.identities + pad32(did));
+    if (BigInt(word(ident, 4)) !== 0n) {
+      logLine('<span class="pill-warn">This agent is already registered, so nothing was generated or sent.</span>');
+      await lookup();
       return;
     }
-    const pub = new Uint8Array(await crypto.subtle.exportKey("raw", kp.publicKey));
-    const pubHex = [...pub].map(b => b.toString(16).padStart(2, "0")).join("");
-    // Export the private key as PKCS8, falling back to JWK.
-    //
-    // Ed25519 generateKey is supported in Chrome 137+, Firefox 129+ and Safari 17+, but
-    // MDN carries a note that exportKey handles Ed25519 for "raw" and not "pkcs8". This
-    // path was only ever exercised in Chromium, where pkcs8 works and returns 48 bytes.
-    // Rather than trust a compatibility table for browsers nobody here can run, take
-    // whichever envelope the browser will actually produce. It is the same key material,
-    // and nothing reads this file programmatically: it exists for the operator to keep.
-    let keyFormat = "PKCS8 base64";
-    let keyText;
-    try {
-      const pkcs8 = new Uint8Array(await crypto.subtle.exportKey("pkcs8", kp.privateKey));
-      keyText = btoa(String.fromCharCode(...pkcs8));
-    } catch (_) {
-      keyFormat = "JWK";
-      keyText = JSON.stringify(await crypto.subtle.exportKey("jwk", kp.privateKey));
-      logLine("this browser does not export PKCS8 for Ed25519; saving the key as JWK instead");
+
+    // One keypair per agent for as long as the page is open. An attempt that fails after the key file
+    // was saved (a refused signature, a revert) is retried with that same key, so the operator holds
+    // one file for the agent rather than one per attempt.
+    let key = sessionKeys.get(agent.toLowerCase());
+    if (key) {
+      logLine(`using the key saved earlier on this page, ${esc(key.file)}`);
+    } else {
+      logLine("generating Ed25519 identity keypair in your browser…");
+      let kp;
+      try {
+        kp = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+      } catch (_) {
+        logLine('<span class="pill-err">This browser cannot generate Ed25519 keys — use the SDK flow in the Quickstart instead.</span>');
+        return;
+      }
+      const pub = new Uint8Array(await crypto.subtle.exportKey("raw", kp.publicKey));
+      const pubHex = [...pub].map(b => b.toString(16).padStart(2, "0")).join("");
+      // Export the private key as PKCS8, falling back to JWK.
+      //
+      // Ed25519 generateKey is supported in Chrome 137+, Firefox 129+ and Safari 17+, but
+      // MDN carries a note that exportKey handles Ed25519 for "raw" and not "pkcs8". This
+      // path was only ever exercised in Chromium, where pkcs8 works and returns 48 bytes.
+      // Rather than trust a compatibility table for browsers nobody here can run, take
+      // whichever envelope the browser will actually produce. It is the same key material,
+      // and nothing reads this file programmatically: it exists for the operator to keep.
+      let keyFormat = "PKCS8 base64";
+      let keyText;
+      try {
+        const pkcs8 = new Uint8Array(await crypto.subtle.exportKey("pkcs8", kp.privateKey));
+        keyText = btoa(String.fromCharCode(...pkcs8));
+      } catch (_) {
+        keyFormat = "JWK";
+        keyText = JSON.stringify(await crypto.subtle.exportKey("jwk", kp.privateKey));
+        logLine("this browser does not export PKCS8 for Ed25519; saving the key as JWK instead");
+      }
+      const blob = new Blob([
+        `Sigvara agent identity key (Ed25519, private key as ${keyFormat})
+` +
+        `agent:      ${agent}
+` +
+        `did:        did:sigvara:${CHAIN_ID}:${agent}
+` +
+        `public key: 0x${pubHex}
+` +
+        `private key (KEEP SECRET, it signs auth challenges for this agent):
+${keyText}
+`,
+      ], { type: "text/plain" });
+      // The name carries the key's start as well as the agent's, so two keys never share a file name.
+      const file = `sigvara-agent-key-${agent.slice(0, 10)}-${pubHex.slice(0, 8)}.txt`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = file;
+      a.click();
+      // A retry needs only the public key, which the page keeps. The link to the file goes.
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      key = { pubHex, file };
+      sessionKeys.set(agent.toLowerCase(), key);
+      logLine(`key file ${esc(file)} downloaded. Keep it safe. pubkey 0x${pubHex.slice(0, 16)}…`);
     }
-    const blob = new Blob([
-      `Sigvara agent identity key (Ed25519, private key as ${keyFormat})\n` +
-      `agent:      ${currentAgent}\n` +
-      `did:        did:sigvara:${CHAIN_ID}:${currentAgent}\n` +
-      `public key: 0x${pubHex}\n` +
-      `private key (KEEP SECRET — it signs auth challenges for this agent):\n${keyText}\n`,
-    ], { type: "text/plain" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `sigvara-agent-key-${currentAgent.slice(0, 10)}.txt`;
-    a.click();
-    logLine(`key file downloaded — keep it safe. pubkey 0x${pubHex.slice(0, 16)}…`);
     logLine("signing proof of control for this address…");
     const digest = await rpcRead(
       IDENTITY,
-      SEL.registrationDigest + encAddr(currentAgent) + encAddr(account) + pubHex
+      SEL.registrationDigest + encAddr(agent) + encAddr(from) + key.pubHex
     );
     // personal_sign applies the EIP-191 prefix, which is the one the contract expects.
-    await ensureArc();
+    await ensureArc(from);
     const signature = await wallet.request({
       method: "personal_sign",
-      params: [digest, account],
+      params: [digest, from],
     });
 
     logLine("registering agent (your wallet becomes the operator)…");
     await sendTx(
       IDENTITY,
       // agentAddress, ed25519PubKey, signature -> three head slots.
-      SEL.registerAgent + encAddr(currentAgent) + pubHex + encBytes(signature, 3)
+      SEL.registerAgent + encAddr(agent) + key.pubHex + encBytes(signature, 3),
+      from
     );
+    logLine(`registered with public key 0x${key.pubHex.slice(0, 16)}…, the one in ${esc(key.file)}`);
     await lookup();
   } catch (e) { logLine(`<span class="pill-err">${esc(e.message)}</span>`); }
 }
@@ -791,25 +874,25 @@ async function registerAgentFlow() {
 async function deposit() {
   try {
     if (!FEES_LIVE) { logLine('<span class="pill-err">No fee registry on this deployment.</span>'); return; }
-    if (!currentDidHash) await lookup();
+    const { did, agent, from } = await target();
     const amt = parseUnits($("amount").value);
-    const allowance = BigInt(await rpcRead(tokenAddr, SEL.allowance + encAddr(account) + encAddr(FEES)));
+    const allowance = BigInt(await rpcRead(tokenAddr, SEL.allowance + encAddr(from) + encAddr(FEES)));
     if (allowance < amt) {
       logLine(`approving ${formatUnits(amt)} ${esc(tokenSymbol)}…`);
-      await sendTx(tokenAddr, SEL.approve + encAddr(FEES) + encUint(amt));
+      await sendTx(tokenAddr, SEL.approve + encAddr(FEES) + encUint(amt), from);
     }
-    logLine(`depositing ${formatUnits(amt)} ${esc(tokenSymbol)} for agent…`);
-    await sendTx(FEES, SEL.depositFor + pad32(currentDidHash) + encUint(amt));
+    logLine(`depositing ${formatUnits(amt)} ${esc(tokenSymbol)} for ${forAgent(agent)}…`);
+    await sendTx(FEES, SEL.depositFor + pad32(did) + encUint(amt), from);
     await Promise.all([lookup(), refreshSvrBalance()]);
   } catch (e) { logLine(`<span class="pill-err">${esc(e.message)}</span>`); }
 }
 async function withdrawFees() {
   try {
     if (!FEES_LIVE) { logLine('<span class="pill-err">No fee registry on this deployment.</span>'); return; }
-    if (!currentDidHash) await lookup();
+    const { did, from } = await target();
     const amt = parseUnits($("amount").value);
     logLine(`withdrawing ${formatUnits(amt)} ${esc(tokenSymbol)} (operator only)…`);
-    await sendTx(FEES, SEL.withdraw + pad32(currentDidHash) + encUint(amt));
+    await sendTx(FEES, SEL.withdraw + pad32(did) + encUint(amt), from);
     await Promise.all([lookup(), refreshSvrBalance()]);
   } catch (e) { logLine(`<span class="pill-err">${esc(e.message)}</span>`); }
 }
@@ -826,16 +909,20 @@ async function faucet() {
 // flow's own refresh set it (buttonsSet counts those), or comes back on when nothing refreshed it.
 let buttonsSet = 0;
 const inFlight = new Set();
+// Look up is off while any flow runs, so the card keeps showing the agent the wallet is signing for.
+let running = 0;
 function busy(id, flow) {
   return async () => {
     if (inFlight.has(id)) return;
     inFlight.add(id);
     const seen = buttonsSet;
     $(id).disabled = true;
+    if (running++ === 0) $("lookupBtn").disabled = true;
     try {
       await flow();
     } finally {
       inFlight.delete(id);
+      if (--running === 0) $("lookupBtn").disabled = false;
       if (buttonsSet === seen) $(id).disabled = false;
     }
   };
