@@ -23,7 +23,7 @@
   <link rel="icon" type="image/png" sizes="512x512" href="../assets/sigvara-card.png" />
   <link rel="apple-touch-icon" href="../assets/sigvara-card.png" />
   <link rel="preload" href="../assets/fonts/PublicSans-ExtraBold.woff2" as="font" type="font/woff2" crossorigin />
-  <link rel="stylesheet" href="../assets/style.css?v=type2" />
+  <link rel="stylesheet" href="../assets/style.css?v=phone1" />
 </head>
 <body>
 
@@ -151,7 +151,8 @@
           </div>
         </div>
 
-        <table class="data-table u-mb-32">
+        <div class="table-scroll">
+        <table class="data-table formula-table u-mb-32">
           <thead><tr><th>Factor</th><th>Max</th><th>Formula (live oracle)</th><th>Status</th></tr></thead>
           <tbody>
             <tr><td class="mono">feeScore</td><td>20</td><td class="u-muted-13"><code>min(20, decayedVolume / PAYMENT_FEE_UNIT)</code> — settled payments verified on chain, capped per payer</td><td><span class="tag tag-green">live</span></td></tr>
@@ -162,6 +163,7 @@
             <tr><td class="mono">propagationScore</td><td>5</td><td class="u-muted-13">external standing of the counterparties that paid the agent, 1 pt per fully trusted payer, pro-rated by the payer's external score</td><td><span class="tag tag-green">live</span></td></tr>
           </tbody>
         </table>
+        </div>
         <p class="u-muted-13">All six factors are live. Only a <strong>bonded</strong> agent is scored at all: a newly registered agent is <code>PendingBond</code> until a deposit carries it over the minimum stake, and an unbonded agent cannot be slashed, so scoring one would mean scoring something unaccountable. Evidence decays on a half-life from the moment each payment settled, and a score is earned before it is spendable — <code>getTotalScore()</code> returns the matured value that threshold checks read, while <code>getEarnedScore()</code> returns the raw figure. externalScore is 0 unless the agent links an ERC-8004 identity it owns, and because propagation inherits only external standing, both are 0 across the network until linked agents exist &mdash; which puts today's reachable ceiling at <strong>70 of 100</strong>, and that is the number a threshold should be set against. You can see any agent's live per-factor breakdown on the <a href="../app">App page</a>, and how the scores spread across the bands a threshold is set in, and what followed each band, on <a href="../status">the status page</a>.</p>
 
         <h3>Sybil Resistance</h3>
@@ -249,6 +251,7 @@ console.log(rep.ageScore);       <span class="cm">// 0–30 (tenure)</span>
 
         <h3>Score bands</h3>
         <p class="u-muted-13">These are the bands the score badge colours by, as a reading aid. Nothing on chain enforces them.</p>
+        <div class="table-scroll">
         <table class="data-table">
           <thead><tr><th>Score Range</th><th>Label</th><th>Meaning</th></tr></thead>
           <tbody>
@@ -258,6 +261,7 @@ console.log(rep.ageScore);       <span class="cm">// 0–30 (tenure)</span>
             <tr><td>0–24</td><td><span class="tag tag-red">UNVERIFIED</span></td><td class="u-muted-13">Insufficient data, new registration, or flagged</td></tr>
           </tbody>
         </table>
+        </div>
 
         <h3>Slashing and Score Reset</h3>
         <p>When a slash settles, through <code>SigvaraStaking.executeSlash()</code> after an undisputed challenge period or through the admin upholding a disputed one with <code>resolveDispute</code>, the staking contract calls <code>zeroReputation(didHash)</code> on the reputation contract. All six factor scores are set to zero. The agent's identity status is permanently set to <code>Slashed</code> — it cannot be reinstated or re-registered at the same address. Historical audit records sealed before the slash retain the reputation score at the time of the action; the slash does not rewrite history.</p>

@@ -23,7 +23,7 @@
   <link rel="icon" type="image/png" sizes="512x512" href="../assets/sigvara-card.png" />
   <link rel="apple-touch-icon" href="../assets/sigvara-card.png" />
   <link rel="preload" href="../assets/fonts/PublicSans-ExtraBold.woff2" as="font" type="font/woff2" crossorigin />
-  <link rel="stylesheet" href="../assets/style.css?v=type2" />
+  <link rel="stylesheet" href="../assets/style.css?v=phone1" />
 </head>
 <body>
 
@@ -88,6 +88,7 @@
         </div>
 
         <h3>Contract</h3>
+        <div class="table-scroll">
         <table class="data-table">
           <thead><tr><th>Item</th><th>Value</th></tr></thead>
           <tbody>
@@ -103,11 +104,13 @@
             <tr><td>Chart</td><td><a href="https://dexscreener.com/arc/0xa9Be080545C6d61529c27294512bDb3Bde67A735" target="_blank" rel="noopener">DexScreener</a>, a third-party chart of the pool above. Its token info (icon, links, description) was submitted by the team on 12 November 2026.</td></tr>
           </tbody>
         </table>
+        </div>
 
         <p>The token contract is Tolly's <code>TollyToken</code>, a plain OpenZeppelin ERC-20 with public source (<a href="https://github.com/TollyLabs/v3-contracts" target="_blank" rel="noopener">TollyLabs/v3-contracts</a>). It has no owner, no mint, no pause, no blacklist and no transfer tax. Its one deviation is an anti-snipe cap of 3% of supply per wallet for the first 300 seconds after launch, after which it is a vanilla ERC-20. That is exactly what the protocol contracts need from a bond asset: <code>SigvaraStaking</code>, <code>SigvaraOracleBond</code> and <code>SigvaraEpochFees</code> take the token by address at initialization and treat it as a plain <code>IERC20</code>.</p>
         <p>Because the token is chosen at initialization rather than compiled in, <code>SigvaraStaking</code> does not assume it behaves. Deposits credit the <em>measured</em> balance change rather than the amount requested, so a token that takes a cut in transit is accounted for what actually arrived instead of booking stake the contract never received. Neither deployed token does that, which is the point: the guard is there for whoever deploys these contracts next. Rebasing tokens remain unsupported, since stake is stored as a fixed amount and a balance that moves on its own cannot be detected from inside the contract.</p>
 
         <h3>Addresses</h3>
+        <div class="table-scroll">
         <table class="data-table">
           <thead><tr><th>Role</th><th>Address</th></tr></thead>
           <tbody>
@@ -116,6 +119,7 @@
             <tr><td>Admin Safe</td><td><a href="https://explorer.arc.io/address/0x6ba985D721925357DBf0Fa1E45037CFC3C245983" target="_blank" rel="noopener"><code>0x6ba985D721925357DBf0Fa1E45037CFC3C245983</code></a>, 2 of 3, created through Safe's factory on 9 November 2026. The deployer is not an owner</td></tr>
           </tbody>
         </table>
+        </div>
 
         <p>The SVR launch transaction was sent from the deployer address above, and the Arc <b>mainnet</b> registry deployment will be too. A token or mainnet contract attributed to Sigvara that was not created by that address is not ours. Arc testnet is deployed from a separate address so that a testnet key never touches anything with value. The treasury address holds protocol-owned SVR and the USDC from monthly fee claims, and nothing else. The SVR pays only the costs listed under treasury policy, and the USDC is not spent until a buyback schedule is published there. The admin Safe schedules every payment from it, and a payment executes 48 hours later at the earliest, so each one is public two days before it happens (<a href="https://github.com/RunTimeAdmin/Sigvara/blob/main/docs/adr/0005-governance-and-emergency-powers.md" target="_blank" rel="noopener">ADR 0005</a>, decision 13). Until 8 November 2026 this table listed <code>0xeDC966e23318782c0241aBe1790bd221b8aCE867</code> as the treasury. That is a single key, it is not the treasury, and nothing should be sent to it.</p>
 
@@ -127,6 +131,7 @@
         <p>The anti-snipe cap limits any single wallet to 3% of supply for the first 300 seconds. The team does not split buys across wallets to work around it. A position larger than that cap is accumulated afterwards, on the open market, disclosed as it is bought.</p>
 
         <h3>Team acquisitions</h3>
+        <div class="table-scroll">
         <table class="data-table">
           <thead><tr><th>9 November 2026</th><th>First buy</th></tr></thead>
           <tbody>
@@ -138,7 +143,9 @@
             <tr><td>Held for</td><td>5,000,000 for the two oracle operator bonds (2,500,000 each, primary and checker). The other 17,283,004.212403886 is treasury inventory, locked until 9 May 2027 (below).</td></tr>
           </tbody>
         </table>
+        </div>
 
+        <div class="table-scroll">
         <table class="data-table">
           <thead><tr><th>12 November 2026</th><th>Second buy</th></tr></thead>
           <tbody>
@@ -150,7 +157,9 @@
             <tr><td>Held for</td><td>Treasury inventory (below).</td></tr>
           </tbody>
         </table>
+        </div>
 
+        <div class="table-scroll">
         <table class="data-table">
           <thead><tr><th>12 November 2026</th><th>Third buy</th></tr></thead>
           <tbody>
@@ -162,10 +171,12 @@
             <tr><td>Held for</td><td>Treasury inventory: 1,890,000 of the two buys was sent to the treasury timelock <a href="https://explorer.arc.io/address/0xBc6acE041434368dBD20a092425F6008bCFe50d4" target="_blank" rel="noopener"><code>0xBc6acE04…50d4</code></a> at 14:26:13. The remaining 1,574.332718404 is with the deployer.</td></tr>
           </tbody>
         </table>
+        </div>
 
         <p>On 12 November 2026 the creator fee share accrued since launch, 7.070578 USDC, was claimed from Tolly's fee locker to the deployer at 13:47:36 in <a href="https://explorer.arc.io/tx/0x5cbf5c0dcee17895a61fe060cdde198ce3c3162147a7bb840462e2ad6e6cd868" target="_blank" rel="noopener"><code>0x5cbf5c0d…d868</code></a>. With 3.788880 USDC of the deployer's own it paid for the two buys above, 10.859458 USDC in all, and 1,890,000 of the SVR bought was sent to the treasury timelock at 14:26:13 in <a href="https://explorer.arc.io/tx/0xf02e578ab7374ad214bbe569818c53c4d8a68842adea2c28f7454977d9281773" target="_blank" rel="noopener"><code>0xf02e578a…1773</code></a>. It was done once, as a test that the claim, the purchase and the transfer to the treasury work end to end. That departs from the treasury policy below in two ways: the claim was made on the 12th rather than the 1st, and it reached the treasury as SVR rather than as USDC held for a published buyback schedule. The remaining 1,574.332718404 SVR is held by the deployer, beside the 5,000,000 for the operator bonds.</p>
 
         <h3>Locked</h3>
+        <div class="table-scroll">
         <table class="data-table">
           <thead><tr><th>Lock</th><th><a href="https://explorer.arc.io/address/0xE246eaF919a39d7E0ff656320f7132Ee8AfBB8FB" target="_blank" rel="noopener"><code>0xE246eaF9…B8FB</code></a></th></tr></thead>
           <tbody>
@@ -175,6 +186,7 @@
             <tr><td>Owner</td><td>The treasury timelock, since 9 November 2026 (<a href="https://explorer.arc.io/tx/0xef44f70918c7f79e2e8d83b09774325bd665a40ce1d78c6ebef5e1b5a7bbf7a0" target="_blank" rel="noopener"><code>0xef44f709…f7a0</code></a>), so the release goes to the treasury. Ownership decides where the SVR goes, never when, and changing it now takes the admin Safe and 48 hours' notice</td></tr>
           </tbody>
         </table>
+        </div>
         <p>The other 5,000,000 SVR of the first buy is <strong>not locked</strong>. It is for the two oracle operator bonds, the primary's and the checker's, at the 2,500,000 SVR that <code>SigvaraOracleBond</code> requires of each operator on mainnet (see Mainnet parameters). It stays with the deployer until the mainnet registries deploy and the bonds are posted, and that transfer is published here. Anyone can read the deployer's balance, and the lock's <code>start()</code>, <code>end()</code>, <code>owner()</code> and <code>releasable(SVR)</code>, on chain.</p>
 
         <h3>Treasury policy</h3>
@@ -218,6 +230,7 @@
         <p>Arc testnet keeps using the faucet <code>SVRToken</code> for mechanics testing. That token carries the SVR name and symbol, anyone can mint it from an open faucet, it is worth nothing, and it is <b>not</b> this token. At mainnet deploy the registries are initialized with the SVR address above, with <code>minimumStake</code> and <code>bondAmount</code> denominated in 18 decimals. <code>SigvaraEpochFees</code> is not deployed at launch.</p>
 
         <h3>Mainnet parameters</h3>
+        <div class="table-scroll">
         <table class="data-table">
           <thead><tr><th>Parameter</th><th>Value</th><th>Share of supply</th></tr></thead>
           <tbody>
@@ -225,6 +238,7 @@
             <tr><td><code>SigvaraStaking.minimumStake</code></td><td>10,000 SVR</td><td>0.001%</td></tr>
           </tbody>
         </table>
+        </div>
 
         <p>The operator bond is what a corrupt oracle loses. <code>slash()</code> can take up to the whole of it, so the deterrent is the full number rather than a fraction. The agent stake is a gate on who is worth scoring, which is a much smaller job than deterring an oracle, so it sits two orders of magnitude lower. On Arc testnet both were 1,000 until the bond was raised to 25,000 on 20 September 2026, and the match was coincidence rather than design.</p>
 
@@ -245,6 +259,7 @@
         <p>Anyone can deploy a token called SVR or Sigvara on any launchpad. Before this page carries an address, there is no genuine SVR. After it does, only that address is genuine. The team never announces a contract address on social media first. It goes here and on sigvara.xyz, then everywhere else.</p>
 
         <p>These are the only accounts and domains the project speaks through:</p>
+        <div class="table-scroll">
         <table class="data-table">
           <thead><tr><th>Surface</th><th>Where</th></tr></thead>
           <tbody>
@@ -254,6 +269,7 @@
             <tr><td>Security</td><td><code>security@sigvara.xyz</code></td></tr>
           </tbody>
         </table>
+        </div>
 
         <p>Anything else claiming to be Sigvara is not, including accounts using the same name or avatar. An unnamed "official account" protects nobody, which is why this list exists and why it also lives in the repository, where its history is public, rather than only in a profile bio that can be edited without trace.</p>
 
