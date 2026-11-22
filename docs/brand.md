@@ -121,14 +121,14 @@ code,
 
 | Role | Desktop | Mobile | Weight | Letter spacing |
 | --- | --- | --- | --- | --- |
-| Hero title | `clamp(48px, 7vw, 86px)` | `clamp(47px, 15vw, 72px)` | 750 | `-0.01em` |
+| Hero title | `clamp(48px, 6vw, 78px)` | `clamp(47px, 15vw, 72px)` | 750 | `-0.01em` |
 | Section title | `clamp(30px, 4vw, 48px)` | `32–40px` | 700 | `-0.01em` |
 | Card title | `17px` | `17px` | 700 | `-0.01em` |
 | Lead paragraph | `clamp(17px, 2vw, 20px)` | `17px` | 400 | normal |
 | Body | `14–15px` | `14px` | 400 | normal |
 | Metadata | `10–12px` | `10–12px` | 500–700 | `.08–.14em` |
 
-Headlines should be short and confident, in solid text. Every heading uses the same tracking, `-0.01em`. Keep the violet gradient for signals such as score bars, status indicators and the primary action. Do not use it on words in a headline or in body copy.
+Headlines should be short and confident, in solid text. Every heading uses the same tracking, `-0.01em`, and sets `text-wrap: balance` (`pretty` where a heading has a forced line break) so none ends on a lone word. Keep the violet gradient for signals such as score bars, status indicators and the primary action. Do not use it on words in a headline or in body copy.
 
 ## 4. Logo and avatar system
 

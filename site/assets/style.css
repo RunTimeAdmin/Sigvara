@@ -161,9 +161,9 @@ nav {
 .btn[disabled] { opacity: .45; pointer-events: none; }
 
 /* ── Typography ── */
-h1 { font-size: clamp(34px, 5vw, 56px); font-weight: 750; line-height: 1.05; letter-spacing: -.01em; }
-h2 { font-size: clamp(26px, 3vw, 34px); font-weight: 700; letter-spacing: -.01em; line-height: 1.15; margin-bottom: 10px; }
-h3 { font-size: 17px; font-weight: 700; letter-spacing: -.01em; margin-bottom: 6px; }
+h1 { font-size: clamp(34px, 5vw, 56px); font-weight: 750; line-height: 1.05; letter-spacing: -.01em; text-wrap: balance; }
+h2 { font-size: clamp(26px, 3vw, 34px); font-weight: 700; letter-spacing: -.01em; line-height: 1.15; margin-bottom: 10px; text-wrap: balance; }
+h3 { font-size: 17px; font-weight: 700; letter-spacing: -.01em; margin-bottom: 6px; text-wrap: balance; }
 h4 { font-size: 14px; font-weight: 600; color: var(--sig-text); margin: 28px 0 10px; }
 .gradient-text {
   color: var(--sig-violet-bright);

@@ -35,7 +35,7 @@ nav { display: flex; align-items: center; justify-content: space-between; gap: 2
 .intro { padding: 56px 0 26px; }
 .eyebrow { display: inline-flex; align-items: center; gap: 9px; color: var(--muted-strong); font-size: 12px; letter-spacing: .13em; text-transform: uppercase; }
 .eyebrow::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 0 5px rgba(111,229,234,.10), 0 0 24px rgba(111,229,234,.65); }
-h1 { margin: 18px 0 16px; max-width: 760px; font-size: clamp(34px, 5vw, 58px); line-height: 1.02; letter-spacing: -.01em; font-weight: 750; }
+h1 { margin: 18px 0 16px; max-width: 760px; font-size: clamp(34px, 5vw, 58px); line-height: 1.02; letter-spacing: -.01em; font-weight: 750; text-wrap: balance; }
 .lede { max-width: 640px; color: var(--muted-strong); font-size: 17px; line-height: 1.55; margin: 0; }
 .net-strip { display: flex; flex-wrap: wrap; gap: 12px 26px; align-items: center; margin-top: 24px; padding: 14px 18px; border: 1px solid var(--line); border-radius: 14px; background: rgba(15,18,33,.6); font-size: 13px; color: var(--muted); }
 .net-strip b { color: var(--text); font-weight: 600; }
