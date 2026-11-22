@@ -708,3 +708,25 @@ test('every font a stylesheet names is a file in site/, and pages preload only t
   }
   assert.ok(preloads > 0);
 });
+
+test('a table or a long address cannot make a page wider than a phone screen', () => {
+  // Every table scrolls inside its own box, so a wide one does not widen the page.
+  let tables = 0;
+  for (const [name, html] of siteFiles('.html')) {
+    for (const m of html.matchAll(/<table\b/g)) {
+      assert.ok(html.slice(0, m.index).trimEnd().endsWith('<div class="table-scroll">'), `${name}: a <table> outside <div class="table-scroll">`);
+      tables++;
+    }
+  }
+  assert.ok(tables > 0);
+  const css = fs.readFileSync(path.join(SITE, 'assets', 'style.css'), 'utf8');
+  const rule = (selector) => {
+    const found = [...css.matchAll(/(?:^|\n)([^{}\n]+)\{([^}]*)\}/g)].find(([, sel]) => sel.trim() === selector);
+    assert.ok(found, `style.css has no "${selector}" rule`);
+    return found[2];
+  };
+  assert.match(rule('.table-scroll'), /overflow-x:\s*auto/);
+  // Addresses, hashes and DIDs have no break points of their own.
+  assert.match(rule('code'), /overflow-wrap:\s*anywhere/);
+  assert.match(rule('.sealed-packet'), /overflow-wrap:\s*anywhere/);
+});

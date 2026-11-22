@@ -129,7 +129,7 @@ h1 { margin: 18px 0 16px; max-width: 760px; font-size: clamp(34px, 5vw, 58px); l
 
 footer { padding: 26px 0 34px; border-top: 1px solid var(--line); color: #6d7691; font-size: 12px; }
 .footer-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
-.footer-links { display: flex; gap: 19px; }
+.footer-links { display: flex; flex-wrap: wrap; gap: 19px; }
 .footer-links a { text-decoration: none; }
 .footer-links a:hover { color: var(--text); }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }

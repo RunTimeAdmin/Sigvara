@@ -69,7 +69,7 @@ body {
 
 a { color: var(--sig-violet-bright); text-decoration: none; transition: color .2s ease; }
 a:hover { color: var(--sig-text); text-decoration: underline; text-underline-offset: 3px; }
-code { font-family: var(--sig-font-mono); font-size: 0.88em; background: var(--sig-bg-soft); border: 1px solid var(--sig-line); padding: 2px 6px; border-radius: 6px; color: var(--sig-text-soft); }
+code { font-family: var(--sig-font-mono); font-size: 0.88em; background: var(--sig-bg-soft); border: 1px solid var(--sig-line); padding: 2px 6px; border-radius: 6px; color: var(--sig-text-soft); overflow-wrap: anywhere; }
 strong { color: var(--sig-text); font-weight: 600; }
 .mono, [data-mono="true"] { font-family: var(--sig-font-mono); }
 
@@ -289,6 +289,10 @@ pre code { background: none; border: none; padding: 0; font-size: inherit; color
 .data-table tr:last-child td { border-bottom: none; }
 .data-table td.mono { font-family: var(--sig-font-mono); font-size: 12.5px; color: var(--sig-text-soft); }
 .data-table td.addr { font-family: var(--sig-font-mono); font-size: 12.5px; color: var(--sig-text-muted); }
+/* A table wider than a phone screen scrolls inside this box instead of widening the page. */
+.table-scroll { overflow-x: auto; }
+/* A formula keeps its names whole, breaking only at its spaces; its table scrolls instead. */
+.formula-table code { overflow-wrap: normal; }
 
 /* ── Footer ── */
 footer { border-top: 1px solid var(--sig-line); padding: var(--sig-space-7) 0; margin-top: var(--sig-space-11); }
@@ -354,7 +358,7 @@ footer { border-top: 1px solid var(--sig-line); padding: var(--sig-space-7) 0; m
 .qs-body p { font-size: 14px; color: var(--sig-text-muted); margin-bottom: 12px; }
 
 /* ── Sealed packet ── */
-.sealed-packet { background: var(--sig-bg-soft); border: 1px solid var(--sig-line); border-radius: 10px; padding: 16px; font-family: var(--sig-font-mono); font-size: 13px; line-height: 1.7; color: var(--sig-text-soft); }
+.sealed-packet { background: var(--sig-bg-soft); border: 1px solid var(--sig-line); border-radius: 10px; padding: 16px; font-family: var(--sig-font-mono); font-size: 13px; line-height: 1.7; color: var(--sig-text-soft); overflow-wrap: anywhere; }
 .sp-key { color: var(--sig-violet-bright); }
 .sp-str { color: var(--sig-mint); }
 .sp-num { color: var(--sig-orange); }
