@@ -33,15 +33,48 @@ async function load() {
   let bonded = null, disagreed = null;
   try { bonded = await renderOperators(history, { primary, checker }); } catch (e) { setCard("operatorsCard", X.failed("the operators", e)); }
   try { disagreed = await renderDivergence(divergence); } catch (e) { setCard("divergenceCard", X.failed("the disagreements", e)); }
-  if (bonded) publish(bonded, history.value.logs, { primary, checker }, disagreed);
+  if (bonded) {
+    publish(bonded, history.value.logs, { primary, checker }, disagreed);
+    keepHealthFresh(window.SigvaraOperatorsData.health);
+  }
   try { renderHistory(history); } catch (e) { setCard("bondHistoryCard", X.failed("the bond history", e)); }
+}
+
+// What the room's clocks need from an operator's /health, or null when it was not read.
+const healthOf = (h) => (h.status === "fulfilled" && h.value
+  ? { epochMs: Number(h.value.epochMs) || 0, last: Number(h.value.lastSuccessfulEpochMs) || 0, commit: h.value.commit } : null);
+
+// The clocks count down to each operator's next run from /health as it was read. Once that run is
+// due, the page reads /health again, while the tab is visible, and updates the objects the room
+// draws from: an operator that ran on time is not drawn as overdue only because this page's reading
+// has aged. One still late after the read stays late, and is read again a minute later.
+function keepHealthFresh(health) {
+  let timer = null;
+  const schedule = () => {
+    clearTimeout(timer);
+    const due = [health.primary, health.checker]
+      .filter((h) => h && h.last > 0 && h.epochMs > 0).map((h) => h.last + h.epochMs);
+    if (!due.length) return;
+    timer = setTimeout(refresh, Math.max(60000, Math.min(...due) - Date.now() + 60000));
+  };
+  const refresh = async () => {
+    if (document.hidden) {
+      document.addEventListener("visibilitychange", refresh, { once: true });
+      return;
+    }
+    const [primary, checker] = await Promise.allSettled([X.getJson(`${X.PRIMARY}/health`), X.getJson(`${X.CHECKER}/health`)]);
+    for (const [held, read] of [[health.primary, primary], [health.checker, checker]]) {
+      const now = healthOf(read);
+      if (held && now) Object.assign(held, now);
+    }
+    schedule();
+  };
+  schedule();
 }
 
 // The room at the top of the page (operators-scene.js) draws from what this page has already
 // read. It is a module, so it may load before or after this.
 function publish({ ops, bondAmount }, logs, health, disagreed) {
-  const healthOf = (h) => (h.status === "fulfilled" && h.value
-    ? { epochMs: Number(h.value.epochMs) || 0, last: Number(h.value.lastSuccessfulEpochMs) || 0, commit: h.value.commit } : null);
   window.SigvaraOperatorsData = {
     ops: ops.map((o) => Object.assign(o, { name: nameOf(o) })),
     bondAmount,

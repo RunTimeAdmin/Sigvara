@@ -168,6 +168,14 @@ function renderHero(agents, start, live) {
   const negatives = counted.reduce((s, a) => s + a.negatives, 0);
   const onBase = counted.reduce((s, a) => s + a.onBase, 0);
   const pending = live === null;
+  // An agent whose evidence could not be read has no count, which is not a count of zero. With every
+  // read failed the totals are unknown; with some failed they leave those agents out, and say so.
+  const unread = live ? live.length - counted.length : 0;
+  const unknown = unread > 0 && counted.length === 0;
+  const shown = (n) => (pending ? "…" : unknown ? "?" : n);
+  const readNote = !unread ? ""
+    : unknown ? '<p class="pill-err">The oracle\'s evidence could not be read for any agent, so these totals are unknown. Reload to try again.</p>'
+    : `<p class="pill-warn">The oracle's evidence could not be read for ${unread} of ${live.length} agents, so these totals leave them out.</p>`;
   const tile = (value, label, sub) => `<div class="sim-tile"><div class="sim-tile-value">${value}</div><div class="sim-tile-label">${label}</div>${sub ? `<div class="sim-tile-sub">${sub}</div>` : ""}</div>`;
   const progress = start === null
     ? '<p class="sim-day">Not started yet</p>'
@@ -175,14 +183,14 @@ function renderHero(agents, start, live) {
        <div class="sim-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(pct)}" aria-label="Progress through the four weeks"><div class="sim-fill" data-w="${pct.toFixed(1)}"></div></div>`;
   $("simHero").querySelector(".card-body").innerHTML = progress + `<div class="sim-tiles">
     ${tile(`${bonded}<span class="sim-of"> / ${agents.length}</span>`, "agents bonded", "the rest arrive later")}
-    ${tile(pending ? "…" : payments.toLocaleString("en-US"), "payments", "from simulated customers")}
+    ${tile(shown(payments.toLocaleString("en-US")), "payments", "from simulated customers")}
     ${BATCH === 2
-      ? tile(pending ? "…" : onBase.toLocaleString("en-US"), "on Base Sepolia", "of those payments, in test USDC")
-      : tile(pending ? "…" : X.esc(X.fmtSvr(paid).replace(" SVR", "")), "SVR paid", "testnet tokens, no value")}
-    ${tile(pending ? "…" : signed.toLocaleString("en-US"), "signed outcomes", negatives > 0
+      ? tile(shown(onBase.toLocaleString("en-US")), "on Base Sepolia", "of those payments, in test USDC")
+      : tile(shown(X.esc(X.fmtSvr(paid).replace(" SVR", ""))), "SVR paid", "testnet tokens, no value")}
+    ${tile(shown(signed.toLocaleString("en-US")), "signed outcomes", negatives > 0
       ? `customers confirming delivery, and ${negatives.toLocaleString("en-US")} reporting it did not happen`
       : "customers confirming delivery")}
-  </div>`;
+  </div>${readNote}`;
   widths($("simHero"));
 }
 

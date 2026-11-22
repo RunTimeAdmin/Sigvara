@@ -106,6 +106,9 @@ let filter = "all";
 let page = 0;
 let lastHistory = null;
 let tableSeq = 0;
+// The filter and page the table last showed, and an error to show above it once.
+let shownView = null;
+let tableError = null;
 
 // The committed root, linked to the payments it is over as the primary oracle serves them, which
 // "Check evidence" rebuilds it from.
@@ -118,15 +121,22 @@ async function renderAgents() {
   const seq = ++tableSeq;
   const listed = agents.filter((a) => filter === "all" || groupOf(a).key === filter);
   const pages = Math.max(1, Math.ceil(listed.length / PAGE_ROWS));
-  page = Math.min(page, pages - 1);
+  page = Math.max(0, Math.min(page, pages - 1));
   const shown = listed.slice(page * PAGE_ROWS, (page + 1) * PAGE_ROWS);
   try {
     await readChain(shown);
   } catch (e) {
-    if (seq === tableSeq) setCard("agentsCard", X.failed("the agents' scores from the chain", e));
-    return;
+    if (seq !== tableSeq) return;
+    const error = X.failed("the agents' scores from the chain", e);
+    // The table the visitor had stays, with the error above it, rather than one line with no way
+    // back. Its rows were read already, so showing it again reads nothing.
+    if (!shownView || (shownView.filter === filter && shownView.page === page)) return setCard("agentsCard", error);
+    ({ filter, page } = shownView);
+    tableError = error;
+    return renderAgents();
   }
   if (seq !== tableSeq) return;
+  shownView = { filter, page };
   const history = lastHistory;
   const count = (key) => agents.filter((a) => groupOf(a).key === key).length;
   const n = { all: agents.length, outside: count("outside"), sim: count("sim"), own: count("own") };
@@ -164,6 +174,7 @@ async function renderAgents() {
   html += `<p class="netnote">Agents are listed in the order they registered, ${PAGE_ROWS} to a page. The matured score is the total other contracts read (<code>getTotalScore</code>). It climbs toward the earned score, the one last finalized (<code>getEarnedScore</code>), at a bounded rate a day, and falls at once. <a href="docs/reputation">How scores work</a>. The agent links open its score epochs, and each evidence root links to the payments it commits to.</p>`;
   if (history?.truncated) html += '<p class="pill-warn">The explorer has more registrations than this page reads, so the newest may be missing.</p>';
   html += X.historyNote(history);
+  if (tableError) { html = tableError + html; tableError = null; }
   setCard("agentsCard", html);
   for (const btn of document.querySelectorAll("[data-check]")) {
     btn.addEventListener("click", () => checkEvidence(btn.getAttribute("data-check")));
@@ -225,11 +236,29 @@ async function checkEvidence(didHash) {
   if (!a) return;
   setCard("checkCard", `<p class="netnote">Reading the payments behind <code>${X.short(a.address)}</code>…</p>`);
   $("checkCard").scrollIntoView({ behavior: "smooth", block: "start" });
-  const [evidence, pending] = await Promise.allSettled([
+  // The root is read again with the pending proposal. The row's was read when the row was first shown,
+  // and verifyEvidence checks proofs against the root the contract holds now, which any finalization
+  // since then has replaced.
+  const [evidence, chain] = await Promise.allSettled([
     X.getJson(`${X.PRIMARY}/evidence/${didHash}`),
-    X.ethCalls([{ to: X.REPUTATION, data: X.SEL.getPendingScore + X.pad32(didHash) }]),
+    X.ethCalls([
+      { to: X.REPUTATION, data: X.SEL.getPendingScore + X.pad32(didHash) },
+      { to: X.REPUTATION, data: X.SEL.evidenceRoots   + X.pad32(didHash) },
+      { to: X.REPUTATION, data: X.SEL.getTotalScore   + X.pad32(didHash) },
+      { to: X.REPUTATION, data: X.SEL.getEarnedScore  + X.pad32(didHash) },
+    ]),
   ]);
   if (seq !== checkSeq) return;
+  const pending = chain.status === "fulfilled" ? { status: "fulfilled", value: chain.value.slice(0, 1) } : chain;
+  if (chain.status === "fulfilled") {
+    const [, root, total, earned] = chain.value;
+    const now = X.word(root, 0).toLowerCase();
+    if (now !== a.root) {
+      // Finalized since the row was read: the row shows what was checked.
+      Object.assign(a, { root: now, total: Number(BigInt(total)), earned: Number(BigInt(earned)) });
+      renderAgents();
+    }
+  }
   try {
     await renderCheck(a, evidence, pending);
   } catch (e) {

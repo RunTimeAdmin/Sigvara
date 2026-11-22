@@ -175,3 +175,14 @@ test('the top line takes the worst row', () => {
   assert.equal(overall(rows('attention', 'unreachable')), 'unreachable');
   assert.equal(overall(rows('down', 'unreachable', 'ok')), 'down');
 });
+
+test('a checker whose divergence watcher stopped polling needs attention, as the live checks say', () => {
+  const now = Date.now();
+  const silent = assessOracle(answered(health({ watcherSeenMs: now - 45 * 60 * 1000 })), { checker: true });
+  assert.equal(silent.state, 'attention');
+  assert.match(silent.text, /divergence watcher last polled it 45 minutes ago/);
+  assert.equal(assessOracle(answered(health({ watcherSeenMs: now - 5 * 60 * 1000 })), { checker: true }).state, 'ok');
+  assert.match(assessOracle(answered(health()), { checker: true }).text, /does not say when the divergence watcher last polled it/);
+  // The primary has no watcher, and is not held to one.
+  assert.equal(assessOracle(answered(health())).state, 'ok');
+});

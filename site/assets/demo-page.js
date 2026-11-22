@@ -187,5 +187,11 @@ $('btnReset').addEventListener('click', function () {
 });
 $('btnClearLog').addEventListener('click', function () { sim.events = []; seen = 0; renderLog(); });
 
+// A reload can bring back form state the simulator does not have: a browser that restores forms
+// (Firefox does) keeps Register disabled and each slider where it was, while the simulator starts
+// with no agent and the labels say what the HTML wrote. The page starts from what it holds.
+$('btnRegister').disabled = false;
+Object.keys(sliders).forEach(function (id) { $(sliders[id]).textContent = $(id).value; });
+
 refresh();
 })();
