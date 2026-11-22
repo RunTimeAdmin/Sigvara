@@ -631,3 +631,80 @@ test('the demo says what is missing when Verify is pressed before anything was s
   assert.match($('outVerify').innerHTML, /issue and sign a challenge first/);
   assert.doesNotMatch($('outVerify').innerHTML, /Cannot read properties/);
 });
+
+const SITE = path.join(__dirname, '..', 'site');
+
+// Every file under site/ with the given extension, as [path relative to site/ with forward slashes, text].
+function siteFiles(ext) {
+  const out = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name.endsWith(ext)) out.push([path.relative(SITE, full).split(path.sep).join('/'), fs.readFileSync(full, 'utf8')]);
+    }
+  };
+  walk(SITE);
+  return out;
+}
+
+test('no heading is drawn in gradient text or tracked tighter than -0.01em, and no stylesheet asks for Inter', () => {
+  const sheets = siteFiles('.css');
+  const pages = siteFiles('.html');
+  assert.ok(sheets.length > 0 && pages.length > 0);
+
+  // Each rule as [file, selector, body]; a rule inside @media is matched on its own.
+  const rules = sheets.flatMap(([name, css]) =>
+    [...css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => [name, m[1].trim(), m[2]]));
+  const isHeading = (selector) => selector.split(',').some((s) => /^h[1-3](?![\w-])/.test(s.trim().split(/[\s>+~]+/).pop()));
+
+  const clipped = new Set();
+  for (const [name, selector, body] of rules) {
+    if (/background-clip:\s*text/.test(body)) {
+      assert.doesNotMatch(selector, /\bh[1-3]\b/, `${name}: ${selector} clips a gradient to heading text`);
+      for (const [, cls] of selector.matchAll(/\.([\w-]+)/g)) clipped.add(cls);
+    }
+    for (const [decl] of body.matchAll(/(?:font|font-family|--[\w-]*font[\w-]*)\s*:[^;]*/g)) {
+      assert.doesNotMatch(decl, /\bInter\b/, `${name}: ${selector}`);
+    }
+    if (isHeading(selector)) {
+      const tracking = body.match(/letter-spacing:\s*(-?[\d.]+)em/);
+      if (tracking) assert.ok(Number(tracking[1]) >= -0.01, `${name}: ${selector} is tracked at ${tracking[1]}em`);
+    }
+  }
+  for (const [name, html] of pages) {
+    for (const [heading] of html.matchAll(/<(h[1-3])\b[^>]*>[\s\S]*?<\/\1>/g)) {
+      for (const [, list] of heading.matchAll(/class="([^"]*)"/g)) {
+        for (const cls of list.split(/\s+/)) assert.ok(!clipped.has(cls), `${name}: ${heading}`);
+      }
+    }
+  }
+});
+
+test('every font a stylesheet names is a file in site/, and pages preload only those fonts, in a way the stylesheet can reuse', () => {
+  const faces = new Set();
+  for (const [name, css] of siteFiles('.css')) {
+    for (const [face] of css.matchAll(/@font-face\s*\{[^}]*\}/g)) {
+      for (const [, url] of face.matchAll(/url\(\s*["']?([^"')]+)["']?\s*\)/g)) {
+        assert.doesNotMatch(url, /^([a-z][\w+.-]*:)?\/\//i, `${name}: ${url} is not on this site, and the CSP allows fonts from this site only`);
+        const file = path.posix.join(path.posix.dirname(name), url.split(/[?#]/)[0]);
+        assert.ok(fs.existsSync(path.join(SITE, file)), `${name}: ${url} is not a file in site/`);
+        faces.add(file);
+      }
+    }
+  }
+  assert.ok(faces.size > 0);
+  let preloads = 0;
+  for (const [name, html] of siteFiles('.html')) {
+    for (const [link] of html.matchAll(/<link\b[^>]*\brel="preload"[^>]*>/g)) {
+      if (!/\bas="font"/.test(link)) continue;
+      // Fonts are fetched in CORS mode, so a preload without crossorigin is not reused and the font downloads twice.
+      assert.match(link, /\scrossorigin\b/, `${name}: ${link}`);
+      const href = link.match(/\bhref="([^"]+)"/)[1];
+      const file = href.startsWith('/') ? href.slice(1) : path.posix.join(path.posix.dirname(name), href);
+      assert.ok(faces.has(file), `${name}: preloads ${href}, which no stylesheet's @font-face names`);
+      preloads++;
+    }
+  }
+  assert.ok(preloads > 0);
+});
