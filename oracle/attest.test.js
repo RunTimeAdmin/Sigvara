@@ -383,6 +383,18 @@ test('an unregistered agent is refused', async () => {
   assert.match(r.body.error, /unknown didHash/);
 });
 
+// ---- the browser preflight ---------------------------------------------------------------
+
+test('OPTIONS /attest is answered, so a browser goes on to send its POST', async () => {
+  // A browser posting JSON to another origin asks first, and sends nothing unless the answer is a 2xx.
+  // The proxy in front adds the CORS headers; the oracle has to answer the request at all.
+  const r = await oracle.call('OPTIONS', '/attest');
+  assert.equal(r.status, 204, r.text);
+  assert.equal(r.text, '');
+  // Only that path: a route that serves GET still answers a preflight with nothing.
+  assert.equal((await oracle.call('OPTIONS', '/health')).status, 404);
+});
+
 // ---- tenure ----------------------------------------------------------------------------
 
 test('an agent that was never paid scores no tenure, however long ago it registered', async () => {
