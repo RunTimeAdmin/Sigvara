@@ -193,14 +193,14 @@ $('btnRead').addEventListener('click', function () {
   }, 'outRead');
 });
 $('btnReset').addEventListener('click', function () {
-  sim.reset(); challenge = null; signature = null; seen = 0;
+  sim.reset(); challenge = null; signature = null; seen = 0; $('log').innerHTML = '';
   ['outRegister', 'outStake', 'outScore', 'outVerify', 'outSlash', 'outRead'].forEach(function (id) { out(id, ''); });
   [2, 3, 4, 5, 6].forEach(function (n) { setStep(n, 'locked'); });
   setStep(1, 'active'); $('btnRegister').disabled = false;
   refresh();
   document.querySelector('.step[data-step="1"]').scrollIntoView({ behavior: 'smooth', block: 'start' });
 });
-$('btnClearLog').addEventListener('click', function () { sim.events = []; seen = 0; renderLog(); });
+$('btnClearLog').addEventListener('click', function () { sim.events = []; seen = 0; $('log').innerHTML = ''; renderLog(); });
 
 // A reload can bring back form state the simulator does not have: a browser that restores forms
 // (Firefox does) keeps Register disabled and each slider where it was, while the simulator starts
