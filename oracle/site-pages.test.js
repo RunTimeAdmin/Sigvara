@@ -118,7 +118,7 @@ test('the testnet page reports a read the RPC never answers after 20 seconds, ra
 });
 
 // The agents page in a vm, with a card for each element id and the explorer stubbed by `X`.
-function agentsPage(X) {
+function agentsPage(X, win = {}, controls = []) {
   const source = fs.readFileSync(path.join(__dirname, '..', 'site', 'assets', 'agents.js'), 'utf8');
   const cards = new Map();
   const card = (id) => {
@@ -131,12 +131,14 @@ function agentsPage(X) {
   };
   const buttons = {};
   const ctx = vm.createContext({
-    window: { SigvaraExplorer: X, SigvaraDid: did, SigvaraLobby: { ...lobby, startLobby: () => {} } },
+    window: { SigvaraExplorer: X, SigvaraDid: did, SigvaraLobby: { ...lobby, startLobby: () => {} }, ...win },
     document: {
       getElementById: card,
       addEventListener() {},
-      querySelectorAll: (sel) => (sel === '[data-page]' ? [{ getAttribute: () => '1', addEventListener: (_ev, fn) => { buttons.next = fn; } }] : []),
+      querySelectorAll: (sel) => (sel === '[data-page]' ? [{ getAttribute: () => '1', addEventListener: (_ev, fn) => { buttons.next = fn; } }]
+        : sel === '[data-page], [data-filter]' ? controls : []),
     },
+    URLSearchParams, URL,
   });
   vm.runInContext(source, ctx);
   return { ctx, html: (id) => card(id).html, el: card, buttons };
@@ -352,4 +354,280 @@ test('the check page says what the badge says, and links the agent\'s own eviden
   assert.equal($('resultState').textContent, 'Unavailable', 'a badge that says unavailable is not called live');
   assert.equal($('evidenceLink').href, `https://oracle.sigvara.xyz/evidence/${did.computeDidHash(AGENT, 5042002).toLowerCase()}`);
   assert.match($('badgeImg').src, /^data:image\/svg\+xml/, 'the badge shown is the one that was read');
+});
+
+// The epochs page in a vm: a card for each element id, `X` over the explorer, and a network that never answers.
+function epochsPage(X = {}, extra = {}) {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'site', 'assets', 'epochs.js'), 'utf8');
+  const cards = new Map();
+  const card = (id) => {
+    if (!cards.has(id)) {
+      const c = { html: '', value: '', textContent: '', innerHTML: '', classList: { add() {}, remove() {} }, addEventListener() {} };
+      c.querySelector = () => ({ set innerHTML(v) { c.html = v; } });
+      cards.set(id, c);
+    }
+    return cards.get(id);
+  };
+  const idle = () => new Promise(() => {});
+  const ctx = vm.createContext({
+    window: { SigvaraExplorer: { ...explorer, indexLogs: idle, getJson: idle, contractLogs: idle, ...X }, SigvaraDid: did, location: { search: '', href: 'https://sigvara.xyz/epochs' }, history: { replaceState() {} } },
+    document: { getElementById: card, addEventListener() {}, dispatchEvent() {}, querySelector: () => null, querySelectorAll: () => [], ...extra.document },
+    Event: class { constructor(type) { this.type = type; } },
+    URLSearchParams, URL, AbortController, setTimeout, clearTimeout, setInterval: extra.setInterval ?? (() => 0), clearInterval() {},
+    fetch: idle,
+    SigvaraDid: did,
+  });
+  vm.runInContext(source, ctx);
+  return { ctx, card };
+}
+
+test('the epochs page names the agent being looked up at once, not the previous one', () => {
+  const { ctx, card } = epochsPage();
+  const B = '0x00000000000000000000000000000000000000b2';
+  card('status').innerHTML = 'Active';
+  ctx.lookup(B); // the reads never answer
+  assert.match(card('didStr').textContent, new RegExp(B));
+  assert.equal(card('status').textContent, 'Reading…');
+  assert.equal(card('score').textContent, 'Reading…');
+});
+
+test('a lookup submitted again while it runs is not started twice, and a replaced one can stop its reads', () => {
+  const asked = [];
+  const { ctx } = epochsPage({ indexLogs: (_a, opts) => { asked.push(opts); return new Promise(() => {}); } });
+  const A = '0x00000000000000000000000000000000000000a1';
+  const B = '0x00000000000000000000000000000000000000b2';
+  ctx.lookup(A);
+  ctx.lookup(A);
+  assert.equal(asked.length, 1, 'the same address twice is one lookup');
+  assert.equal(asked[0].isCurrent(), true);
+  ctx.lookup(B);
+  assert.equal(asked.length, 2);
+  assert.equal(asked[0].isCurrent(), false, "A's reads learn that B replaced it");
+});
+
+test('"no proposal yet" keeps the note on blocks the chain could not fill in', () => {
+  const { ctx, card } = epochsPage();
+  const tail = { source: 'index', indexHead: { block: 100, time: null }, from: 101, to: 100, missed: null, error: 'rate limit exceeded' };
+  ctx.renderTimeline({ status: 'fulfilled', value: { logs: [], truncated: false, tail } }, { status: 'fulfilled', value: { pending: null } }, false);
+  assert.match(card('timelineCard').html, /No proposal has been made/);
+  assert.match(card('timelineCard').html, /could not be read from the chain/);
+});
+
+test('the time left in an open challenge window keeps counting while the page is open', () => {
+  let tick = null;
+  const shown = { dataset: {}, textContent: '' };
+  const { ctx, card } = epochsPage({}, { setInterval: (fn) => { tick = fn; return 1; }, document: { querySelectorAll: () => [shown] } });
+  const now = Math.floor(Date.now() / 1000);
+  const pending = { total: 40, factors: [], proposer: '0x0000000000000000000000000000000000000001', proposedAt: now - 100, root: `0x${'ab'.repeat(32)}`, finalizableAt: now + 3600 };
+  ctx.renderPending({ status: 'fulfilled', value: { pending } });
+  assert.match(card('pendingCard').html, new RegExp(`data-until="${pending.finalizableAt}"`));
+  assert.equal(typeof tick, 'function', 'a ticker runs while the window is open');
+  shown.dataset.until = String(now - 1); // the window has closed since
+  tick();
+  assert.equal(shown.textContent, 'now closed');
+});
+
+test('the agents table takes its filter and page from the address, and keeps the address in step', async () => {
+  const word = (n) => n.toString(16).padStart(64, '0');
+  const logs = Array.from({ length: 130 }, (_, i) => ({ topics: [explorer.EVENTS[0].topic, '0x' + word(i + 1), '0x' + word(0xabc), '0x' + word(0x1000 + i)], time: 1_700_000_000 + i, tx: null }));
+  const X = { ...explorer, contractLogs: async () => ({ logs, truncated: false, tail: null }), loadSimulation: async () => {}, ethCalls: async (calls) => calls.map(() => '0x' + word(0).repeat(5)) };
+  const urls = [];
+  const location = { search: '?page=2', href: 'https://sigvara.xyz/agents?page=2' };
+  const page = agentsPage(X, { location, history: { replaceState: (_s, _t, u) => { urls.push(u); location.href = u; } } });
+  await settle();
+  assert.match(page.html('agentsCard'), /Rows 51 to 100 of 130\./, 'a shared link to page 2 opens on page 2');
+  await page.buttons.next();
+  assert.equal(urls.at(-1), 'https://sigvara.xyz/agents?page=3');
+});
+
+test('the agents page turns every paging and filter control off while the rows it asked for load', async () => {
+  const word = (n) => n.toString(16).padStart(64, '0');
+  const logs = Array.from({ length: 130 }, (_, i) => ({ topics: [explorer.EVENTS[0].topic, '0x' + word(i + 1), '0x' + word(0xabc), '0x' + word(0x1000 + i)], time: 1_700_000_000 + i, tx: null }));
+  let hold = null;
+  const X = { ...explorer, contractLogs: async () => ({ logs, truncated: false, tail: null }), loadSimulation: async () => {},
+    ethCalls: async (calls) => { if (hold) await hold; return calls.map(() => '0x' + word(0).repeat(5)); } };
+  const controls = [{ disabled: false }, { disabled: false }, { disabled: false }];
+  const page = agentsPage(X, {}, controls);
+  await settle();
+  hold = new Promise(() => {}); // page 2's rows never arrive
+  page.buttons.next();
+  assert.ok(controls.every((c) => c.disabled), 'Previous, Next and the filters are off');
+});
+
+test('"no agent has registered" keeps the note on blocks the chain could not fill in', async () => {
+  const tail = { source: 'index', indexHead: { block: 100, time: null }, from: 101, to: 100, missed: null, error: 'rate limit exceeded' };
+  const X = { ...explorer, contractLogs: async () => ({ logs: [], truncated: false, tail }), loadSimulation: async () => {}, ethCalls: async () => [] };
+  const page = agentsPage(X);
+  await settle();
+  assert.match(page.html('agentsCard'), /No agent has registered/);
+  assert.match(page.html('agentsCard'), /could not be read from the chain/);
+});
+
+test('a second click on "Check the payments against the chain" while it runs starts nothing', async () => {
+  const word = (n) => BigInt(n).toString(16).padStart(64, '0');
+  const DID = `0x${'d1'.repeat(32)}`;
+  const list = [{ txHash: `0x${word(0xbeef01)}`, payer: `0x${'00'.repeat(19)}b1`, amount: String(10n ** 6n), settledAt: 1_700_000_000, success: true }];
+  const root = explorer.rootOf(list.map((e) => explorer.leafOf(e)));
+  let receiptReads = 0;
+  const X = {
+    ...explorer,
+    contractLogs: async () => ({ logs: [{ topics: [explorer.EVENTS[0].topic, DID, `0x${word(0xabc)}`, `0x${word(0xa1)}`], time: 1, tx: null }], truncated: false, tail: null }),
+    loadSimulation: async () => {},
+    ethCalls: async (calls) => calls.map(({ data }) => (data.startsWith(explorer.SEL.evidenceRoots) ? root : `0x${word(1)}${word(0).repeat(11)}`)),
+    getJson: async () => ({ evidence: list, evidenceRoot: root }),
+    rpcMany: async () => { receiptReads++; return new Promise(() => {}); }, // the receipts never arrive
+  };
+  const page = agentsPage(X);
+  await settle();
+  await page.ctx.checkEvidence(DID);
+  await settle();
+  const btn = page.el('chainCheckBtn');
+  btn.onclick();
+  btn.onclick();
+  await settle(5);
+  assert.equal(receiptReads, 1);
+  assert.equal(btn.disabled, true);
+});
+
+// A page script in a vm, with a card for each element id and the explorer stubbed by `X`.
+function pageIn(file, X = {}) {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'site', 'assets', file), 'utf8');
+  const cards = new Map();
+  const card = (id) => {
+    if (!cards.has(id)) {
+      const c = { html: '', textContent: '', classList: { add() {}, remove() {} }, addEventListener() {} };
+      c.querySelector = () => ({ set innerHTML(v) { c.html = v; } });
+      cards.set(id, c);
+    }
+    return cards.get(id);
+  };
+  const idle = () => new Promise(() => {});
+  const win = { SigvaraExplorer: { ...explorer, contractLogs: idle, getJson: idle, loadSimulation: async () => {}, ...X }, SigvaraDid: did };
+  const ctx = vm.createContext({
+    window: win,
+    document: { getElementById: card, addEventListener() {}, dispatchEvent() {}, querySelector: () => null, querySelectorAll: () => [] },
+    Event: class { constructor(type) { this.type = type; } },
+    setTimeout, clearTimeout,
+  });
+  vm.runInContext(source, ctx);
+  return { ctx, card, win };
+}
+const unreadTail = { source: 'index', indexHead: { block: 100, time: null }, from: 101, to: 100, missed: null, error: 'rate limit exceeded' };
+
+test('the operators page lists the disagreements even when their agents\' addresses cannot be read', async () => {
+  const D = `0x${'d1'.repeat(32)}`;
+  const { ctx, card } = pageIn('operators.js', { ethCalls: async () => { throw new Error('rate limit exceeded'); } });
+  const got = await ctx.renderDivergence({ status: 'fulfilled', value: { total: 1, tolerance: 5, divergences: [{ didHash: D, at: Date.now(), pendingTotal: 50, ownTotal: 40, proposedAt: 1_700_000_000 }] } });
+  assert.match(card('divergenceCard').html, /proposed 50, checker got 40/);
+  assert.ok(card('divergenceCard').html.includes(explorer.short(D)), 'named by its didHash');
+  assert.equal(got.total, 1);
+  const none = await ctx.renderDivergence({ status: 'fulfilled', value: { total: 0, divergences: [] } });
+  assert.deepEqual({ ...none, shown: [...none.shown] }, { total: 0, shown: [] }, 'an empty list is a count of none');
+});
+
+test('the operators room is told when the disagreements were not read, rather than that there were none', () => {
+  const { ctx, win } = pageIn('operators.js');
+  ctx.publish({ ops: [], bondAmount: 0n }, [], { primary: { status: 'rejected' }, checker: { status: 'rejected' } }, undefined);
+  assert.equal(win.SigvaraOperatorsData.divergenceTotal, null);
+  assert.equal(win.SigvaraOperatorsData.divergences, null);
+});
+
+test('"no operator has bonded yet" keeps the note on blocks the chain could not fill in', async () => {
+  const { ctx, card } = pageIn('operators.js');
+  const down = { status: 'rejected', reason: new Error('offline') };
+  await ctx.renderOperators({ status: 'fulfilled', value: { logs: [], truncated: false, tail: unreadTail } }, { primary: down, checker: down });
+  assert.match(card('operatorsCard').html, /No operator has bonded yet/);
+  assert.match(card('operatorsCard').html, /could not be read from the chain/);
+});
+
+test('the slashes page says a failed read of the filing transactions failed, not that the evidence is unreadable', async () => {
+  const word = (n) => BigInt(n).toString(16).padStart(64, '0');
+  const filed = { name: 'SlashInitiated', topics: [`0x${'5'.repeat(64)}`, `0x${'d1'.repeat(32)}`, `0x${word(0xa1)}`, `0x${word(0xb2)}`], data: `0x${word(1_700_000_000)}`, time: 1_700_000_000, tx: `0x${'ab'.repeat(32)}`, legacy: false };
+  const history = { status: 'fulfilled', value: { logs: [filed], truncated: false, tail: null } };
+  const failed = pageIn('slashes.js', { ethCalls: async (calls) => calls.map(() => `0x${word(0).repeat(5)}`), rpcMany: async () => { throw new Error('rate limit exceeded'); } });
+  await failed.ctx.renderSlashes(history);
+  assert.match(failed.card('slashCard').html, /could not be read just now \(rate limit exceeded\)/);
+  const missing = pageIn('slashes.js', { ethCalls: async (calls) => calls.map(() => `0x${word(0).repeat(5)}`), rpcMany: async () => [null] });
+  await missing.ctx.renderSlashes(history);
+  assert.match(missing.card('slashCard').html, /the RPC did not return the transaction that filed it/);
+});
+
+test('"no operator bond has been slashed" keeps the note on blocks the chain could not fill in', () => {
+  const { ctx, card } = pageIn('slashes.js');
+  ctx.renderBondSlashes({ status: 'fulfilled', value: { logs: [], truncated: false, tail: unreadTail } });
+  assert.match(card('bondSlashCard').html, /No operator bond has been slashed/);
+  assert.match(card('bondSlashCard').html, /could not be read from the chain/);
+});
+
+test('a copy button clicked twice comes back to its own label', async () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'site', 'assets', 'check.js'), 'utf8');
+  const els = new Map();
+  const element = () => ({ value: '', textContent: '', href: '', src: '', hidden: false, style: { setProperty() {} }, classList: { add() {}, remove() {} }, addEventListener() {}, appendChild() {}, focus() {} });
+  const $ = (id) => { if (!els.has(id)) els.set(id, element()); return els.get(id); };
+  let onClick = null;
+  const timers = [];
+  const attrs = {};
+  const btn = { textContent: 'Copy', getAttribute: (k) => (k === 'data-copy' ? 'snipMd' : attrs[k] ?? null), setAttribute: (k, v) => { attrs[k] = v; } };
+  const ctx = vm.createContext({
+    window: { SigvaraDid: did, location: { search: '', href: 'https://sigvara.xyz/check' }, history: { replaceState() {} } },
+    document: { getElementById: $, addEventListener: (type, fn) => { if (type === 'click') onClick = fn; }, createElement: () => element() },
+    navigator: { clipboard: { writeText: async () => {} } },
+    setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearTimeout() {},
+    URL, URLSearchParams,
+  });
+  vm.runInContext(source, ctx);
+  const click = () => onClick({ target: { closest: () => btn } });
+  click();
+  await settle(3);
+  click(); // while "Copied" shows
+  await settle(3);
+  assert.equal(btn.textContent, 'Copied');
+  for (const t of timers) t.fn(); // both resets fire, in order
+  assert.equal(btn.textContent, 'Copy');
+});
+
+test('the testnet check clears the previous address\'s card at once and puts the address in the link', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'site', 'assets', 'testnet.js'), 'utf8');
+  const els = new Map();
+  const handlers = {};
+  const $ = (id) => {
+    if (!els.has(id)) els.set(id, { id, textContent: '', value: '', href: '', setAttribute() {}, addEventListener: (type, fn) => { handlers[`${id}:${type}`] = fn; } });
+    return els.get(id);
+  };
+  let ready = null;
+  const urls = [];
+  const ctx = vm.createContext({
+    window: { SigvaraDid: did, location: { href: 'https://sigvara.xyz/testnet' }, history: { replaceState: (_s, _t, u) => urls.push(u) } },
+    document: { getElementById: $, querySelector: () => null, addEventListener: (type, fn) => { if (type === 'DOMContentLoaded') ready = fn; } },
+    URLSearchParams, URL, location: { search: '' }, AbortController,
+    fetch: () => new Promise(() => {}), setTimeout: () => 0, clearTimeout() {},
+  });
+  vm.runInContext(source, ctx);
+  ready();
+  $('cardScore').textContent = '61'; // the previous address's score
+  $('addr').value = '0x00000000000000000000000000000000000000b2';
+  handlers['checkBtn:click']();
+  assert.equal($('cardScore').textContent, '—', 'the previous score is gone while this one is read');
+  assert.equal($('cardDid').textContent, 'reading chain…');
+  assert.equal(urls.at(-1), 'https://sigvara.xyz/testnet?a=0x00000000000000000000000000000000000000b2');
+});
+
+test('the demo says what is missing when Verify is pressed before anything was signed', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'site', 'assets', 'demo-page.js'), 'utf8');
+  const els = new Map();
+  const element = () => ({
+    value: '', textContent: '', innerHTML: '', disabled: false, dataset: {}, style: {},
+    classList: { add() {}, remove() {}, toggle() {} },
+    listeners: {}, addEventListener(type, fn) { this.listeners[type] = fn; }, querySelectorAll: () => [], querySelector: () => null, setAttribute() {}, scrollIntoView() {}, prepend() {}, remove() {},
+  });
+  const $ = (id) => { if (!els.has(id)) els.set(id, element()); return els.get(id); };
+  const ctx = vm.createContext({
+    window: { SigvaraDemo: demo, nacl: undefined },
+    document: { getElementById: $, querySelector: () => element(), querySelectorAll: () => [], createElement: () => element() },
+    crypto: globalThis.crypto,
+  });
+  vm.runInContext(source, ctx);
+  $('btnVerify').listeners.click();
+  assert.match($('outVerify').innerHTML, /issue and sign a challenge first/);
+  assert.doesNotMatch($('outVerify').innerHTML, /Cannot read properties/);
 });

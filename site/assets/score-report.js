@@ -215,7 +215,7 @@
       a.status = Number(BigInt(X.word(ident, 3)));
       a.total = Number(BigInt(total));
     });
-    return { agents, reputation, staking, payer, simUnknown: X.simUnknown() };
+    return { agents, registrations, reputation, staking, payer, simUnknown: X.simUnknown() };
   }
 
   // The report, from what readAll read. `now` is in seconds.
@@ -310,7 +310,7 @@
     const body = document.querySelector("#scoresCard .card-body");
     try {
       const data = await readAll();
-      const notes = [data.reputation, data.staking].map(X.historyNote).filter(Boolean).join("");
+      const notes = [data.registrations, data.reputation, data.staking].map(X.historyNote).filter(Boolean).join("");
       body.innerHTML = render(build(data, Math.floor(Date.now() / 1000)), notes);
     } catch (e) {
       body.innerHTML = X.failed("the scores", e);

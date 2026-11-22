@@ -28,6 +28,7 @@ const LOBBY_MAX = 60;
 let agents = [];
 
 async function loadAgents() {
+  readView();
   setCard("agentsCard", X.READING_HISTORY);
   let registrations;
   try {
@@ -42,7 +43,11 @@ async function loadAgents() {
   agents = registrations.logs
     .map((l) => ({ didHash: l.topics[1], operator: X.topicAddr(l.topics[2]), address: X.topicAddr(l.topics[3]), time: l.time, tx: l.tx }))
     .filter((a) => X.isHash(a.didHash) && X.isAddr(a.address) && !seen.has(a.didHash) && seen.add(a.didHash));
-  if (!agents.length) return setCard("agentsCard", "<p>No agent has registered on this deployment yet.</p>");
+  if (!agents.length) {
+    // A history the chain could not fill in can read as none, so its notes are said here too.
+    return setCard("agentsCard", "<p>No agent has registered on this deployment yet.</p>"
+      + (registrations.truncated ? '<p class="pill-warn">The explorer has more registrations than this page reads, so the newest may be missing.</p>' : "") + X.historyNote(registrations));
+  }
   lastHistory = registrations;
 
   // The lobby's agents, which take in the table's first page.
@@ -110,6 +115,26 @@ let tableSeq = 0;
 let shownView = null;
 let tableError = null;
 
+// The table's filter and page live in the address, so a reload or a shared link shows the same
+// rows. Replaced, not pushed: paging through a list is not worth a Back step each.
+const FILTERS = ["all", "outside", "sim", "own"];
+function readView() {
+  try {
+    const q = new URLSearchParams(window.location.search);
+    const f = q.get("filter"), n = Number(q.get("page"));
+    if (FILTERS.includes(f)) filter = f;
+    if (Number.isSafeInteger(n) && n >= 1) page = n - 1;
+  } catch (_) { /* the defaults stand */ }
+}
+function writeView() {
+  try {
+    const u = new URL(window.location.href);
+    if (filter === "all") u.searchParams.delete("filter"); else u.searchParams.set("filter", filter);
+    if (page === 0) u.searchParams.delete("page"); else u.searchParams.set("page", String(page + 1));
+    if (u.toString() !== window.location.href) window.history.replaceState(null, "", u.toString());
+  } catch (_) { /* a shareable address is a nicety */ }
+}
+
 // The committed root, linked to the payments it is over as the primary oracle serves them, which
 // "Check evidence" rebuilds it from.
 const rootLink = (a) => (X.same(a.root, X.ZERO32) ? X.rootCode(a.root)
@@ -137,6 +162,7 @@ async function renderAgents() {
   }
   if (seq !== tableSeq) return;
   shownView = { filter, page };
+  writeView();
   const history = lastHistory;
   const count = (key) => agents.filter((a) => groupOf(a).key === key).length;
   const n = { all: agents.length, outside: count("outside"), sim: count("sim"), own: count("own") };
@@ -179,12 +205,16 @@ async function renderAgents() {
   for (const btn of document.querySelectorAll("[data-check]")) {
     btn.addEventListener("click", () => checkEvidence(btn.getAttribute("data-check")));
   }
+  // Every paging and filter control is off until the table it asked for is drawn: a click on the
+  // old table's Previous while a filter's rows load acted on a page that was already being replaced.
+  const controlsOff = () => { for (const b of document.querySelectorAll("[data-page], [data-filter]")) b.disabled = true; };
   for (const btn of document.querySelectorAll("[data-filter]")) {
-    btn.addEventListener("click", () => { filter = btn.getAttribute("data-filter"); page = 0; renderAgents(); });
+    btn.addEventListener("click", () => { controlsOff(); filter = btn.getAttribute("data-filter"); page = 0; renderAgents(); });
   }
   for (const btn of document.querySelectorAll("[data-page]")) {
     btn.addEventListener("click", async () => {
       btn.disabled = true;
+      controlsOff();
       page += Number(btn.getAttribute("data-page"));
       await renderAgents();
       // The buttons sit under the rows, so the new page is shown from its top.
@@ -229,6 +259,7 @@ function showInLobby(a) {
 
 // ---- the evidence check ----
 let checkSeq = 0;
+let paymentsRunning = false;
 
 async function checkEvidence(didHash) {
   const seq = ++checkSeq;
@@ -336,8 +367,23 @@ async function renderCheck(a, evidence, pendingRead) {
     setCard("checkCard", head + `<dl class="kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd class="prose"${k === "Contract check" ? ' id="contractCheck"' : ""}>${v}</dd>`).join("")}</dl>`
       + (list.length ? `<p><button class="btn btn-secondary btn-sm" type="button" id="chainCheckBtn">Check the payments against the chain</button></p><div id="chainCheck"></div>` : "")
       + '<p class="netnote">The leaf is <code>keccak256(keccak256(abi.encode(txHash, payer, amount, settledAt, outcome)))</code>, with <code>chainId</code> first for a payment that settled on another chain, the tree hashes sorted pairs, and an odd node is promoted, as in <a href="https://github.com/RunTimeAdmin/Sigvara/blob/main/oracle/merkle.js" target="_blank" rel="noopener">oracle/merkle.js</a>. A test holds this page to it.</p>');
+    // One check at a time: a second click doubled the reads, and whichever finished last was shown.
     const btn = $("chainCheckBtn");
-    if (btn) btn.onclick = () => checkPayments(a, list);
+    if (btn) {
+      btn.disabled = paymentsRunning;
+      btn.onclick = async () => {
+        if (paymentsRunning) return;
+        paymentsRunning = true;
+        btn.disabled = true;
+        try {
+          await checkPayments(a, list);
+        } finally {
+          paymentsRunning = false;
+          const now = $("chainCheckBtn");
+          if (now) now.disabled = false;
+        }
+      };
+    }
   };
   render(rows[rows.length - 1][1]);
 

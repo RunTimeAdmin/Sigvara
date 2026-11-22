@@ -137,3 +137,13 @@ test('the card says when the payer outcomes could not be read rather than counti
   assert.match(html, /could not be read \(HTTP 503\)/);
   assert.match(html, /No Active agent to count/);
 });
+
+test('the score report keeps the registrations\' read, so its notes cover the agents it counts', async (t) => {
+  const tail = { source: 'index', indexHead: { block: 100, time: null }, from: 101, to: 100, missed: null, error: 'rate limit exceeded' };
+  t.mock.method(X, 'contractLogs', async (address) => ({ logs: [], truncated: false, tail: address === X.IDENTITY ? tail : null }));
+  t.mock.method(X, 'loadSimulation', async () => {});
+  t.mock.method(X, 'getJson', async () => { throw new Error('HTTP 503'); });
+  const data = await R.readAll();
+  assert.equal(data.registrations.tail, tail);
+  assert.match(X.historyNote(data.registrations), /could not be read from the chain/);
+});

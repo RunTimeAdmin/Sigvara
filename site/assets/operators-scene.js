@@ -275,7 +275,7 @@ function start(host, data) {
   // One marker a disagreement, along the checker's line.
   if (checks) {
     const gem = new THREE.OctahedronGeometry(narrow ? 0.2 : 0.13);
-    data.divergences.forEach((d, i, all) => {
+    (data.divergences ?? []).forEach((d, i, all) => {
       const at = checks.getPoint(0.86 - i * Math.min(narrow ? 0.17 : 0.075, 0.5 / all.length));
       const m = new THREE.Mesh(gem, new THREE.MeshStandardMaterial({ color: COLOR.bad, emissive: COLOR.bad, emissiveIntensity: 0.7, roughness: 0.3 }));
       m.position.copy(at);
@@ -298,7 +298,8 @@ function start(host, data) {
 
   const active = ops.filter((o) => o.status === 2).length;
   hud.innerHTML = `<b>${active} active operator${active === 1 ? "" : "s"}</b><span>bond to be active: ${X.esc(X.fmtSvr(data.bondAmount))}</span>`
-    + (data.divergenceTotal ? `<span>${data.divergenceTotal} disagreement${data.divergenceTotal === 1 ? "" : "s"} recorded</span>` : "");
+    + (data.divergenceTotal === null ? "<span>disagreements not read</span>"
+      : data.divergenceTotal ? `<span>${data.divergenceTotal} disagreement${data.divergenceTotal === 1 ? "" : "s"} recorded</span>` : "");
 
   // ---- the clock ----
   function tick() {

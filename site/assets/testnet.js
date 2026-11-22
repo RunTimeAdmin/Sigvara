@@ -250,7 +250,15 @@
     var addr = $("addr").value.trim();
     var seq = ++checkSeq;
     if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) { reset("that is not a 20-byte address"); return; }
-    $("cardDid").textContent = "reading chain…";
+    // The whole card and every step start again, so nothing from the previous address shows
+    // beside this one while it is read.
+    reset("reading chain…");
+    // The address bar names the agent shown, so a copied link opens the same check.
+    try {
+      var u = new URL(window.location.href);
+      u.searchParams.set("a", addr);
+      window.history.replaceState(null, "", u.toString());
+    } catch (e) { /* a shareable link is a nicety */ }
     check(addr, seq).catch(function (e) {
       if (seq !== checkSeq) return;
       reset("");

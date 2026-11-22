@@ -81,8 +81,9 @@ function publish({ ops, bondAmount }, logs, health, disagreed) {
     deposits: logs.filter((l) => l.name === "BondDeposited" && l.data.length >= 66)
       .map((l) => ({ operator: X.topicAddr(l.topics[1]), amount: BigInt(X.word(l.data, 0)), time: l.time, tx: l.tx })),
     health: { primary: healthOf(health.primary), checker: healthOf(health.checker) },
-    divergences: disagreed?.shown ?? [],
-    divergenceTotal: disagreed?.total ?? 0,
+    // null when the checker's list could not be read: the room says so rather than drawing none.
+    divergences: disagreed ? disagreed.shown : null,
+    divergenceTotal: disagreed ? disagreed.total : null,
   };
   document.dispatchEvent(new Event("sigvara-operators-data"));
 }
@@ -92,7 +93,12 @@ async function renderOperators(history, health) {
     return setCard("operatorsCard", X.failed("the bond contract's history from the explorer", history.reason) + healthList(health));
   }
   const addresses = [...new Set(history.value.logs.map((l) => X.topicAddr(l.topics[1])))].filter(X.isAddr);
-  if (!addresses.length) return setCard("operatorsCard", "<p>No operator has bonded yet.</p>" + healthList(health));
+  if (!addresses.length) {
+    // A history the chain could not fill in can read as none, so its notes are said here too.
+    return setCard("operatorsCard", "<p>No operator has bonded yet.</p>"
+      + (history.value.truncated ? '<p class="pill-warn">The explorer has more history than this page reads, so the newest entries may be missing.</p>' : "")
+      + X.historyNote(history.value) + healthList(health));
+  }
   const reads = await X.ethCalls([
     { to: X.ORACLE_BOND, data: X.SEL.bondAmount },
     { to: X.ORACLE_BOND, data: X.SEL.slashBeneficiary },
@@ -223,12 +229,18 @@ async function renderDivergence(divergence) {
   }
   if (!list.length) {
     html += "<p>None recorded. The checker writes only disagreements, and a run that could not score an agent writes nothing either, so an empty list is not a confirmation.</p>";
-    return setCard("divergenceCard", html);
+    setCard("divergenceCard", html);
+    return { total: Number.isFinite(total) ? total : 0, shown: [] };
   }
   // Each agent's address, so the entry can link to its epochs.
   const hashes = [...new Set(list.slice(0, DIVERGENCES_SHOWN).map((d) => d.didHash.toLowerCase()))];
-  const idents = await X.ethCalls(hashes.map((h) => ({ to: X.IDENTITY, data: X.SEL.identities + X.pad32(h) })));
-  const addrOf = new Map(hashes.map((h, i) => [h, X.wordAddr(idents[i], 1)]));
+  // A read of the addresses that fails costs only the links: each entry then names its didHash,
+  // and the list the checker answered with is still shown.
+  let idents = [];
+  try {
+    idents = await X.ethCalls(hashes.map((h) => ({ to: X.IDENTITY, data: X.SEL.identities + X.pad32(h) })));
+  } catch (_) { /* labelled by didHash below */ }
+  const addrOf = new Map(hashes.map((h, i) => [h, idents[i] ? X.wordAddr(idents[i], 1) : null]));
   html += `<ul class="pay-list ex-divergences">${list.slice(0, DIVERGENCES_SHOWN).map((d) => {
     const addr = addrOf.get(d.didHash.toLowerCase());
     const who = X.isAddr(addr) && !/^0x0{40}$/.test(addr) ? `<a href="epochs?a=${addr}"><code>${X.short(addr)}</code></a>` : `<code>${X.esc(X.short(d.didHash))}</code>`;
