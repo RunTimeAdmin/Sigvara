@@ -403,5 +403,5 @@ test('a refused signature and a second Register keep one key file, and register 
   const [register] = sends(p);
   assert.ok(register, 'the registration was sent');
   const pubKey = register.params[0].data.slice(74, 138);
-  assert.match(page.downloads[0].download, new RegExp(`-${pubKey.slice(0, 8)}\.txt$`), 'the key registered is the one in the file');
+  assert.ok(page.downloads[0].download.endsWith(`-${pubKey.slice(0, 8)}.txt`), 'the key registered is the one in the file');
 });
