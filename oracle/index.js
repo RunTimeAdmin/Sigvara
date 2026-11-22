@@ -3575,6 +3575,15 @@ async function handleRequest(req, res) {
     return json(res, 202, { message: 'Epoch started' });
   }
 
+  // OPTIONS /attest: the CORS preflight. A browser posting JSON to another origin sends this
+  // first, and sends the POST only if the answer is a 2xx. The proxy in front adds the CORS
+  // headers for this path (Caddyfile.oracle.example), but the request fell through to the
+  // 404 below, so no page could post an outcome. Nothing is read or written here.
+  if (req.method === 'OPTIONS' && pathname === '/attest') {
+    res.writeHead(204);
+    return res.end();
+  }
+
   // POST /attest  — body: { didHash, success, attester }
   // attester: unique ID for the party submitting the attestation (e.g. client address, API key hash).
   // Used for dedupe/cooldown: the same attester cannot attest the same agent within ATTEST_COOLDOWN_MS.
