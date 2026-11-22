@@ -174,8 +174,15 @@ oracle.sigvara.xyz {
 		-Server
 	}
 
+	# Access logs hold visitors' IP addresses, so they are kept no longer than the privacy
+	# page says (sigvara.xyz/privacy, up to 30 days): a new file each day, and a file older
+	# than 28 days is deleted at the next daily rotation.
 	log {
-		output file /var/log/caddy/oracle.log
+		output file /var/log/caddy/oracle.log {
+			roll_interval 24h
+			roll_keep 28
+			roll_keep_for 672h
+		}
 		format json
 	}
 }
