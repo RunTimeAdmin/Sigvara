@@ -252,7 +252,7 @@ A reader built from the current source reads the slash state with staking's `sla
 copies one field where `getSlashProposal` copied the whole proposal and its evidence. A staking
 proxy running code from before that view cannot answer it, and every `trust` call for a
 registered agent would revert, so deploy such a reader only after staking is upgraded, with
-`SMOKE_AGENT` set. The reader already on Arc testnet calls `getSlashProposal`, which stays.
+`SMOKE_AGENT` set. The earlier Arc testnet reader, `0x2921b4eE879CdF5793FA273BbDc4E7dF01ABcef8`, calls `getSlashProposal`, which stays, so it still answers.
 
 ## Example
 
