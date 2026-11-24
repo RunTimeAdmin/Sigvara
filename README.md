@@ -7,7 +7,7 @@ import { Contract, JsonRpcProvider } from "ethers";
 
 const abi = ["function isTrusted(address,uint8,uint256) view returns (bool)"];
 const provider = new JsonRpcProvider("https://rpc.testnet.arc.io");
-const reader = new Contract("0x2921b4eE879CdF5793FA273BbDc4E7dF01ABcef8", abi, provider);
+const reader = new Contract("0x99B15D0a2cdaf8610D3fBa6C7c0ed2D48b34fa17", abi, provider);
 
 // Active, a score of at least 40, and a bond of at least 1,000 test SVR.
 if (!(await reader.isTrusted(agent, 40, 1000n * 10n ** 18n))) throw new Error("not in good standing");
@@ -43,7 +43,7 @@ flowchart LR
 ## Where it stands
 
 - Runs on Arc testnet. We run both oracle operators.
-- Not audited yet: the [roadmap](docs/roadmap.md#mainnet) puts an external audit after the staking upgrade. To report a problem, see [SECURITY.md](SECURITY.md).
+- Not audited yet: the [roadmap](docs/roadmap.md#mainnet) puts an external audit before mainnet. To report a problem, see [SECURITY.md](SECURITY.md).
 - Slashing has been tested live on testnet: [the drill log](docs/slash-drill-log.md).
 
 ## Read more

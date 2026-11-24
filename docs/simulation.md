@@ -46,7 +46,8 @@ The ring is the slash target, and the slashes are real proceedings on the real c
 - **Day 10:** the committee files a slash against the first ring agent, naming the evidence in plain
   text. Nobody disputes it, and it is executed once the challenge window closes: on 19 November 2026 a slash keeper did it before the simulation's own hourly check.
 - **Day 12:** the committee files against the second ring agent. The ring's operator disputes it
-  within the hour, and the admin rules.
+  within the hour, and the admin rules: on 23 November 2026 the admin upheld it once the challenge window
+  had closed.
 
 Filing and ruling need the committee and admin keys, which the simulation does not hold. It writes
 the exact `cast` commands for those steps to its manual-steps file when they are due; it disputes

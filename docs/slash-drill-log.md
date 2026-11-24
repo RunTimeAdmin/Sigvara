@@ -191,11 +191,11 @@ The plan and the predictions, written before any of this ran, are in
 [slash-drill.md, "The adversarial drill"](slash-drill.md#the-adversarial-drill). Three agents were
 bonded for it, and the evidence field of every filing says it is a drill.
 
-**Status: day 0 done, every prediction held.** A was disputed and dropped by the admin, and B was
-vetoed. Both are Active with their bonds intact. C is open and suspended.
-- **Day 7**, from **10 November 2026, 03:46 UTC**: A's refile cooldown ends and C's dispute window
-  has closed.
-- **Day 21**, from **24 November 2026, 03:45 UTC**: C lapses and can be expired.
+**Status: done, every prediction held.** A was disputed and dropped by the admin, B was vetoed, A was
+refiled and withdrawn on day 7, and C lapsed and was expired on day 21. All three are Active with their
+bonds intact.
+- **Day 7**, **10 November 2026**: A's refile cooldown had ended and C's dispute window had closed.
+- **Day 21**, **24 November 2026**: C lapsed at 03:44:40 UTC and was expired at 03:58:12 UTC.
 
 | Agent | Address | didHash |
 |---|---|---|
@@ -299,3 +299,27 @@ held by `KEEPER_SKIP_AGENTS`, so neither will execute it before day 21.
   guards ran. No drill call fell in that window, and every call above ran on the drill's own code.
 
 Nothing in the protocol differed.
+
+### Day 21, 24 November 2026: expire C
+
+C's challenge deadline was 10 November 2026, 03:44:40 UTC, so it lapsed fourteen days later, at 03:44:40
+UTC on 24 November, with nobody having executed it. Anyone may expire a lapsed slash: the drill's operator
+key (`0x11bbb7764D215c7Ab2E7c677283E226D599ce956`), which holds no role on the contracts, sent it from
+`scripts/slash-drill-adversarial.sh anyone-day21`, and the guards ran after it as free calls.
+
+| Step | Block | Time (UTC) | Transaction | Event |
+|---|---|---|---|---|
+| `expireSlash(C)` | 73807022 | 03:58:12 | `0xa2e7b974aef18af58b3a04b03614c5be1f1c088242f33fa8294b8a8296bff4e4` | `SlashCancelled` |
+
+| Call | Predicted | Got |
+|---|---|---|
+| Committee files C again at once | `SlashCooldownActive` | `SlashCooldownActive` |
+| Anyone executes the lapsed C | `NoActivePendingSlash` | `NoActivePendingSlash` |
+
+Afterwards C is `Active` with its proposal `Cancelled` and its 1,000 SVR bond intact, as A and B are. None
+of the three drill agents lost any of its bond.
+
+### Day 21: what differed from the plan
+
+Nothing. Staking ran the code the drill started on until the drill had ended, and was upgraded to
+`4e8c56b` ten minutes after C was expired, in block 73808194.

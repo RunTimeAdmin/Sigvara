@@ -56,7 +56,7 @@
 
 <span class="kw">const</span> abi = [<span class="str">"function isTrusted(address,uint8,uint256) view returns (bool)"</span>];
 <span class="kw">const</span> provider = <span class="kw">new</span> <span class="fn">JsonRpcProvider</span>(<span class="str">"https://rpc.testnet.arc.io"</span>);
-<span class="kw">const</span> reader = <span class="kw">new</span> <span class="fn">Contract</span>(<span class="str">"0x2921b4eE879CdF5793FA273BbDc4E7dF01ABcef8"</span>, abi, provider);
+<span class="kw">const</span> reader = <span class="kw">new</span> <span class="fn">Contract</span>(<span class="str">"0x99B15D0a2cdaf8610D3fBa6C7c0ed2D48b34fa17"</span>, abi, provider);
 
 <span class="cm">// Active, a score of at least 40, and a bond of at least 1,000 test SVR.</span>
 <span class="kw">if</span> (!(<span class="kw">await</span> reader.<span class="fn">isTrusted</span>(agent, <span class="num">40</span>, <span class="num">1000n</span> * <span class="num">10n</span> ** <span class="num">18n</span>))) <span class="kw">throw new</span> <span class="fn">Error</span>(<span class="str">"not in good standing"</span>);</code></pre>
@@ -72,7 +72,7 @@
         <span class="kw">external view returns</span> (bool);
 }
 ISigvaraReader <span class="kw">constant</span> SIGVARA =
-    <span class="fn">ISigvaraReader</span>(<span class="num">0x2921b4eE879CdF5793FA273BbDc4E7dF01ABcef8</span>);
+    <span class="fn">ISigvaraReader</span>(<span class="num">0x99B15D0a2cdaf8610D3fBa6C7c0ed2D48b34fa17</span>);
 
 <span class="cm">// Then, in any function:</span>
 <span class="fn">require</span>(SIGVARA.<span class="fn">isTrusted</span>(msg.sender, <span class="num">40</span>, <span class="num">1000e18</span>), <span class="str">"not in good standing"</span>);</code></pre>
@@ -158,6 +158,6 @@ ISigvaraReader <span class="kw">constant</span> SIGVARA =
 
 <script src="assets/did.js?v=32000f8"></script>
 <script src="assets/explorer.js?v=lows1"></script>
-<script src="assets/integrate.js?v=integrate1"></script>
+<script src="assets/integrate.js?v=integrate2"></script>
 </body>
 </html>

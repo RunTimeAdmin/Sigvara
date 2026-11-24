@@ -9,7 +9,7 @@ agent, see the [quickstart](quickstart.md). For how the score is built, see the
 ```solidity
 import {ISigvaraReader} from "sigvara/src/interfaces/ISigvara.sol";
 
-ISigvaraReader sigvara = ISigvaraReader(READER); // on Arc testnet, 0x2921b4eE879CdF5793FA273BbDc4E7dF01ABcef8
+ISigvaraReader sigvara = ISigvaraReader(READER); // on Arc testnet, 0x99B15D0a2cdaf8610D3fBa6C7c0ed2D48b34fa17
 
 require(sigvara.isTrusted(agent, 40), "agent not in good standing");
 ```
@@ -234,7 +234,7 @@ So people can see the rules and not only the result:
 `SigvaraReader` has no proxy, no roles and nothing to initialize. Its constructor takes the
 identity, reputation and staking proxy addresses and keeps them as immutables. Nothing in the
 protocol reads from it, so deploying or replacing one carries no protocol risk. Arc testnet
-already has one, at `0x2921b4eE879CdF5793FA273BbDc4E7dF01ABcef8`. To point at different registries, deploy another.
+already has one, at `0x99B15D0a2cdaf8610D3fBa6C7c0ed2D48b34fa17`. To point at different registries, deploy another.
 
 ```bash
 DEPLOYER_PRIVATE_KEY=... IDENTITY_ADDRESS=... REPUTATION_ADDRESS=... STAKING_ADDRESS=... \

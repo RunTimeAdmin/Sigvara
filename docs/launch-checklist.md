@@ -4,21 +4,21 @@ Sequenced by gate, not by date. The wider plan, adoption included, is the [roadm
 
 ## Where this stands
 
-As of 16 November 2026. The SVR token is on Arc mainnet; the registries and the oracle run on Arc testnet only. What runs where is in the
+As of 24 November 2026. The SVR token is on Arc mainnet; the registries and the oracle run on Arc testnet only. What runs where is in the
 [runbook](operations-runbook.md). There has been no external audit, and nobody outside the team gates on a score yet.
 
-**In progress, with dates.**
-- The adversarial slash drill: day 7 done on 10 November, day 21 from 24 November 03:45 UTC
+**Done recently.**
+- The adversarial slash drill ended on 24 November, when day 21 expired C, and every prediction held
   ([slash-drill.md](slash-drill.md), [slash-drill-log.md](slash-drill-log.md)).
-- The slash keepers went live on 5 November. Both hold C. The primary executed its first real slash on 19 November, against one of the simulation's ring agents.
+- The staking upgrade, on testnet since 24 November: a cap on the challenge period below the dispute period,
+  refusing the admin as a slash's victim and a zero-amount withdrawal, and a bound on slash evidence, with a new
+  Reader. Every deployed contract matches one build, which [arc.md](arc.md) names.
+- The slash keepers went live on 5 November. The primary executed its first real slash on 19 November, against one of the simulation's ring agents, and on 23 November the admin upheld a disputed slash against another.
 
 **Open before mainnet.**
 - An external audit, and fixing what it finds (Phase 2).
-- The staking upgrade, on testnet after the drill: a cap on the challenge period below the dispute period,
-  refusing the admin as a slash's victim and a zero-amount withdrawal, and a bound on slash evidence. A new
-  Reader follows it. The other contracts are upgraded, and [arc.md](arc.md) names each build.
-- The handover: moving testnet roles to a Safe and a timelock, after the drill, since `executeSlash` needs
-  the reporter still on the committee.
+- The handover: moving testnet roles to a Safe and a timelock. It waited for the drill, since `executeSlash`
+  needs the reporter still on the committee.
 - A review of retention by counsel, before public outcome retrieval and peer import on mainnet.
 
 **Open, and not blocking mainnet.**

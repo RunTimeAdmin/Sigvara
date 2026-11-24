@@ -5,7 +5,7 @@
   const X = window.SigvaraExplorer;
   const Did = window.SigvaraDid;
   // From deployments/5042002.json; scripts/check-docs.mjs checks it.
-  const READER = "0x2921b4eE879CdF5793FA273BbDc4E7dF01ABcef8";
+  const READER = "0x99B15D0a2cdaf8610D3fBa6C7c0ed2D48b34fa17";
   // Sigvara's demo agent, named in docs/slash-drill.md and docs/divergence-log.md.
   const AGENT = "0xCc52Cd92963f8A86d04dB29a4810d1e01D193910";
   const MIN_SCORE = 40;
