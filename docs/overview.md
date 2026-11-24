@@ -48,7 +48,7 @@ The documents below are written by hand and are the authority on intent, trade-o
 | [If an operator's signing key may be stolen](incident-operator-key.md) | Operators: what to do in the first half hour, what to keep and what to rotate |
 | [Operations runbook](operations-runbook.md) | Operators: the event index the explorer reads, backing up and restoring the oracle's state, payer-outcome import lag, and the two operators disagreeing |
 | [TypeScript SDK](../packages/sdk/README.md) | Developers: install, the gate, and what each release changed ([changelog](../packages/sdk/CHANGELOG.md)) |
-| [Slash drill](slash-drill.md) and [its log](slash-drill-log.md) | Reviewers: the procedure for a live slash, the record of the first one, and the adversarial drill under way since 3 November 2026 (a dispute the admin drops, a veto, a proposal left to lapse, the re-file cooldown) |
+| [Slash drill](slash-drill.md) and [its log](slash-drill-log.md) | Reviewers: the procedure for a live slash, the record of the first one, and the adversarial drill of 3 to 24 November 2026 (a dispute the admin drops, a veto, a proposal left to lapse, the re-file cooldown) |
 | [Divergence log](divergence-log.md) | Reviewers: every disagreement the checking operator recorded, and what it turned out to be |
 | [Roadmap](roadmap.md) and [launch checklist](launch-checklist.md) | Everyone: what comes next and what starts it, and the sequence from testnet proof to an Arc mainnet launch |
 | [x402 dispute bridge](x402-dispute-bridge.md) | Everyone: a captured design for x402 disputes; the payer-signed outcome is built, the dispute path is not |
