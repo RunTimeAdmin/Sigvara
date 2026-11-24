@@ -613,16 +613,15 @@ hardware from the primary and a separate RPC provider, with its own 25,000 SVR b
 its own state; and the divergence watcher that consumes its output, on a third host with
 no key and no state. `activeCount` on `SigvaraOracleBond` is 2. The checker exposes
 `/health`, `/divergence`, `/evidence` and `/outcomes` publicly at `checker.sigvara.xyz`;
-every write path 404s before reaching the service. `SigvaraReader`, one read for a contract that gates on an agent's standing, was deployed on 4 November 2026 at `0x2921b4eE879CdF5793FA273BbDc4E7dF01ABcef8`.
+every write path 404s before reaching the service. `SigvaraReader`, one read for a contract that gates on an agent's standing, was deployed on 4 November 2026 and replaced on 24 November 2026, after the staking upgrade, by the one at `0x99B15D0a2cdaf8610D3fBa6C7c0ed2D48b34fa17`.
 
 **Not deployed:** `SigvaraEpochFees`. Scoring on Arc testnet is free and nothing is
 charged. The app disables every fee control rather than pointing at an address with no
 code.
 
 **Deployed contracts versus `main`.** The Arc testnet proxies run the implementations recorded in
-`deployments/5042002.json`, which are the contracts at commit `949cc17` of 16 November 2026, except
-staking, whose changes since `25c2d59` wait for the slash drill to end. The four proxies were upgraded in place with `script/Upgrade.s.sol` to `fdce1a7` on
-26 October, the staking proxy again to `f89b3b9` on 28 October and to `25c2d59` on 2 November, the oracle bond proxy to `76bbc97` the same day, the reputation proxy to `f35cbc6` on 4 November, and the reputation and oracle bond proxies to `dcad617` on 5 November and to `44ff8e8` on 10 November, and the reputation proxy to `a101f07` on 15 November, and the identity and reputation proxies to `949cc17` on 16 November. A contract
+`deployments/5042002.json`, which are the contracts at commit `4e8c56b` of 22 November 2026. The four proxies were upgraded in place with `script/Upgrade.s.sol` to `fdce1a7` on
+26 October, the staking proxy again to `f89b3b9` on 28 October and to `25c2d59` on 2 November, the oracle bond proxy to `76bbc97` the same day, the reputation proxy to `f35cbc6` on 4 November, and the reputation and oracle bond proxies to `dcad617` on 5 November and to `44ff8e8` on 10 November, and the reputation proxy to `a101f07` on 15 November, and the identity and reputation proxies to `949cc17` on 16 November, and the staking proxy to `4e8c56b` on 24 November, once the slash drill had ended. A contract
 change merged after that commit is not on the testnet until the next upgrade. The guardian pause, admin-ruled disputes with a veto, a lapse and a bound on late upholds, launch
 floors and ceilings, operator signers, the reporter check at slash execution, a withdrawal's claim time
 fixed when it is queued, an oracle operator's exit time fixed when it starts to leave, the refusal of evidence the admin rejected, a score's age counted from its proposal and a slash that pays the

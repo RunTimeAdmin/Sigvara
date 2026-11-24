@@ -671,11 +671,11 @@ contract's own rules decide, then sends.
 - **Touch an agent on `KEEPER_SKIP_AGENTS`.** Live mode will not start until that is set, even if
   only to `none`.
 
-**Agent C of the slash drill.** The drill leaves C
+**Agent C of the slash drill.** The drill left C
 (`0x30b95fc4473e5ea0f187d4955ab24bcfebd7a739a0a93c1beafd5d6445f1d93a`) to lapse on purpose
-([slash-drill.md](slash-drill.md)). Its window opens on 10 November 2026 and it lapses on 24 November.
-A keeper without C on its skip list would burn C's 750 SVR and spoil day 21, so keep it listed until
-day 21 is done. After that it is not Pending, and the entry does nothing.
+([slash-drill.md](slash-drill.md)), and day 21 expired it on 24 November 2026. Until then a keeper without
+C on its skip list would have burned C's 750 SVR and spoiled day 21. C is no longer Pending, so the entry
+does nothing and can come off the list.
 
 **Two copies.** `KEEPER_GRACE_SECONDS` is 0 on the primary and 3600 on the backup, so the primary goes
 first and only one pays the gas. If both act, the second simulates, finds nothing Pending and sends
@@ -727,8 +727,9 @@ should from 10 November.
 **Around a drill.** Agent A of the drill is not on `KEEPER_SKIP_AGENTS`. Day 7 refiles it, so cancel
 it before its deadline, as the plan does, or a keeper executes it and burns its bond. Any other slash
 meant to be left alone has to be listed on both hosts first. Expect a `dropped` alert for A if a run
-lands between the refile and the cancel, and `lapsed` alerts for C from both keepers from
-24 November 03:45 UTC, repeating daily until `expireSlash(C)`.
+lands between the refile and the cancel, and daily `lapsed` alerts from both keepers for a slash left to
+lapse, until someone calls `expireSlash` (C lapsed on 24 November at 03:45 UTC, and day 21 expired it 13
+minutes later).
 
 **Before rewiring staking.** Resolve every Pending or Disputed slash proposal before `setStakeView`
 repoints the identity registry, or before `STAKING_CORE_ROLE` is revoked from the staking contract. A

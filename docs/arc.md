@@ -39,7 +39,7 @@ fails at the fee-estimation step, retry with `--legacy`.
 **Explorer verification.** Every Arc testnet contract, each proxy and the implementation
 behind it, is source-verified on [explorer.testnet.arc.io](https://explorer.testnet.arc.io), and
 each is reproduced byte for byte by a build of the commit `deployments/5042002.json` names
-(`bytecode.reproducedAt`, tagged `arc-testnet-2026-11-16`). See [Verifying the deployed code](#verifying-the-deployed-code)
+(`bytecode.reproducedAt`, tagged `arc-testnet-2026-11-24`). See [Verifying the deployed code](#verifying-the-deployed-code)
 below. Do not add `[etherscan]` entries for `5042` / `5042002` to `foundry.toml` until Foundry
 ships chain metadata for Arc; unknown chain IDs break `forge script`.
 
@@ -661,7 +661,7 @@ when you ask for more than you hold.
 
 ### Implementation history
 
-Proxy addresses never change; these are the implementations behind them, newest first. On 26 October 2026 (Central time; 27 October 01:19 UTC) all four moved in place to the code on `main` (commit `fdce1a7`) with `script/Upgrade.s.sol`. On 28 October 2026 (Central time; 14:47 UTC) the staking proxy moved again, to the code on `main` at commit `f89b3b9`, which adds the dispute bound of pull request 94; the other three already matched that commit. On 2 November 2026 (16:28 UTC, block 70377384) the staking proxy moved to `25c2d59`, where a slash pays the committee nothing (pull request 144, [ADR 0007](adr/0007-no-slash-share-for-the-committee.md)); its deployed code matches that commit's build apart from the implementation's own address. Later that day (21:36 UTC, block 70413542) the oracle bond proxy moved to `76bbc97`, where an operator's exit time is fixed when it starts to leave (pull request 151). On 5 November 2026 (20:39 UTC, blocks 70916733 and 70916843) the reputation and oracle bond proxies moved to `dcad617` (pull request 218); the staking changes in that commit wait for the slash drill to end. [`deployments/5042002.json`](../deployments/5042002.json) holds the upgrade transaction and block of each replaced implementation, and it is the record to trust over this table.
+Proxy addresses never change; these are the implementations behind them, newest first. On 26 October 2026 (Central time; 27 October 01:19 UTC) all four moved in place to the code on `main` (commit `fdce1a7`) with `script/Upgrade.s.sol`. On 28 October 2026 (Central time; 14:47 UTC) the staking proxy moved again, to the code on `main` at commit `f89b3b9`, which adds the dispute bound of pull request 94; the other three already matched that commit. On 2 November 2026 (16:28 UTC, block 70377384) the staking proxy moved to `25c2d59`, where a slash pays the committee nothing (pull request 144, [ADR 0007](adr/0007-no-slash-share-for-the-committee.md)); its deployed code matches that commit's build apart from the implementation's own address. Later that day (21:36 UTC, block 70413542) the oracle bond proxy moved to `76bbc97`, where an operator's exit time is fixed when it starts to leave (pull request 151). On 5 November 2026 (20:39 UTC, blocks 70916733 and 70916843) the reputation and oracle bond proxies moved to `dcad617` (pull request 218); the staking changes in that commit waited for the slash drill to end. On 24 November 2026 (04:08 UTC, block 73808194), once the drill had ended, the staking proxy moved to `4e8c56b`, which brings them in: a cap on the challenge period below the dispute period, refusing the admin as a slash's victim and a zero-amount withdrawal, a bound on slash evidence, and `slashState`. [`deployments/5042002.json`](../deployments/5042002.json) holds the upgrade transaction and block of each replaced implementation, and it is the record to trust over this table.
 
 | Proxy | Implementation | Released |
 |---|---|---|
@@ -670,7 +670,8 @@ Proxy addresses never change; these are the implementations behind them, newest 
 | | `0xb2616f4a449726b195951b6a576aba6847e174ef` | 19 Sep, operator index |
 | | `0x95d8592e7681550bee0c3e06c275ac1b94c873c6` | 19 Sep, proof of control + PendingBond |
 | | `0x486b1c2230c80a77dbec68835ff5b58eccd164ab` | 18 Sep, operator transfer |
-| `staking` | `0x347d01d33bc07120c67bcadb5c32fe0d8af6c943` | 2 Nov, `25c2d59`, no committee share of a slash (current; restored 10 Nov in block 71720997 after the `44ff8e8` build `0x3073e91150cad7a7acf013ca0342c4901ab17d1d` ran from block 71720600 by mistake) |
+| `staking` | `0xa62c6e05e1cf989be83046befe27e7dc0bc4c01a` | 24 Nov, `4e8c56b`, the changes held back for the slash drill (current) |
+| | `0x347d01d33bc07120c67bcadb5c32fe0d8af6c943` | 2 Nov, `25c2d59`, no committee share of a slash (restored 10 Nov in block 71720997 after the `44ff8e8` build `0x3073e91150cad7a7acf013ca0342c4901ab17d1d` ran from block 71720600 by mistake) |
 | | `0x210ed3f7ef42f01ee94b9543f67b8291e27aaa6b` | 28 Oct, `f89b3b9`, dispute bound |
 | | `0x147b687ab3299b454db8e413d62e251cf89588d5` | 26 Oct, `fdce1a7` |
 | | `0x169f1ada8a3568e229d24e74515b4ef889b8a6bd` | 21 Sep |
@@ -699,16 +700,15 @@ cast storage <proxy> 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505
 Anyone can check that the code on chain is this repository's, without trusting the explorer:
 
 ```bash
-git checkout arc-testnet-2026-11-16
+git checkout arc-testnet-2026-11-24
 sh scripts/fetch-deps.sh && forge build
 node scripts/check-bytecode.mjs
 ```
 
-`check-bytecode.mjs` reads each proxy, the implementation it runs, the SVR token and the reader (`0x2921b4eE879CdF5793FA273BbDc4E7dF01ABcef8`) from the
+`check-bytecode.mjs` reads each proxy, the implementation it runs, the SVR token and the reader (`0x99B15D0a2cdaf8610D3fBa6C7c0ed2D48b34fa17`) from the
 chain, blanks the immutables (a UUPS implementation stores its own address in one), and compares
-the rest with the build, byte for byte, source metadata included. On 16 November 2026, after the
-identity and reputation upgrades, all matched the build of `949cc17` except staking, whose new source waits for the slash drill to end,
-and the reader, whose new source waits for staking's upgrade: both are reported as expected, and `arc-testnet-2026-11-04b` builds staking and `arc-testnet-2026-11-15` the reader. Build in an ordinary checkout: a `lib/` that is a symlink or
+the rest with the build, byte for byte, source metadata included. On 24 November 2026, after the
+staking upgrade and the new reader, all ten matched the build of `4e8c56b`, tagged `arc-testnet-2026-11-24`. Build in an ordinary checkout: a `lib/` that is a symlink or
 junction changes the source paths solc records, and with them the metadata hash. CI runs the
 same check after every build; when main's sources have moved on since the recorded commit, a
 mismatch is expected and reported as such.

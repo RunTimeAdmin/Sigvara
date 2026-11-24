@@ -1,6 +1,6 @@
 # Sigvara roadmap
 
-As of 21 November 2026. This is the one list of what comes next. The [launch checklist](launch-checklist.md) holds the detail of each mainnet gate, and [section 8 of the whitepaper](whitepaper.md#8-roadmap) keeps the reasoning behind the main steps.
+As of 24 November 2026. This is the one list of what comes next. The [launch checklist](launch-checklist.md) holds the detail of each mainnet gate, and [section 8 of the whitepaper](whitepaper.md#8-roadmap) keeps the reasoning behind the main steps.
 
 **The goal:** someone outside the team accepts or refuses an agent in production because of its Sigvara score, on mainnet.
 
@@ -23,13 +23,13 @@ As of 21 November 2026. This is the one list of what comes next. The [launch che
 
 | Step | When |
 |---|---|
-| The adversarial [slash drill](slash-drill.md) | Day 7 done on 10 November, day 21 from 24 November 03:45 UTC |
-| The staking half of the contract upgrade | After the drill |
-| Testnet roles to a Safe and a timelock. Upgrades then wait 48 hours, so this follows the staking upgrade | After the staking upgrade |
+| The adversarial [slash drill](slash-drill.md) | Done, 24 November 2026: every prediction held ([log](slash-drill-log.md#the-adversarial-drill)) |
+| The staking half of the contract upgrade | Done, 24 November 2026: staking runs `4e8c56b`, with a new `SigvaraReader` ([arc.md](arc.md#implementation-history)) |
+| Testnet roles to a Safe and a timelock. Upgrades then wait 48 hours, so this follows the staking upgrade | Next |
 | An ADR on who rules a contested negative outcome | Done, 9 November 2026: [ADR 0011](adr/0011-who-rules-negative-outcomes.md) |
 | A limit on operators' total epoch spend, and the reads an unstaked registration adds | Done, 10 November 2026: an epoch sends at most `MAX_WRITES_PER_EPOCH` proposals, and an agent below the minimum stake is left out of the reads until a log names it ([#274](https://github.com/RunTimeAdmin/Sigvara/pull/274)). Both operators have run it since 11 November |
 | SVR launch through Tolly (checklist phase 3) | Done, 9 November 2026: the address is in [token.md](token.md) |
-| External audit, and fixing what it finds (phase 2) | After the staking upgrade, so it reads what will run |
+| External audit, and fixing what it finds (phase 2) | Next, now that testnet runs the code it will read |
 | Registries on Arc mainnet with bonds in SVR, mainnet keepers, pinned operators (phase 4) | After the audit's fixes |
 
 Mainnet launches with payer outcomes positive only, as [ADR 0006](adr/0006-payer-signed-outcomes.md) allows. Arc testnet operators have taken a payer's "not delivered" since 11 November 2026 and hold it 7 days for the agent to refund ([ADR 0011](adr/0011-who-rules-negative-outcomes.md)). On mainnet, non-delivery cannot ground a slash (A3 in [ADR 0010](adr/0010-what-can-be-slashed.md)) until its operators take negatives too.

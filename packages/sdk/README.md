@@ -172,7 +172,7 @@ longer ago than that, or never, with `stale_score`. A healthy score gets to abou
 oracle's proposals apart before the next one lands (about 20 hours on Arc testnet, where an unchanged score is proposed again every 12 hours, two days on a daily
 epoch), so choose more than that. It is measured against your host's clock. Unset, a score is trusted however old it is.
 It costs one more read per admission. The same check exists on chain as
-`SigvaraReader.isTrustedFresh`, on Arc testnet at `0x2921b4eE879CdF5793FA273BbDc4E7dF01ABcef8`.
+`SigvaraReader.isTrustedFresh`, on Arc testnet at `0x99B15D0a2cdaf8610D3fBa6C7c0ed2D48b34fa17`.
 
 **More at stake than the minimum covers.** Set `minBond` to refuse an agent holding less, with
 `below_bond`, whatever its score (from 1.0.0-alpha.16). It is in the bond token's base units, as
