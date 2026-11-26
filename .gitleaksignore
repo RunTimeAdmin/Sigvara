@@ -1,0 +1,11 @@
+# Findings checked by hand and known to be harmless. Format: commit:file:rule:line.
+# Anvil's first test key, public and valueless, used only inside tests.
+36638ad5482b4e230be855b9714fa361613d5ade:test/SplitAuthority.t.sol:generic-api-key:63
+e994a50d63843808158c600784e5eccde641b6ad:oracle/secrets.test.js:generic-api-key:11
+e994a50d63843808158c600784e5eccde641b6ad:test/DeployScripts.t.sol:generic-api-key:174
+# Public contract addresses, not keys.
+813172903b5d50ed5b483d5848917972dbed2776:test/SplitAuthorityFork.t.sol:generic-api-key:42
+813172903b5d50ed5b483d5848917972dbed2776:test/SplitAuthorityFork.t.sol:generic-api-key:43
+5a8acda262df3aa9cc7ca5d6371c1aacc48d7d23:deployments/5042002.json:generic-api-key:1
+643eee63b2b05768fe21591d76892d74021c6cf4:deployments/5042002.json:generic-api-key:7
+e5a67054e55d0b789c6246b73f4b9e05a23b1a7e:docs/quickstart.md:generic-api-key:31
