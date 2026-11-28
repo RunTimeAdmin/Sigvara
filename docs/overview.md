@@ -161,6 +161,8 @@ All four registries inherit two small shared contracts, neither deployed on its 
 
 [`SigvaraReader`](../src/SigvaraReader.sol) is separate: a stateless, non-upgradeable convenience for contracts that read an agent's standing. It is not a registry, holds nothing and is not read by the protocol. Its interfaces, and those of the three registries, are in [`src/interfaces/ISigvara.sol`](../src/interfaces/ISigvara.sol). See the [integration guide](integration.md).
 
+[`SigvaraValidator`](../src/SigvaraValidator.sol) is separate too, and not deployed yet. It answers ERC-8004 validation requests with the spendable score and refuses any answer that `SigvaraReputation` does not hold on chain ([ADR 0014](adr/0014-answer-erc8004-validation-requests.md)). The ERC-8004 calls it makes are in [`src/interfaces/IERC8004.sol`](../src/interfaces/IERC8004.sol).
+
 ---
 
 ## DID Method

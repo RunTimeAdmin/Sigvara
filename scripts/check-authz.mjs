@@ -35,7 +35,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const MATRIX = 'docs/authorisation-matrix.md';
-const CONTRACTS = ['SigvaraIdentity', 'SigvaraReputation', 'SigvaraStaking', 'SigvaraOracleBond', 'SigvaraEpochFees', 'SVRToken'];
+const CONTRACTS = ['SigvaraIdentity', 'SigvaraReputation', 'SigvaraStaking', 'SigvaraOracleBond', 'SigvaraEpochFees', 'SVRToken', 'SigvaraValidator'];
 // Abstract bases in src/ whose functions each heir exposes.
 const SRC_BASES = { InflowGuard: 'InflowGuard', TimelockedGrants: 'TimelockedGrants' };
 // OpenZeppelin bases and the state-changing entry points each adds. TimelockedGrants is
@@ -46,6 +46,7 @@ const BASE_ENTRY = {
   UUPSUpgradeable: ['upgradeToAndCall(address,bytes)'],
   ERC20: ['transfer(address,uint256)', 'approve(address,uint256)', 'transferFrom(address,address,uint256)'],
   Ownable: ['transferOwnership(address)', 'renounceOwnership()'],
+  Ownable2Step: ['transferOwnership(address)', 'acceptOwnership()', 'renounceOwnership()'],
 };
 
 const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' ')).replace(/\/\/[^\n]*/g, '');
