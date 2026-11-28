@@ -1,6 +1,7 @@
 # ADR 0014: Answer ERC-8004 validation requests with the Sigvara score
 
-**Status:** Proposed · 2026-11-28. Section 9 lists the decisions it needs. Code references are to main at `ba619c6`.
+**Status:** Accepted · 2026-11-28, the owner's choice of option D (section 3) with the answers proposed in section 9.
+Code references are to main at `ba619c6`.
 References to the Validation Registry are to `ValidationRegistryUpgradeable.sol` in
 [erc-8004/erc-8004-contracts](https://github.com/erc-8004/erc-8004-contracts/blob/b9e466c/contracts/ValidationRegistryUpgradeable.sol)
 at `b9e466c`, which reports the same version, 2.0.0, as the registries deployed on Arc.
@@ -39,7 +40,7 @@ at `b9e466c`, which reports the same version, 2.0.0, as the registries deployed 
   reference repository says this part of the spec is still being revised with the TEE community.
 - **The roadmap.** It lists the Validation Registry as a candidate that starts when a partner or a registry user asks,
   with CounterAudit validations as its smallest version ([roadmap.md](../roadmap.md)). This ADR settles the design
-  ahead of that trigger, at the owner's request. Whether to build it now is decision 1.
+  ahead of that trigger, at the owner's request, and the owner chose to build it now (decision 1).
 
 ## 2. What any answer must keep
 
@@ -67,7 +68,7 @@ registry binds each request to one validator address, so a rotation of the publi
 strands every kept request: the new key cannot answer them, and every agent must open a new one. And an answer is
 whatever the key signs. Not chosen.
 
-**D. C, answered through a validator contract. Proposed.** A small contract, `SigvaraValidator`, is the validator that
+**D. C, answered through a validator contract. Chosen.** A small contract, `SigvaraValidator`, is the validator that
 agents name, and the publisher key operates it.
 
 1. The owner calls `answer(requestHash, didHash, response, responseURI, responseHash)`, and the contract calls
@@ -192,11 +193,11 @@ of their feedback updates (about 186,000 gas each, ADR 0008).
    `docs/roadmap.md`, and `oracle/README.md`.
 5. **Mainnet** with the rest of the protocol, behind the same gates ([launch-checklist.md](../launch-checklist.md)).
 
-## 9. Decisions needed
+## 9. Decisions (the owner, 28 November 2026)
 
-1. **Build it now,** on Arc testnet in shadow mode first, ahead of the roadmap's trigger?
-2. **Option D, the validator contract,** or option C, the publisher's own address and no contract, where a key
-   rotation strands every request and answers are not checked on chain? Proposed: D.
+1. **Build it now,** on Arc testnet in shadow mode first, ahead of the roadmap's trigger.
+2. **Option D, the validator contract,** over option C, the publisher's own address with no contract, where a key
+   rotation would strand every request and answers would not be checked on chain.
 3. **A resend every 7 days** when the score has not changed, so a contract can require a recent `lastUpdate`, at about
-   0.002 USDC per agent per week? Proposed: yes.
-4. **The tags** `sigvara` and `sigvara-unlinked`? Proposed: yes. `sigvara` is already the feedback tag and the link key.
+   0.002 USDC per agent per week.
+4. **The tags** `sigvara` and `sigvara-unlinked`. `sigvara` is already the feedback tag and the link key.
