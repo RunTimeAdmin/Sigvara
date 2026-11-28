@@ -1,8 +1,8 @@
 # Authorisation matrix
 
 Every function that changes state in Sigvara's contracts: who may call it, what has to hold for the
-call to succeed, and what it changes. It covers the five registries and the SVR faucet token as they
-are on `main`. `SigvaraReader` only reads, so it has no table.
+call to succeed, and what it changes. It covers the five registries, the SVR faucet token and
+`SigvaraValidator` as they are on `main`. `SigvaraReader` only reads, so it has no table.
 
 [`scripts/check-authz.mjs`](../scripts/check-authz.mjs) reads `src/` in CI and fails when:
 
@@ -20,7 +20,7 @@ reviewed with the change that touches the function, like any other documentation
 | Caller | Meaning |
 |---|---|
 | `role:NAME` | `onlyRole(NAME)`: the caller must hold that role on this contract |
-| `owner` | `onlyOwner`, on the SVR faucet token only |
+| `owner` | `onlyOwner`, on the SVR faucet token and `SigvaraValidator` |
 | `initializer`, `reinitializer:N` | Runs once per proxy: at deployment, or with an upgrade |
 | `checked` | No access modifier. The body decides who may call, for example only the agent's operator, and **Requires** says who |
 | `anyone` | Any account may call, within what **Requires** lists. These are the permissionless paths, such as finalizing a score or executing a slash once its window has closed |
@@ -198,3 +198,16 @@ administrators of the staking-core, committee and slasher roles and fails unless
 | `transfer(address,uint256)` | `inherited` | `-` | Any holder; `to` nonzero (`ERC20InvalidReceiver`); caller's balance at least `value` (`ERC20InsufficientBalance`). | Moves `value` SVR from the caller to `to`. Emits `Transfer`. |
 | `transferFrom(address,address,uint256)` | `inherited` | `-` | Any spender whose allowance from `from` is at least `value` (`ERC20InsufficientAllowance`); `from`'s balance at least `value`; `to` nonzero. | Lowers the allowance by `value` unless it is the maximum uint256, without an `Approval` event; moves `value` SVR from `from` to `to`. Emits `Transfer`. |
 | `transferOwnership(address)` | `inherited` | `-` | The owner (`onlyOwner`); `newOwner` nonzero (`OwnableInvalidOwner`). | Makes `newOwner` the owner at once (one step, no acceptance), giving it `mint`. Emits `OwnershipTransferred`. |
+
+## SigvaraValidator
+
+Not upgradeable and not deployed yet. Its owner is the publisher's key ([ADR 0014](adr/0014-answer-erc8004-validation-requests.md)). The
+constructor checks that the Validation Registry is bound to the Identity Registry it is given (`RegistryMismatch`).
+
+| Function | Caller | Guard | Requires | Effect |
+|---|---|---|---|---|
+| `acceptOwnership()` | `inherited` | `-` | The pending owner named by `transferOwnership` (`OwnableUnauthorizedAccount` otherwise). | Makes the caller the owner and clears the pending owner. The validator's address and every kept request stay. Emits `OwnershipTransferred`. |
+| `answer(bytes32,bytes32,uint8,string,bytes32)` | `owner` | `-` | The owner. A nonzero request hash (`ZeroRequestHash`) whose ERC-8004 request names this contract (`NotThisValidator`) and is its agent's kept request, or the agent has none yet (`NotKeptRequest`). Then either the link holds, meaning the ERC-8004 agent names `didHash` under `sigvara` and is owned by that Sigvara agent's operator (`LinkDoesNotHold`), and `response` equals `getTotalScore(didHash)` (`ScoreMismatch`); or the request was last answered for `didHash`, that agent is `Slashed`, and `response` is 0. Enough gas left for the link check's fixed allowance (`GasTooLow`). | Makes the request its agent's kept request if it has none, sets `answeredFor` to `didHash` and, when the link holds, `liveRequest[didHash]` to the request. Emits `Answered`, then calls `validationResponse` on the ERC-8004 Validation Registry with the tag `sigvara`, replacing the request's previous answer. |
+| `renounceOwnership()` | `inherited` | `-` | Nobody: overridden to revert with `RenounceDisabled`. | None. The contract always has an owner, so a later slash can still be written as a zero and no kept request is stranded. |
+| `retire(bytes32,string,bytes32)` | `owner` | `-` | The owner. The request was answered before (`NeverAnswered`), and the Sigvara agent it was last answered for is not `Slashed` (`AgentSlashed`). Either that agent's link no longer holds, or its score has since been answered on another request (`LinkStillHolds`). Enough gas left for the link check (`GasTooLow`). | Emits `Retired` and answers 0 with the tag `sigvara-unlinked`, so a summary filtered on `sigvara` stops counting it. `answeredFor` stays, so a later slash of that agent can still set the answer to 0. |
+| `transferOwnership(address)` | `inherited` | `-` | The owner. | Names a pending owner, who must call `acceptOwnership`; the current owner keeps answering until then. Emits `OwnershipTransferStarted`. |

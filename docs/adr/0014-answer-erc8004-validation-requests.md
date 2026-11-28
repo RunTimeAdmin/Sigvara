@@ -1,7 +1,8 @@
 # ADR 0014: Answer ERC-8004 validation requests with the Sigvara score
 
 **Status:** Accepted · 2026-11-28, the owner's choice of option D (section 3) with the answers proposed in section 9.
-Code references are to main at `ba619c6`.
+Rollout step 1 is built: `src/SigvaraValidator.sol`, tested on a fork of Arc testnet in
+`test/SigvaraValidatorFork.t.sol`, with `script/DeployValidator.s.sol`. Code references are to main at `ba619c6`.
 References to the Validation Registry are to `ValidationRegistryUpgradeable.sol` in
 [erc-8004/erc-8004-contracts](https://github.com/erc-8004/erc-8004-contracts/blob/b9e466c/contracts/ValidationRegistryUpgradeable.sol)
 at `b9e466c`, which reports the same version, 2.0.0, as the registries deployed on Arc.
@@ -49,8 +50,9 @@ at `b9e466c`, which reports the same version, 2.0.0, as the registries deployed 
 2. At most one live Sigvara answer per ERC-8004 agent, so that `getSummary(agentId, [validator], "sigvara")` gives the
    current score with a count of 1, as ADR 0008's feedback does.
 3. Sigvara's gas grows with linked agents, not with the requests an agent's owner chooses to open.
-4. A slashed agent reads as zero whatever happens to its link afterwards, as its feedback does
-   (`oracle/publisher.js:240-244`).
+4. A slashed agent reads as zero on every ERC-8004 agent it was answered on, whatever happens to the link afterwards,
+   as its feedback does (`oracle/publisher.js:240-244`). Only a link to another Sigvara agent replaces it, again as with
+   feedback.
 5. Nothing Sigvara answers feeds back into a Sigvara score.
 
 ## 3. Options considered
@@ -74,21 +76,30 @@ agents name, and the publisher key operates it.
 1. The owner calls `answer(requestHash, didHash, response, responseURI, responseHash)`, and the contract calls
    `validationResponse` with the tag `sigvara`.
 2. It accepts an answer only when the answer is true on chain in that block. The request's ERC-8004 agent must name
-   `didHash` in its `sigvara` metadata and be owned by that Sigvara agent's operator, the rule a link must meet
-   (`oracle/link-scan.js:153-158`), and `response` must equal `SigvaraReputation.getTotalScore(didHash)`. A score that
-   moved after the publisher read it reverts the answer, and the publisher reads again.
+   `didHash` in its `sigvara` metadata and be owned by that Sigvara agent's operator, the test a link must still pass
+   whenever the oracle reads it (`claimHolds`, `oracle/external.js:278-286`), and `response` must equal
+   `SigvaraReputation.getTotalScore(didHash)`. A score that moved after the publisher read it reverts the answer, and
+   the publisher reads again. The `sigvara` value is read with a fixed gas allowance of 50,000, so a value an owner makes
+   oversized reads as no link, at a bounded cost.
 3. When the Sigvara agent it last answered for on that request is `Slashed`, it accepts an answer of 0 for that agent,
    whatever the link says.
-4. `retire(requestHash)` answers 0 with the tag `sigvara-unlinked`. It is accepted only when the link no longer holds,
-   and never when the Sigvara agent last answered for is `Slashed`.
-5. It keeps one request per ERC-8004 agent, the first one it answers. It refuses any other request for that agent, and
-   returns the kept one from `keptRequest(agentId)`.
-6. Ownership moves in two steps, so a new publisher key takes over the same validator address and every kept request.
-   The contract is not upgradeable. If the registry's interface changes, a new contract is deployed and agents open new
-   requests.
+4. `retire(requestHash, responseURI, responseHash)` answers 0 with the tag `sigvara-unlinked`. It is accepted when the
+   link no longer holds, or when the same Sigvara agent's score has since been answered on another ERC-8004 agent's
+   request, and never when the Sigvara agent last answered for is `Slashed`.
+5. It keeps one request per ERC-8004 agent, the first one it answers, and returns it from `keptRequest(agentId)`. It
+   refuses any other request for that agent, and a request hash of zero, which `keptRequest` uses to mean "none yet".
+6. Ownership moves in two steps, so a new publisher key takes over the same validator address and every kept request,
+   and it cannot be renounced. The constructor checks that the Validation Registry is bound to the Identity Registry it
+   is given. The contract is not upgradeable. If the registry's interface changes, a new contract is deployed and agents
+   open new requests.
 
-A stolen publisher key can then delay, skip or retire answers, but it cannot publish a score that `SigvaraReputation`
-does not hold. The cost is a contract to write, test, review and deploy, and its reads on every answer.
+What the contract cannot check is history. The oracle also requires that the operator owned the ERC-8004 agent when it
+set the key, and when several of an operator's agents name the same Sigvara agent it takes the newest claim
+(`oracle/link-scan.js:20-48` and `153-171`). Which ERC-8004 agent gets the answer is therefore the publisher's choice,
+made by those rules. A stolen publisher key can delay, skip or retire answers, or answer for another agent the operator
+owns that names the same Sigvara agent, such as an older claim or one a third party set up and handed over. It cannot
+publish a score that `SigvaraReputation` does not hold. The cost is a contract to write, test, review and deploy, and
+its reads on every answer.
 
 **E. A contract anyone can call.** D without an owner: anyone triggers an answer, and nobody holds a key. But a
 contract cannot tell which of several ERC-8004 agents that name the same didHash holds the link in force. The oracle
@@ -129,7 +140,8 @@ against `SigvaraReputation` at the block it names.
 - **Reading an answer.** `getSummary(agentId, [validator], "sigvara")` returns a count of 1 and the score for a linked,
   answered agent, and 0, 0 otherwise. It walks every request the agent has opened, so an agent that opens very many
   can make it costly for a contract to call. `getValidationStatus(keptRequest(agentId))` costs the same whatever the
-  agent did, and its `lastUpdate` says how recent the answer is. The validator's address is published in the SDK and
+  agent did, and its `lastUpdate` says how recent the answer is. A reader that uses it checks that `keptRequest(agentId)`
+  is not zero, and that the status names that agent, this validator and the tag `sigvara`. The validator's address is published in the SDK and
   the docs, and as the metadata key `sigvaraValidator` on Sigvara's own registration.
 
 ## 5. When it answers
@@ -139,8 +151,9 @@ against `SigvaraReputation` at the block it names.
   zero goes at once (`mayPostNow`, `oracle/publisher-policy.js:88-90`). An unchanged score sends nothing.
 - An answer that has not changed for 7 days is sent again, so a contract can require a recent `lastUpdate`
   (decision 3).
-- When a link stops holding, the publisher retires the kept answer, unless the Sigvara agent was slashed. If the agent
-  links again, the same request is answered again with `sigvara`.
+- When a link stops holding, or the score moves to a newer ERC-8004 agent of the same operator, the publisher retires the
+  old answer, unless the Sigvara agent was slashed. If the agent links again, the same request is answered again with
+  `sigvara`.
 - The checker never answers, for the reasons ADR 0008 gives for feedback. The publisher's caps cover answers too:
   `PUBLISH_MAX_FEE_GWEI`, the transactions per run and the balance floor.
 
@@ -161,6 +174,12 @@ reads to each answer.
 `getSummary(agentId, [validator], "sigvara")` returned 0, 0, as a revoke does for feedback. A second request with a
 hash already used reverted. 100 linked agents answered every day would cost about 0.21 USDC a day, under half the cost
 of their feedback updates (about 186,000 gas each, ADR 0008).
+
+Through `SigvaraValidator`, on the same fork with a 33-byte file (Foundry's gas report for
+`test/SigvaraValidatorFork.t.sol`): an answer took 134,049 gas at the median and 269,065 at most, for a first answer.
+A retire took 139,348 at most, the most being a retire after the owner had set a 6,000-byte `sigvara` value.
+Deployment took 1,153,822. A 1,000-byte file adds about 24,000 gas of calldata and log data. That puts 100 agents
+answered every day at about 0.40 USDC a day, still under the cost of their feedback updates.
 
 ## 7. Consequences
 
